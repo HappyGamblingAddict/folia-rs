@@ -1,0 +1,10 @@
+name: HelloPlugin
+version: 1.0.0
+main: rs.folia.example.HelloPlugin
+api-version: '1.21'
+description: Demo plugin for the Rust Folia host
+commands:
+  hello:
+    description: Says hello through a normal Paper command
+    usage: /hello [name]
+    aliases: [hi]

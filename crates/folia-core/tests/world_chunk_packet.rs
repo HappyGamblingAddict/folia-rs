@@ -1,0 +1,75 @@
+use folia_core::chunk_packet::{ChunkPacketTemplate, block_state_id, heightmap_bytes, light_bytes};
+use folia_core::protocol::PacketReader;
+use folia_core::world::{Dimension, WorldStorage};
+use std::path::PathBuf;
+
+#[test]
+fn chunk_packet_uses_blocks_loaded_from_world_storage() {
+    let world_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../world");
+    if !world_root.join("region").is_dir() {
+        eprintln!("skipping: {} has no region directory", world_root.display());
+        return;
+    }
+
+    let mut storage = WorldStorage::for_dimension(&world_root, Dimension::Overworld);
+    let chunk = storage
+        .load_chunk(0, -1)
+        .expect("load chunk")
+        .expect("chunk exists");
+    assert_eq!(chunk.x, 0);
+    assert_eq!(chunk.z, -1);
+    assert!(chunk.sections.len() >= 24);
+
+    let expected_bedrock = chunk
+        .block_state(0, -64, 0)
+        .map(block_state_id)
+        .expect("bedrock block");
+    let expected_grass = chunk
+        .block_state(0, -61, 0)
+        .map(block_state_id)
+        .expect("grass block");
+    assert_eq!(expected_bedrock, 85);
+    assert_eq!(expected_grass, 9);
+
+    let template = ChunkPacketTemplate::from_first_captured_chunk().expect("template");
+    assert_eq!(
+        heightmap_bytes(&chunk),
+        template.captured_heightmaps(),
+        "generated heightmaps must match the Java server"
+    );
+    assert_eq!(
+        light_bytes(&chunk),
+        template.captured_light(),
+        "generated light data must match the Java server"
+    );
+
+    let packet = ChunkPacketTemplate::build_dynamic(&chunk).expect("build packet");
+
+    let mut reader = PacketReader::new(&packet);
+    assert_eq!(reader.read_varint().unwrap(), 44);
+    assert_eq!(reader.read_i32().unwrap(), 0);
+    assert_eq!(reader.read_i32().unwrap(), -1);
+
+    let heightmaps = reader.read_varint().unwrap();
+    for _ in 0..heightmaps {
+        let _ = reader.read_varint().unwrap();
+        let longs = reader.read_varint().unwrap();
+        let _ = reader.read_bytes(longs as usize * 8).unwrap();
+    }
+    let chunk_data_len = reader.read_varint().unwrap();
+    let chunk_data = reader.read_bytes(chunk_data_len as usize).unwrap().to_vec();
+
+    let mut data = PacketReader::new(&chunk_data);
+    let non_empty = data.read_bytes(2).unwrap();
+    assert!(i16::from_be_bytes([non_empty[0], non_empty[1]]) > 0);
+    let bits = data.read_u8().unwrap();
+    assert!(bits >= 4);
+    let palette_len = data.read_varint().unwrap();
+    let mut palette = Vec::new();
+    for _ in 0..palette_len {
+        palette.push(data.read_varint().unwrap());
+    }
+    assert!(palette.contains(&expected_bedrock));
+    assert!(palette.contains(&expected_grass));
+    assert!(palette.contains(&0));
+}

@@ -1,0 +1,11 @@
+[package]
+name = "folia-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flate2 = "1.0"
+folia-math = { path = "../folia-math" }
+folia-random = { path = "../folia-random" }
+serde_json = "1.0"

@@ -1,0 +1,15 @@
+[package]
+name = "folia-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "folia-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+ctrlc = "3.4"
+folia-core = { path = "../folia-core" }
+jni = { version = "0.21", features = ["invocation"] }

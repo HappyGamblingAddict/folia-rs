@@ -1,0 +1,9 @@
+target/
+**/classes/**
+**/*.class
+**/*.jar
+!java/bridge/resources/**
+run/
+capture/
+*.log
+

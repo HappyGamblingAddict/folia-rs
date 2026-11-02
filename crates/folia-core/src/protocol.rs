@@ -1,0 +1,578 @@
+use crate::varint::{read_varint, read_varint_slice, write_varint};
+use std::io::{self, Read, Write};
+
+/// Vanilla clients refuse packets larger than 2 MiB. Keeping the same limit in
+/// the Rust core prevents malicious length prefixes from allocating unbounded
+/// memory.
+pub const MAX_PACKET_SIZE: usize = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextState {
+    Status,
+    Login,
+    Transfer,
+}
+
+impl NextState {
+    pub fn from_id(id: i32) -> io::Result<Self> {
+        match id {
+            1 => Ok(NextState::Status),
+            2 => Ok(NextState::Login),
+            3 => Ok(NextState::Transfer),
+            other => Err(invalid(format!("unknown handshake next state {other}"))),
+        }
+    }
+
+    pub fn id(self) -> i32 {
+        match self {
+            NextState::Status => 1,
+            NextState::Login => 2,
+            NextState::Transfer => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handshake {
+    pub protocol_version: i32,
+    pub server_address: String,
+    pub server_port: u16,
+    pub next_state: NextState,
+}
+
+pub fn read_packet<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
+    let length = read_varint(reader)?;
+    if length < 0 || length as usize > MAX_PACKET_SIZE {
+        return Err(invalid(format!("invalid packet length {length}")));
+    }
+    let mut payload = vec![0u8; length as usize];
+    reader.read_exact(&mut payload)?;
+    Ok(payload)
+}
+
+pub fn write_packet<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
+    if payload.len() > MAX_PACKET_SIZE {
+        return Err(invalid("packet exceeds 2 MiB"));
+    }
+    write_varint(writer, payload.len() as i32)?;
+    writer.write_all(payload)
+}
+
+pub fn parse_handshake(payload: &[u8]) -> io::Result<Handshake> {
+    let mut reader = PacketReader::new(payload);
+    let packet_id = reader.read_varint()?;
+    if packet_id != 0 {
+        return Err(invalid(format!(
+            "expected handshake packet id 0, got {packet_id}"
+        )));
+    }
+    let protocol_version = reader.read_varint()?;
+    let server_address = reader.read_string()?;
+    let server_port = reader.read_u16()?;
+    let next_state = NextState::from_id(reader.read_varint()?)?;
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after handshake"));
+    }
+    Ok(Handshake {
+        protocol_version,
+        server_address,
+        server_port,
+        next_state,
+    })
+}
+
+pub fn build_handshake(
+    protocol_version: i32,
+    server_address: &str,
+    server_port: u16,
+    next_state: NextState,
+) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(0)?;
+    writer.write_varint(protocol_version)?;
+    writer.write_string(server_address)?;
+    writer.write_u16(server_port)?;
+    writer.write_varint(next_state.id())?;
+    Ok(writer.into_inner())
+}
+
+pub fn build_status_request() -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(0).expect("writing to Vec cannot fail");
+    writer.into_inner()
+}
+
+pub fn build_ping(payload: i64) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(1).expect("writing to Vec cannot fail");
+    writer
+        .write_i64(payload)
+        .expect("writing to Vec cannot fail");
+    writer.into_inner()
+}
+
+pub fn build_pong(payload: i64) -> Vec<u8> {
+    build_ping(payload)
+}
+
+pub fn build_status_response(json: &str) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(0)?;
+    writer.write_string(json)?;
+    Ok(writer.into_inner())
+}
+
+pub fn parse_status_response(payload: &[u8]) -> io::Result<String> {
+    let mut reader = PacketReader::new(payload);
+    let packet_id = reader.read_varint()?;
+    if packet_id != 0 {
+        return Err(invalid(format!(
+            "expected status response id 0, got {packet_id}"
+        )));
+    }
+    reader.read_string()
+}
+
+pub fn parse_ping(payload: &[u8]) -> io::Result<i64> {
+    let mut reader = PacketReader::new(payload);
+    let packet_id = reader.read_varint()?;
+    if packet_id != 1 {
+        return Err(invalid(format!("expected ping id 1, got {packet_id}")));
+    }
+    reader.read_i64()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginStart {
+    pub name: String,
+    /// Present in 1.20.2+ login packets; older clients omit it.
+    pub uuid: Option<[u8; 16]>,
+}
+
+pub fn parse_login_start(payload: &[u8]) -> io::Result<LoginStart> {
+    let mut reader = PacketReader::new(payload);
+    let packet_id = reader.read_varint()?;
+    if packet_id != 0 {
+        return Err(invalid(format!(
+            "expected login start id 0, got {packet_id}"
+        )));
+    }
+    let name = reader.read_string()?;
+    let uuid = if reader.remaining() >= 16 {
+        let bytes = reader.read_bytes(16)?;
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(bytes);
+        Some(uuid)
+    } else {
+        None
+    };
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after login start"));
+    }
+    Ok(LoginStart { name, uuid })
+}
+
+pub fn build_login_start(name: &str, uuid: Option<[u8; 16]>) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(0)?;
+    writer.write_string(name)?;
+    if let Some(uuid) = uuid {
+        writer.write_bytes(&uuid);
+    }
+    Ok(writer.into_inner())
+}
+
+pub fn build_login_disconnect(reason_json: &str) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(0)?;
+    writer.write_string(reason_json)?;
+    Ok(writer.into_inner())
+}
+
+/// Packets at or above `threshold` are zlib-compressed after the login
+/// `Set Compression` packet. Below the threshold, Minecraft sends a zero
+/// uncompressed-length marker followed by the raw payload.
+pub fn write_compressed_packet<W: Write>(
+    writer: &mut W,
+    payload: &[u8],
+    threshold: usize,
+) -> io::Result<()> {
+    let mut inner = PacketWriter::new();
+    if payload.len() >= threshold {
+        inner.write_varint(payload.len() as i32)?;
+        let compressed = crate::compression::compress(payload)?;
+        inner.write_bytes(&compressed);
+    } else {
+        inner.write_varint(0)?;
+        inner.write_bytes(payload);
+    }
+    write_packet(writer, &inner.into_inner())
+}
+
+pub fn read_compressed_packet<R: Read>(reader: &mut R, maximum_size: usize) -> io::Result<Vec<u8>> {
+    let packet = read_packet(reader)?;
+    let mut inner = PacketReader::new(&packet);
+    let uncompressed_length = inner.read_varint()?;
+    if uncompressed_length == 0 {
+        return Ok(inner.read_bytes(inner.remaining())?.to_vec());
+    }
+    if uncompressed_length < 0 || uncompressed_length as usize > maximum_size {
+        return Err(invalid(format!(
+            "invalid uncompressed packet length {uncompressed_length}"
+        )));
+    }
+    let compressed = inner.read_bytes(inner.remaining())?;
+    let payload = crate::compression::decompress(compressed, maximum_size)?;
+    if payload.len() != uncompressed_length as usize {
+        return Err(invalid(format!(
+            "declared uncompressed length {uncompressed_length}, got {}",
+            payload.len()
+        )));
+    }
+    Ok(payload)
+}
+
+pub struct PacketReader<'a> {
+    data: &'a [u8],
+    position: usize,
+}
+
+impl<'a> PacketReader<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, position: 0 }
+    }
+
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.position)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    pub fn read_varint(&mut self) -> io::Result<i32> {
+        let (value, consumed) = read_varint_slice(&self.data[self.position..])?;
+        self.position += consumed;
+        Ok(value)
+    }
+
+    pub fn read_varlong(&mut self) -> io::Result<i64> {
+        let (value, consumed) = crate::varint::read_varlong_slice(&self.data[self.position..])?;
+        self.position += consumed;
+        Ok(value)
+    }
+
+    pub fn read_u8(&mut self) -> io::Result<u8> {
+        if self.remaining() < 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "packet is truncated",
+            ));
+        }
+        let value = self.data[self.position];
+        self.position += 1;
+        Ok(value)
+    }
+
+    pub fn read_u16(&mut self) -> io::Result<u16> {
+        let bytes = self.read_bytes(2)?;
+        Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+
+    pub fn read_i64(&mut self) -> io::Result<i64> {
+        let bytes = self.read_bytes(8)?;
+        let mut array = [0u8; 8];
+        array.copy_from_slice(bytes);
+        Ok(i64::from_be_bytes(array))
+    }
+
+    pub fn read_i32(&mut self) -> io::Result<i32> {
+        let bytes = self.read_bytes(4)?;
+        Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    pub fn read_i16(&mut self) -> io::Result<i16> {
+        let bytes = self.read_bytes(2)?;
+        Ok(i16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+
+    pub fn read_f32(&mut self) -> io::Result<f32> {
+        let bytes = self.read_bytes(4)?;
+        Ok(f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    pub fn read_f64(&mut self) -> io::Result<f64> {
+        let bytes = self.read_bytes(8)?;
+        let mut array = [0u8; 8];
+        array.copy_from_slice(bytes);
+        Ok(f64::from_be_bytes(array))
+    }
+
+    pub fn read_string(&mut self) -> io::Result<String> {
+        let length = self.read_varint()?;
+        if length < 0 || length as usize > self.remaining() {
+            return Err(invalid(format!("invalid string length {length}")));
+        }
+        let bytes = self.read_bytes(length as usize)?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|error| invalid(format!("invalid UTF-8 in packet string: {error}")))
+    }
+
+    pub fn read_bool(&mut self) -> io::Result<bool> {
+        Ok(self.read_u8()? != 0)
+    }
+
+    pub fn read_nbt_root(&mut self) -> io::Result<crate::nbt::Tag> {
+        let mut cursor = io::Cursor::new(&self.data[self.position..]);
+        let tag = crate::nbt::read_root(&mut cursor)?;
+        self.position += cursor.position() as usize;
+        Ok(tag)
+    }
+
+    pub fn read_nbt_any(&mut self) -> io::Result<crate::nbt::Tag> {
+        let mut cursor = io::Cursor::new(&self.data[self.position..]);
+        let tag = crate::nbt::read_any_tag(&mut cursor)?;
+        self.position += cursor.position() as usize;
+        Ok(tag)
+    }
+
+    pub fn read_bytes(&mut self, length: usize) -> io::Result<&'a [u8]> {
+        if self.remaining() < length {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "packet is truncated",
+            ));
+        }
+        let start = self.position;
+        self.position += length;
+        Ok(&self.data[start..self.position])
+    }
+}
+
+pub struct PacketWriter {
+    data: Vec<u8>,
+}
+
+impl PacketWriter {
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn write_varint(&mut self, value: i32) -> io::Result<()> {
+        write_varint(&mut self.data, value)?;
+        Ok(())
+    }
+
+    pub fn write_varlong(&mut self, value: i64) -> io::Result<()> {
+        crate::varint::write_varlong(&mut self.data, value)?;
+        Ok(())
+    }
+
+    pub fn write_u8(&mut self, value: u8) -> io::Result<()> {
+        self.data.push(value);
+        Ok(())
+    }
+
+    pub fn write_u16(&mut self, value: u16) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_i64(&mut self, value: i64) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_i32(&mut self, value: i32) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_i16(&mut self, value: i16) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_f32(&mut self, value: f32) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_f64(&mut self, value: f64) -> io::Result<()> {
+        self.data.extend_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn write_string(&mut self, value: &str) -> io::Result<()> {
+        if value.len() > i32::MAX as usize {
+            return Err(invalid("string is too long"));
+        }
+        self.write_varint(value.len() as i32)?;
+        self.data.extend_from_slice(value.as_bytes());
+        Ok(())
+    }
+
+    pub fn write_bytes(&mut self, value: &[u8]) {
+        self.data.extend_from_slice(value);
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+impl Default for PacketWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packet_framing_round_trip() {
+        let payload = vec![0x42; 300];
+        let mut framed = Vec::new();
+        write_packet(&mut framed, &payload).unwrap();
+        assert_eq!(framed[0..2], [0xAC, 0x02]);
+        let decoded = read_packet(&mut framed.as_slice()).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn handshake_round_trip() {
+        let bytes = build_handshake(774, "mc.example.com", 25565, NextState::Status).unwrap();
+        let handshake = parse_handshake(&bytes).unwrap();
+        assert_eq!(
+            handshake,
+            Handshake {
+                protocol_version: 774,
+                server_address: "mc.example.com".into(),
+                server_port: 25565,
+                next_state: NextState::Status,
+            }
+        );
+    }
+
+    #[test]
+    fn status_response_round_trip() {
+        let json = r#"{"version":{"name":"1.21.11","protocol":774}}"#;
+        let payload = build_status_response(json).unwrap();
+        assert_eq!(parse_status_response(&payload).unwrap(), json);
+    }
+
+    #[test]
+    fn ping_round_trip() {
+        let payload = build_ping(0x1122334455667788);
+        assert_eq!(parse_ping(&payload).unwrap(), 0x1122334455667788);
+    }
+
+    #[test]
+    fn rejects_unknown_packet_id() {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(99).unwrap();
+        assert!(parse_handshake(&writer.into_inner()).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_packet() {
+        let mut writer = Vec::new();
+        write_varint(&mut writer, (MAX_PACKET_SIZE + 1) as i32).unwrap();
+        assert!(read_packet(&mut writer.as_slice()).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_packet() {
+        let bytes = [0x05, 0x00];
+        assert!(read_packet(&mut bytes.as_slice()).is_err());
+    }
+
+    #[test]
+    fn handles_utf8_strings() {
+        let mut writer = PacketWriter::new();
+        writer.write_string("Folia-RS ✓").unwrap();
+        let data = writer.into_inner();
+        let mut reader = PacketReader::new(&data);
+        assert_eq!(reader.read_string().unwrap(), "Folia-RS ✓");
+    }
+
+    #[test]
+    fn compressed_packets_round_trip_above_and_below_threshold() {
+        let small = vec![0x42; 10];
+        let large = vec![0x24; 4096];
+
+        let mut small_wire = Vec::new();
+        write_compressed_packet(&mut small_wire, &small, 256).unwrap();
+        assert_eq!(
+            read_compressed_packet(&mut small_wire.as_slice(), 1 << 20).unwrap(),
+            small
+        );
+
+        let mut large_wire = Vec::new();
+        write_compressed_packet(&mut large_wire, &large, 256).unwrap();
+        assert_eq!(
+            read_compressed_packet(&mut large_wire.as_slice(), 1 << 20).unwrap(),
+            large
+        );
+    }
+
+    #[test]
+    fn rejects_declared_compressed_length_mismatch() {
+        let payload = vec![7u8; 2048];
+        let compressed = crate::compression::compress(&payload).unwrap();
+
+        let mut inner = PacketWriter::new();
+        inner.write_varint((payload.len() + 1) as i32).unwrap();
+        inner.write_bytes(&compressed);
+
+        let mut wire = Vec::new();
+        write_packet(&mut wire, &inner.into_inner()).unwrap();
+        assert!(read_compressed_packet(&mut wire.as_slice(), 1 << 20).is_err());
+    }
+
+    #[test]
+    fn login_start_round_trips_with_and_without_uuid() {
+        let uuid = [0x11u8; 16];
+        let payload = build_login_start("Steve", Some(uuid)).unwrap();
+        assert_eq!(
+            parse_login_start(&payload).unwrap(),
+            LoginStart {
+                name: "Steve".into(),
+                uuid: Some(uuid),
+            }
+        );
+
+        let payload = build_login_start("Alex", None).unwrap();
+        assert_eq!(
+            parse_login_start(&payload).unwrap(),
+            LoginStart {
+                name: "Alex".into(),
+                uuid: None,
+            }
+        );
+    }
+}

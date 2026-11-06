@@ -40,14 +40,17 @@ Do not branch, reset, or push unless the user asks.
 Verified state (2026-11-06, merged workspace):
 
 ```text
-804 tests passing on the merged tree (full gate)
-0 failed
+812 tests on this branch (802 existing + 10 new light-occlusion tests)
+focused light suites: green
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
 cargo build --workspace: clean
 native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
+
+The full workspace gate is run by the coordinator after merging worker
+branches; the 812 count above is this branch's focused-light slice.
 
 Worldgen parity on the 16-column fixture:
 
@@ -105,7 +108,8 @@ Key files:
 - Anvil `.mca` read/write, zlib/gzip/uncompressed chunks.
 - Block-state and biome palette decode/encode.
 - Dynamic `ClientboundLevelChunkWithLight` packets from `WorldStorage` chunks.
-- Heightmaps and sky/block light computed from chunk data.
+- Heightmaps and sky/block light computed from chunk data, including
+  per-state outline face occlusion.
 - Block break progress, tool-tier/harvest gating, drops, and durability via
   `ServerboundPlayerAction`; placement via `ServerboundUseItemOn`.
 - Chunk persistence, block and light update broadcasts.
@@ -664,8 +668,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - No containers beyond the player inventory and block-entity slots.
 - No lighting updates after block changes beyond full chunk light payloads.
 - Block edits run incremental light decrease/increase (sky column updates and
-  cross-chunk propagation) and send section-scoped light payloads; there is no
-  Java light-array/packet fixture yet and occlusion is still full-cube.
+  cross-chunk propagation) and send section-scoped light payloads. Occlusion
+  now uses the generated outline shapes (slabs, stairs, snow, farmland, paths,
+  carpets) with cached per-state face masks and pairwise face-shape unions;
+  glass/water/leaves/ice keep their attenuation. There is no Java
+  light-array/packet fixture yet.
 - No online-mode encryption or Mojang authentication.
 - No lighting updates after block changes beyond full chunk light payloads.
 - Online-mode crypto/auth core exists, but `folia-server` still refuses
@@ -711,9 +718,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
    is vein-noise interpolation and disks/`underwater_magma`. `feature_data.json`
    already has every definition.
 3. **Real lighting (P3.5–P3.9).** Nibble storage, incremental
-   decrease/increase queues, sky column updates, cross-chunk propagation, and
-   section-scoped payloads are in. Capture Java light-array/packet fixtures and
-   add P1.5 shape occlusion, then initialize light during chunk generation.
+   decrease/increase queues, sky column updates, cross-chunk propagation,
+   section-scoped payloads, and outline shape occlusion are in. Capture Java
+   light-array/packet fixtures, add the remaining `canOcclude` flags, then
+   initialize light during chunk generation.
 4. **Surface fidelity (P2.12 code landed).** Capture a Java frozen-ocean /
    iceberg fixture and thread `WorldGenerator.seed()` directly into
    `build_surface` so direct harnesses do not need the configured-generator

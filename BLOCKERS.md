@@ -177,14 +177,18 @@ These are expected gaps, not reasons to stop:
   vanilla-verified. `LightScene` runs Java's decrease-then-increase queues
   across the edited chunk and loaded neighbours, updates the edited sky column
   source, and reports dirty sections; `block_update` persists and broadcasts
-  only those section payloads. Remaining gaps: no Java light-array/packet
-  fixture, light occlusion is the per-state `light_block` value with full-cube
-  shapes (P1.5 metadata is not ported), unknown states stay opaque and
-  non-emitting, chunks with no light data pay a one-time whole-chunk
-  initialization on their first edit, generated chunks still use the height
-  fallback until edited, and generation-time lighting is not wired into the
-  chunk-status pipeline. Cached behaviour lookups and a Java seam fixture also
-  remain open.
+  only those section payloads. Face occlusion now uses the oracle outline
+  table: cached per-state face masks plus Java's pairwise face-shape union in
+  both increase engines and in the sky-column edge scan, with full-cube
+  transparent states treated like `canOcclude=false`. Remaining gaps: no Java
+  light-array/packet fixture, exact `canOcclude`/`useShapeForLightOcclusion`
+  columns (the engine uses a static override list) and `getOcclusionShape`
+  overrides (sculk shrieker, lectern, fence gate) are approximated from
+  outlines, unknown states stay opaque and non-emitting,
+  chunks with no light data pay a one-time whole-chunk initialization on their
+  first edit, generated chunks still use the height fallback until edited, and
+  generation-time lighting is not wired into the chunk-status pipeline. Cached
+  behaviour lookups and a Java seam fixture also remain open.
 - `BiomeManager` has no Java fixture. Its seed obfuscation is pinned to NIST
   SHA-256 vectors and its quart selection to values derived from the Java
   source; a Java `getBiome` dump would lock it down.

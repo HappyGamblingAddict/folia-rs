@@ -2493,3 +2493,62 @@ Format:
   log because the join session exposes no outbound queue. `playSound` and
   `spawnParticle` are logged no-ops. Enchantment/sound registry shims provide
   identity only, not gameplay effects or audio.
+## 2026-11-06 - Light occlusion uses the generated outline face projections
+- Context: `light.rs` previously treated light occlusion as the per-state
+  `light_block` value alone. That is correct for full cubes but wrong for
+  slabs, stairs, snow layers, farmland, and paths: Java's
+  `LightEngine.shapeOccludes` merges the two adjacent `getFaceOcclusionShape`
+  projections and only blocks light when the union covers the shared face.
+  `block_state_behaviour.tsv.gz` has no `canOcclude` or
+  `useShapeForLightOcclusion` columns, but `block_shapes.tsv.gz` stores the
+  exact `getShape`/outline AABBs.
+- Decision: `light::face_occludes(state_id, direction)` projects the extreme
+  slice of the state's outline onto the face square and tests whether the union
+  of projected boxes covers it. `pair_shape_occludes` unions both states'
+  opposing faces, mirroring `Shapes.faceShapeOccludes`. The geometry and light
+  masks are cached in two dense 29,671-byte tables (`FACE_MASKS`), so the hot
+  path is a branch plus a byte lookup; only the rare partial/partial pair
+  rebuilds rectangles.
+- Decision: A full cube with `light_block < 15` is treated as shape-transparent.
+  This reproduces the effect of `canOcclude=false`/`noOcclusion()` for glass,
+  stained glass, ice, frosted ice, leaves, water, honey, slime, beacon,
+  shulker boxes, copper grates, and spawners without adding columns to the
+  generated assets. Empty outlines (air, fluids, plants, torches) never
+  contribute a face. Attenuation still comes from `light_block`, so water and
+  leaves stay at 1 and glass stays at 0.
+- Decision: The engine's `light_face_mask` also excludes ordinary full cubes
+  (stone, glowstone, sea lantern, magma). Vanilla leaves
+  `useShapeForLightOcclusion` false for them and relies on `light_block == 15`;
+  including the full shape would incorrectly stop an opaque emitter such as
+  glowstone from lighting its neighbours.
+- Decision: Because the asset lacks `useShapeForLightOcclusion`, the light
+  mask uses a small static allowlist transcribed from the decompiled block
+  classes: slabs, stairs, shelves, carpets (intentional task deviation), snow,
+  farmland, dirt paths, daylight detectors, enchanting tables, lecterns,
+  pistons, sculk shriekers/sensors, stonecutters, and end portal frames. Doors,
+  trapdoors, fence gates, fences, walls, panes, campfires, beds, bells,
+  composters, and other `useShapeForLightOcclusion=false` partial shapes keep
+  their `light_block` attenuation without occluding. This is what lets a
+  campfire light the block above it and a closed trapdoor pass direct sky.
+  The public `face_occludes` still reports the geometric face, so callers can
+  use it for hit/visibility tests without inheriting the engine's policy.
+- Decision: Both engines use the same check: the whole-chunk sky source scan
+  uses `isEdgeOccluded` (lower `light_block != 0` or the pairwise face test),
+  and sky/block increase propagation checks the face before writing a level.
+  The decrease queues deliberately do not shape-check, matching
+  `BlockLightEngine.propagateDecrease`/`SkyLightEngine.propagateDecrease`: they
+  over-clear the old region and the increase phase re-lights it through the new
+  shape. `LightScene::update_block` recomputes the sky column when either the
+  light-block value or the per-state face mask changes, and re-runs a direct-sky
+  cell when only the shape changed.
+- Why: This keeps the asset format stable, uses the oracle-exact outline data
+  already embedded, and matches the documented task contract.
+- Consequences: Cover the common shape-occluding blocks (slabs, stairs, snow,
+  farmland, paths, carpets) and confirm fences/panes/walls and other
+  `useShapeForLightOcclusion=false` shapes stay transparent, without Java
+  light fixtures yet. Remaining approximation: blocks that override
+  `getOcclusionShape` independently of `getShape` (sculk shrieker, lectern,
+  fence gate) use their outline, and carpet shape-occludes its top/bottom
+  although vanilla `CarpetBlock` leaves `useShapeForLightOcclusion` false.
+  Exact `canOcclude`/`useShapeForLightOcclusion` columns and Java light-array
+  fixtures are the next parity step.

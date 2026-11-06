@@ -117,6 +117,8 @@ Before starting, verify these exist:
 
 - `crates/folia-core/assets/block_states.tsv`
 - `crates/folia-core/assets/block_defaults.tsv`
+- `crates/folia-core/assets/block_state_behaviour.tsv.gz`
+- `crates/folia-core/assets/block_shapes.tsv.gz`
 - `crates/folia-core/assets/item_ids.tsv`
 - `crates/folia-core/assets/entity_type_ids.tsv`
 - `crates/folia-core/assets/feature_data.json`

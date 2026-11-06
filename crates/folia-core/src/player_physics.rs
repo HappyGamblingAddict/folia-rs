@@ -9,18 +9,19 @@
 //! The formulas follow `LivingEntity.travelInAir`, `Entity.move`,
 //! `Entity.moveRelative`, `Entity.checkFallDamage`, and `Player.travel` for
 //! 1.21.11: gravity `0.08`, drag `0.98`, ground friction, speed and jump
-//! factors from the generated [`crate::block_behaviour`] table, jump impulse
-//! `0.42`, step height `0.6`, and `0.91` horizontal air/ground drag. Features
-//! that need movement metadata this port does not carry yet (ladders, cobwebs,
-//! slime bounce, elytra, water/lava currents, bubbles, powder snow,
-//! scaffolding) are intentionally not simulated; see `DECISIONS.md` for the
-//! exact remaining gaps. Collision shapes are still full cubes because shape
-//! metadata is not ported.
+//! factors from the generated [`crate::block_behaviour`] table and collision
+//! boxes from the generated [`crate::block_shapes`] table. Features that need
+//! movement metadata this port does not carry yet (ladders, cobwebs, slime
+//! bounce, elytra, water/lava currents, bubbles, powder snow, scaffolding) are
+//! intentionally not simulated; see `DECISIONS.md` for the exact remaining
+//! gaps.
 
 use crate::chunk::{BlockState, Chunk};
 use crate::world::WorldStorage;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+
+pub use crate::block_shapes::Aabb;
 
 /// Vanilla living-entity gravity (`Attributes.GRAVITY` default).
 pub const GRAVITY: f64 = 0.08;
@@ -73,83 +74,21 @@ pub const MAX_SETTLE_LIFT: f64 = 8.0;
 const SETTLE_STEP: f64 = 0.25;
 const EPSILON: f64 = 1.0e-7;
 
-/// An axis-aligned collision box in world coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Aabb {
-    pub min_x: f64,
-    pub min_y: f64,
-    pub min_z: f64,
-    pub max_x: f64,
-    pub max_y: f64,
-    pub max_z: f64,
-}
-
-impl Aabb {
-    pub fn new(min_x: f64, min_y: f64, min_z: f64, max_x: f64, max_y: f64, max_z: f64) -> Self {
-        Self {
-            min_x,
-            min_y,
-            min_z,
-            max_x,
-            max_y,
-            max_z,
-        }
-    }
-
-    /// The full cube occupied by the block at `(x, y, z)`.
-    pub fn block(x: i32, y: i32, z: i32) -> Self {
-        let min_x = f64::from(x);
-        let min_y = f64::from(y);
-        let min_z = f64::from(z);
-        Self::new(min_x, min_y, min_z, min_x + 1.0, min_y + 1.0, min_z + 1.0)
-    }
-
-    /// The box a player with the given feet position and dimensions occupies.
-    pub fn player(x: f64, y: f64, z: f64, width: f64, height: f64) -> Self {
-        let half = width * 0.5;
-        Self::new(x - half, y, z - half, x + half, y + height, z + half)
-    }
-
-    pub fn offset(self, x: f64, y: f64, z: f64) -> Self {
-        Self::new(
-            self.min_x + x,
-            self.min_y + y,
-            self.min_z + z,
-            self.max_x + x,
-            self.max_y + y,
-            self.max_z + z,
-        )
-    }
-
-    /// The union of this box and the box translated towards the movement.
-    pub fn expand_towards(self, x: f64, y: f64, z: f64) -> Self {
-        Self::new(
-            self.min_x + x.min(0.0),
-            self.min_y + y.min(0.0),
-            self.min_z + z.min(0.0),
-            self.max_x + x.max(0.0),
-            self.max_y + y.max(0.0),
-            self.max_z + z.max(0.0),
-        )
-    }
-
-    /// Strict overlap: boxes that only touch at a face do not count.
-    pub fn intersects(self, other: &Aabb) -> bool {
-        self.min_x < other.max_x
-            && self.max_x > other.min_x
-            && self.min_y < other.max_y
-            && self.max_y > other.min_y
-            && self.min_z < other.max_z
-            && self.max_z > other.min_z
-    }
-}
-
 /// World queries player physics needs. Implemented by the shared world storage
 /// and by the flat/test worlds used in focused tests.
 pub trait PhysicsWorld {
-    /// The collision box of the block at `(x, y, z)`, or `None` when the block
-    /// has no collision (air, fluids, replaceable plants, ...).
+    /// The first collision box of the block at `(x, y, z)`, or `None` when the
+    /// block has no collision (air, fluids, replaceable plants, ...).
     fn collision_box(&mut self, x: i32, y: i32, z: i32) -> Option<Aabb>;
+    /// Every collision box of the block at `(x, y, z)`.
+    ///
+    /// Most blocks have a single full cube, but slabs, stairs, fences, walls,
+    /// panes, snow layers, and similar states return multiple or partial
+    /// boxes. The default keeps simple test worlds working by wrapping
+    /// [`Self::collision_box`].
+    fn collision_boxes(&mut self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        self.collision_box(x, y, z).into_iter().collect()
+    }
     /// Block friction of the supporting block.
     fn friction(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
         DEFAULT_BLOCK_FRICTION
@@ -246,12 +185,18 @@ impl<'a> StoragePhysicsWorld<'a> {
 
 impl PhysicsWorld for StoragePhysicsWorld<'_> {
     fn collision_box(&mut self, x: i32, y: i32, z: i32) -> Option<Aabb> {
-        let state = self.block_state(x, y, z)?;
-        // Block shapes are still unported, so every collidable state is
-        // approximated as a full cube. `has_collision` is the vanilla property
-        // that decides whether a shape exists at all; air, fluids and
-        // replaceable plants report false.
-        crate::block_behaviour::has_collision(state).then(|| Aabb::block(x, y, z))
+        self.collision_boxes(x, y, z).into_iter().next()
+    }
+
+    fn collision_boxes(&mut self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        let Some(state) = self.block_state(x, y, z) else {
+            return Vec::new();
+        };
+        let state_id = crate::registry::block_state_id(state);
+        crate::block_shapes::collision_boxes(state_id)
+            .iter()
+            .map(|bounds| bounds.offset(f64::from(x), f64::from(y), f64::from(z)))
+            .collect()
     }
 
     fn friction(&mut self, x: i32, y: i32, z: i32) -> f64 {
@@ -889,20 +834,23 @@ pub fn fall_damage_for(fall_distance: f64) -> f32 {
 }
 
 fn collision_boxes(world: &mut impl PhysicsWorld, area: Aabb) -> Vec<Aabb> {
-    let x0 = (area.min_x - EPSILON).floor() as i32;
-    let x1 = (area.max_x + EPSILON).floor() as i32;
-    let y0 = (area.min_y - EPSILON).floor() as i32;
-    let y1 = (area.max_y + EPSILON).floor() as i32;
-    let z0 = (area.min_z - EPSILON).floor() as i32;
-    let z1 = (area.max_z + EPSILON).floor() as i32;
+    // Vanilla `BlockCollisions` widens the block cursor by one block on every
+    // side so shapes that extend past their own block (fences 1.5 high, walls
+    // 1.5 high for collision) are still considered.
+    let x0 = (area.min_x - EPSILON).floor() as i32 - 1;
+    let x1 = (area.max_x + EPSILON).floor() as i32 + 1;
+    let y0 = (area.min_y - EPSILON).floor() as i32 - 1;
+    let y1 = (area.max_y + EPSILON).floor() as i32 + 1;
+    let z0 = (area.min_z - EPSILON).floor() as i32 - 1;
+    let z1 = (area.max_z + EPSILON).floor() as i32 + 1;
     let mut boxes = Vec::new();
     for x in x0..=x1 {
         for y in y0..=y1 {
             for z in z0..=z1 {
-                if let Some(collision) = world.collision_box(x, y, z)
-                    && collision.intersects(&area)
-                {
-                    boxes.push(collision);
+                for collision in world.collision_boxes(x, y, z) {
+                    if collision.intersects(&area) {
+                        boxes.push(collision);
+                    }
                 }
             }
         }

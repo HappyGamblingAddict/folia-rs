@@ -10,7 +10,7 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Tests: **630 passing** on the final full workspace gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -22,11 +22,12 @@ Last updated: 2026-11-06
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
   block breaking/tools/drops/durability, exact surface biome zoom, and an
   expanded Bukkit bridge (world/player/item/events).
-- Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
-  ownership.
+- Major gaps: P1.5 metadata beyond collision/outline shapes and the current
+  behaviour table (support rules, waterlogging, tool/tier tables, per-state
+  random-tick behavior), P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9
+  incremental light and Java light fixtures, P5 AI/spawning/armor, P6
+  pistons/block entities/full redstone, P7 Nether/End, P8 online mode, P9 plugin
+  API depth, P10 region ownership.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -186,15 +187,15 @@ Last updated: 2026-11-06
   fall/fire/hunger damage and inventory drops are still missing.
 - Server-side player physics is live: `player_physics.rs` models the
   standing/sneaking/swimming hitboxes, vanilla gravity/drag/friction, jump,
-  sprint jump, step height, axis-separated collision against the shared world
-  storage, fall distance, and fall damage. Movement packets are reconciled
-  instead of accepted verbatim: deltas up to `0.75` blocks are replayed through
-  the collider, a reproducible claim is accepted exactly, and a blocked claim
-  sends a position correction. Longer packets are lag bursts that validate
-  their destination. Fall damage sends health updates and death; landing resets
-  fall distance. Non-full block shapes, ladders, cobwebs, slime, elytra, water/
-  lava currents, swimming, bubbles, powder snow, and sprint/sneak input packets
-  are not ported yet.
+  sprint jump, step height, axis-separated swept collision against per-state
+  block shape AABBs, fall distance, and fall damage. Movement packets are
+  reconciled instead of accepted verbatim: deltas up to `0.75` blocks are
+  replayed through the collider, a reproducible claim is accepted exactly, and
+  a blocked claim sends a position correction. Longer packets are lag bursts
+  that validate their destination. Fall damage sends health updates and death;
+  landing resets fall distance. Ladders, cobwebs, slime, elytra, water/lava
+  currents, swimming, bubbles, powder snow, and sprint/sneak input packets are
+  not ported yet.
 
 - Structure templates have a first P2.8 slice in
   `worldgen/structure/template.rs`: gzip structure NBT parsing (DataVersion,
@@ -245,8 +246,9 @@ Last updated: 2026-11-06
 
 ## Current focus
 
-1. P1.5 block shapes and collision metadata, then use it in physics, lighting,
-   and breaking.
+1. P1.5 remaining metadata (support/occlusion rules, waterlogging, tool/tier
+   tables, per-state random-tick behavior), then use it in lighting and
+   breaking.
 2. P2.8 structure processor lists, template pools, jigsaw expansion, biome
    filtering, and generator wiring.
 3. P3.6–P3.9 decrease queues, incremental section light packets, cross-chunk
@@ -272,9 +274,8 @@ Last updated: 2026-11-06
   differential fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
-  powder snow, sprint/sneak input packets, real block shapes) and eventually
-  move player simulation onto its own 20 Hz tick instead of packet-driven
-  reconciliation.
+  powder snow, sprint/sneak input packets) and eventually move player
+  simulation onto its own 20 Hz tick instead of packet-driven reconciliation.
 - P1.3 tag data is available and the ore feature already resolves its four
   target tags through `folia_core::tags`; add the remaining cosmetic
   registries.
@@ -285,8 +286,8 @@ Last updated: 2026-11-06
   sampler with Java's level RNG once parity lands; add a Java fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
-  powder snow, sprint/sneak input packets, real block shapes) and move
-  player simulation onto its own 20 Hz tick.
+  powder snow, sprint/sneak input packets) and move player simulation onto its
+  own 20 Hz tick.
 - The P2.5 aquatic/vine/mushroom features are in place. Next: wire the tree
   `pale_moss` decorator, port `simple_random_selector` for the dripleaf
   pools, add `simple_block.schedule_tick`, and add beehive occupants.
@@ -304,7 +305,9 @@ Last updated: 2026-11-06
 - [ ] P1.1 Complete remaining registry dumps
 - [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
 - [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
-- [ ] P1.5 Block behavior metadata
+- [~] P1.5 Block behavior metadata (per-state collision/outline shapes done;
+  support/occlusion rules, waterlogging, tool/tier tables, and per-state
+  random-tick behavior remain)
 - [~] P1.7 Loot and recipe assets (1,324 tables + 1,470 recipes extracted,
   typed loaders/roll engine; drop wiring and crafting matcher remain)
 - [~] P2.1 Feature framework core (framework + loader done)
@@ -342,6 +345,16 @@ Last updated: 2026-11-06
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-06: P1.5 per-state block collision/outline shapes — new
+  `block_shapes.rs` embeds `assets/block_shapes.tsv.gz` (29,671 rows, 161,523
+  B), generated by `scripts/extract_block_shapes.ps1` from the local Folia
+  oracle. `collision_boxes`/`outline_boxes` return exact AABB lists for every
+  state; passable states (air/fluids/plants/torches) are empty; unknown ids
+  fall back to a full cube. `player_physics` now sweeps multi-box shapes with
+  vanilla's ±1 block cursor and step-up; `entity.rs` uses the same lists via a
+  `BlockCollider::collision_boxes` default. The player steps onto/off a bottom
+  slab and an armor stand lands at 0.5. 4 lib + 15 `tests/block_shapes.rs`
+  tests.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/

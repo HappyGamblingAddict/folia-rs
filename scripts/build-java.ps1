@@ -102,6 +102,7 @@ if ((Invoke-Native $javac $pluginArguments) -ne 0) {
     throw "Example plugin compilation failed."
 }
 Copy-Item (Join-Path $pluginSource "plugin.yml") (Join-Path $pluginClasses "plugin.yml") -Force
+Copy-Item (Join-Path $pluginSource "config.yml") (Join-Path $pluginClasses "config.yml") -Force
 New-Item -ItemType Directory -Force (Split-Path -Parent $pluginJar) | Out-Null
 if ((Invoke-Native $jarTool @("--create", "--file", $pluginJar, "-C", $pluginClasses, ".")) -ne 0) {
     throw "Example plugin packaging failed."

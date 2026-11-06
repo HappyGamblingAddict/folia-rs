@@ -8,8 +8,10 @@ import org.bukkit.Keyed;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
+import org.bukkit.Sound;
 import org.bukkit.block.Biome;
 import org.bukkit.block.BlockType;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemType;
 
 import java.lang.reflect.Proxy;
@@ -63,6 +65,12 @@ public final class BridgeRegistryAccess implements RegistryAccess {
         if (type == Biome.class) {
             return cast(biomeRegistry());
         }
+        if (type == Enchantment.class) {
+            return cast(enchantmentRegistry());
+        }
+        if (type == Sound.class) {
+            return cast(soundRegistry());
+        }
         return cast(emptyRegistry());
     }
 
@@ -77,6 +85,13 @@ public final class BridgeRegistryAccess implements RegistryAccess {
         }
         if (name.equals("biome") || name.endsWith("/biome")) {
             return cast(biomeRegistry());
+        }
+        if (name.equals("enchantment") || name.endsWith("/enchantment")) {
+            return cast(enchantmentRegistry());
+        }
+        if (name.equals("sound_event") || name.endsWith("/sound_event")
+                || name.equals("sound") || name.endsWith("/sound")) {
+            return cast(soundRegistry());
         }
         return cast(emptyRegistry());
     }
@@ -133,6 +148,24 @@ public final class BridgeRegistryAccess implements RegistryAccess {
 
     private static Registry<Keyed> emptyRegistry() {
         return new SimpleRegistry<>(Keyed.class, key -> null, Stream::empty, value -> null);
+    }
+
+    private static Registry<Enchantment> enchantmentRegistry() {
+        return new SimpleRegistry<>(
+                Enchantment.class,
+                BridgeEnchantment::new,
+                Stream::empty,
+                Enchantment::getKey
+        );
+    }
+
+    private static Registry<Sound> soundRegistry() {
+        return new SimpleRegistry<>(
+                Sound.class,
+                BridgeSound::new,
+                Stream::empty,
+                Sound::getKey
+        );
     }
 
     private static ItemType itemType(Material material) {

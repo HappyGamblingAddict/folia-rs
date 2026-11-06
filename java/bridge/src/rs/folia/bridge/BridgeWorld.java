@@ -192,12 +192,70 @@ final class BridgeWorld implements InvocationHandler {
             case "getWorldType" -> WorldType.NORMAL;
             case "getDifficulty" -> Difficulty.NORMAL;
             case "getSpawnLocation" -> spawnLocation();
-            case "setSpawnLocation" -> false;
-            case "getTime", "getFullTime" -> 0L;
-            case "setTime", "setFullTime" -> null;
-            case "isDayTime" -> true;
-            case "hasStorm", "isThundering" -> false;
-            case "getWeatherDuration", "getThunderDuration", "getClearWeatherDuration" -> 0;
+            case "setSpawnLocation" -> {
+                if (args == null || args.length == 0) {
+                    yield false;
+                }
+                if (args[0] instanceof Location location) {
+                    yield Bridge.nativeWorldSetSpawn(
+                            name,
+                            location.getBlockX() + 0.5D,
+                            location.getBlockY(),
+                            location.getBlockZ() + 0.5D
+                    );
+                }
+                if (args.length >= 3) {
+                    yield Bridge.nativeWorldSetSpawn(
+                            name,
+                            ((Number) args[0]).intValue() + 0.5D,
+                            ((Number) args[1]).intValue(),
+                            ((Number) args[2]).intValue() + 0.5D
+                    );
+                }
+                yield false;
+            }
+            case "getFullTime" -> Bridge.nativeWorldFullTime(name);
+            case "getTime" -> Math.floorMod(Bridge.nativeWorldFullTime(name), 24_000L);
+            case "getGameTime" -> Bridge.nativeWorldFullTime(name);
+            case "setTime" -> {
+                long time = ((Number) args[0]).longValue();
+                long fullTime = Bridge.nativeWorldFullTime(name);
+                long margin = Math.floorMod(time - fullTime, 24_000L);
+                Bridge.nativeWorldSetFullTime(name, fullTime + margin);
+                yield null;
+            }
+            case "setFullTime" -> {
+                Bridge.nativeWorldSetFullTime(name, ((Number) args[0]).longValue());
+                yield null;
+            }
+            case "isDayTime" -> Bridge.nativeWorldIsDayTime(name);
+            case "hasStorm" -> Bridge.nativeWorldHasStorm(name);
+            case "setStorm" -> {
+                Bridge.nativeWorldSetStorm(name, Boolean.TRUE.equals(args[0]));
+                yield null;
+            }
+            case "isThundering" -> Bridge.nativeWorldIsThundering(name);
+            case "setThundering" -> {
+                Bridge.nativeWorldSetThundering(name, Boolean.TRUE.equals(args[0]));
+                yield null;
+            }
+            case "isClearWeather" ->
+                    !Bridge.nativeWorldHasStorm(name) && !Bridge.nativeWorldIsThundering(name);
+            case "getWeatherDuration" -> Bridge.nativeWorldWeatherDuration(name);
+            case "setWeatherDuration" -> {
+                Bridge.nativeWorldSetWeatherDuration(name, ((Number) args[0]).intValue());
+                yield null;
+            }
+            case "getThunderDuration" -> Bridge.nativeWorldThunderDuration(name);
+            case "setThunderDuration" -> {
+                Bridge.nativeWorldSetThunderDuration(name, ((Number) args[0]).intValue());
+                yield null;
+            }
+            case "getClearWeatherDuration" -> Bridge.nativeWorldClearWeatherDuration(name);
+            case "setClearWeatherDuration" -> {
+                Bridge.nativeWorldSetClearWeatherDuration(name, ((Number) args[0]).intValue());
+                yield null;
+            }
             case "getKeepSpawnInMemory" -> true;
             case "setKeepSpawnInMemory" -> null;
             case "getBlockAt" -> switch (args.length) {
@@ -321,6 +379,11 @@ final class BridgeWorld implements InvocationHandler {
                  "getChunkCount" -> 0;
             case "spawnEntity", "spawn", "createEntity", "dropItem", "dropItemNaturally",
                  "strikeLightning", "strikeLightningEffect", "spawnArrow" -> null;
+            case "playSound", "playEffect", "spawnParticle", "stopSound", "stopAllSounds" -> {
+                Bridge.logger().fine(() -> "Ignoring client-only effect " + method.getName()
+                        + " on " + name + ": the bridge has no packet queue for it yet");
+                yield null;
+            }
             case "generateTree", "hasStructureAt", "lineOfSightExists", "hasCollisionsIn",
                  "addPluginChunkTicket", "removePluginChunkTicket", "setChunkForceLoaded",
                  "isChunkForceLoaded" -> false;

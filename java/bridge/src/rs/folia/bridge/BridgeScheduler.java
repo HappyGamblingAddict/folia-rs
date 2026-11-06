@@ -20,13 +20,34 @@ import java.util.logging.Logger;
  * <p>The actual task table lives in Rust ({@code TASKS} in {@code jvm.rs}).
  * Scheduling, cancellation and tick advancement all happen in the Rust server
  * loop; Java only keeps the {@link BukkitTask} handle that plugins expect.</p>
+ *
+ * <p><strong>Asynchronous semantics:</strong> the bridge has no worker pool, so
+ * the asynchronous variants are accepted but run on the server thread in the
+ * same Rust tick queue. Their {@link BukkitTask#isSync()} intentionally reports
+ * {@code true}; a plugin must not treat them as off-thread work. This is an
+ * explicit limitation until a bridge-owned async executor exists.</p>
  */
 final class BridgeScheduler {
+    /** Test seam so the deferral/cancellation protocol can be checked without JNI. */
+    interface Backend {
+        int schedule(String pluginName, Runnable task, long delay, long period);
+
+        void cancel(int taskId);
+
+        void cancelTasks(String pluginName);
+    }
+
     private final Logger log;
+    private final Backend backend;
     private final BukkitScheduler proxy;
 
     BridgeScheduler(Logger log, ClassLoader classLoader) {
+        this(log, classLoader, new NativeBackend());
+    }
+
+    BridgeScheduler(Logger log, ClassLoader classLoader, Backend backend) {
         this.log = log;
+        this.backend = backend;
         this.proxy = (BukkitScheduler) Proxy.newProxyInstance(
                 classLoader,
                 new Class<?>[]{BukkitScheduler.class},
@@ -49,29 +70,29 @@ final class BridgeScheduler {
         String name = method.getName();
         try {
             return switch (name) {
-                case "runTaskTimer" -> schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3), true);
+                case "runTaskTimer" -> schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3));
                 case "runTaskTimerAsynchronously" ->
                         schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3), false);
-                case "runTaskLater" -> schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L, true);
+                case "runTaskLater" -> schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L);
                 case "runTaskLaterAsynchronously" ->
                         schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L, false);
-                case "runTask" -> schedule((Plugin) args[0], (Runnable) args[1], 0L, 0L, true);
+                case "runTask" -> schedule((Plugin) args[0], (Runnable) args[1], 0L, 0L);
                 case "runTaskAsynchronously" -> schedule((Plugin) args[0], (Runnable) args[1], 0L, 0L, false);
                 case "scheduleSyncDelayedTask" ->
-                        schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L, true);
+                        schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L);
                 case "scheduleSyncRepeatingTask" ->
-                        schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3), true);
+                        schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3));
                 case "scheduleAsyncDelayedTask" ->
                         schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), 0L, false);
                 case "scheduleAsyncRepeatingTask" ->
                         schedule((Plugin) args[0], (Runnable) args[1], asLong(args, 2), asLong(args, 3), false);
                 case "callSyncMethod" -> callSync((Callable<?>) args[1]);
                 case "cancelTask" -> {
-                    Bridge.nativeCancelTask(asInt(args, 0));
+                    backend.cancel(asInt(args, 0));
                     yield null;
                 }
                 case "cancelTasks" -> {
-                    Bridge.nativeCancelTasks(((Plugin) args[0]).getName());
+                    backend.cancelTasks(((Plugin) args[0]).getName());
                     yield null;
                 }
                 case "isCurrentlyRunning", "isQueued" -> false;
@@ -84,8 +105,17 @@ final class BridgeScheduler {
         }
     }
 
-    private BukkitTask schedule(Plugin plugin, Runnable runnable, long delay, long period, boolean sync) {
-        int id = Bridge.nativeScheduleTask(
+    private BukkitTask schedule(Plugin plugin, Runnable runnable, long delay, long period) {
+        return schedule(plugin, runnable, delay, period, true);
+    }
+
+    private BukkitTask schedule(Plugin plugin, Runnable runnable, long delay, long period,
+                                boolean asyncRequested) {
+        if (!asyncRequested) {
+            log.fine(() -> "Async task from " + plugin.getName()
+                    + " will run on the server tick thread; no async executor exists");
+        }
+        int id = backend.schedule(
                 plugin.getName(),
                 runnable,
                 Math.max(0L, delay),
@@ -94,7 +124,8 @@ final class BridgeScheduler {
         if (id < 0) {
             throw new IllegalStateException("Rust host rejected the scheduled task");
         }
-        return new Task(id, plugin, sync).proxy;
+        // isSync is always true: the Rust queue runs tasks on the server thread.
+        return new Task(id, plugin, true).proxy;
     }
 
     private Future<Object> callSync(Callable<?> callable) {
@@ -126,6 +157,23 @@ final class BridgeScheduler {
             case "equals" -> proxyObject == args[0];
             default -> null;
         };
+    }
+
+    private static final class NativeBackend implements Backend {
+        @Override
+        public int schedule(String pluginName, Runnable task, long delay, long period) {
+            return Bridge.nativeScheduleTask(pluginName, task, delay, period);
+        }
+
+        @Override
+        public void cancel(int taskId) {
+            Bridge.nativeCancelTask(taskId);
+        }
+
+        @Override
+        public void cancelTasks(String pluginName) {
+            Bridge.nativeCancelTasks(pluginName);
+        }
     }
 
     private final class Task implements InvocationHandler {
@@ -164,7 +212,7 @@ final class BridgeScheduler {
                 case "cancel" -> {
                     if (!cancelled) {
                         cancelled = true;
-                        Bridge.nativeCancelTask(id);
+                        backend.cancel(id);
                     }
                     yield null;
                 }

@@ -1,0 +1,4 @@
+# HelloPlugin configuration (flat scalar keys).
+motd: "Hello from the Rust bridge"
+max-homes: 3
+debug: false

@@ -58,6 +58,19 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P9 bridge depth slice — `jvm.rs` adds Rust-owned permission
+  attachments (explicit values + operator default), Rust-backed flat-YAML
+  plugin config I/O under `run/<plugin>/config.yml`, persisted world
+  time/weather/spawn state in `run/world_state.txt`, and a v2 item codec with
+  enchantments. Java adds `BridgeConfig`, `BridgeServicesManager`,
+  `BridgePermissions`/`BridgePermissionAttachment`, world time/weather/spawn
+  methods, a scheduler backend seam, registry shims for enchantment/sound
+  constants, and explicit no-op sound/particle paths. `HelloPlugin` exercises
+  config, services, time/weather/spawn, permissions, and enchantments;
+  `BridgeApiTest` grows from 18 to 44 checks. Focused Rust: 11 `folia-server`
+  tests pass; live `FOLIA_BRIDGE_SELFTEST=1` plugin startup passes. Live
+  message/kick transport, weather/time packets, item flags/PDC persistence,
+  plugin.yml permission expansion, and stock `reloadConfig` remain open.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's

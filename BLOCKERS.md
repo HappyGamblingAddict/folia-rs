@@ -626,3 +626,34 @@ These are expected gaps, not reasons to stop:
 - Additional limitation: there is no TLS stack in the workspace, so the real
   session lookup shells out to `curl`. Replace it with an in-process TLS client
   when a dependency is allowed (P11 hardening).
+
+## 2026-11-06 - Bridge API depth leaves live transport and YAML sections open
+
+- Scope: `BridgeConfig` (flat scalar YAML, Rust file I/O), Rust-owned permission
+  attachments with operator defaults, `ServicesManager`, scheduler backend
+  seam, persisted world time/weather/spawn, item enchantment round-trip, and
+  registry shims for enchantment/sound constants. All focused Rust and Java
+  checks pass.
+- Not implemented: `Player.sendMessage` reaches only the Rust log because
+  `join.rs` exposes no outbound message queue; `kickPlayer` logs a request but
+  cannot close the socket. `playSound`/`spawnParticle` are explicit no-ops.
+  World time/weather changes persist to `run/world_state.txt` but no play
+  packets are emitted, so a connected client will not see them.
+- Config limitations: comments, lists, maps, and nested sections are not
+  serialized; dotted scalar keys work. `saveDefaultConfig()` is honoured on
+  first read, but the stock `JavaPlugin.reloadConfig()` replaces the bridge
+  configuration with a YamlConfiguration. Plugins that need the bridge file
+  should call `getConfig()` or `saveConfig()` after reload.
+- Permission limitations: attachments are Rust-owned and explicit values win,
+  but permission wildcards/parents from `plugin.yml`, permission registration
+  (`PluginManager.addPermission`/`getPermission`), and default permission maps
+  are not modelled. Unset permissions use only the operator flag.
+- Scheduler limitations: async variants are downgraded to the server tick
+  thread and `isSync()` reports true; Folia region/entity schedulers are not
+  implemented. Timed permission attachments reuse the same queue.
+- Item limitations: enchantments round-trip through
+  `ComponentValue::Enchantments`; item flags, PDC, custom model data, and
+  container contents do not. Registry shims make `Enchantment`/`Sound`
+  constants resolvable but provide identity only, not vanilla stats or audio.
+- Services are process-local and in-memory; dependency/load ordering and a
+  multi-plugin service test remain open.

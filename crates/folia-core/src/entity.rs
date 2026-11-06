@@ -61,6 +61,13 @@ impl Entity {
         self.velocity = [x, y, z];
     }
 
+    /// Create the living-entity state (health, attributes, equipment,
+    /// metadata) for this entity's id. The state is stored separately by id so
+    /// physics and gameplay data stay independent.
+    pub fn living(&self) -> crate::entity_metadata::LivingEntity {
+        crate::entity_metadata::LivingEntity::new(self.id)
+    }
+
     pub fn aabb(&self) -> (f64, f64, f64, f64, f64, f64) {
         let half = self.width * 0.5;
         (
@@ -369,7 +376,53 @@ pub fn spawn(entity: Entity) -> Vec<u8> {
     packet
 }
 
+/// Spawn a living entity and register its health/metadata/equipment record by
+/// id. The add-entity packet is unchanged; callers send
+/// [`crate::entity_metadata::LivingEntity::all_metadata_packet`] when they need
+/// the initial synced values.
+pub fn spawn_living(entity: Entity) -> Vec<u8> {
+    let id = entity.id;
+    let packet = spawn(entity);
+    crate::entity_metadata::register_living(id);
+    packet
+}
+
+/// Apply damage to a registered living entity and broadcast the resulting
+/// metadata/death/health packets. Returns `None` when no living record exists.
+pub fn hurt_entity(id: i32, amount: f32) -> Option<crate::entity_metadata::HurtResult> {
+    let result = crate::entity_metadata::living_entities().hurt(id, amount)?;
+    for packet in &result.packets {
+        crate::block_update::broadcast(packet);
+    }
+    Some(result)
+}
+
+/// Tick every registered living entity once and broadcast death-animation
+/// packets. The physics tick remains in [`tick_all`].
+pub fn tick_living_entities() -> Vec<Vec<u8>> {
+    let packets = crate::entity_metadata::living_entities().tick_all();
+    for packet in &packets {
+        crate::block_update::broadcast(packet);
+    }
+    packets
+}
+
+/// Replace one equipment slot and broadcast a full equipment update.
+pub fn set_entity_equipment(
+    id: i32,
+    slot: crate::entity_metadata::EquipmentSlot,
+    stack: crate::item_components::ItemStack,
+) -> Option<Vec<u8>> {
+    let mut entities = crate::entity_metadata::living_entities();
+    entities.set_equipment(id, slot, stack)?;
+    let packet = entities.equipment_packet(id)?;
+    drop(entities);
+    crate::block_update::broadcast(&packet);
+    Some(packet)
+}
+
 pub fn remove(id: i32) -> Option<Vec<u8>> {
+    crate::entity_metadata::remove_living(id);
     let removed = ENTITIES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

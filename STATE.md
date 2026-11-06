@@ -9,11 +9,21 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Working tree: entity metadata/health/equipment slice landed on
+  `task/entities2`; docs updated for this slice.
+- Tests: **426 passing** on the last full gate; this slice adds 6 lib and 12
+  integration focused tests (`entity_metadata`). Focused entity and
+  armor-stand physics tests are green.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
+- P5.1 has its first core slice: `entity_metadata.rs` provides a typed
+  metadata store keyed by entity id with dirty-only
+  `ClientboundSetEntityData` encoding, `LivingEntity` health/damage with the
+  vanilla 20-tick invulnerability window and death event `3`/`60`,
+  `ClientboundSetHealth` for players, typed attributes (max health, armor,
+  attack damage/speed, movement speed), and the eight equipment slots with
+  `ClientboundSetEquipment` round-trip. It is not wired into join/player
+  sessions; `entity.rs` exposes bridge helpers only.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -227,6 +237,12 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P5.1 metadata/health/equipment core is in place. Next: wire
+  `LivingEntity` into spawned entities and player sessions, send the initial
+  non-default metadata snapshot, add the remaining serializers (effect
+  particles, arrow/stinger counts, sleeping pos), compute armor from equipment
+  once item prototypes carry armor data, and add a Java-captured packet
+  fixture. Do not claim entity tracking parity yet.
 - P1.4 has a working component-aware stack model. Next: dump per-item prototype
   component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
@@ -279,6 +295,10 @@ Last updated: 2026-11-06
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
 - [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
 - [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
+- [~] P5.1 Entity metadata and living-entity core (typed metadata store,
+  dirty-only packets, health/damage/death, attributes, eight equipment slots;
+  remaining serializers, session/entity wiring, armor calculation, and a Java
+  fixture open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
@@ -292,6 +312,18 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+- 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
+  adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
+  typed `MetadataValue` serializers (byte/int/long/float/string/component/
+  optional component/item stack/boolean/pose), `ClientboundSetEntityData`
+  encode/decode, `ClientboundSetEquipment` with ordinal+continuation bits,
+  `ClientboundEntityEvent` death events `3`/`60`, `ClientboundSetHealth`,
+  `LivingEntity` raw damage with the 20-tick invulnerability window and death
+  animation, typed attributes (max health, armor, toughness, attack
+  damage/speed, movement speed, follow range), and eight equipment slots.
+  `entity.rs` adds `spawn_living`, `hurt_entity`, `tick_living_entities`, and
+  `set_entity_equipment` bridges plus cleanup on removal; join/player sessions
+  are deliberately untouched. 6 lib + 12 integration tests.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

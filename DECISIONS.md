@@ -1309,3 +1309,49 @@ Format:
 - Consequences: The exact-name number in `STATE.md`/`PORT_MAP.md` is 92.02%
   until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
   the delta and its cause are recorded here.
+
+## 2026-11-06 - Entity metadata and living state are separate from physics
+
+- Context: The entity store is a global `HashMap<i32, Entity>` with physics
+  and spawn packets. P5.1 needs typed synched data, health, attributes, and
+  equipment while P5.2 will eventually move entities into per-chunk/per-region
+  storage. Adding every gameplay field to `Entity` would make the physics type
+  own state that must later move per region.
+- Decision: Keep `Entity` as position/physics and add a separate
+  `LivingEntity` record keyed by network id in `entity_metadata.rs`. It owns
+  `EntityMetadata`, health, attributes, and equipment. `Entity::living()`
+  constructs the record, and `entity.rs` exposes `spawn_living`/`hurt_entity`/
+  `tick_living_entities`/`set_entity_equipment` bridges plus cleanup in
+  `remove`. Join and player sessions are deliberately not wired.
+- Decision: `MetadataValue` is a closed typed enum; its variant selects the
+  serializer id, so a caller cannot write a byte under the float accessor.
+  Setting an existing index with a different serializer returns
+  `MetadataError::SerializerMismatch`. Unsupported serializer ids in an
+  incoming packet return an explicit decode error instead of guessing a
+  payload length.
+- Decision: Dirty tracking uses a `BTreeSet<u8>`; `pack_dirty` returns values
+  in ascending index order and clears the set, matching `SynchedEntityData`.
+  Defaults are not dirty, so a new record has no dirty packet.
+- Decision: Equipment packets use `EquipmentSlot.ordinal()` (0 mainhand, 1
+  offhand, 2 feet, 3 legs, 4 chest, 5 head, 6 body, 7 saddle) because
+  `ClientboundSetEquipmentPacket` writes the ordinal, not
+  `EquipmentSlot.getId()` (whose values are 0, 5, 1, 2, 3, 4, 6, 7).
+- Decision: Damage is the raw `LivingEntity.hurtServer` health subset:
+  dead/removed entities reject it, negative damage clamps to zero, the hit is
+  ignored while `invulnerableTime > invulnerableDuration / 2` and
+  `amount <= lastHurt`, otherwise health is clamped to `[0, max_health]`.
+  Death sends event `3` immediately, the dirty health/pose metadata packet,
+  and `ClientboundSetHealth` for players. `tick` sends event `60` at death
+  tick 20; non-players set `removed` but the model does not emit a remove
+  packet.
+- Decision: Packet builders return the raw payload including the packet id,
+  matching existing `entity.rs` helpers, rather than framing the VarInt
+  length. Callers use the existing `write_packet` path.
+- Why: This keeps the metadata/damage model testable without a session, avoids
+  committing the eventual region ownership design to the base physics type,
+  and makes serializer/equipment mistakes fail at the model boundary.
+- Consequences: Two stores keyed by entity id exist until the region entity
+  store lands (`MetadataStore` and `LivingEntityStore`); `spawn` does not
+  create a living record, so callers must use `spawn_living`. Initial
+  non-default metadata, per-viewer tracking, armor calculation, other
+  serializers, and a Java packet fixture remain open (see `BLOCKERS.md`).

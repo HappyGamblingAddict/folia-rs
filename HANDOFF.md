@@ -290,8 +290,14 @@ Key files:
   `ClientboundSetHealth` for players, typed attributes, and the eight equipment
   slots with `ClientboundSetEquipment` round-trip. `entity.rs` exposes
   `spawn_living`/`hurt_entity`/`tick_living_entities`/`set_entity_equipment`
-  bridges. This is a core model/packet slice; join and player sessions still
-  use their own health fields and per-viewer tracking is not ported.
+  bridges.
+- `SessionEntityTracker` gives every live session a deterministic cow/pig/zombie
+  set with Add Entity, full initial metadata, equipment, 20 Hz physics,
+  `entity_ai` environment updates, dirty metadata flush, death/poof/remove, and
+  out-of-range/chunk-unload/disconnect cleanup. Broadcast entity packets are
+  filtered to tracked ids. `join.rs` routes fall/void player damage through the
+  living store and resets it on respawn. Session mobs are viewer-owned and are
+  not saved or shared between players yet.
 
 Key files:
 
@@ -299,6 +305,7 @@ Key files:
 - `crates/folia-core/src/entity_metadata.rs`
 - `crates/folia-core/tests/entity_physics.rs`
 - `crates/folia-core/tests/entity_metadata.rs`
+- `crates/folia-core/tests/join_entities.rs`
 
 ### World generation
 
@@ -572,14 +579,19 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   comparators, torches, observers, pressure plates, lamps, pistons, and other
   components are not. Fluids flow on scheduled ticks but lava fire/quenching
   and block-destruction drops are not modeled.
-- Entity AI, goals, pathfinding, combat, and general damage are not ported.
-  Players now take void damage, die, and respawn at world spawn; fall, fire,
-  hunger, and projectile damage are still missing. The new `LivingEntity`
-  model handles raw health/death but is not wired into sessions, and it does
-  not yet apply armor, enchantments, absorption, knockback, or damage types.
-  Metadata covers indices 0-9 only, initial non-default spawn metadata is not
-  sent, and there is no Java-captured metadata/equipment packet fixture.
-- Entity tracking range/culling and player physics corrections are not ported.
+- Entity AI goals, pathfinding, combat, and general damage are not ticked in
+  live sessions. Join mobs update `entity_ai` environment state but do not use
+  goal selectors; players take fall and void damage through the `LivingEntity`
+  model, and die/respawn at world spawn. Hunger, fire, projectile, armor,
+  enchantment, absorption, knockback, and damage types are still missing.
+  Metadata covers indices 0-9 only, and there is no Java-captured
+  metadata/equipment packet fixture.
+- Session entities are viewer-owned: they are not saved with chunks, shared
+  between players, or given vanilla per-type tracking ranges. Entity tracking
+  still lacks velocity/teleport variants, animation/effect/passenger/leash
+  packets, and per-viewer metadata dirtying.
+- Player physics corrections are ported, but special movement (ladders,
+  liquids, elytra) is not.
 - Crafting/smelting exist as a tested state model, but there are no crafting or
   furnace menus, click handling, recipe book/advancement unlocks, brewing, or
   block-entity persistence. Special/decorated/trim recipes are explicit

@@ -1,9 +1,13 @@
 use crate::block_shapes::Aabb;
 use crate::chunk::{BlockState, Chunk};
+use crate::entity_ai::{ActorKind, AiMob, MemoryWorld};
+use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
+use crate::math::Vec3;
 use crate::protocol::PacketWriter;
 use crate::world::WorldStorage;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 pub const CLIENTBOUND_ADD_ENTITY: i32 = 1;
@@ -282,6 +286,308 @@ fn pack_degrees(degrees: f32) -> u8 {
     ((degrees * 256.0 / 360.0) as i32 & 0xFF) as u8
 }
 
+/// Session-local mobs are removed once this far from their viewer.
+pub const SESSION_TRACKING_RANGE: f64 = 80.0;
+
+const SESSION_MOB_SPAWNS: [SessionMobSpawn; 3] = [
+    SessionMobSpawn {
+        name: "minecraft:cow",
+        dx: 3.0,
+        dz: 2.0,
+        max_health: 10.0,
+    },
+    SessionMobSpawn {
+        name: "minecraft:pig",
+        dx: -3.0,
+        dz: 3.0,
+        max_health: 10.0,
+    },
+    SessionMobSpawn {
+        name: "minecraft:zombie",
+        dx: 2.0,
+        dz: -4.0,
+        max_health: 20.0,
+    },
+];
+
+struct SessionMobSpawn {
+    name: &'static str,
+    dx: f64,
+    dz: f64,
+    max_health: f32,
+}
+
+/// A session-owned living entity. The process-wide [`ENTITIES`] map is for
+/// legacy broadcast entities; tracked mobs live here so each player sees only
+/// their own deterministic population.
+#[derive(Debug, Clone)]
+pub struct TrackedEntity {
+    pub entity: Entity,
+    pub living: LivingEntity,
+    /// AI environment state for mobs whose goals are usable with the current
+    /// world model. Goal-driven movement remains a later P5.6 slice.
+    pub ai: Option<AiMob>,
+}
+
+/// Packets produced by one session entity tick.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SessionEntityTick {
+    pub packets: Vec<Vec<u8>>,
+    pub removed: Vec<i32>,
+}
+
+/// Per-session entity view: deterministic mobs near the player plus their
+/// metadata, health, equipment, and removal lifecycle.
+///
+/// The tracker owns its living-entity records instead of using the
+/// process-wide [`crate::entity_metadata::living_entities`] store. That keeps
+/// two players from sharing one cow and makes disconnect cleanup a plain drop.
+pub struct SessionEntityTracker {
+    entities: Vec<TrackedEntity>,
+    ai_world: MemoryWorld,
+    game_time: i64,
+}
+
+static NEXT_SESSION_ENTITY_ID: AtomicI32 = AtomicI32::new(10_000);
+
+impl SessionEntityTracker {
+    /// Spawn the pinned mob set on a flat surface at `ground_y` (the block the
+    /// mobs stand on). Used by tests; the live join path uses
+    /// [`Self::spawn_near_player`].
+    pub fn deterministic(player: (f64, f64, f64), ground_y: i32, seed: i64) -> Self {
+        Self::build(player, seed, |_, _| f64::from(ground_y))
+    }
+
+    /// Spawn the pinned set around `player`, resolving each column's surface
+    /// through `storage`. Missing chunks fall back to the player's own y.
+    pub fn spawn_near_player(
+        storage: &mut WorldStorage,
+        player: (f64, f64, f64),
+        seed: i64,
+    ) -> Self {
+        Self::build(player, seed, |x, z| {
+            let block_x = x.floor() as i32;
+            let block_z = z.floor() as i32;
+            let chunk_x = block_x.div_euclid(16);
+            let chunk_z = block_z.div_euclid(16);
+            match storage.load_chunk(chunk_x, chunk_z) {
+                Ok(Some(chunk)) => f64::from(crate::chunk::surface_y(
+                    &chunk,
+                    block_x.rem_euclid(16) as usize,
+                    block_z.rem_euclid(16) as usize,
+                )),
+                _ => player.1,
+            }
+        })
+    }
+
+    fn build(player: (f64, f64, f64), seed: i64, mut ground: impl FnMut(f64, f64) -> f64) -> Self {
+        let base_id = NEXT_SESSION_ENTITY_ID.fetch_add(8, Ordering::Relaxed);
+        let mut entities = Vec::with_capacity(SESSION_MOB_SPAWNS.len());
+        for (index, spawn) in SESSION_MOB_SPAWNS.iter().enumerate() {
+            let x = player.0.floor() + spawn.dx + 0.5;
+            let z = player.2.floor() + spawn.dz + 0.5;
+            let y = ground(x, z);
+            let entity_type = crate::spawn::entity_type(spawn.name)
+                .expect("every pinned session mob is a shipped entity type");
+            let id = base_id + index as i32;
+            let mut entity = Entity::new(
+                id,
+                session_entity_uuid(id, index),
+                entity_type.id(),
+                x,
+                y,
+                z,
+            );
+            entity.width = f64::from(entity_type.width);
+            entity.height = f64::from(entity_type.height);
+            entity.yaw = match index {
+                0 => 90.0,
+                1 => 180.0,
+                _ => 0.0,
+            };
+
+            let mut living = LivingEntity::new(id);
+            living.set_attribute(Attribute::MaxHealth, f64::from(spawn.max_health));
+            living.set_health(spawn.max_health);
+            // The initial all-metadata packet carries these values; do not
+            // re-send them on the first tick.
+            living.metadata.pack_dirty();
+
+            let ai = (spawn.name == "minecraft:zombie").then(|| {
+                AiMob::new(
+                    id,
+                    ActorKind::Zombie,
+                    Vec3::new(x, y, z),
+                    seed ^ i64::from(id),
+                )
+            });
+
+            entities.push(TrackedEntity { entity, living, ai });
+        }
+
+        Self {
+            entities,
+            ai_world: MemoryWorld::flat(-64, 320, player.1.floor() as i32 - 1, 24),
+            game_time: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
+    pub fn tracked_ids(&self) -> Vec<i32> {
+        self.entities
+            .iter()
+            .map(|tracked| tracked.entity.id)
+            .collect()
+    }
+
+    pub fn tracks(&self, id: i32) -> bool {
+        self.entities.iter().any(|tracked| tracked.entity.id == id)
+    }
+
+    pub fn entity(&self, id: i32) -> Option<&TrackedEntity> {
+        self.entities.iter().find(|tracked| tracked.entity.id == id)
+    }
+
+    /// Add Entity, initial metadata (including health), and equipment for every
+    /// tracked mob, in spawn order.
+    pub fn join_packets(&self) -> Vec<Vec<u8>> {
+        let mut packets = Vec::with_capacity(self.entities.len() * 3);
+        for tracked in &self.entities {
+            packets.push(add_entity_packet(&tracked.entity));
+            packets.push(tracked.living.all_metadata_packet());
+            packets.push(tracked.living.equipment_packet());
+        }
+        packets
+    }
+
+    /// One session tick: physics/gravity, AI environment, dirty metadata,
+    /// death animation, and out-of-range removal.
+    pub fn tick(
+        &mut self,
+        player: (f64, f64, f64),
+        collider: &mut impl BlockCollider,
+    ) -> SessionEntityTick {
+        self.game_time += 1;
+        let mut out = SessionEntityTick::default();
+        let range_sq = SESSION_TRACKING_RANGE * SESSION_TRACKING_RANGE;
+        let ai_world = &self.ai_world;
+        let mut index = 0;
+        while index < self.entities.len() {
+            let tracked = &mut self.entities[index];
+            let dx = tracked.entity.x - player.0;
+            let dy = tracked.entity.y - player.1;
+            let dz = tracked.entity.z - player.2;
+            if dx * dx + dy * dy + dz * dz > range_sq {
+                let id = tracked.entity.id;
+                out.packets.push(remove_entities_packet(&[id]));
+                out.removed.push(id);
+                self.entities.remove(index);
+                continue;
+            }
+
+            let id = tracked.entity.id;
+            let moved = tracked.entity.tick_physics(collider);
+            if let Some(ai) = &mut tracked.ai {
+                ai.health = tracked.living.health;
+                ai.pos = Vec3::new(tracked.entity.x, tracked.entity.y, tracked.entity.z);
+                ai.update_environment(ai_world);
+            }
+            if moved {
+                out.packets
+                    .push(entity_position_sync_packet(&tracked.entity));
+            }
+            out.packets.extend(tracked.living.tick());
+            if let Some(packet) = tracked.living.dirty_metadata_packet() {
+                out.packets.push(packet);
+            }
+            if tracked.living.removed {
+                out.packets.push(remove_entities_packet(&[id]));
+                out.removed.push(id);
+                self.entities.remove(index);
+                continue;
+            }
+            index += 1;
+        }
+        out
+    }
+
+    /// Apply damage to one tracked mob. The returned packets are the vanilla
+    /// death event, metadata health/pose update, and (for players) SetHealth.
+    pub fn damage(&mut self, id: i32, amount: f32) -> Option<HurtResult> {
+        let tracked = self
+            .entities
+            .iter_mut()
+            .find(|tracked| tracked.entity.id == id)?;
+        let result = tracked.living.hurt(amount);
+        let health = tracked.living.health;
+        if let Some(ai) = &mut tracked.ai {
+            ai.health = health;
+            if tracked.living.dead {
+                ai.alive = false;
+            }
+        }
+        Some(result)
+    }
+
+    /// Remove one tracked id and return its remove-entities packet.
+    pub fn remove(&mut self, id: i32) -> Option<Vec<u8>> {
+        let index = self
+            .entities
+            .iter()
+            .position(|tracked| tracked.entity.id == id)?;
+        self.entities.remove(index);
+        Some(remove_entities_packet(&[id]))
+    }
+
+    /// Drop tracked mobs whose chunk is no longer in the session's sent set.
+    pub fn retain_in_chunks(&mut self, chunks: &HashSet<(i32, i32)>) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        self.entities.retain(|tracked| {
+            let chunk = (
+                (tracked.entity.x.floor() as i32).div_euclid(16),
+                (tracked.entity.z.floor() as i32).div_euclid(16),
+            );
+            if chunks.contains(&chunk) {
+                true
+            } else {
+                packets.push(remove_entities_packet(&[tracked.entity.id]));
+                false
+            }
+        });
+        packets
+    }
+
+    /// Disconnect cleanup. The per-session store makes this equivalent to
+    /// dropping the tracker, but the live loop calls it explicitly so tracking
+    /// state is empty before the socket closes.
+    pub fn clear(&mut self) {
+        self.entities.clear();
+    }
+}
+
+fn session_entity_uuid(id: i32, index: usize) -> [u8; 16] {
+    let mut uuid = [0u8; 16];
+    uuid[0..4].copy_from_slice(&id.to_be_bytes());
+    uuid[4] = 0x5a;
+    uuid[5] = index as u8;
+    uuid[15] = 0x7f;
+    uuid
+}
+
+impl Drop for SessionEntityTracker {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 static ENTITIES: LazyLock<Mutex<HashMap<i32, Entity>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static WORLD: OnceLock<&'static Mutex<WorldStorage>> = OnceLock::new();
@@ -295,13 +601,13 @@ pub fn configure_world(world_dir: impl Into<PathBuf>) {
     }
 }
 
-struct WorldCollider<'a> {
+pub struct WorldCollider<'a> {
     storage: &'a mut WorldStorage,
     chunks: HashMap<(i32, i32), Chunk>,
 }
 
 impl<'a> WorldCollider<'a> {
-    fn new(storage: &'a mut WorldStorage) -> Self {
+    pub fn new(storage: &'a mut WorldStorage) -> Self {
         Self {
             storage,
             chunks: HashMap::new(),
@@ -472,6 +778,15 @@ pub fn spawn_packets() -> Vec<Vec<u8>> {
         .values()
         .map(add_entity_packet)
         .collect()
+}
+
+/// Whether the process-wide broadcast entity map owns `id`. Live sessions use
+/// this to decide whether an incoming entity packet belongs to their view.
+pub fn is_tracked(id: i32) -> bool {
+    ENTITIES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(&id)
 }
 
 #[cfg(test)]

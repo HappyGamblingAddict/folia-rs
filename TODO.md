@@ -31,7 +31,7 @@ where possible, a differential test against the Java oracle.
 | Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring |
 | Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and shape occlusion missing |
 | Player simulation | ~35% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
-| Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
+| Entities | ~30% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, deterministic join mobs with tracking/cleanup; sensors/brains, armor, shared per-viewer tracking missing |
 | Blocks/redstone/fluids | ~30% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks missing |
 | Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
@@ -43,6 +43,16 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-06: P5 join-session entity wiring — live sessions now spawn a
+  deterministic cow/pig/zombie near the player, send Add Entity (id 1), full
+  synched metadata (id 97, including health), and equipment (id 100), then tick
+  physics/gravity at 20 Hz, update `entity_ai` environment state, flush dirty
+  metadata, and emit death event 3 / poof 60 / remove-entities 75. Tracked mobs
+  are dropped on death, out-of-range, chunk unload, and disconnect; broadcast
+  entity packets are filtered to tracked ids. Fall/void damage goes through the
+  living metadata store so metadata health and `ClientboundSetHealth` (102)
+  agree; respawn resets it. 6 focused `tests/join_entities.rs`; existing
+  `join`, `entity_metadata`, and `entity_physics` suites stay green.
 - 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
   non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
   `item_prototypes.rs` loads it once, validates the counts and every field, and
@@ -1604,10 +1614,12 @@ sync and armor-stand gravity. Minecraft’s world is defined by mobs, item
 entities, projectiles, and combat.
 
 **Current state:** Global `HashMap<i32, Entity>`, basic type/UUID/position,
-gravity/AABB, add/remove/sync packets. A separate typed metadata/living-entity
-store now covers health, flags, pose, custom names, attributes, and equipment
-packets, but it is not yet wired into sessions or per-viewer tracking. No
-per-chunk storage, AI, spawning, or armor calculation.
+gravity/AABB, add/remove/sync packets. A typed metadata/living-entity store
+covers health, flags, pose, custom names, attributes, and equipment packets.
+Live sessions now own a deterministic tracked mob set with initial
+metadata/equipment, per-tick physics, death/removal, and player damage through
+the living store; shared per-viewer tracking, AI goals, armor, and persistence
+are still open.
 
 ### P5.1 Entity registry and metadata `[~]` `L`
 
@@ -1634,6 +1646,13 @@ per-chunk storage, AI, spawning, or armor calculation.
   arrow/stinger counts, sleeping pos, remaining serializers, initial
   non-default metadata at spawn, per-viewer dirty tracking, armor points from
   equipment, effects/absorption/damage types, and a Java packet fixture.
+  **Join wiring (2026-11-06):** `entity.rs` adds `SessionEntityTracker` with a
+  deterministic cow/pig/zombie, full initial metadata/equipment, 20 Hz physics,
+  AI environment updates, dirty metadata flush, death/poof/remove, and
+  out-of-range/chunk-unload/disconnect removal. `join.rs` routes fall/void
+  damage through the living store and filters broadcast entity packets to
+  tracked ids. Remaining: armor calculation, effects, goal-driven AI movement,
+  persistence, and a Java packet fixture.
 
 ### P5.2 Entity lifecycle and per-chunk storage `[ ]` `L`
 
@@ -1740,13 +1759,19 @@ per-chunk storage, AI, spawning, or armor calculation.
   despawn, spawn eggs, monster spawners, breeding, village spawning, structure
   spawn overrides, and a Java spawn-count fixture.
 
-### P5.13 Entity tracking and packets `[ ]` `M`
+### P5.13 Entity tracking and packets `[~]` `M`
 
 - **What:** Per-viewer spawn/remove, position/velocity updates, metadata,
   equipment, animation, effects, passengers, and leashes.
 - **Why:** Needed for multiplayer and bandwidth control.
 - **Done when:** Distant entities are not sent; metadata changes reach only
   tracking players.
+- **Progress (2026-11-06):** Live sessions own a deterministic mob set and
+  filter process-wide broadcast entity packets by tracked id. Session mobs are
+  removed on death, out-of-range (>80 blocks), chunk unload, and disconnect.
+  Still open: vanilla tracking ranges per entity type/chunk ticket, velocity
+  and teleport packet variants, animation/effect/passenger/leash packets,
+  shared entities between viewers, and metadata dirtying per viewer.
 
 ### P5.14 Entity parity and performance harness `[ ]` `M`
 

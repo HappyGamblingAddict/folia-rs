@@ -1,4 +1,5 @@
-use crate::chunk::Chunk;
+use crate::block_shapes::Aabb;
+use crate::chunk::{BlockState, Chunk};
 use crate::protocol::PacketWriter;
 use crate::world::WorldStorage;
 use std::collections::HashMap;
@@ -14,6 +15,7 @@ pub const DRAG: f64 = 0.98;
 /// The fixed point of `(v - 0.08) * 0.98`; armor stands reach this terminal
 /// fall speed after a long fall. Vanilla does not clamp explicitly.
 pub const MAX_FALL_SPEED: f64 = -3.92;
+const EPSILON: f64 = 1.0e-7;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entity {
@@ -83,6 +85,18 @@ impl Entity {
 
 pub trait BlockCollider {
     fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool;
+    /// Every collision box of the block at `(x, y, z)`.
+    ///
+    /// Simple test colliders only implement [`Self::is_solid`]; the default
+    /// treats each solid block as a full cube. World-backed colliders override
+    /// this with the generated per-state shape table.
+    fn collision_boxes(&mut self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        if self.is_solid(x, y, z) {
+            vec![Aabb::block(x, y, z)]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 pub struct FlatCollider {
@@ -133,73 +147,70 @@ impl Entity {
         if amount == 0.0 {
             return;
         }
-        let (min_x, min_y, min_z, max_x, max_y, max_z) = self.aabb();
-        let (target_min_x, target_min_y, target_min_z, target_max_x, target_max_y, target_max_z) =
-            match axis {
-                Axis::X => (min_x + amount, min_y, min_z, max_x + amount, max_y, max_z),
-                Axis::Y => (min_x, min_y + amount, min_z, max_x, max_y + amount, max_z),
-                Axis::Z => (min_x, min_y, min_z + amount, max_x, max_y, max_z + amount),
-            };
+        let start = Aabb::player(self.x, self.y, self.z, self.width, self.height);
+        let sweep = match axis {
+            Axis::X => start.expand_towards(amount, 0.0, 0.0),
+            Axis::Y => start.expand_towards(0.0, amount, 0.0),
+            Axis::Z => start.expand_towards(0.0, 0.0, amount),
+        };
 
-        let x0 = min_x.min(target_min_x).floor() as i32;
-        let x1 = (max_x.max(target_max_x) - 1.0e-7).floor() as i32;
-        let y0 = min_y.min(target_min_y).floor() as i32;
-        let y1 = (max_y.max(target_max_y) - 1.0e-7).floor() as i32;
-        let z0 = min_z.min(target_min_z).floor() as i32;
-        let z1 = (max_z.max(target_max_z) - 1.0e-7).floor() as i32;
+        // Vanilla widens the block cursor by one block on each side so shapes
+        // that extend past their block (fences and walls are 24/16 tall for
+        // collision) are still found.
+        let x0 = (sweep.min_x - EPSILON).floor() as i32 - 1;
+        let x1 = (sweep.max_x + EPSILON).floor() as i32 + 1;
+        let y0 = (sweep.min_y - EPSILON).floor() as i32 - 1;
+        let y1 = (sweep.max_y + EPSILON).floor() as i32 + 1;
+        let z0 = (sweep.min_z - EPSILON).floor() as i32 - 1;
+        let z1 = (sweep.max_z + EPSILON).floor() as i32 + 1;
 
         let mut allowed = amount;
         for bx in x0..=x1 {
             for by in y0..=y1 {
                 for bz in z0..=z1 {
-                    if !collider.is_solid(bx, by, bz) {
-                        continue;
-                    }
-                    let block_min_x = f64::from(bx);
-                    let block_max_x = block_min_x + 1.0;
-                    let block_min_y = f64::from(by);
-                    let block_max_y = block_min_y + 1.0;
-                    let block_min_z = f64::from(bz);
-                    let block_max_z = block_min_z + 1.0;
-
-                    match axis {
-                        Axis::X => {
-                            if amount > 0.0
-                                && max_x <= block_min_x + 1.0e-7
-                                && target_max_x > block_min_x
-                            {
-                                allowed = allowed.min(block_min_x - max_x);
-                            } else if amount < 0.0
-                                && min_x >= block_max_x - 1.0e-7
-                                && target_min_x < block_max_x
-                            {
-                                allowed = allowed.max(block_max_x - min_x);
-                            }
+                    for block in collider.collision_boxes(bx, by, bz) {
+                        if !block.intersects(&sweep) {
+                            continue;
                         }
-                        Axis::Y => {
-                            if amount > 0.0
-                                && max_y <= block_min_y + 1.0e-7
-                                && target_max_y > block_min_y
-                            {
-                                allowed = allowed.min(block_min_y - max_y);
-                            } else if amount < 0.0
-                                && min_y >= block_max_y - 1.0e-7
-                                && target_min_y < block_max_y
-                            {
-                                allowed = allowed.max(block_max_y - min_y);
+                        match axis {
+                            Axis::X => {
+                                if amount > 0.0
+                                    && start.max_x <= block.min_x + EPSILON
+                                    && start.max_x + amount > block.min_x
+                                {
+                                    allowed = allowed.min(block.min_x - start.max_x);
+                                } else if amount < 0.0
+                                    && start.min_x >= block.max_x - EPSILON
+                                    && start.min_x + amount < block.max_x
+                                {
+                                    allowed = allowed.max(block.max_x - start.min_x);
+                                }
                             }
-                        }
-                        Axis::Z => {
-                            if amount > 0.0
-                                && max_z <= block_min_z + 1.0e-7
-                                && target_max_z > block_min_z
-                            {
-                                allowed = allowed.min(block_min_z - max_z);
-                            } else if amount < 0.0
-                                && min_z >= block_max_z - 1.0e-7
-                                && target_min_z < block_max_z
-                            {
-                                allowed = allowed.max(block_max_z - min_z);
+                            Axis::Y => {
+                                if amount > 0.0
+                                    && start.max_y <= block.min_y + EPSILON
+                                    && start.max_y + amount > block.min_y
+                                {
+                                    allowed = allowed.min(block.min_y - start.max_y);
+                                } else if amount < 0.0
+                                    && start.min_y >= block.max_y - EPSILON
+                                    && start.min_y + amount < block.max_y
+                                {
+                                    allowed = allowed.max(block.max_y - start.min_y);
+                                }
+                            }
+                            Axis::Z => {
+                                if amount > 0.0
+                                    && start.max_z <= block.min_z + EPSILON
+                                    && start.max_z + amount > block.min_z
+                                {
+                                    allowed = allowed.min(block.min_z - start.max_z);
+                                } else if amount < 0.0
+                                    && start.min_z >= block.max_z - EPSILON
+                                    && start.min_z + amount < block.max_z
+                                {
+                                    allowed = allowed.max(block.max_z - start.min_z);
+                                }
                             }
                         }
                     }
@@ -296,10 +307,8 @@ impl<'a> WorldCollider<'a> {
             chunks: HashMap::new(),
         }
     }
-}
 
-impl BlockCollider for WorldCollider<'_> {
-    fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool {
+    fn block_state(&mut self, x: i32, y: i32, z: i32) -> Option<&BlockState> {
         let chunk_x = x.div_euclid(16);
         let chunk_z = z.div_euclid(16);
         let key = (chunk_x, chunk_z);
@@ -308,25 +317,33 @@ impl BlockCollider for WorldCollider<'_> {
                 Ok(Some(chunk)) => {
                     self.chunks.insert(key, chunk);
                 }
-                _ => return false,
+                _ => return None,
             }
         }
-        let Some(chunk) = self.chunks.get(&key) else {
-            return false;
-        };
+        let chunk = self.chunks.get(&key)?;
         let local_x = x.rem_euclid(16) as usize;
         let local_z = z.rem_euclid(16) as usize;
-        match chunk.block_state(local_x, y, local_z) {
-            Some(state) => !matches!(
-                state.name.as_str(),
-                "minecraft:air"
-                    | "minecraft:cave_air"
-                    | "minecraft:void_air"
-                    | "minecraft:water"
-                    | "minecraft:lava"
-            ),
-            None => false,
-        }
+        chunk.block_state(local_x, y, local_z)
+    }
+}
+
+impl BlockCollider for WorldCollider<'_> {
+    fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let Some(state) = self.block_state(x, y, z) else {
+            return false;
+        };
+        crate::block_shapes::has_collision_state(state)
+    }
+
+    fn collision_boxes(&mut self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        let Some(state) = self.block_state(x, y, z) else {
+            return Vec::new();
+        };
+        let state_id = crate::registry::block_state_id(state);
+        crate::block_shapes::collision_boxes(state_id)
+            .iter()
+            .map(|bounds| bounds.offset(f64::from(x), f64::from(y), f64::from(z)))
+            .collect()
     }
 }
 

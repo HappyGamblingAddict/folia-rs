@@ -208,6 +208,21 @@ These are expected gaps, not reasons to stop:
   `NetworkEncodingReport`. `HashedStack` component hashes are parsed but not
   matched against a reconstructed stack, and there is no Java-captured component
   NBT/packet fixture yet.
+- Item components are a first slice: per-item prototype defaults
+  (`max_stack_size`, `max_damage`, food/tool/enchantment defaults) are not
+  dumped, so a plain damageable item without a damage/max_damage component
+  still reports stack size 64. `attribute_modifiers`,
+  `potion_contents`, and `tool` are NBT-only; their network codecs are omitted
+  and reported by `NetworkEncodingReport`. `HashedStack` component hashes are
+  parsed but not matched against a reconstructed stack, and there is no
+  Java-captured component NBT/packet fixture yet.
+- Block shapes are oracle-exact for `CollisionContext.empty()`, but
+  entity-dependent collision contexts are not modeled, and passable states
+  (air/fluids/plants/torches) store empty outline lists by design. The asset is
+  regenerated with `scripts/extract_block_shapes.ps1`, which needs the local
+  patched Folia jar or Paperclip plus `cache`/`libraries`; without that reference
+  tree the table cannot be reproduced. `underwater_magma` still uses its old
+  full-cube face-occlusion approximation instead of `block_shapes`.
 
 - Some Java oracle data requires starting `java-worldgen`; if the server cannot
   start, use the existing dumps in `crates/folia-core/assets`.
@@ -313,22 +328,24 @@ These are expected gaps, not reasons to stop:
 - Workaround: The default is enabled and pinned by `tests/ore_wiring.rs`; do
   not claim block-for-block ore parity until the three gaps above are closed.
 
-## 2026-11-06 — P4.1/P4.2 special movement and block shapes remain unported
+## 2026-11-06 — P4.1/P4.2 special movement remains unported
 
-- Blocker: Full vanilla player movement still needs block-shape metadata,
-  climbable/liquid/powder-snow handling, player-input packets, and a standalone
-  player tick scheduler. The generated per-state table now supplies collision,
-  friction, speed/jump factors, and motion/solid flags, but not the per-state
-  collision AABBs.
+- Blocker: Full vanilla player movement still needs climbable/liquid/powder-snow
+  handling, player-input packets, and a standalone player tick scheduler. Per-
+  state collision and outline AABBs are now ported, so cube-family and multi-box
+  geometry is no longer the blocker.
 - What was tried: Implemented walking/falling/jumping/step-up/fall damage and
-  packet reconciliation against full-cube collision. `has_collision` replaces
-  the old tag list for passability, `blocks_motion`/`is_solid` gate support,
-  and `friction`/`speed_factor`/`jump_factor` come from the same generated
-  table. Non-full shapes are still approximated as full cubes.
-- What is needed: P1.5 shape metadata, `ServerboundPlayerInput`/
-  `ServerboundPlayerCommand` parsing, water/lava fluid state and movement,
-  ladder/vine/scaffolding/cobweb/slime/elytra/powder-snow handling, and a
-  per-region player tick.
+  packet reconciliation. `has_collision` replaces the old tag list for
+  passability, `blocks_motion`/`is_solid` gate support,
+  `friction`/`speed_factor`/`jump_factor` come from the generated behaviour
+  table, and `block_shapes::collision_boxes` supplies every collision AABB.
+  Player and entity moves use vanilla's one-block-widened block cursor so tall
+  fence/wall shapes are found.
+- What is needed: `ServerboundPlayerInput`/`ServerboundPlayerCommand` parsing,
+  water/lava fluid state and movement,
+  ladder/vine/scaffolding/cobweb/slime/elytra/powder-snow handling, a per-region
+  player tick, and `CollisionContext`-aware shapes for blocks whose collision
+  depends on the entity (the table currently uses `CollisionContext.empty()`).
 - Workaround: Keep the unsupported paths explicit in `DECISIONS.md`; do not
   claim ladder, swimming, or elytra parity. The ten-block teleport net plus
   collider replay still rejects the common wall/teleport cases.

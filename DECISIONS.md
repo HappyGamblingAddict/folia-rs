@@ -2146,3 +2146,39 @@ Format:
   vegetation) now places in generated chunks. A shared dimension-aware
   `step_feature_order` would remove the duplicate algorithm when dimensions are
   wired into `world.rs`.
+## 2026-11-06 - Block shapes are an oracle-generated AABB table
+
+- Context: P1.5 asked for per-state collision/outline shapes. A hand-written
+  property-family implementation (slab/stairs/fence/wall/...) would only cover a
+  subset of the 1,166 blocks and would silently approximate chests, cauldrons,
+  dripstone, scaffolding, shulker boxes, and every shape that is not a simple
+  cube family.
+- Decision: `scripts/extract_block_shapes.ps1` generates a temporary Java
+  dumper, boots the local Folia 1.21.11 server classes, and writes
+  `id<TAB>collision<TAB>outline` for all 29,671 states to
+  `assets/block_shapes.tsv.gz`. Each shape is the `getCollisionShape` and
+  `getShape` AABB list with `CollisionContext.empty()`; boxes are sorted
+  lexicographically. The Rust server embeds and parses the table once and never
+  starts a JVM for shapes.
+- Decision: States whose block has `hasCollision == false` (air, fluids,
+  plants, torches, signs, ...) store empty collision and outline lists. Vanilla
+  still has a small selection shape for some of these, but this physics-focused
+  slice deliberately exposes no outline for passable states.
+- Decision: Unknown or out-of-range state ids fall back to a full cube, matching
+  the previous conservative behaviour. `has_collision` is shape-based, so a
+  snow layer with `layers=1` reports false even though the block's
+  `hasCollision` flag is true.
+- Decision: Player and entity collision iterate a block cursor widened by one
+  block on every side, like `BlockCollisions`, so a fence/wall collision box
+  that extends above its block is still found. The player keeps its
+  axis-separated swept AABB move and `0.6` step height; entities use the same
+  AABB lists but do not gain step-up.
+- Why: The oracle table is exact, deterministic, reproducible from the local
+  reference tree, and makes every block shape available without hand-porting
+  1,166 subclasses. Embedding keeps the shipped server Java-free.
+- Consequences: Regenerating the asset requires the local patched Folia jar (or
+  Paperclip + `cache`/`libraries`), the same local-reference constraint as
+  P0.5. Entity-specific collision contexts (`CollisionContext` with an entity)
+  are not modeled; shapes are dumped with the empty context. Outline data for
+  passable states, support/occlusion rules, and waterlogging remain open P1.5
+  work.

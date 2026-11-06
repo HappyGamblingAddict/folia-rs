@@ -75,7 +75,7 @@ pub fn set_block(
         return Ok(None);
     }
 
-    storage.save_chunk(&chunk, Compression::Zlib)?;
+    storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
     storage.flush()?;
     let state_id = block_state_id(&state);
     Ok(Some(BlockChange {

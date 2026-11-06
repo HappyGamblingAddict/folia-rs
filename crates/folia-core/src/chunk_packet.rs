@@ -1,4 +1,5 @@
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
+use crate::nbt::Tag;
 use crate::protocol::{PacketReader, PacketWriter};
 use std::collections::HashMap;
 use std::io;
@@ -11,11 +12,6 @@ pub const OVERWORLD_HEIGHT: usize = 384;
 pub const LIGHT_SECTION_COUNT: usize = OVERWORLD_SECTION_COUNT + 2;
 
 const AIR: i32 = 0;
-const STONE: i32 = 1;
-const GRASS_SNOWY: i32 = 8;
-const GRASS: i32 = 9;
-const DIRT: i32 = 10;
-const BEDROCK: i32 = 85;
 const PLAINS_BIOME: i32 = 40;
 
 /// Captured heightmaps/light data reused for flat-world chunks. The chunk data
@@ -153,40 +149,21 @@ pub fn flat_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     }
 }
 
-pub fn block_state_id(state: &BlockState) -> i32 {
-    match state.name.as_str() {
-        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air" => AIR,
-        "minecraft:stone" => STONE,
-        "minecraft:grass_block" => {
-            if state
-                .properties
-                .iter()
-                .any(|(key, value)| key == "snowy" && value == "true")
-            {
-                GRASS_SNOWY
-            } else {
-                GRASS
-            }
-        }
-        "minecraft:dirt" => DIRT,
-        "minecraft:bedrock" => BEDROCK,
-        "minecraft:water" => 86,
-        "minecraft:lava" => 102,
-        "minecraft:sand" => 118,
-        "minecraft:gravel" => 124,
-        "minecraft:tuff" => 23250,
-        "minecraft:andesite" => 6,
-        "minecraft:granite" => 2,
-        "minecraft:deepslate" => 27722,
-        _ => STONE,
-    }
-}
+pub use crate::registry::block_state_id;
 
 pub fn biome_id(name: &str) -> i32 {
-    match name {
-        "minecraft:the_void" => 57,
-        _ => PLAINS_BIOME,
-    }
+    static IDS: std::sync::OnceLock<std::collections::HashMap<&'static str, i32>> =
+        std::sync::OnceLock::new();
+    let ids = IDS.get_or_init(|| {
+        include_str!("../assets/biome_ids.txt")
+            .lines()
+            .filter_map(|line| {
+                let (id, name) = line.split_once('\t')?;
+                Some((name, id.parse().ok()?))
+            })
+            .collect()
+    });
+    *ids.get(name).unwrap_or(&PLAINS_BIOME)
 }
 
 fn build_chunk_data(chunk: &Chunk) -> io::Result<Vec<u8>> {
@@ -233,6 +210,29 @@ pub fn heightmap_bytes(chunk: &Chunk) -> Vec<u8> {
     writer.into_inner()
 }
 
+/// The same heightmap values the chunk packet carries, in the NBT shape a
+/// stored chunk uses (three named 9-bit long arrays).
+pub fn heightmap_nbt(chunk: &Chunk) -> Tag {
+    let mut entries = Vec::with_capacity(3);
+    for (kind, name) in [
+        (HeightKind::MotionBlocking, "MOTION_BLOCKING"),
+        (
+            HeightKind::MotionBlockingNoLeaves,
+            "MOTION_BLOCKING_NO_LEAVES",
+        ),
+        (HeightKind::WorldSurface, "WORLD_SURFACE"),
+    ] {
+        let values: Vec<u16> = (0..256)
+            .map(|index| {
+                let height = column_height(chunk, index % 16, index / 16, kind);
+                (height - OVERWORLD_MIN_Y) as u16
+            })
+            .collect();
+        entries.push((name.into(), Tag::LongArray(pack_heightmap(&values))));
+    }
+    Tag::Compound(entries)
+}
+
 pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
     let heights: Vec<i32> = (0..256)
         .map(|index| {
@@ -262,7 +262,7 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
             for x in 0..16 {
                 let height = heights[x + z * 16];
                 for local_y in 0..16 {
-                    let world_y = section_y * 16 + local_y as i32;
+                    let world_y = section_y * 16 + local_y;
                     let light = if world_y >= height { 15u8 } else { 0u8 };
                     if light == 0 {
                         all_full = false;
@@ -388,14 +388,22 @@ fn write_section(writer: &mut PacketWriter, section: &ChunkSection) -> io::Resul
         return Err(invalid("chunk section must contain 4096 block states"));
     }
 
+    // Resolve each palette entry once instead of hashing every block state's
+    // name and properties 4096 times per section. A section usually has a
+    // small palette, so this turns the packet's dominant cost into palette
+    // lookups plus a linear index pass.
+    let mut palette_ids = Vec::with_capacity(section.block_states.palette.len());
+    for state in &section.block_states.palette {
+        palette_ids.push(block_state_id(state));
+    }
+
     let mut block_ids = Vec::with_capacity(4096);
     let mut non_empty = 0i16;
-    for index in 0..4096 {
-        let state = section
-            .block_states
-            .get(index)
+    for &palette_index in &section.block_states.indices {
+        let id = palette_ids
+            .get(palette_index as usize)
+            .copied()
             .ok_or_else(|| invalid("chunk block palette index is out of range"))?;
-        let id = block_state_id(state);
         if id != AIR {
             non_empty = non_empty.saturating_add(1);
         }
@@ -490,6 +498,17 @@ fn invalid(message: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
 
+    const GRASS: i32 = 9;
+    const DIRT: i32 = 10;
+    const BEDROCK: i32 = 85;
+
+    #[test]
+    fn biome_registry_ids_match_java() {
+        assert_eq!(biome_id("minecraft:ocean"), 35);
+        assert_eq!(biome_id("minecraft:plains"), 40);
+        assert_eq!(biome_id("minecraft:the_void"), 57);
+    }
+
     #[test]
     fn live_flat_chunk_packet_has_block_and_biome_palettes() {
         let packet = ChunkPacketTemplate::build_dynamic(&flat_chunk(3, 4)).unwrap();
@@ -563,5 +582,87 @@ mod tests {
             block_state_id(&flat_chunk(0, 0).sections[0].block_states.palette[3]),
             0
         );
+    }
+
+    #[test]
+    fn encoded_blocks_resolve_every_palette_entry_to_its_state_id() {
+        let air = BlockState {
+            name: "minecraft:air".into(),
+            properties: vec![],
+        };
+        let grass = BlockState {
+            name: "minecraft:grass_block".into(),
+            properties: vec![("snowy".into(), "false".into())],
+        };
+        let snowy_grass = BlockState {
+            name: "minecraft:grass_block".into(),
+            properties: vec![("snowy".into(), "true".into())],
+        };
+        let source_palette = vec![air.clone(), grass.clone(), snowy_grass.clone()];
+        let source_indices: Vec<u16> = (0..4096).map(|index| (index % 3) as u16).collect();
+        let chunk = Chunk {
+            x: 0,
+            z: 0,
+            sections: vec![ChunkSection {
+                y: OVERWORLD_MIN_SECTION,
+                block_states: PalettedContainer {
+                    palette: source_palette,
+                    indices: source_indices,
+                },
+                biomes: Some(PalettedContainer {
+                    palette: vec!["minecraft:plains".into()],
+                    indices: vec![0; 64],
+                }),
+            }],
+        };
+
+        let packet = ChunkPacketTemplate::build_dynamic(&chunk).unwrap();
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), 44);
+        let _ = reader.read_i32().unwrap();
+        let _ = reader.read_i32().unwrap();
+        let height_map_count = reader.read_varint().unwrap();
+        for _ in 0..height_map_count {
+            let _ = reader.read_varint().unwrap();
+            let longs = reader.read_varint().unwrap();
+            let _ = reader.read_bytes(longs as usize * 8).unwrap();
+        }
+        let chunk_data_length = reader.read_varint().unwrap();
+        let chunk_data = reader
+            .read_bytes(chunk_data_length as usize)
+            .unwrap()
+            .to_vec();
+
+        let mut data = PacketReader::new(&chunk_data);
+        let _ = data.read_bytes(2).unwrap();
+        let bits = data.read_u8().unwrap();
+        assert!(bits >= 4);
+        let palette_length = data.read_varint().unwrap();
+        let encoded_palette: Vec<i32> = (0..palette_length)
+            .map(|_| data.read_varint().unwrap())
+            .collect();
+        let expected_palette = vec![
+            block_state_id(&air),
+            block_state_id(&grass),
+            block_state_id(&snowy_grass),
+        ];
+        assert_eq!(encoded_palette, expected_palette);
+
+        let per_long = 64 / bits as usize;
+        let long_count = 4096usize.div_ceil(per_long);
+        let packed: Vec<u64> = (0..long_count)
+            .map(|_| data.read_i64().unwrap() as u64)
+            .collect();
+        let mask = (1u64 << bits) - 1;
+        for block in 0..4096 {
+            let long = packed[block / per_long];
+            let shift = (block % per_long) * bits as usize;
+            let palette_index = ((long >> shift) & mask) as usize;
+            assert_eq!(
+                encoded_palette[palette_index],
+                expected_palette[block % 3],
+                "block {block} mapped to the wrong palette entry"
+            );
+        }
     }
 }

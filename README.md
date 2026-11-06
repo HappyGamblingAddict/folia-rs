@@ -1,14 +1,16 @@
 # Folia-RS
 
-A Rust server core with an embedded JVM plugin runtime. It boots a Rust process,
-starts a JVM in-process, and loads ordinary Bukkit/Paper `.jar` plugins against
-the real `folia-api` classes.
+A Rust server core with an optional embedded JVM plugin runtime. It boots a
+Rust process and, only when `plugins/` contains `.jar` files, starts a JVM
+in-process to load ordinary Bukkit/Paper plugins against the real `folia-api`
+classes. With no plugin jars the server runs fully native and never loads Java.
 
 > **Status: working foundation, not a finished port.** The decompiled Folia
 > server is 6,485 files / 744,058 lines of Java. A literal 1:1 rewrite is a
 > multi-year project. The Rust core now owns the process, tick loop, task
-> scheduler, protocol primitives, NBT, Anvil storage and chunk decoding; the
-> embedded JVM exists only to run unmodified plugin jars.
+> scheduler, protocol primitives, NBT, Anvil storage, chunk decoding and the
+> overworld generator; the optional embedded JVM exists only to run unmodified
+> plugin jars.
 
 ## What works right now
 
@@ -25,17 +27,19 @@ the real `folia-api` classes.
   on the player's chunk. Heightmaps and sky/block light are computed from the
   Rust chunk data.
 - Overworld noise generation: the real `minecraft:overworld` noise router,
-  splines and density functions are embedded and evaluated in Rust. Missing
-  chunks use a 4x8x4 density grid, the vanilla noise aquifer, random
-  bedrock/deepslate vertical gradients and simple surface blocks.
+  splines, density functions, noise aquifer, surface-rule tree and cave/canyon
+  carvers are embedded and evaluated in Rust. Missing chunks use a 4x8x4
+  density grid and the full post-surface carving pass.
 - Noise/density differential tests: `NormalNoise` and `BlendedNoise` match Java
   at 16 sample points within `1e-12`; all 1225 final-density grid values for
   chunk `(0,-1)` match Java within `1e-9`.
 - Chunk differential: at 16 sampled Java chunk columns, bedrock layers match
-  exactly, block-class agreement (solid/air/water/lava) is 96.3%, exact block
-  names are 89.0%, and surface heights differ by 1.81 blocks on average.
+  exactly, block-class agreement (solid/air/water/lava) is 98.76%, exact block
+  names are 92.09%, and surface heights differ by 0.62 blocks on average.
 - Multi-noise biome sampling: the real overworld parameter list and all 1536
   biome cells of chunk `(0,-1)` match the Java server exactly.
+- Cave and canyon carvers: exact legacy seeding, the 17x17 neighbouring-start
+  replay, shared carving masks and post-surface `topMaterial` replacement.
 - Live player sessions: movement packets update position, gzip-NBT playerdata is
   saved under `run/playerdata`, and server keepalives are driven by the Rust
   session loop.
@@ -56,6 +60,23 @@ the real `folia-api` classes.
   stand fall is differential-tested against a captured Folia trace (18 samples,
   all within 5e-4, landing at `y = -60`).
 - `PlayerJoinEvent` is forwarded from the Rust session to the Java plugin bridge.
+- Full 1.21.11 registries embedded from Java dumps: 29,671 block states
+  (including properties) and 1,166 block defaults, item IDs, entity type IDs and
+  biome IDs. Lookups resolve the exact property set and fall back to the
+  block's default state, not to stone.
+- Feature framework: `Feature`, `ConfiguredFeature`, `PlacedFeature`,
+  `FeaturePlaceContext`, a chunk-bounded write region, and the 11 vanilla
+  generation steps. `assets/feature_data.json` (224 configured features, 258
+  placed features, 65 biome feature lists) is loaded and reference-validated;
+  unported feature types fail loudly instead of no-oping. Placement modifiers
+  are typed; 762 of 888 execute in vanilla RNG order and the rest report an
+  explicit failure. Supported vegetation runs after carvers; supported trees
+  include oak, birch, jungle, swamp oak, spruce, pine, dark oak, fancy oak,
+  cherry, acacia, mega spruce/pine, mega jungle, jungle bush, azalea,
+  mangrove, and fallen trees. Ore and scattered-ore configs (30 + 2) parse
+  and place, but are not wired into chunk generation until feature-RNG parity.
+  Attached-to-leaves decoration, randomized integer block states, weighted
+  foliage providers, and waterlogged mangrove roots are supported.
 - Anvil `.mca` region reader/writer with gzip/zlib/uncompressed chunks.
 - Chunk section decoder: block-state and biome palettes, packed indices.
 - Chunk encoder: generated chunks round-trip through Anvil storage.
@@ -70,11 +91,16 @@ the real `folia-api` classes.
 
 ### Plugin translation layer (`java/bridge`, only where a JVM is required)
 
+- The JVM starts lazily only when `plugins/*.jar` exists; the core never needs
+  Java.
 - Real `.jar` plugins load with a Paper-compatible class loader.
 - Plugin lifecycle: `onLoad` → `onEnable` → ticks → `onDisable`.
 - Bukkit `@EventHandler` annotations are dispatched through a bridge event bus.
-- `plugin.yml` commands are registered and dispatched from Rust; executors use
-  the normal Bukkit `PluginCommand` API.
+- `plugin.yml` commands are registered; the bridge exposes a dispatch entry
+  point and executors use the normal Bukkit `PluginCommand` API. The native
+  terminal console now supports `help`, `list`, `ops`, `op`, `deop`,
+  `gamemode`, and `stop`; full command trees and Bukkit console dispatch are
+  still pending.
 - Bukkit scheduler tasks are registered over JNI; the task table, delays,
   periods and tick advancement live in Rust.
 - JNI round trip: Java plugin → Rust `nativePing` → Java.
@@ -87,8 +113,15 @@ and exercises every one of those paths.
 
 ```powershell
 cd folia-rs
+cargo run                  # runs natively until Ctrl+C (no Java needed)
+```
+
+To use `.jar` plugins, build the compatibility layer once and put plugin jars
+in `plugins/`:
+
+```powershell
 .\scripts\build-java.ps1   # compiles the bridge + example plugin
-cargo run                  # runs until Ctrl+C
+cargo run
 ```
 
 For a bounded demo run:
@@ -107,6 +140,15 @@ cargo run -p folia-core --example status_probe -- 127.0.0.1:25565
 `server.properties` controls the bind address, port, MOTD and player limit. The
 `FOLIA_BIND` environment variable overrides the address for tests.
 
+The first join of a world without a `level.dat` writes one (DataVersion 4788,
+seed, spawn, overworld generator settings) and marks it `folia:written`, so a
+fresh world reloads with the same seed and spawn. Generated terrain is saved
+into `<level>/region/*.mca` and stamped `folia:written`. A level this server
+created serves only stamped chunks, so leftover chunks from another source are
+regenerated instead of hiding the terrain; a `level.dat` this server did not
+create, or `FOLIA_LOAD_STORED=1`, serves every chunk in the region files (for
+example, an existing world).
+
 ### Server listing vs joining
 
 The Rust server accepts logins when `server.properties` has
@@ -119,12 +161,14 @@ This is an initial join path, not full gameplay yet:
 - Online-mode encryption is not implemented; keep `online-mode=false`.
 - Chunks are generated from `WorldStorage` with dynamic heightmaps and
   sky/block light; when no region directory exists, chunks come from the Rust
-  overworld noise generator with aquifers and bedrock/deepslate gradients.
-  Block break/place updates and basic tracked-entity gravity are implemented,
-  but the full vanilla surface-rule tree, carvers/caves, ores, features,
-  biomes, light propagation, redstone and AI are not.
+  overworld noise generator with aquifers, surface rules, caves/canyons and
+  exact biomes. Block break/place updates and basic tracked-entity gravity are
+  implemented, but ore generation is not wired yet, and structures, light
+  propagation, redstone and AI are not.
 - Player movement is parsed and persisted, but player physics and movement
   corrections are not simulated; only tracked entities are server-ticked.
+- Void damage, death, and respawn are implemented; other damage sources,
+  inventory drops, and full respawn-point rules are not.
 - `PlayerJoinEvent` is wired through a minimal player proxy; player/world/entity
   API objects beyond that are not complete.
 
@@ -157,18 +201,23 @@ add the same TCP 25565 allow rule in AVG's firewall settings.
 Run the core test suite:
 
 ```powershell
-cargo test -p folia-core
+cargo test --workspace    # 341 tests
 ```
+
+The baseline is clean: `cargo fmt --check` and
+`cargo clippy --workspace --all-targets -- -D warnings` both pass with no
+warnings.
 
 Requirements:
 
 - Rust 1.85+ (edition 2024)
-- JDK 21 with `jvm.dll` / `libjvm.so`
-- The reconstructed Folia dependency tree in `..\libraries` (created by the
-  decompile/bootstrap step)
+- For the native server: nothing else.
+- For `.jar` plugins only: JDK/JRE 21 with `jvm.dll` / `libjvm.so`, plus the
+  reconstructed Folia dependency tree in `..\libraries`.
 
-`JAVA_HOME` is auto-detected on Windows from common JDK 21 install paths. Set it
-explicitly for other layouts.
+`JAVA_HOME` is auto-detected on Windows from common Java 21 install paths. Set
+it explicitly for other layouts. If no Java is installed, remove the jars from
+`plugins/` (or set `FOLIA_DISABLE_PLUGINS=1`) and the native server still runs.
 
 ## Architecture
 
@@ -179,10 +228,10 @@ explicitly for other layouts.
 │    ├─ region scheduler ───────┐                                      │
 │    ├─ status server ──────────┤                                      │
 │    ├─ core: NBT/Anvil/chunks  │                                      │
-│    └─ JNI bridge ─────────────┼──────────────┐                       │
+│    └─ optional JNI bridge ────┼──────────────┐ (only with jars)      │
 │                               │              │                       │
 │  ┌────────────────────────────▼──────────────▼───────────────────┐  │
-│  │ embedded JVM (libjvm)                                         │  │
+│  │ lazy embedded JVM (libjvm), started only for plugin jars      │  │
 │  │   Bridge / PluginHost                                         │  │
 │  │   PluginClassLoader (Paper ConfiguredPluginClassLoader)        │  │
 │  │   BridgeServer / BridgeScheduler / BridgeEventBus              │  │
@@ -192,8 +241,9 @@ explicitly for other layouts.
 ```
 
 The server core is Rust. Java is confined to `java/bridge`, the compatibility
-surface that plugins compile against. No game/world logic is implemented in
-Java; those modules are ported into `crates/folia-core`.
+surface that plugins compile against, and is not started unless plugin jars are
+present. No game/world logic is implemented in Java; those modules are ported
+into `crates/folia-core`.
 
 ## Repository layout
 
@@ -202,7 +252,7 @@ Java; those modules are ported into `crates/folia-core`.
 | `crates/folia-core/` | Rust core: NBT, Anvil, chunks, protocol, region scheduler, config |
 | `crates/folia-math/` | Coordinates, directions, vectors, AABBs, math helpers |
 | `crates/folia-random/` | Legacy LCG and Xoroshiro128++ random sources |
-| `crates/folia-server/` | Rust binary, JVM bootstrap, tick loop, status server |
+| `crates/folia-server/` | Rust binary, native tick loop, status server, optional JVM bootstrap |
 | `java/bridge/` | Bukkit/Paper API shim and plugin host (JVM boundary only) |
 | `java/example-plugin/` | Demo plugin compiled against `folia-api` |
 | `scripts/build-java.ps1` | javac/jar build for the bridge and demo plugin |
@@ -218,7 +268,7 @@ See `PORT_MAP.md` for the decompiled-Java → Rust-module mapping.
 |---|---|
 | Lifecycle + logger + `plugin.yml` | Works |
 | Bukkit `@EventHandler` events fired by the host | Works (host bus) |
-| `plugin.yml` commands + `PluginCommand` executors | Works (dispatched from Rust) |
+| `plugin.yml` commands + `PluginCommand` executors | Registered; dispatch hook available |
 | `runTask*` sync scheduling | Works (Rust task table) |
 | Public API-only plugins | Partial; API surface grows incrementally |
 | Services, inventories, players, worlds | Not yet |
@@ -231,9 +281,11 @@ JVM; the Rust core is still the owner of the server.
 ## What is not done
 
 - Live world simulation: the Rust noise generator produces overworld base
-  terrain with aquifers, bedrock/deepslate gradients and exact multi-noise
-  biomes, but the full vanilla surface-rule tree, carvers/caves, ores, features
-  and structures are not ported. Entities are spawned/moved/removed, visible to
+  terrain with aquifers, surface rules, cave/canyon carvers and exact
+  multi-noise biomes, but ore generation is not wired yet, most vegetation,
+  structures and full light propagation are not ported; supported tree features
+  run after carvers, other feature types fail loudly, and some world-dependent
+  placement modifiers are stubs. Entities are spawned/moved/removed, visible to
   clients and ticked with gravity/AABB collision, but there is no AI, damage or
   entity-tracking range logic. Redstone is not ported.
 - Online-mode encryption and Mojang session authentication.

@@ -105,7 +105,7 @@ task table, ticks it, and disables it.
   bedrock/deepslate surface
   gradients, and a 4x8x4 grid chunk generator. Differential-tested against a
   real Java oracle: 1225/1225 final-density grid values within `1e-9`, exact
-  bedrock layers, 96.3% block-class agreement and 89.0% exact block names on
+  bedrock layers, 98.76% block-class agreement and 92.09% exact block names on
   sampled chunk columns.
 - Block-update path: chunk mutation, heightmap/light recomputation, Anvil
   persistence, `ClientboundBlockUpdate`/`SectionBlocksUpdate` broadcast.
@@ -113,8 +113,8 @@ task table, ticks it, and disables it.
   242 chunks / 3,872 sections with zero errors; end region parsed 144 chunks /
   2,305 sections with zero errors.
 
-Acceptance: `cargo test --workspace` passes 116 core unit tests + 30 core
-integration tests + 62 math tests + 23 random tests (231 total), the status
+Acceptance: `cargo test --workspace` passes 133 core unit tests + 35 core
+integration tests + 62 math tests + 23 random tests (253 total), the status
 probe returns the 1.21.11 JSON/pong, the join probe reaches Join Game and
 streams 49 live chunks, a world without region data streams 49 generated noise
 chunks, block mutation persists and broadcasts, hotbar selection changes the
@@ -148,7 +148,7 @@ Port bounded systems first, keeping the Java original as the oracle:
 3. world format read/write against the Rust Anvil/chunk modules
 4. block/light updates — mutation, persistence, broadcast, break/place wired; inventory/redstone triggers pending
 5. entity tracking - spawn/move/remove and gravity/AABB physics done; AI/damage/range logic pending
-6. world generation - noise primitives, density router, aquifers, biomes, bedrock/deepslate gradients and base terrain done; full surface-rule tree/carvers/features pending
+6. world generation - noise primitives, density router, aquifers, biomes, surface rules and cave/canyon carvers done; ores/features/structures pending
 7. gameplay systems
 
 Each slice gets a differential harness: run the same input against the Java

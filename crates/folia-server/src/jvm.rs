@@ -1,13 +1,11 @@
-use anyhow::{Context, Result};
-use folia_core::region::{ChunkPos, RegionScheduler};
+use anyhow::{Context, Result, bail};
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::{jint, jlong, jstring};
 use jni::{InitArgsBuilder, JNIEnv, JNIVersion, JavaVM, NativeMethod};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 struct Task {
     id: i32,
@@ -134,151 +132,180 @@ fn tick_tasks(env: &mut JNIEnv) {
     }
 }
 
-pub fn run(root: &Path) -> Result<()> {
-    eprintln!("[rust] locating JDK");
-    ensure_java_home();
-    eprintln!("[rust] building classpath");
-    let classpath = build_classpath(root)?;
-    eprintln!("[rust] classpath built ({} bytes)", classpath.len());
-    eprintln!("[rust] bootstrapping JVM (root={})", root.display());
+/// Optional Java compatibility layer for `.jar` plugins.
+///
+/// The native server never depends on this type: when `plugins/` contains no
+/// jars (or `FOLIA_DISABLE_PLUGINS=1` is set), startup returns `None` and no JVM
+/// is created. When plugin jars are present, the embedded JVM hosts the Bukkit
+/// API surface and the Rust tick loop drives it.
+pub struct PluginRuntime {
+    jvm: JavaVM,
+    bridge: GlobalRef,
+}
 
-    let args = InitArgsBuilder::new()
-        .version(JNIVersion::V8)
-        .option("-Dfile.encoding=UTF-8")
-        .option(format!("-Djava.class.path={classpath}"))
-        .build()
-        .context("failed to build JVM arguments")?;
-
-    let jvm = JavaVM::new(args).context("failed to start the embedded JVM")?;
-    eprintln!("[rust] JVM started");
-    let mut env = jvm
-        .attach_current_thread()
-        .context("failed to attach to the embedded JVM")?;
-
-    let bridge = env
-        .find_class("rs/folia/bridge/Bridge")
-        .context("bridge class is missing; run scripts/build-java.ps1 first")?;
-    eprintln!("[rust] bridge class loaded");
-
-    let methods = [
-        NativeMethod {
-            name: "nativePing".into(),
-            sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
-            fn_ptr: native_ping as *mut c_void,
-        },
-        NativeMethod {
-            name: "nativeScheduleTask".into(),
-            sig: "(Ljava/lang/String;Ljava/lang/Runnable;JJ)I".into(),
-            fn_ptr: native_schedule_task as *mut c_void,
-        },
-        NativeMethod {
-            name: "nativeCancelTask".into(),
-            sig: "(I)V".into(),
-            fn_ptr: native_cancel_task as *mut c_void,
-        },
-        NativeMethod {
-            name: "nativeCancelTasks".into(),
-            sig: "(Ljava/lang/String;)V".into(),
-            fn_ptr: native_cancel_tasks as *mut c_void,
-        },
-    ];
-    env.register_native_methods(&bridge, &methods)
-        .context("failed to register native bridge methods")?;
-
-    let plugins_dir = root.join("plugins");
-    let data_dir = root.join("run");
-    std::fs::create_dir_all(&plugins_dir)?;
-    std::fs::create_dir_all(&data_dir)?;
-
-    {
-        let plugins = env.new_string(plugins_dir.to_string_lossy())?;
-        let data = env.new_string(data_dir.to_string_lossy())?;
-        let plugins = JObject::from(plugins);
-        let data = JObject::from(data);
-        call(
-            &mut env,
-            &bridge,
-            "boot",
-            "(Ljava/lang/String;Ljava/lang/String;)V",
-            &[JValue::Object(&plugins), JValue::Object(&data)],
-        )
-        .context("plugin host boot failed")?;
-        eprintln!("[rust] plugin host booted");
-    }
-
-    {
-        let line = JObject::from(env.new_string("hello Rust")?);
-        call(
-            &mut env,
-            &bridge,
-            "dispatchCommand",
-            "(Ljava/lang/String;)V",
-            &[JValue::Object(&line)],
-        )
-        .context("plugin command dispatch failed")?;
-    }
-
-    let running = Arc::new(AtomicBool::new(true));
-    {
-        let running = Arc::clone(&running);
-        ctrlc::set_handler(move || running.store(false, Ordering::SeqCst))
-            .context("failed to install the Ctrl+C handler")?;
-    }
-
-    let max_ticks = std::env::var("FOLIA_MAX_TICKS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok());
-
-    match max_ticks {
-        Some(limit) => println!("[rust] server loop running for at most {limit} ticks"),
-        None => println!("[rust] server loop running (Ctrl+C to stop)"),
-    }
-
-    let mut regions = RegionScheduler::new(8);
-    regions.schedule_at(ChunkPos::new(0, 0), 5, 0, || {
-        println!("[rust] spawn region task fired");
-    });
-    regions.schedule_global(0, 100, || {
-        println!("[rust] global region heartbeat");
-    });
-
-    let mut ticks = 0u64;
-    while running.load(Ordering::SeqCst) {
-        let region_tasks = regions.tick_parallel(4);
-        if region_tasks > 0 {
-            println!("[rust] region scheduler ran {region_tasks} task(s)");
+impl PluginRuntime {
+    pub fn start(root: &Path) -> Result<Option<Self>> {
+        if std::env::var("FOLIA_DISABLE_PLUGINS").is_ok_and(|value| value == "1") {
+            println!("[rust] plugin layer disabled (FOLIA_DISABLE_PLUGINS=1)");
+            return Ok(None);
         }
-        for joined in folia_core::join::take_pending_joins() {
-            let name = JObject::from(env.new_string(joined.name)?);
-            let uuid = JObject::from(env.new_string(joined.uuid)?);
+
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir)?;
+        if plugin_jars(&plugins_dir).is_empty() {
+            println!(
+                "[rust] no .jar plugins in {}; running native-only (no JVM)",
+                plugins_dir.display()
+            );
+            return Ok(None);
+        }
+
+        if !root
+            .join("java")
+            .join("bridge")
+            .join("classes")
+            .join("rs")
+            .join("folia")
+            .join("bridge")
+            .join("Bridge.class")
+            .is_file()
+        {
+            bail!(
+                "plugin jars are present but the Bukkit bridge is missing; \
+                 run scripts/build-java.ps1 first"
+            );
+        }
+
+        eprintln!("[rust] locating JDK for the plugin compatibility layer");
+        ensure_java_home();
+        let classpath = build_classpath(root)?;
+        eprintln!("[rust] bootstrapping plugin JVM");
+
+        let args = InitArgsBuilder::new()
+            .version(JNIVersion::V8)
+            .option("-Dfile.encoding=UTF-8")
+            .option(format!("-Djava.class.path={classpath}"))
+            .build()
+            .context("failed to build JVM arguments")?;
+        let jvm = JavaVM::new(args).context(
+            "failed to start the plugin JVM; install Java 21 or remove the jars \
+             from plugins/ to run native-only",
+        )?;
+
+        let bridge = {
+            let mut env = jvm
+                .attach_current_thread()
+                .context("failed to attach to the plugin JVM")?;
+            let bridge = env
+                .find_class("rs/folia/bridge/Bridge")
+                .context("Bukkit bridge class is missing; run scripts/build-java.ps1")?;
+
+            let methods = [
+                NativeMethod {
+                    name: "nativePing".into(),
+                    sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
+                    fn_ptr: native_ping as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeScheduleTask".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/Runnable;JJ)I".into(),
+                    fn_ptr: native_schedule_task as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeCancelTask".into(),
+                    sig: "(I)V".into(),
+                    fn_ptr: native_cancel_task as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeCancelTasks".into(),
+                    sig: "(Ljava/lang/String;)V".into(),
+                    fn_ptr: native_cancel_tasks as *mut c_void,
+                },
+            ];
+            env.register_native_methods(&bridge, &methods)
+                .context("failed to register native bridge methods")?;
+
+            let data_dir = root.join("run");
+            std::fs::create_dir_all(&data_dir)?;
+            let plugins_string = env.new_string(plugins_dir.to_string_lossy())?;
+            let data_string = env.new_string(data_dir.to_string_lossy())?;
+            let plugins_object = JObject::from(plugins_string);
+            let data_object = JObject::from(data_string);
             call(
                 &mut env,
                 &bridge,
-                "firePlayerJoin",
+                "boot",
                 "(Ljava/lang/String;Ljava/lang/String;)V",
-                &[JValue::Object(&name), JValue::Object(&uuid)],
+                &[
+                    JValue::Object(&plugins_object),
+                    JValue::Object(&data_object),
+                ],
             )
-            .context("PlayerJoinEvent dispatch failed")?;
-        }
-        tick_tasks(&mut env);
-        call(&mut env, &bridge, "tick", "()V", &[])?;
-        folia_core::entity::tick_all();
-        ticks += 1;
-        if max_ticks.is_some_and(|limit| ticks >= limit) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    println!("[rust] server loop stopped after {ticks} ticks");
+            .context("plugin host boot failed")?;
 
-    call(&mut env, &bridge, "shutdown", "()V", &[]).context("plugin host shutdown failed")?;
-    // Drop plugin task references while the JVM is still alive.
-    TASKS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
-    println!("[rust] shutdown complete");
-    Ok(())
+            env.new_global_ref(&bridge)
+                .context("failed to pin the bridge class")?
+        };
+
+        eprintln!("[rust] plugin compatibility layer ready");
+        Ok(Some(Self { jvm, bridge }))
+    }
+
+    fn class<'local>(&self, env: &mut JNIEnv<'local>) -> Result<JClass<'local>> {
+        Ok(JClass::from(env.new_local_ref(self.bridge.as_obj())?))
+    }
+
+    pub fn tick(&mut self) -> Result<()> {
+        let mut env = self
+            .jvm
+            .attach_current_thread()
+            .context("failed to attach to the plugin JVM")?;
+        tick_tasks(&mut env);
+        let bridge = self.class(&mut env)?;
+        call(&mut env, &bridge, "tick", "()V", &[]).context("plugin tick failed")
+    }
+
+    pub fn fire_player_join(&mut self, name: &str, uuid: &str) -> Result<()> {
+        let mut env = self
+            .jvm
+            .attach_current_thread()
+            .context("failed to attach to the plugin JVM")?;
+        let name = JObject::from(env.new_string(name)?);
+        let uuid = JObject::from(env.new_string(uuid)?);
+        let bridge = self.class(&mut env)?;
+        call(
+            &mut env,
+            &bridge,
+            "firePlayerJoin",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Object(&name), JValue::Object(&uuid)],
+        )
+        .context("PlayerJoinEvent dispatch failed")
+    }
+
+    pub fn shutdown(&mut self) -> Result<()> {
+        let mut env = self
+            .jvm
+            .attach_current_thread()
+            .context("failed to attach to the plugin JVM")?;
+        let bridge = self.class(&mut env)?;
+        call(&mut env, &bridge, "shutdown", "()V", &[]).context("plugin host shutdown failed")?;
+        TASKS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        Ok(())
+    }
+}
+
+impl Drop for PluginRuntime {
+    fn drop(&mut self) {
+        // GlobalRefs must be released while the JVM is still alive.
+        TASKS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
 }
 
 fn call(env: &mut JNIEnv, class: &JClass, name: &str, sig: &str, args: &[JValue]) -> Result<()> {
@@ -288,6 +315,22 @@ fn call(env: &mut JNIEnv, class: &JClass, name: &str, sig: &str, args: &[JValue]
         return Err(error.into());
     }
     Ok(())
+}
+
+fn plugin_jars(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut jars: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("jar"))
+        })
+        .collect();
+    jars.sort();
+    jars
 }
 
 fn build_classpath(root: &Path) -> Result<String> {

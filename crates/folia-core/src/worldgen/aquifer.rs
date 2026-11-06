@@ -40,7 +40,7 @@ pub enum FluidKind {
 }
 
 impl FluidKind {
-    fn block_state(self) -> BlockState {
+    pub fn block_state(self) -> BlockState {
         match self {
             FluidKind::Water => BlockState {
                 name: "minecraft:water".into(),
@@ -54,12 +54,18 @@ impl FluidKind {
     }
 }
 
-fn block_state_for(kind: Option<FluidKind>) -> BlockState {
-    kind.map(FluidKind::block_state)
-        .unwrap_or_else(|| BlockState {
-            name: "minecraft:air".into(),
-            properties: vec![],
-        })
+/// Result of the aquifer at one block position. Keeping air as a tag avoids a
+/// `BlockState` string allocation for every air block in the chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AquiferSubstance {
+    Solid,
+    Air,
+    Fluid(FluidKind),
+}
+
+fn substance_for(kind: Option<FluidKind>) -> AquiferSubstance {
+    kind.map(AquiferSubstance::Fluid)
+        .unwrap_or(AquiferSubstance::Air)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,17 +190,17 @@ impl Aquifer {
         y: i32,
         z: i32,
         substance: f64,
-    ) -> Option<BlockState> {
+    ) -> AquiferSubstance {
         if substance > 0.0 {
-            return None;
+            return AquiferSubstance::Solid;
         }
 
         let global = self.global_fluid(x, y, z);
         if y > self.skip_sampling_above_y {
-            return Some(block_state_for(global.at(y)));
+            return substance_for(global.at(y));
         }
         if global.at(y) == Some(FluidKind::Lava) {
-            return Some(FluidKind::Lava.block_state());
+            return AquiferSubstance::Fluid(FluidKind::Lava);
         }
 
         let grid_x = grid_x(x - 5);
@@ -264,13 +270,13 @@ impl Aquifer {
         let center_similarity = similarity(first_distance, second_distance);
         let block = status.at(y);
         if center_similarity <= 0.0 {
-            return Some(block_state_for(block));
+            return substance_for(block);
         }
 
         if block == Some(FluidKind::Water)
             && self.global_fluid(x, y - 1, z).at(y - 1) == Some(FluidKind::Lava)
         {
-            return Some(FluidKind::Water.block_state());
+            return AquiferSubstance::Fluid(FluidKind::Water);
         }
 
         let mut barrier = None;
@@ -278,7 +284,7 @@ impl Aquifer {
         let pressure = center_similarity
             * self.calculate_pressure(x, y, z, &mut barrier, status, second_status);
         if substance + pressure > 0.0 {
-            return None;
+            return AquiferSubstance::Solid;
         }
 
         let third_status = self.status(third_index);
@@ -288,7 +294,7 @@ impl Aquifer {
                 * second_similarity
                 * self.calculate_pressure(x, y, z, &mut barrier, status, third_status);
             if substance + pressure > 0.0 {
-                return None;
+                return AquiferSubstance::Solid;
             }
         }
 
@@ -298,13 +304,13 @@ impl Aquifer {
                 * third_similarity
                 * self.calculate_pressure(x, y, z, &mut barrier, second_status, third_status);
             if substance + pressure > 0.0 {
-                return None;
+                return AquiferSubstance::Solid;
             }
         }
 
         // Flowing-update scheduling is not needed for static chunk generation.
         let _ = fourth_index;
-        Some(block_state_for(block))
+        substance_for(block)
     }
 
     fn calculate_pressure(

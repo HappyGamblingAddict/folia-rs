@@ -18,6 +18,7 @@
 
 mod legacy;
 mod support;
+mod worldgen;
 mod xoroshiro;
 
 pub use legacy::LegacyRandomSource;
@@ -26,6 +27,7 @@ pub use support::{
     GOLDEN_RATIO_64, SILVER_RATIO_64, Seed128bit, mix_stafford13, seed_from_hash_of,
     upgrade_seed_to_128bit, upgrade_seed_to_128bit_unmixed,
 };
+pub use worldgen::WorldgenRandom;
 pub use xoroshiro::{
     Xoroshiro128PlusPlus, XoroshiroPositionalRandomFactory, XoroshiroRandomSource, get_seed,
 };

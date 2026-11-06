@@ -70,25 +70,81 @@ fn login_generates_noise_terrain_when_world_is_missing() {
     let first = read_packet(&mut client).expect("play login");
     assert_eq!(packet_id(&first), 48, "Join Game");
 
+    let (spawn_x, spawn_y, spawn_z) = loop {
+        let packet = read_packet(&mut client).expect("play packet");
+        if packet_id(&packet) == 70 {
+            let mut reader = PacketReader::new(&packet);
+            let _ = reader.read_varint().unwrap();
+            let _ = reader.read_varint().unwrap();
+            let x = reader.read_f64().unwrap();
+            let y = reader.read_f64().unwrap();
+            let z = reader.read_f64().unwrap();
+            break (x, y, z);
+        }
+        assert_ne!(
+            packet_id(&packet),
+            44,
+            "the position is sent before the chunk batch"
+        );
+    };
+
     let mut chunks = 0;
     let mut saw_bedrock = false;
-    loop {
-        let packet = read_packet(&mut client).expect("play packet");
+    while chunks < 169 {
+        let packet = read_packet(&mut client).expect("chunk packet");
         if packet_id(&packet) == 44 {
             chunks += 1;
             if chunk_palette_contains(&packet, 85) {
                 saw_bedrock = true;
             }
         }
-        if packet_id(&packet) == 70 {
-            break;
+    }
+    assert_eq!(chunks, 169, "13x13 generated chunks");
+    assert!(saw_bedrock, "generated chunk palette contains bedrock");
+    assert!(
+        spawn_y > 0.0,
+        "a fresh player spawns on the generated surface, not at the captured \
+         y = -60 (got {spawn_y})"
+    );
+
+    // Crossing a chunk border streams the newly visible column and moves the
+    // chunk cache center with the player.
+    // Move 8.5 blocks east in one legal step (< the 10-block guard) so the
+    // player crosses into chunk 1 without a correction.
+    write_packet(&mut client, &move_packet(spawn_x + 8.5, spawn_y, spawn_z)).unwrap();
+    let mut new_chunks = 0;
+    let mut recentered = false;
+    loop {
+        let packet = read_packet(&mut client).expect("streamed packet");
+        match packet_id(&packet) {
+            44 => {
+                new_chunks += 1;
+                if new_chunks == 13 {
+                    break;
+                }
+            }
+            92 => recentered = true,
+            _ => {}
         }
     }
-    assert_eq!(chunks, 49, "7x7 generated chunks");
-    assert!(saw_bedrock, "generated chunk palette contains bedrock");
+    assert_eq!(new_chunks, 13, "one new chunk column when moving +X");
+    assert!(recentered, "chunk cache center follows the player");
 
     drop(client);
     server.join().expect("server thread").expect("join flow");
+
+    let level = folia_core::level::read(root.join("level.dat")).expect("generated level.dat");
+    assert!(level.own_level, "the level file marks the world as ours");
+    assert_eq!(level.data_version, folia_core::level::DATA_VERSION);
+    assert_eq!(level.seed, Some(12345), "the generator seed is saved");
+    let (level_x, level_y, level_z) = level.spawn.expect("world spawn");
+    assert_eq!((level_x, level_z), (8, 8), "spawn column");
+    assert_eq!(
+        (spawn_x, spawn_y),
+        (f64::from(level_x) + 0.5, f64::from(level_y)),
+        "a new player spawns at the saved world spawn"
+    );
+
     std::fs::remove_dir_all(root).ok();
 }
 
@@ -120,6 +176,16 @@ fn chunk_palette_contains(packet: &[u8], state_id: i32) -> bool {
     false
 }
 
+fn move_packet(x: f64, y: f64, z: f64) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(29).unwrap();
+    writer.write_f64(x).unwrap();
+    writer.write_f64(y).unwrap();
+    writer.write_f64(z).unwrap();
+    writer.write_u8(1).unwrap();
+    writer.into_inner()
+}
+
 fn packet_id(packet: &[u8]) -> i32 {
     let mut reader = PacketReader::new(packet);
     reader.read_varint().unwrap()
@@ -142,7 +208,7 @@ fn client_information() -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(0).unwrap();
     writer.write_string("en_us").unwrap();
-    writer.write_u8(2).unwrap();
+    writer.write_u8(6).unwrap();
     writer.write_varint(0).unwrap();
     writer.write_u8(1).unwrap();
     writer.write_u8(0).unwrap();

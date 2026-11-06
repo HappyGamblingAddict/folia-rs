@@ -4,7 +4,7 @@ use folia_core::protocol::{
 };
 use std::io;
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() -> io::Result<()> {
     let address = std::env::args()
@@ -68,24 +68,44 @@ fn main() -> io::Result<()> {
     }
     println!("Join Game received (id 48)");
 
+    let started = Instant::now();
     let mut chunks = 0;
+    // The server's position packet is where the client ends up; report it and
+    // move from there instead of assuming a spawn height.
+    let mut position = (0.5_f64, 64.0_f64, 0.5_f64);
     loop {
         let packet = read_packet(&mut stream)?;
         match packet_id(&packet) {
-            44 => chunks += 1,
-            70 => break,
+            44 => {
+                if chunks == 0 {
+                    println!("first chunk after {:.2}s", started.elapsed().as_secs_f64());
+                }
+                chunks += 1;
+            }
+            70 => {
+                let mut reader = PacketReader::new(&packet);
+                let _ = reader.read_varint();
+                let _ = reader.read_varint();
+                position.0 = reader.read_f64()?;
+                position.1 = reader.read_f64()?;
+                position.2 = reader.read_f64()?;
+                break;
+            }
             _ => {}
         }
     }
     println!("play stream received: {chunks} live chunk packets");
-    println!("live position packet received");
+    println!(
+        "live position packet received at ({:.1}, {:.1}, {:.1})",
+        position.0, position.1, position.2
+    );
 
     // Send one movement packet so the server persists a live position.
     let mut movement = PacketWriter::new();
     movement.write_varint(29).unwrap();
-    movement.write_f64(12.5).unwrap();
-    movement.write_f64(-60.0).unwrap();
-    movement.write_f64(8.25).unwrap();
+    movement.write_f64(position.0).unwrap();
+    movement.write_f64(position.1).unwrap();
+    movement.write_f64(position.2).unwrap();
     movement.write_u8(1).unwrap();
     write_packet(&mut stream, &movement.into_inner())?;
     std::thread::sleep(Duration::from_millis(250));
@@ -94,6 +114,48 @@ fn main() -> io::Result<()> {
     if chunks == 0 {
         std::process::exit(4);
     }
+
+    // Optional walk mode: `join_probe <address> <blocks-east>`.
+    let walk_blocks: f64 = std::env::args()
+        .nth(2)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0);
+    if walk_blocks > 0.0 {
+        let mut walked = 0.0;
+        let mut extra_chunks = 0usize;
+        stream.set_read_timeout(Some(Duration::from_millis(400)))?;
+        while walked < walk_blocks {
+            walked = (walked + 8.0).min(walk_blocks);
+            let x = position.0 + walked;
+            let mut movement = PacketWriter::new();
+            movement.write_varint(29).unwrap();
+            movement.write_f64(x).unwrap();
+            movement.write_f64(position.1).unwrap();
+            movement.write_f64(position.2).unwrap();
+            movement.write_u8(1).unwrap();
+            write_packet(&mut stream, &movement.into_inner())?;
+            loop {
+                match read_packet(&mut stream) {
+                    Ok(packet) => {
+                        if packet_id(&packet) == 44 {
+                            extra_chunks += 1;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            || error.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        println!(
+            "walked {walked:.0} blocks east from spawn: {extra_chunks} new live chunk packets"
+        );
+    }
+
     Ok(())
 }
 
@@ -119,7 +181,7 @@ fn client_information() -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(0).unwrap();
     writer.write_string("en_us").unwrap();
-    writer.write_u8(2).unwrap();
+    writer.write_u8(6).unwrap();
     writer.write_varint(0).unwrap();
     writer.write_u8(1).unwrap();
     writer.write_u8(0).unwrap();

@@ -66,6 +66,8 @@ pub struct RegionFile {
     data: Vec<u8>,
     locations: [Location; CHUNKS_PER_REGION],
     timestamps: [u32; CHUNKS_PER_REGION],
+    /// Sectors abandoned by records that outgrew their allocation.
+    dead_sectors: usize,
     dirty: bool,
 }
 
@@ -104,6 +106,7 @@ impl RegionFile {
             data,
             locations,
             timestamps,
+            dead_sectors: 0,
             dirty: false,
         })
     }
@@ -116,6 +119,7 @@ impl RegionFile {
             data,
             locations: [Location::EMPTY; CHUNKS_PER_REGION],
             timestamps: [0u32; CHUNKS_PER_REGION],
+            dead_sectors: 0,
             dirty: true,
         };
         file.save()?;
@@ -202,25 +206,45 @@ impl RegionFile {
             return Err(invalid("chunk record needs more than 255 sectors"));
         }
 
-        let offset = self.data.len().div_ceil(SECTOR_SIZE);
-        if offset > 0x00FF_FFFF {
-            return Err(invalid(
-                "region file exceeds the 24-bit sector offset limit",
-            ));
-        }
+        // Rewrite in place when the new record fits in the sectors the chunk
+        // already owns; appending every save would grow a region without bound
+        // as a player edits the same chunk.
+        let index = index(local_x, local_z);
+        let existing = self.locations[index];
+        let reusable = existing.offset != 0
+            && existing.sectors as usize >= sectors
+            && (existing.offset as usize + existing.sectors as usize) * SECTOR_SIZE
+                <= self.data.len();
+        let (offset, allocated) = if reusable {
+            (existing.offset as usize, existing.sectors as usize)
+        } else {
+            let offset = self.data.len().div_ceil(SECTOR_SIZE);
+            if offset > 0x00FF_FFFF {
+                return Err(invalid(
+                    "region file exceeds the 24-bit sector offset limit",
+                ));
+            }
+            self.data.resize((offset + sectors) * SECTOR_SIZE, 0);
+            (offset, sectors)
+        };
 
-        let required = (offset + sectors) * SECTOR_SIZE;
-        self.data.resize(required, 0);
+        if !reusable && !existing.is_empty() {
+            self.dead_sectors += existing.sectors as usize;
+        }
 
         let start = offset * SECTOR_SIZE;
         self.data[start..start + 4].copy_from_slice(&(length as u32).to_be_bytes());
         self.data[start + 4] = compression.id();
         self.data[start + 5..start + 4 + length].copy_from_slice(&compressed);
+        let used = start + 4 + length;
+        let allocated_end = start + allocated * SECTOR_SIZE;
+        if used < allocated_end {
+            self.data[used..allocated_end].fill(0);
+        }
 
-        let index = index(local_x, local_z);
         self.locations[index] = Location {
             offset: offset as u32,
-            sectors: sectors as u8,
+            sectors: allocated as u8,
         };
         self.timestamps[index] = now_unix();
         self.write_location(index);
@@ -230,17 +254,87 @@ impl RegionFile {
 
     pub fn remove_chunk(&mut self, local_x: u8, local_z: u8) {
         let index = index(local_x, local_z);
+        let existing = self.locations[index];
+        if !existing.is_empty() {
+            self.dead_sectors += existing.sectors as usize;
+        }
         self.locations[index] = Location::EMPTY;
         self.timestamps[index] = 0;
         self.write_location(index);
         self.dirty = true;
     }
 
-    pub fn save(&self) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
+    /// Pack live chunk records after the header, reclaiming abandoned sectors.
+    /// Returns true when at least one record moved.
+    pub fn compact(&mut self) -> bool {
+        if self.dead_sectors == 0 {
+            return false;
+        }
+        let old = std::mem::take(&mut self.data);
+        let mut packed = vec![0u8; HEADER_SIZE];
+        let mut moved = false;
+        for index in 0..CHUNKS_PER_REGION {
+            let location = self.locations[index];
+            if location.is_empty() {
+                continue;
             }
+            let start = location.offset as usize * SECTOR_SIZE;
+            let end = start + location.sectors as usize * SECTOR_SIZE;
+            let length = if end <= old.len() {
+                u32::from_be_bytes([old[start], old[start + 1], old[start + 2], old[start + 3]])
+                    as usize
+            } else {
+                0
+            };
+            if length == 0 || 4 + length > end - start {
+                self.locations[index] = Location::EMPTY;
+                self.timestamps[index] = 0;
+                continue;
+            }
+            let offset = packed.len().div_ceil(SECTOR_SIZE);
+            if offset > 0x00FF_FFFF {
+                self.locations[index] = Location::EMPTY;
+                self.timestamps[index] = 0;
+                continue;
+            }
+            packed.resize((offset + location.sectors as usize) * SECTOR_SIZE, 0);
+            let new_start = offset * SECTOR_SIZE;
+            packed[new_start..new_start + 4 + length]
+                .copy_from_slice(&old[start..start + 4 + length]);
+            self.locations[index] = Location {
+                offset: offset as u32,
+                sectors: location.sectors,
+            };
+            moved = true;
+        }
+        self.data = packed;
+        self.dead_sectors = 0;
+        self.dirty = true;
+        for index in 0..CHUNKS_PER_REGION {
+            self.write_location(index);
+        }
+        moved
+    }
+
+    fn should_compact(&self) -> bool {
+        if self.dead_sectors == 0 {
+            return false;
+        }
+        let live: usize = self
+            .locations
+            .iter()
+            .map(|location| location.sectors as usize)
+            .sum();
+        self.dead_sectors * 4 > live
+    }
+
+    pub fn save(&self) -> io::Result<()> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
         }
         let temporary = self.path.with_extension("tmp");
         fs::write(&temporary, &self.data)?;
@@ -251,6 +345,9 @@ impl RegionFile {
     pub fn save_if_dirty(&mut self) -> io::Result<bool> {
         if !self.dirty {
             return Ok(false);
+        }
+        if self.should_compact() {
+            self.compact();
         }
         self.save()?;
         self.dirty = false;
@@ -345,8 +442,8 @@ mod tests {
 
             let location = reopened.location(5, 7);
             assert!(!location.is_empty());
-            assert_eq!(location.offset % 1, 0);
-            assert_eq!(location.sectors as usize * SECTOR_SIZE % SECTOR_SIZE, 0);
+            assert!(location.offset as usize >= HEADER_SECTORS);
+            assert!(location.sectors > 0);
 
             fs::remove_file(path).unwrap();
         }
@@ -386,6 +483,81 @@ mod tests {
         assert_eq!(offset, region.location(1, 2).offset);
         assert_eq!(bytes[base + 3], region.location(1, 2).sectors);
         assert_eq!(bytes.len() % SECTOR_SIZE, 0);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn overwriting_a_chunk_reuses_its_sectors() {
+        let path = temp_path("reuse");
+        let mut padded = chunk(4, 5);
+        if let Tag::Compound(entries) = &mut padded {
+            entries.push(("Padding".into(), Tag::String("x".repeat(4096))));
+        }
+
+        let mut region = RegionFile::create(&path).unwrap();
+        region
+            .write_chunk(4, 5, &padded, Compression::None)
+            .unwrap();
+        region.save().unwrap();
+        let length = fs::metadata(&path).unwrap().len();
+        let original = region.location(4, 5);
+        assert!(
+            original.sectors > 1,
+            "the padded chunk needs several sectors"
+        );
+
+        let mut reopened = RegionFile::open(&path).unwrap();
+        reopened
+            .write_chunk(4, 5, &chunk(4, 5), Compression::None)
+            .unwrap();
+        reopened.save().unwrap();
+
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            length,
+            "a smaller rewrite does not append sectors"
+        );
+        let location = reopened.location(4, 5);
+        assert_eq!(
+            location.offset, original.offset,
+            "the record stays in place"
+        );
+        assert_eq!(location.sectors, original.sectors, "the allocation is kept");
+        assert_eq!(reopened.read_chunk(4, 5).unwrap().unwrap(), chunk(4, 5));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn compaction_reclaims_sectors_left_by_grown_records() {
+        let path = temp_path("compact");
+        let mut padded = chunk(1, 1);
+        if let Tag::Compound(entries) = &mut padded {
+            entries.push(("Padding".into(), Tag::String("x".repeat(8192))));
+        }
+
+        let mut region = RegionFile::create(&path).unwrap();
+        region
+            .write_chunk(1, 1, &chunk(1, 1), Compression::None)
+            .unwrap();
+        region
+            .write_chunk(2, 2, &chunk(2, 2), Compression::None)
+            .unwrap();
+        region
+            .write_chunk(1, 1, &padded, Compression::None)
+            .unwrap();
+        region.save().unwrap();
+        let before = fs::metadata(&path).unwrap().len();
+
+        assert!(region.compact(), "dead sectors are reclaimed");
+        region.save().unwrap();
+        assert!(
+            fs::metadata(&path).unwrap().len() < before,
+            "compaction shrinks the region"
+        );
+
+        let reopened = RegionFile::open(&path).unwrap();
+        assert_eq!(reopened.read_chunk(1, 1).unwrap().unwrap(), padded);
+        assert_eq!(reopened.read_chunk(2, 2).unwrap().unwrap(), chunk(2, 2));
         fs::remove_file(path).unwrap();
     }
 }

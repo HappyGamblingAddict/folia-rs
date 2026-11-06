@@ -32,15 +32,22 @@ Rust tree: `crates/folia-core`.
 | Overworld density functions / noise router | `folia-core/src/worldgen/density.rs` | Embedded `worldgen.json`; noise, splines, gradients, range/min/max, markers, weird sampler |
 | `NoiseBasedAquifer` | `folia-core/src/worldgen/aquifer.rs` | Fluid/noise grid, pressure blending, water/lava selection, deep-dark rules |
 | `MultiNoiseBiomeSource` | `folia-core/src/worldgen/biome.rs` | Biome parameter list, climate quantization, minimum-fitness search; 1536/1536 Java quart samples exact |
+| `BiomeManager` fuzzy zoom | `folia-core/src/worldgen/biome_zoom.rs` | SHA-256 seed obfuscation, LCG fiddled-distance search over eight quart corners, `biome_at` against `BiomeSampler` |
 | `NoiseBasedChunkGenerator` base terrain | `folia-core/src/worldgen/generator.rs` | 4x8x4 density grid, trilinear interpolation, aquifer substance, bedrock/deepslate gradients, simple surface, sea-level water |
+| `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
+| `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
+| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay; `no_op` implemented, other feature types explicitly unsupported |
+| `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; 6 world-free modifiers plus `BiomeFilter` (via `PlacementWorld`) execute with vanilla draw order (667/888 shipped), the rest report `PlacementFailure` |
 | `net/minecraft/world/level/lighting/*` | - | Not ported |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs` | Partial: base entity physics for tracked entities; AI/goals/damage not ported |
 | `net/minecraft/world/level/block/*` redstone/gameplay | — | Not ported |
 
 ## Verification evidence
 
-- `cargo test --workspace` → 116 core unit + 30 core integration + 62 math + 23
-  random tests (231 total).
+- `cargo test --workspace` → 158 core unit + 35 core integration + 62 math + 23
+  random tests (278 total), 0 failed.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
+  are clean (2026-11-04).
 - Status server responds to status/ping, legacy ping, and login.
 - End-to-end login probe: `cargo run -p folia-core --example join_probe -- 127.0.0.1:25565`
   prints `login accepted`, `configuration complete`, `Join Game received`,
@@ -85,7 +92,7 @@ Rust tree: `crates/folia-core`.
 - All 1225 `final_density` values on the chunk `(0,-1)` 4x8x4 interpolation grid
   match Java within `1e-9` (`worldgen/generator.rs` test,
   `assets/java-density-grid.txt`).
-- Generated chunk `(0,-1)` uses the noise aquifer: block-class agreement with the Java chunk is 96.3% (5915/6144 sampled positions), exact block names are 89.0%, and surface heights differ by 1.81 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
+- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.76% (6068/6144 sampled positions), exact block names are 92.09% (5658/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
 - `tests/worldgen_join.rs` logs in with no region directory, streams 49
   generated terrain chunks, and checks the palette contains bedrock.
 - Live server startup logs `[rust] noise world generator ready (seed=0)`.

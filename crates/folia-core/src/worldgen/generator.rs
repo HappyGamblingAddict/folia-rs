@@ -1,16 +1,24 @@
 //! Noise-based overworld chunk generation.
 //!
 //! This evaluates the real `minecraft:overworld` final-density router on the
-//! vanilla 4x8x4 interpolation grid and fills a Rust chunk. It is the base
-//! terrain pass: bedrock, deepslate/stone, simple surface blocks and sea-level
-//! water. Vanilla surface rules, carvers, aquifers, ores, features and
-//! structures are not applied yet.
+//! vanilla 4x8x4 interpolation grid and fills a Rust chunk. The density pass
+//! produces stone/air/water/lava, then the full vanilla surface-rule tree
+//! (bedrock floor, deepslate gradient, badlands, snow/ice, swamp water, ...)
+//! replaces the near-surface blocks, the cave and canyon carvers replay their
+//! starts from the 17x17 neighbourhood, and the supported vegetation features
+//! decorate the chunk. Ores, other features and structures are not applied yet.
 
-use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
-use crate::worldgen::aquifer::Aquifer;
+use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer, is_air_state};
+use crate::worldgen::aquifer::{Aquifer, AquiferSubstance};
 use crate::worldgen::biome::BiomeSampler;
+use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
-use folia_random::{RandomSource, XoroshiroPositionalRandomFactory};
+use crate::worldgen::feature::{
+    Decoration, FeatureData, Heightmap, PlacementWorld, WorldGenRegion,
+};
+use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
+use folia_math::BlockPos;
+use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
 use std::io;
 use std::sync::{Arc, OnceLock};
 
@@ -38,9 +46,10 @@ pub fn configured() -> Option<&'static Arc<WorldGenerator>> {
 pub struct WorldGenerator {
     router: NoiseRouter,
     biomes: BiomeSampler,
+    surface: SurfaceSystem,
+    surface_rules: RuleSource,
+    carvers: CarverSet,
     aquifer_factory: XoroshiroPositionalRandomFactory,
-    deepslate_factory: XoroshiroPositionalRandomFactory,
-    bedrock_factory: XoroshiroPositionalRandomFactory,
     seed: i64,
     min_y: i32,
     height: i32,
@@ -57,22 +66,27 @@ impl WorldGenerator {
             .seed()
             .from_hash_of("minecraft:aquifer")
             .fork_positional();
-        let deepslate_factory = data
-            .seed()
-            .from_hash_of("minecraft:deepslate")
-            .fork_positional();
-        let bedrock_factory = data
-            .seed()
-            .from_hash_of("minecraft:bedrock_floor")
-            .fork_positional();
         let biomes = BiomeSampler::from_data(&data)?;
+        let surface = SurfaceSystem::new(
+            &data,
+            min_y,
+            height,
+            sea_level,
+            BlockState {
+                name: "minecraft:stone".into(),
+                properties: vec![],
+            },
+        )?;
+        let surface_rules =
+            surface::parse_rules(&data.surface_rule()?, data.seed(), min_y, height)?;
         let router = data.router()?;
         Ok(Self {
             router,
             biomes,
+            surface,
+            surface_rules,
+            carvers: CarverSet::overworld(min_y),
             aquifer_factory,
-            deepslate_factory,
-            bedrock_factory,
             seed,
             min_y,
             height,
@@ -103,36 +117,6 @@ impl WorldGenerator {
 
     pub fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
         self.biomes.sample_block(x, y, z)
-    }
-
-    /// Vanilla `bedrock_floor` vertical-gradient surface rule.
-    fn is_bedrock(&self, x: i32, y: i32, z: i32) -> bool {
-        if y <= self.min_y {
-            return true;
-        }
-        if y >= self.min_y + 5 {
-            return false;
-        }
-        let probability = map(
-            f64::from(y),
-            f64::from(self.min_y),
-            f64::from(self.min_y + 5),
-            1.0,
-            0.0,
-        ) as f32;
-        self.bedrock_factory.at(x, y, z).next_float() < probability
-    }
-
-    /// Vanilla `deepslate` vertical-gradient surface rule.
-    fn is_deepslate(&self, x: i32, y: i32, z: i32) -> bool {
-        if y <= 0 {
-            return true;
-        }
-        if y >= 8 {
-            return false;
-        }
-        let probability = map(f64::from(y), 0.0, 8.0, 1.0, 0.0) as f32;
-        self.deepslate_factory.at(x, y, z).next_float() < probability
     }
 
     pub fn generate_chunk(&self, chunk_x: i32, chunk_z: i32) -> io::Result<Chunk> {
@@ -186,13 +170,22 @@ impl WorldGenerator {
             self.sea_level,
         );
 
+        let stone = BlockState {
+            name: "minecraft:stone".into(),
+            properties: vec![],
+        };
         let mut solid = vec![false; self.height as usize];
         let mut fluids: Vec<Option<BlockState>> = vec![None; self.height as usize];
         for local_x in 0..16 {
             for local_z in 0..16 {
                 let world_x = chunk_x * 16 + local_x;
                 let world_z = chunk_z * 16 + local_z;
-                let mut top_solid = self.min_y - 1;
+                // The column buffers are reused, so clear them: leaving a
+                // previous column's solid/fluid flags in place leaks terrain
+                // sideways into neighbouring columns.
+                solid.fill(false);
+                fluids.fill(None);
+
                 for index in 0..self.height as usize {
                     let y = self.min_y + index as i32;
                     let value = sample_grid(
@@ -206,47 +199,271 @@ impl WorldGenerator {
                     );
                     if value > 0.0 {
                         solid[index] = true;
-                    } else if let Some(state) =
-                        aquifer.compute_substance(world_x, y, world_z, value)
-                    {
-                        if state.name != "minecraft:air" {
-                            fluids[index] = Some(state);
-                        }
                     } else {
-                        // Aquifer pressure can turn a negative density into
-                        // solid terrain.
-                        solid[index] = true;
-                    }
-                    if solid[index] {
-                        top_solid = y;
+                        match aquifer.compute_substance(world_x, y, world_z, value) {
+                            AquiferSubstance::Solid => solid[index] = true,
+                            AquiferSubstance::Air => {}
+                            AquiferSubstance::Fluid(kind) => {
+                                fluids[index] = Some(kind.block_state());
+                            }
+                        }
                     }
                 }
 
                 for index in 0..self.height as usize {
                     let y = self.min_y + index as i32;
-                    let state = if self.is_bedrock(world_x, y, world_z) {
-                        Some(BlockState {
-                            name: "minecraft:bedrock".into(),
-                            properties: vec![],
-                        })
-                    } else if solid[index] {
-                        Some(surface_block(
-                            y,
-                            top_solid,
-                            self.sea_level,
-                            self.is_deepslate(world_x, y, world_z),
-                        ))
-                    } else {
-                        fluids[index].clone()
-                    };
-                    if let Some(state) = state {
+                    if solid[index] {
+                        chunk.set_block_state_ref(local_x as usize, y, local_z as usize, &stone);
+                    } else if let Some(state) = fluids[index].take() {
                         chunk.set_block_state(local_x as usize, y, local_z as usize, state);
                     }
                 }
             }
         }
 
+        // Sample every quart biome cell once: the surface rules and the chunk
+        // biome palettes both use this array.
+        let biome_indices = self.sample_biome_indices(chunk_x, chunk_z);
+        let preliminary_surface = self.router.function("preliminary_surface_level")?;
+        surface::build_surface(
+            &self.surface,
+            &self.surface_rules,
+            preliminary_surface.as_ref(),
+            &self.biomes,
+            &biome_indices,
+            &mut chunk,
+        );
+
+        // Vanilla runs carvers after the surface pass, so they can cut through
+        // grass and dirt and then ask the surface rules for a replacement floor.
+        let carver_context = CarverContext::new(
+            &self.surface,
+            &self.surface_rules,
+            preliminary_surface.as_ref(),
+            &self.biomes,
+            &biome_indices,
+            self.min_y,
+            self.height,
+        );
+        self.carvers
+            .apply(&carver_context, &mut chunk, &mut aquifer, self.seed);
+
+        let mut biome_cursor = 0usize;
+        for section in &mut chunk.sections {
+            let mut palette: Vec<String> = Vec::new();
+            let mut indices = Vec::with_capacity(64);
+            for _ in 0..64 {
+                let entry = biome_indices[biome_cursor];
+                biome_cursor += 1;
+                let biome = self.biomes.biome_name(entry).to_owned();
+                let index = match palette.iter().position(|value| value == &biome) {
+                    Some(index) => index,
+                    None => {
+                        palette.push(biome);
+                        palette.len() - 1
+                    }
+                };
+                indices.push(index as u16);
+            }
+            section.biomes = Some(PalettedContainer { palette, indices });
+        }
+
+        // Biomes are now stored in the chunk, which the biome placement filter
+        // reads through `FeaturePlacementWorld`.
+        self.apply_decorations(&mut chunk, &biome_indices)?;
+
         Ok(chunk)
+    }
+
+    /// Runs the decoration steps this port implements for every biome that
+    /// appears in this chunk.
+    ///
+    /// Vanilla seeds each placed feature independently:
+    /// `WorldgenRandom.setFeatureSeed(decorationSeed, featureIndex, step)`.
+    /// The feature index is the position in `FeatureSorter`'s global list for
+    /// the step, not the order a biome happens to list it in.
+    fn apply_decorations(&self, chunk: &mut Chunk, biome_indices: &[usize]) -> io::Result<()> {
+        let data = FeatureData::vanilla();
+        let mut chunk_biomes = std::collections::HashSet::new();
+        for entry in biome_indices {
+            chunk_biomes.insert(self.biomes.biome_name(*entry));
+        }
+
+        let possible_biomes = self.biomes.possible_biomes();
+        let step_order = data.step_feature_order(&possible_biomes);
+        let mut worldgen_random = WorldgenRandom::new(0);
+        let decoration_seed = worldgen_random.set_decoration_seed(
+            self.seed,
+            chunk.x.wrapping_mul(16),
+            chunk.z.wrapping_mul(16),
+        );
+        let origin = BlockPos::new(
+            chunk.x.wrapping_mul(16),
+            self.min_y,
+            chunk.z.wrapping_mul(16),
+        );
+        for step in [Decoration::VegetalDecoration] {
+            let mut active = std::collections::HashSet::new();
+            for biome in &chunk_biomes {
+                let Some(steps) = data.biome_features(biome) else {
+                    continue;
+                };
+                for feature in &steps[step.index()] {
+                    active.insert(feature.as_str());
+                }
+            }
+            if active.is_empty() {
+                continue;
+            }
+
+            for (index, id) in step_order[step.index()].iter().enumerate() {
+                if !active.contains(id.as_str()) {
+                    continue;
+                }
+                let Some(placed) = data.placed(id) else {
+                    continue;
+                };
+                if !placed.placement_is_supported() {
+                    continue;
+                }
+                let Some(configured) = data.configured(placed.feature()) else {
+                    continue;
+                };
+                if !configured.is_supported() {
+                    continue;
+                }
+
+                worldgen_random.set_feature_seed(
+                    decoration_seed,
+                    index as i32,
+                    step.index() as i32,
+                );
+                let positions = {
+                    let world = FeaturePlacementWorld {
+                        chunk: &*chunk,
+                        data,
+                        min_y: self.min_y,
+                        height: self.height,
+                    };
+                    placed
+                        .placement_positions(
+                            origin,
+                            &mut worldgen_random,
+                            &world,
+                            self.min_y,
+                            self.height,
+                        )
+                        .map_err(|failure| {
+                            io::Error::new(io::ErrorKind::InvalidData, failure.to_string())
+                        })?
+                };
+
+                for pos in positions {
+                    let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
+                    configured
+                        .place(&mut region, &mut worldgen_random, pos)
+                        .map_err(|feature| {
+                            io::Error::new(io::ErrorKind::InvalidData, feature.to_string())
+                        })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Samples the chunk's 1536 quart biome cells in
+    /// `(quart_y, quart_z, quart_x)` order, matching the biome palette layout.
+    fn sample_biome_indices(&self, chunk_x: i32, chunk_z: i32) -> Vec<usize> {
+        let quart_layers = (self.height >> 2) as usize;
+        let quart_y_start = self.min_y >> 2;
+        let mut indices = vec![0usize; quart_layers * 16];
+        for qz in 0..4usize {
+            for qx in 0..4usize {
+                let column = self.biomes.sample_quart_column(
+                    chunk_x * 4 + qx as i32,
+                    chunk_z * 4 + qz as i32,
+                    quart_y_start,
+                    quart_layers,
+                );
+                for (layer, entry) in column.into_iter().enumerate() {
+                    indices[(layer * 4 + qz) * 4 + qx] = entry;
+                }
+            }
+        }
+        indices
+    }
+}
+
+/// [`PlacementWorld`] backed by the chunk currently being generated.
+///
+/// Heightmaps are recomputed from the block states, so later trees in the same
+/// chunk see the leaves and logs placed by earlier ones, matching the updated
+/// heightmaps of a live `WorldGenLevel`.
+struct FeaturePlacementWorld<'a> {
+    chunk: &'a Chunk,
+    data: &'a FeatureData,
+    min_y: i32,
+    height: i32,
+}
+
+impl FeaturePlacementWorld<'_> {
+    fn local_column(&self, x: i32, z: i32) -> Option<(usize, usize)> {
+        let local_x = i64::from(x) - i64::from(self.chunk.x) * 16;
+        let local_z = i64::from(z) - i64::from(self.chunk.z) * 16;
+        if (0..16).contains(&local_x) && (0..16).contains(&local_z) {
+            Some((local_x as usize, local_z as usize))
+        } else {
+            None
+        }
+    }
+}
+
+impl PlacementWorld for FeaturePlacementWorld<'_> {
+    fn biome_at(&self, pos: BlockPos) -> &str {
+        if let Some((x, z)) = self.local_column(pos.x(), pos.z()) {
+            let max_y = self.min_y + self.height - 1;
+            let y = pos.y().clamp(self.min_y, max_y);
+            if let Some(biome) = self.chunk.biome(x, y, z) {
+                return biome;
+            }
+        }
+        self.chunk
+            .biome(0, self.min_y, 0)
+            .map_or("minecraft:plains", |biome| biome.as_str())
+    }
+
+    fn biome_has_placed_feature(&self, biome: &str, placed_feature: &str) -> bool {
+        self.data.biome_features(biome).is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|step| step.iter().any(|feature| feature == placed_feature))
+        })
+    }
+
+    fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        let (x, z) = self.local_column(x, z)?;
+        for y in (self.min_y..self.min_y + self.height).rev() {
+            let Some(state) = self.chunk.block_state(x, y, z) else {
+                continue;
+            };
+            let blocks_motion = match kind {
+                Heightmap::WorldSurface => !is_air_state(state),
+                Heightmap::OceanFloor => {
+                    !is_air_state(state)
+                        && state.name != "minecraft:water"
+                        && state.name != "minecraft:lava"
+                }
+            };
+            if blocks_motion {
+                return Some(y + 1);
+            }
+        }
+        Some(self.min_y)
+    }
+
+    fn block_at(&self, pos: BlockPos) -> Option<&BlockState> {
+        let (x, z) = self.local_column(pos.x(), pos.z())?;
+        self.chunk.block_state(x, pos.y(), z)
     }
 }
 
@@ -302,45 +519,6 @@ fn lerp2(delta1: f64, delta2: f64, start1: f64, end1: f64, start2: f64, end2: f6
     )
 }
 
-fn map(input: f64, input_min: f64, input_max: f64, output_min: f64, output_max: f64) -> f64 {
-    let inverse = (input - input_min) / (input_max - input_min);
-    output_min + inverse * (output_max - output_min)
-}
-
-fn surface_block(y: i32, top_solid: i32, sea_level: i32, deepslate: bool) -> BlockState {
-    if top_solid >= sea_level {
-        if y == top_solid {
-            return BlockState {
-                name: "minecraft:grass_block".into(),
-                properties: vec![("snowy".into(), "false".into())],
-            };
-        }
-        if y >= top_solid - 3 {
-            return BlockState {
-                name: "minecraft:dirt".into(),
-                properties: vec![],
-            };
-        }
-    } else if y >= top_solid - 2 {
-        return BlockState {
-            name: "minecraft:sand".into(),
-            properties: vec![],
-        };
-    }
-
-    if deepslate {
-        BlockState {
-            name: "minecraft:deepslate".into(),
-            properties: vec![("axis".into(), "y".into())],
-        }
-    } else {
-        BlockState {
-            name: "minecraft:stone".into(),
-            properties: vec![],
-        }
-    }
-}
-
 fn air() -> BlockState {
     BlockState {
         name: "minecraft:air".into(),
@@ -355,6 +533,33 @@ mod tests {
 
     const JAVA_GRID: &str = include_str!("../../assets/java-density-grid.txt");
     const JAVA_CHUNK: &str = include_str!("../../assets/java-chunk-0--1.txt");
+    const JAVA_BIOMES: &str = include_str!("../../assets/java-biome-samples.txt");
+
+    #[test]
+    fn generated_chunk_biomes_match_java() {
+        let generator = WorldGenerator::overworld(12345).unwrap();
+        let chunk = generator.generate_chunk(0, -1).unwrap();
+        let mut checked = 0;
+        for line in JAVA_BIOMES.lines() {
+            let mut parts = line.split('\t');
+            if parts.next() != Some("biome") {
+                continue;
+            }
+            let qx: i32 = parts.next().unwrap().parse().unwrap();
+            let qy: i32 = parts.next().unwrap().parse().unwrap();
+            let qz: i32 = parts.next().unwrap().parse().unwrap();
+            let expected = parts.next().unwrap();
+            let local_x = (qx * 4).rem_euclid(16) as usize;
+            let local_z = (qz * 4).rem_euclid(16) as usize;
+            let actual = chunk.biome(local_x, qy * 4, local_z).unwrap();
+            assert_eq!(
+                actual, expected,
+                "chunk biome mismatch at quart ({qx},{qy},{qz})"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 1536);
+    }
 
     #[test]
     fn generator_grid_matches_java_density_grid() {
@@ -381,6 +586,32 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 5 * 5 * 49);
+    }
+
+    #[test]
+    fn forest_chunk_contains_trees_and_is_deterministic() {
+        let generator = WorldGenerator::overworld(0).unwrap();
+        let chunk = generator.generate_chunk(0, 0).unwrap();
+        let again = generator.generate_chunk(0, 0).unwrap();
+        assert_eq!(chunk, again, "tree placement must be deterministic");
+
+        let mut logs = 0;
+        let mut leaves = 0;
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in generator.min_y()..generator.min_y() + generator.height() {
+                    let state = chunk.block_state(x, y, z).unwrap();
+                    if state.name.ends_with("_log") {
+                        logs += 1;
+                    } else if state.name.ends_with("_leaves") {
+                        leaves += 1;
+                    }
+                }
+            }
+        }
+        println!("forest chunk logs={logs} leaves={leaves}");
+        assert!(logs > 0, "a forest chunk should contain tree trunks");
+        assert!(leaves > 0, "a forest chunk should contain tree foliage");
     }
 
     #[test]

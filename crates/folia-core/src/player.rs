@@ -5,6 +5,32 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Playerdata fields this server parses and rewrites. Everything else in the
+/// file is kept verbatim in [`PlayerSession::extra`] so a save never drops
+/// fields it does not model (health, food, XP, ender chest, ...).
+pub const KNOWN_PLAYERDATA_FIELDS: [&str; 20] = [
+    "DataVersion",
+    "Name",
+    "UUID",
+    "Pos",
+    "Rotation",
+    "OnGround",
+    "Dimension",
+    "SelectedItemSlot",
+    "Inventory",
+    "Cursor",
+    "Health",
+    "foodLevel",
+    "foodSaturationLevel",
+    "foodExhaustionLevel",
+    "XpLevel",
+    "XpP",
+    "XpTotal",
+    "Score",
+    "Air",
+    "playerGameType",
+];
+
 pub const SERVERBOUND_MOVE_POS: i32 = 29;
 pub const SERVERBOUND_MOVE_POS_ROT: i32 = 30;
 pub const SERVERBOUND_MOVE_ROT: i32 = 31;
@@ -20,9 +46,33 @@ pub struct PlayerSession {
     pub yaw: f32,
     pub pitch: f32,
     pub on_ground: bool,
+    /// Vanilla game mode id (0 survival, 1 creative, 2 adventure, 3 spectator).
+    /// `-1` means the file had no `playerGameType`; the join path fills in the
+    /// server default before the session is used.
+    pub game_mode: i32,
     pub selected_slot: i32,
     pub inventory: Vec<ItemStack>,
     pub cursor: ItemStack,
+    /// Current health points; vanilla's survival default is 20.
+    pub health: f32,
+    /// `foodLevel`, 0-20.
+    pub food_level: i32,
+    /// `foodSaturationLevel`.
+    pub food_saturation: f32,
+    /// `foodExhaustionLevel`.
+    pub food_exhaustion: f32,
+    /// `XpLevel`.
+    pub xp_level: i32,
+    /// `XpP`, progress toward the next level (0.0-1.0).
+    pub xp_progress: f32,
+    /// `XpTotal`.
+    pub xp_total: i32,
+    /// `Score` (the death/scoreboard counter stored in playerdata).
+    pub score: i32,
+    /// `Air`, remaining breath ticks; vanilla's default is 300.
+    pub air: i16,
+    /// Playerdata fields this server does not model, preserved across saves.
+    pub extra: Vec<(String, Tag)>,
 }
 
 impl PlayerSession {
@@ -36,9 +86,20 @@ impl PlayerSession {
             yaw: 0.0,
             pitch: 0.0,
             on_ground: false,
+            game_mode: 0,
             selected_slot: 0,
             inventory: default_inventory(),
             cursor: ItemStack::empty(),
+            health: 20.0,
+            food_level: 20,
+            food_saturation: 5.0,
+            food_exhaustion: 0.0,
+            xp_level: 0,
+            xp_progress: 0.0,
+            xp_total: 0,
+            score: 0,
+            air: 300,
+            extra: Vec::new(),
         }
     }
 
@@ -128,7 +189,24 @@ impl PlayerSession {
             ])
         };
 
-        let tag = Tag::Compound(vec![
+        let mut entries = vec![
+            ("DataVersion".into(), Tag::Int(crate::level::DATA_VERSION)),
+            ("playerGameType".into(), Tag::Int(self.game_mode.max(0))),
+            ("Health".into(), Tag::Float(self.health)),
+            ("foodLevel".into(), Tag::Int(self.food_level)),
+            (
+                "foodSaturationLevel".into(),
+                Tag::Float(self.food_saturation),
+            ),
+            (
+                "foodExhaustionLevel".into(),
+                Tag::Float(self.food_exhaustion),
+            ),
+            ("XpLevel".into(), Tag::Int(self.xp_level)),
+            ("XpP".into(), Tag::Float(self.xp_progress)),
+            ("XpTotal".into(), Tag::Int(self.xp_total)),
+            ("Score".into(), Tag::Int(self.score)),
+            ("Air".into(), Tag::Short(self.air)),
             ("Name".into(), Tag::String(self.name.clone())),
             ("UUID".into(), Tag::String(uuid_string(&self.uuid))),
             (
@@ -151,7 +229,14 @@ impl PlayerSession {
             ("SelectedItemSlot".into(), Tag::Int(self.selected_slot)),
             ("Inventory".into(), Tag::List(inventory_entries)),
             ("Cursor".into(), cursor),
-        ]);
+        ];
+        entries.extend(
+            self.extra
+                .iter()
+                .filter(|(key, _)| !KNOWN_PLAYERDATA_FIELDS.contains(&key.as_str()))
+                .cloned(),
+        );
+        let tag = Tag::Compound(entries);
         let bytes = nbt::write_gzip_root(&tag)?;
         let temporary = path.with_extension("tmp");
         fs::write(&temporary, bytes)?;
@@ -225,6 +310,45 @@ impl PlayerSession {
             })
             .unwrap_or_else(ItemStack::empty);
 
+        let health = root.get("Health").and_then(Tag::as_float).unwrap_or(20.0);
+        let food_level = root.get("foodLevel").and_then(Tag::as_int).unwrap_or(20);
+        let food_saturation = root
+            .get("foodSaturationLevel")
+            .and_then(Tag::as_float)
+            .unwrap_or(5.0);
+        let food_exhaustion = root
+            .get("foodExhaustionLevel")
+            .and_then(Tag::as_float)
+            .unwrap_or(0.0);
+        let xp_level = root.get("XpLevel").and_then(Tag::as_int).unwrap_or(0);
+        let xp_progress = root.get("XpP").and_then(Tag::as_float).unwrap_or(0.0);
+        let xp_total = root.get("XpTotal").and_then(Tag::as_int).unwrap_or(0);
+        let score = root.get("Score").and_then(Tag::as_int).unwrap_or(0);
+        let air = root
+            .get("Air")
+            .and_then(|tag| match tag {
+                Tag::Short(value) => Some(*value),
+                Tag::Int(value) => i16::try_from(*value).ok(),
+                _ => None,
+            })
+            .unwrap_or(300);
+        let game_mode = root
+            .get("playerGameType")
+            .and_then(Tag::as_int)
+            .unwrap_or(-1)
+            .clamp(-1, 3);
+
+        let extra = root
+            .as_compound()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|(key, _)| !KNOWN_PLAYERDATA_FIELDS.contains(&key.as_str()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Some(Self {
             name,
             uuid,
@@ -237,9 +361,20 @@ impl PlayerSession {
                 .get("OnGround")
                 .and_then(Tag::as_byte)
                 .is_some_and(|value| value != 0),
+            game_mode,
             selected_slot,
             inventory,
             cursor,
+            health,
+            food_level,
+            food_saturation,
+            food_exhaustion,
+            xp_level,
+            xp_progress,
+            xp_total,
+            score,
+            air,
+            extra,
         }))
     }
 
@@ -299,13 +434,30 @@ mod tests {
         session.selected_slot = 2;
         session.inventory[0] = ItemStack::new("minecraft:dirt", 3);
         session.cursor = ItemStack::new("minecraft:stone", 2);
+        session.health = 13.5;
+        session.food_level = 11;
+        session.food_saturation = 2.25;
+        session.food_exhaustion = 1.5;
+        session.xp_level = 7;
+        session.xp_progress = 0.75;
+        session.xp_total = 140;
+        session.score = 9;
+        session.air = 120;
+        session.game_mode = 1;
         let path = session.save(&directory).unwrap();
         assert!(path.exists());
+        let saved = nbt::read_gzip_root(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved.get("DataVersion").and_then(Tag::as_int),
+            Some(crate::level::DATA_VERSION),
+            "playerdata carries the current data version"
+        );
 
         let loaded = PlayerSession::load(&directory, [0x11; 16])
             .unwrap()
             .expect("playerdata");
         assert_eq!(loaded, session);
+        assert_eq!(loaded.game_mode, 1, "playerGameType round-trips");
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -321,6 +473,87 @@ mod tests {
         }
         assert!(session.selected_item().is_none());
         assert!(!session.consume_selected());
+    }
+
+    #[test]
+    fn preserves_unknown_playerdata_fields() {
+        let directory = temp_dir("extra");
+        fs::create_dir_all(&directory).unwrap();
+        let uuid = [0x66; 16];
+        let root = Tag::Compound(vec![
+            (
+                "Pos".into(),
+                Tag::List(vec![Tag::Double(1.5), Tag::Double(70.0), Tag::Double(-2.5)]),
+            ),
+            (
+                "Rotation".into(),
+                Tag::List(vec![Tag::Float(10.0), Tag::Float(0.0)]),
+            ),
+            ("Health".into(), Tag::Float(17.5)),
+            ("foodLevel".into(), Tag::Int(12)),
+            (
+                "EnderItems".into(),
+                Tag::List(vec![Tag::Compound(vec![(
+                    "id".into(),
+                    Tag::String("minecraft:stone".into()),
+                )])]),
+            ),
+        ]);
+        fs::write(
+            PlayerSession::path(&directory, &uuid),
+            nbt::write_gzip_root(&root).unwrap(),
+        )
+        .unwrap();
+
+        let mut session = PlayerSession::load(&directory, uuid)
+            .unwrap()
+            .expect("playerdata");
+        assert_eq!(session.extra.len(), 1, "only unknown fields are kept");
+        assert_eq!(session.health, 17.5, "Health is parsed into the session");
+        assert_eq!(
+            session.food_level, 12,
+            "foodLevel is parsed into the session"
+        );
+        assert_eq!(
+            session.game_mode, -1,
+            "a missing playerGameType leaves the server default to the join path"
+        );
+        session.y = 71.0;
+        session.save(&directory).unwrap();
+
+        let reloaded =
+            nbt::read_gzip_root(&fs::read(PlayerSession::path(&directory, &uuid)).unwrap())
+                .unwrap();
+        for key in ["Health", "foodLevel", "EnderItems", "UUID"] {
+            assert!(reloaded.get(key).is_some(), "{key} survived the save");
+        }
+        let position = reloaded.get("Pos").and_then(Tag::as_list).unwrap();
+        assert_eq!(position[1].as_double(), Some(71.0));
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn new_playerdata_starts_with_survival_defaults() {
+        let directory = temp_dir("defaults");
+        let session = PlayerSession::new("New".into(), [0x12; 16], 0.0, 64.0, 0.0);
+        let path = session.save(&directory).unwrap();
+        let root = nbt::read_gzip_root(&fs::read(path).unwrap()).unwrap();
+
+        assert_eq!(root.get("Health").and_then(Tag::as_float), Some(20.0));
+        assert_eq!(root.get("foodLevel").and_then(Tag::as_int), Some(20));
+        assert_eq!(
+            root.get("foodSaturationLevel").and_then(Tag::as_float),
+            Some(5.0)
+        );
+        assert_eq!(
+            root.get("Air").and_then(|tag| match tag {
+                Tag::Short(value) => Some(*value),
+                _ => None,
+            }),
+            Some(300)
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

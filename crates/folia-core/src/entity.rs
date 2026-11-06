@@ -1,6 +1,6 @@
 use crate::chunk::Chunk;
 use crate::protocol::PacketWriter;
-use crate::world::{Dimension, WorldStorage};
+use crate::world::WorldStorage;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, OnceLock};
@@ -50,7 +50,8 @@ impl Entity {
     }
 
     pub fn armor_stand(id: i32, uuid: [u8; 16], x: f64, y: f64, z: f64) -> Self {
-        let mut entity = Self::new(id, uuid, 5, x, y, z);
+        let entity_type = crate::registry::entity_type_id("minecraft:armor_stand").unwrap_or(5);
+        let mut entity = Self::new(id, uuid, entity_type, x, y, z);
         entity.width = 0.5;
         entity.height = 1.975;
         entity
@@ -265,15 +266,14 @@ fn pack_degrees(degrees: f32) -> u8 {
 
 static ENTITIES: LazyLock<Mutex<HashMap<i32, Entity>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static WORLD: OnceLock<Mutex<WorldStorage>> = OnceLock::new();
+static WORLD: OnceLock<&'static Mutex<WorldStorage>> = OnceLock::new();
 
 pub fn configure_world(world_dir: impl Into<PathBuf>) {
     let world_dir = world_dir.into();
     if world_dir.join("region").is_dir() {
-        let _ = WORLD.set(Mutex::new(WorldStorage::for_dimension(
-            world_dir,
-            Dimension::Overworld,
-        )));
+        // Physics must read the same storage the session writes, otherwise a
+        // region save from one side drops the other side's chunks.
+        let _ = WORLD.set(crate::world::shared_overworld(world_dir));
     }
 }
 
@@ -332,9 +332,7 @@ pub fn tick_all() -> Vec<Vec<u8>> {
 
     let mut packets = Vec::new();
     if let Some(world) = WORLD.get() {
-        let mut storage = world
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut storage = crate::world::lock(world);
         let mut collider = WorldCollider::new(&mut storage);
         tick_entities(&mut entities, &mut collider, &mut packets);
     } else {

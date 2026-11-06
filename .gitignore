@@ -5,5 +5,7 @@ target/
 !java/bridge/resources/**
 run/
 capture/
+dist/
+snapshots/
 *.log
 

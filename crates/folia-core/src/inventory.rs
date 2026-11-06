@@ -45,36 +45,15 @@ impl ItemStack {
 }
 
 pub fn item_id(item: &str) -> Option<i32> {
-    match item {
-        "minecraft:stone" => Some(1),
-        "minecraft:grass_block" => Some(27),
-        "minecraft:dirt" => Some(28),
-        _ => None,
-    }
+    crate::registry::item_id(item)
 }
 
 pub fn item_name(id: i32) -> Option<&'static str> {
-    match id {
-        1 => Some("minecraft:stone"),
-        27 => Some("minecraft:grass_block"),
-        28 => Some("minecraft:dirt"),
-        _ => None,
-    }
+    crate::registry::item_name(id)
 }
 
 pub fn block_for_item(item: &str) -> Option<BlockState> {
-    let name = match item {
-        "minecraft:stone" | "minecraft:dirt" | "minecraft:grass_block" => item,
-        _ => return None,
-    };
-    Some(BlockState {
-        name: name.to_owned(),
-        properties: if name == "minecraft:grass_block" {
-            vec![("snowy".into(), "false".into())]
-        } else {
-            Vec::new()
-        },
-    })
+    crate::registry::default_block_state(item)
 }
 
 pub fn default_inventory() -> Vec<ItemStack> {
@@ -131,14 +110,14 @@ pub fn container_content_packet(inventory: &[ItemStack], cursor: &ItemStack) -> 
 /// Convert the 36-slot `Inventory` model into the 46-slot vanilla menu layout.
 pub fn container_items(inventory: &[ItemStack]) -> Vec<ItemStack> {
     let mut menu = vec![ItemStack::empty(); CONTAINER_SLOTS];
-    for index in 0..INVENTORY_SLOTS.min(inventory.len()) {
+    for (index, stack) in inventory.iter().take(INVENTORY_SLOTS).enumerate() {
         let menu_slot = if index < HOTBAR_SLOTS {
             36 + index
         } else {
             index
         };
         if menu_slot < CONTAINER_SLOTS {
-            menu[menu_slot] = inventory[index].clone();
+            menu[menu_slot] = stack.clone();
         }
     }
     menu

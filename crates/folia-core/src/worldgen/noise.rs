@@ -560,15 +560,11 @@ impl BlendedNoise {
             let d14 = wrap(d1 * d11);
             let d15 = wrap(d2 * d11);
             let d16 = d6 * d11;
-            if !above_one {
-                if let Some(octave) = self.min_limit_noise.get_octave_noise(i) {
-                    d8 += octave.noise_with_scale(d13, d14, d15, d16, d1 * d11) / d11;
-                }
+            if !above_one && let Some(octave) = self.min_limit_noise.get_octave_noise(i) {
+                d8 += octave.noise_with_scale(d13, d14, d15, d16, d1 * d11) / d11;
             }
-            if !below_zero {
-                if let Some(octave) = self.max_limit_noise.get_octave_noise(i) {
-                    d9 += octave.noise_with_scale(d13, d14, d15, d16, d1 * d11) / d11;
-                }
+            if !below_zero && let Some(octave) = self.max_limit_noise.get_octave_noise(i) {
+                d9 += octave.noise_with_scale(d13, d14, d15, d16, d1 * d11) / d11;
             }
             d11 /= 2.0;
         }

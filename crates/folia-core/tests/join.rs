@@ -9,16 +9,10 @@ use folia_core::world::{Dimension, WorldStorage};
 use std::fs;
 use std::io;
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn login_reaches_play_state_with_captured_world() {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../world/region");
-    if !fixture.is_dir() {
-        eprintln!("skipping: no world region fixture");
-        return;
-    }
     let temp_world = std::env::temp_dir().join(format!(
         "folia-rs-join-{}-{}",
         std::process::id(),
@@ -28,15 +22,23 @@ fn login_reaches_play_state_with_captured_world() {
             .as_nanos()
     ));
     fs::create_dir_all(temp_world.join("region")).unwrap();
-    for entry in fs::read_dir(&fixture).unwrap() {
-        let entry = entry.unwrap();
-        if entry.path().is_file() {
-            fs::copy(
-                entry.path(),
-                temp_world.join("region").join(entry.file_name()),
-            )
-            .unwrap();
+    // Build the flat fixture explicitly instead of copying a real world, so the
+    // test does not depend on whatever the developer's level contains. The
+    // chunks carry the server's written marker, so they load without a
+    // level.dat.
+    {
+        let mut fixture = WorldStorage::for_dimension(&temp_world, Dimension::Overworld);
+        for chunk_x in -1..=1 {
+            for chunk_z in -1..=1 {
+                fixture
+                    .save_chunk(
+                        &folia_core::chunk_packet::flat_chunk(chunk_x, chunk_z),
+                        folia_core::anvil::Compression::Zlib,
+                    )
+                    .unwrap();
+            }
         }
+        fixture.flush().unwrap();
     }
     folia_core::join::configure_world_dir(temp_world.clone());
     folia_core::join::configure_playerdata(temp_world.join("playerdata"));
@@ -99,21 +101,28 @@ fn login_reaches_play_state_with_captured_world() {
     let first = read_packet(&mut client).expect("play login");
     assert_eq!(packet_id(&first), 48, "first play packet is Join Game");
 
+    loop {
+        let packet = read_packet(&mut client).expect("join position");
+        if packet_id(&packet) == 70 {
+            break;
+        }
+        assert_ne!(
+            packet_id(&packet),
+            44,
+            "the position is sent before the chunk batch"
+        );
+    }
     let mut saw_chunk = false;
     let mut chunk_count = 0;
-    loop {
-        let packet = read_packet(&mut client).expect("play packet");
-        match packet_id(&packet) {
-            44 => {
-                saw_chunk = true;
-                chunk_count += 1;
-            }
-            70 => break,
-            _ => {}
+    while chunk_count < 169 {
+        let packet = read_packet(&mut client).expect("chunk packet");
+        if packet_id(&packet) == 44 {
+            saw_chunk = true;
+            chunk_count += 1;
         }
     }
     assert!(saw_chunk, "live play stream contains chunk packets");
-    assert_eq!(chunk_count, 49, "7x7 live chunk radius");
+    assert_eq!(chunk_count, 169, "13x13 live chunk radius");
 
     let mut carried = PacketWriter::new();
     carried
@@ -425,7 +434,7 @@ fn client_information() -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(0).unwrap();
     writer.write_string("en_us").unwrap();
-    writer.write_u8(2).unwrap();
+    writer.write_u8(6).unwrap();
     writer.write_varint(0).unwrap();
     writer.write_u8(1).unwrap();
     writer.write_u8(0).unwrap();

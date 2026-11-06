@@ -12,6 +12,7 @@ pub mod nbt;
 pub mod player;
 pub mod protocol;
 pub mod region;
+pub mod registry;
 pub mod snbt;
 pub mod status;
 pub mod varint;

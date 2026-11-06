@@ -417,7 +417,7 @@ fn weighted_packet_lengths(rng: &mut Lcg, count: usize) -> Vec<usize> {
 
 #[test]
 fn packet_framing_round_trips_one_thousand_weighted_payloads() {
-    let mut rng = Lcg::new(0x0DDB_A11_2026_0001);
+    let mut rng = Lcg::new(0x0DDB_A112_0260_0001);
     let mut lengths = weighted_packet_lengths(&mut rng, 1_000);
     // Pin the smallest and largest legal sizes so extremes are always covered.
     lengths[0] = 0;
@@ -689,7 +689,7 @@ fn kitchen_sink_tree(rng: &mut Lcg) -> Tag {
 
 #[test]
 fn nbt_round_trips_random_nested_trees() {
-    let mut rng = Lcg::new(0xA11C_E_BEEF_1234);
+    let mut rng = Lcg::new(0xA11C_EBEE_F123_4567);
     for case in 0..300 {
         let tag = if case == 0 {
             // Guarantees every NBT tag type appears in at least one tree.
@@ -809,7 +809,7 @@ fn nbt_rejects_malformed_data() {
 // ---------------------------------------------------------------------------
 
 fn anvil_chunk(local_x: u8, local_z: u8, serial: usize) -> Tag {
-    let filler_length = if serial % 11 == 0 {
+    let filler_length = if serial.is_multiple_of(11) {
         12_000
     } else {
         (serial * 53) % 400
@@ -1080,7 +1080,7 @@ fn chunk_round_trips_fifty_random_palettes_with_biomes() {
         let mut sections = Vec::with_capacity(section_count);
         let mut expected_sections = Vec::with_capacity(section_count);
 
-        for section_index in 0..section_count {
+        for (section_index, &y) in section_ys.iter().enumerate().take(section_count) {
             let palette_len = 1 + (case * 7 + section_index * 5) % 32;
             let mut palette = Vec::with_capacity(palette_len);
             for entry in 0..palette_len {
@@ -1114,7 +1114,6 @@ fn chunk_round_trips_fifty_random_palettes_with_biomes() {
                 None
             };
 
-            let y = section_ys[section_index];
             sections.push(ChunkSection {
                 y,
                 block_states: PalettedContainer {
@@ -1314,7 +1313,7 @@ fn runs_on_tick(delay: u32, period: u32, tick: u32) -> bool {
     } else if period == 0 {
         tick == delay
     } else {
-        (tick - delay) % period == 0
+        (tick - delay).is_multiple_of(period)
     }
 }
 

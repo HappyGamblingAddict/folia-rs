@@ -1,0 +1,153 @@
+# Blockers
+
+Record hard blockers that prevent a task from completing. Do not stop the whole
+project because of one blocker: record it, choose another unblocked task, and
+continue.
+
+Format:
+
+```text
+## YYYY-MM-DD — Px.y Task name
+- Blocker:
+- What was tried:
+- What is needed:
+- Workaround / next task:
+```
+
+## 2026-11-04 — P0.5 Make oracle data reproducible
+
+- Blocker: Regenerating the Java oracle dumps requires starting the
+  out-of-tree capture server in `../java-worldgen` and letting `WorldGenDump`
+  rewrite `worldgen-*.txt`. That run also rewrites the embedded fixture hashes
+  pinned in `crates/folia-core/assets/ASSETS.md`, and it cannot be verified
+  from a session that must not modify the reference tree.
+- What was tried: Confirmed the current fixtures and their checksums are pinned
+  by `tests/assets.rs`; reviewed the documented manual procedure in
+  `HANDOFF.md` (“Java oracle setup”).
+- What is needed: A deliberate oracle-regeneration run that starts
+  `java-worldgen`, copies normalized dumps into `assets/`, and updates the
+  manifest/test hashes in the same change.
+- Workaround / next task: Keep using the existing captures; P0.5 stays `[ ]` and
+  work continues on P2.1 (feature framework) instead.
+
+## 2026-11-04 — P2.2 Heightmap and predicate modifiers (partially resolved 2026-11-05)
+
+- Blocker: Every remaining placement modifier needs block data the assets do
+  not carry. `HeightmapPlacement` reads `Heightmap.Types` over
+  `blocksMotion`/`leaves` block tags; `BlockPredicateFilter` reads block tags
+  and `BlockState` predicates. No asset ships tag membership, so a port would
+  have to guess which blocks count and would look like parity without being it.
+- What was tried: Counted the shipped demand (heightmap 108,
+  `block_predicate_filter` 57, surface depth 25, environment scan 9) and
+  checked the assets for tag data (`feature_data.json` has only the two item
+  tags it needs).
+- What is needed: Block-tag extraction (P1.3) with `blocksMotion`/leaves (and
+  the predicate tags) reachable from Rust.
+- Workaround / next task: Ported `biome` instead, which only needs the biome
+  sampler. Heightmap/predicate modifiers stay explicit unsupported variants.
+  P2.3's ore features are now ported; generator wiring waits on feature-RNG
+  parity (see the 2026-11-06 ore blocker below).
+
+## Known limitations (not hard blockers)
+
+These are expected gaps, not reasons to stop:
+
+- `BiomeManager` has no Java fixture. Its seed obfuscation is pinned to NIST
+  SHA-256 vectors and its quart selection to values derived from the Java
+  source; a Java `getBiome` dump would lock it down.
+- No Java fixture records placement positions, so P2.2's done-when is still
+  open even though the pipeline runs.
+- Tree fixtures are deterministic but not a Java block-for-block parity claim.
+  `BlockStateProvider::simple` still samples through the weighted path and
+  consumes a random draw that Java's `SimpleStateProvider` does not; exact
+  tree RNG alignment needs a separate provider-representation fix.
+
+- Some Java oracle data requires starting `java-worldgen`; if the server cannot
+  start, use the existing dumps in `crates/folia-core/assets`.
+- Plugin bridge work may require Java 21; native-only work does not.
+- Structure templates/loot tables may need extraction from the local Folia jar;
+  if an asset is missing, document it and continue with a different feature.
+
+## 2026-11-05 — P2.4 Tree decorators and non-blob placers (partial)
+
+- Resolved: leaf litter, beehives, vines, cocoa, spruce/pine foliage, dark
+  oak's 2x2 branching trunk, forking acacia, fancy oak (including clipped
+  height), giant mega spruce/pine, mega jungle, bending trunks, random-spread
+  weighted foliage, upwards-branching trunks, mangrove root placement,
+  `alter_ground`, `attached_to_leaves`, `attached_to_logs`, and
+  `creaking_heart` now execute. `jungle_tree`, `swamp_oak`, `spruce`, `pine`,
+  `dark_oak`, `acacia`, `fancy_oak`, `cherry`, `mega_spruce`, `mega_pine`,
+  `mega_jungle_tree`, `jungle_bush`, `azalea_tree`, `mangrove`,
+  `tall_mangrove`, and all five `fallen_*_tree` configs parse and place.
+  Still blocked: beehive occupant NBT and the pale-moss decorator.
+- Workaround: supported trees are verified by config/placement fixtures, not a
+  Java block-for-block fixture. Do not claim full tree parity.
+
+## 2026-11-05 — P2.2 Remaining world-dependent modifiers
+
+- Blocker: `heightmap` variants other than `OCEAN_FLOOR` (83 uses), non-sapling
+  block predicates (12), `environment_scan` (9), `count_on_every_layer` (8),
+  noise counts (10), `surface_relative_threshold_filter` (3), and one
+  `clamped_normal` random offset still need block tags, noise context, or
+  `nextGaussian`.
+- What was tried: Ported `OCEAN_FLOOR`, `WORLD_SURFACE`, surface water depth,
+  and sapling `would_survive`; 762/888 modifiers now execute. The rest fail
+  loudly as unsupported variants.
+- What is needed: Block/item tag extraction (P1.3), noise-context placement
+  support, and `nextGaussian` in `folia-random`.
+- Workaround / next task: Keep them explicit unsupported variants; tree
+  generation only uses the ported subset.
+
+## 2026-11-05 — Native console and void death are partial
+
+- Resolved: the server reads terminal stdin, console commands can reach live
+  sessions, `op`/`deop` persist in `run/ops.txt`, and game-mode commands are
+  operator-gated. Void falls now damage, kill, and respawn.
+- Still partial: no Minecraft command tree/tab completion or Bukkit console
+  dispatch; only the listed console commands exist. General damage types,
+  inventory drops, keep-inventory, beds/anchors, and spawn-point selection are
+  still missing.
+- Workaround: use the terminal console to op a player, then `/gamemode` in
+  chat. Do not claim full death or permission parity.
+
+## 2026-11-05 — P2.4 Fallen trees land; remaining tree gaps
+
+- Resolved: `FallenTreeFeature` and `attached_to_logs` now execute. The five
+  shipped `fallen_*_tree` configs parse and the `fallen_oak_tree` fixture places
+  a stump, four sideways logs, and four mushrooms at seed 7.
+- Still open: beehive occupant NBT, pale moss (vegetation-patch dependency),
+  exact Java block-for-block tree fixtures, and the simple-provider RNG caveat
+  above.
+- Workaround: keep tests behavior-focused; do not claim complete tree parity.
+
+## 2026-11-06 — P2.4 Pale moss decorator is blocked on vegetation patches
+
+- Blocker: `PaleMossDecorator` places hanging moss on logs and leaves, but its
+  ground pass calls the configured `minecraft:pale_moss_patch`. That is a
+  `vegetation_patch` feature whose `moss_replaceable` block tag, face-sturdy
+  checks, and nested `pale_moss_vegetation` simple-block placement are not
+  ported. The shipped pale-oak configs use `ground_probability: 0.8`, so
+  skipping the patch would silently lose most of the decorator's effect.
+- What was tried: Inspected `PaleMossDecorator`, `VegetationPatchFeature`, and
+  the shipped `pale_moss_patch`/`pale_moss_vegetation` configs. Implemented the
+  independent `creaking_heart` decorator instead.
+- What is needed: P1.3 block tags plus the P2.5 vegetation-patch/simple-block
+  feature work.
+- Workaround: keep `minecraft:pale_moss` as an explicit unsupported decorator;
+  pale-oak configs remain unsupported instead of generating partial decoration.
+
+## 2026-11-06 — P2.3 Ore generator wiring deferred on feature-RNG parity
+
+- Blocker: Wiring the newly ported `minecraft:ore` and
+  `minecraft:scattered_ore` features into `underground_ores` lowers the
+  established exact-name parity fixture from 92.09% to 89.06%. The ore
+  algorithms are ported, but feature positions still use the project's
+  approximate per-chunk RNG rather than Java's `WorldgenRandom` sequence.
+- What was tried: Ran both ore features directly and through the generator;
+  all 30 ore + 2 scattered-ore configs parse and place. The generator run
+  produced 344 ore blocks in a forest chunk, while the parity fixture regressed.
+- What is needed: Feature-RNG parity (`WorldgenRandom` sequencing) before ore
+  placement can be compared block-for-block; `OreVeinifier` also remains open.
+- Workaround: Keep ore features executable but do not add `underground_ores` to
+  generation yet. Preserve the 92.09% fixture rather than weakening it.
+

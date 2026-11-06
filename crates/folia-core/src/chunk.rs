@@ -55,6 +55,13 @@ impl Chunk {
     /// Set a block state at absolute world coordinates. Creates an air section
     /// when the target section is absent. Returns true when the state changed.
     pub fn set_block_state(&mut self, x: usize, y: i32, z: usize, state: BlockState) -> bool {
+        self.set_block_state_ref(x, y, z, &state)
+    }
+
+    /// Borrowed-state variant of [`Self::set_block_state`]. The state is only
+    /// cloned when it becomes a new palette entry, which keeps bulk fill loops
+    /// from allocating a string per block.
+    pub fn set_block_state_ref(&mut self, x: usize, y: i32, z: usize, state: &BlockState) -> bool {
         if x >= 16 || z >= 16 {
             return false;
         }
@@ -90,7 +97,7 @@ impl Chunk {
         if section.block_states.indices.len() != 4096 {
             return false;
         }
-        if section.block_states.get(index) == Some(&state) {
+        if section.block_states.get(index) == Some(state) {
             return false;
         }
 
@@ -98,14 +105,14 @@ impl Chunk {
             .block_states
             .palette
             .iter()
-            .position(|value| value == &state)
+            .position(|value| value == state)
         {
             Some(index) => index,
             None => {
                 if section.block_states.palette.len() > u16::MAX as usize {
                     return false;
                 }
-                section.block_states.palette.push(state);
+                section.block_states.palette.push(state.clone());
                 section.block_states.palette.len() - 1
             }
         };
@@ -147,6 +154,38 @@ impl Chunk {
     }
 }
 
+/// True for the three air states a generated or stored chunk can contain.
+pub fn is_air_state(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+    )
+}
+
+/// Absolute Y of the first empty block above the highest non-air block in a
+/// column, or the bottom of the chunk when the column is entirely air.
+pub fn surface_y(chunk: &Chunk, x: usize, z: usize) -> i32 {
+    if x >= 16 || z >= 16 {
+        return 0;
+    }
+    for section in chunk.sections.iter().rev() {
+        let base = i32::from(section.y) * 16;
+        for local_y in (0..16).rev() {
+            let index = (local_y * 16 + z) * 16 + x;
+            let Some(state) = section.block_states.get(index) else {
+                continue;
+            };
+            if !is_air_state(state) {
+                return base + local_y as i32 + 1;
+            }
+        }
+    }
+    chunk
+        .sections
+        .first()
+        .map_or(0, |section| i32::from(section.y) * 16)
+}
+
 pub fn decode_chunk(root: &Tag) -> io::Result<Chunk> {
     let compound = root
         .as_compound()
@@ -175,6 +214,8 @@ pub fn encode_chunk(chunk: &Chunk) -> io::Result<Tag> {
     }
 
     Ok(Tag::Compound(vec![
+        ("DataVersion".into(), Tag::Int(crate::level::DATA_VERSION)),
+        ("Status".into(), Tag::String("minecraft:full".into())),
         ("xPos".into(), Tag::Int(chunk.x)),
         ("zPos".into(), Tag::Int(chunk.z)),
         ("sections".into(), Tag::List(sections)),
@@ -311,7 +352,7 @@ fn canonicalize_biomes(
 }
 
 fn pack_indices(indices: &[u16], palette_len: usize, minimum_bits: u32) -> io::Result<Vec<i64>> {
-    let bits = minimum_bits.max(ceil_log2(palette_len) as u32);
+    let bits = minimum_bits.max(ceil_log2(palette_len));
     if bits > 32 {
         return Err(invalid("palette needs more than 32 bits per entry"));
     }
@@ -439,7 +480,7 @@ fn decode_packed_indices(
         return Ok(vec![0; count]);
     }
 
-    let bits = minimum_bits.max(ceil_log2(palette_len) as u32);
+    let bits = minimum_bits.max(ceil_log2(palette_len));
     let data = data.ok_or_else(|| invalid("paletted container is missing its data array"))?;
     let per_long = (64 / bits) as usize;
     let required_longs = count.div_ceil(per_long);
@@ -587,7 +628,7 @@ mod tests {
                             Tag::String("minecraft:desert".into()),
                         ]),
                     ),
-                    ("data".into(), Tag::LongArray(pack(&vec![1u16; 64], 1))),
+                    ("data".into(), Tag::LongArray(pack(&[1u16; 64], 1))),
                 ]),
             ),
         ])]);

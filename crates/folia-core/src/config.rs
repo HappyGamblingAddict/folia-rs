@@ -200,10 +200,10 @@ fn unescape(value: &str) -> String {
                         None => break,
                     }
                 }
-                if digits.len() == 4 {
-                    if let Ok(code) = u16::from_str_radix(&digits, 16) {
-                        result.push(char::from_u32(u32::from(code)).unwrap_or('\u{fffd}'));
-                    }
+                if digits.len() == 4
+                    && let Ok(code) = u16::from_str_radix(&digits, 16)
+                {
+                    result.push(char::from_u32(u32::from(code)).unwrap_or('\u{fffd}'));
                 }
             }
             Some(other) => result.push(other),

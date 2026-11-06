@@ -1,4 +1,4 @@
-//! `level.dat` parsing.
+//! `level.dat` parsing and creation.
 //!
 //! Mirrors the parts of Minecraft's `PrimaryLevelData`, `LevelVersion` and
 //! `WorldGenSettings` that the Rust port needs. Parsing is deliberately
@@ -12,6 +12,17 @@ use std::path::Path;
 
 /// `GameType.CREATIVE` id, used by vanilla as the default for `allowCommands`.
 const CREATIVE_GAME_TYPE: i32 = 1;
+
+/// `DataVersion` of the target version (Minecraft 1.21.11).
+pub const DATA_VERSION: i32 = 4788;
+
+/// Target Minecraft version, written into `Version.Name`.
+pub const TARGET_VERSION: &str = "1.21.11";
+
+/// Marker written into `Data` when this server creates a level. A level that
+/// has it belongs to this server, so unstamped chunks beside it are leftovers
+/// rather than another server's terrain.
+pub const OWN_LEVEL_MARKER: &str = "folia:written";
 
 /// The subset of a world's `level.dat` used by the Rust port.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -38,6 +49,8 @@ pub struct LevelData {
     pub hardcore: bool,
     /// `allowCommands`; defaults to `true` for creative worlds, like vanilla.
     pub allow_commands: bool,
+    /// Whether this server created the level (see [`OWN_LEVEL_MARKER`]).
+    pub own_level: bool,
 }
 
 /// Parse a gzip-compressed `level.dat` image.
@@ -88,6 +101,7 @@ pub fn parse_root(root: &Tag) -> io::Result<LevelData> {
     let allow_commands = field(data, "allowCommands")
         .map(is_truthy)
         .unwrap_or(game_type == CREATIVE_GAME_TYPE);
+    let own_level = field(data, OWN_LEVEL_MARKER).is_some_and(is_truthy);
 
     Ok(LevelData {
         data_version,
@@ -101,6 +115,7 @@ pub fn parse_root(root: &Tag) -> io::Result<LevelData> {
         seed,
         hardcore,
         allow_commands,
+        own_level,
     })
 }
 
@@ -148,6 +163,186 @@ fn integer_triple(tag: &Tag) -> Option<(i32, i32, i32)> {
         )),
         _ => None,
     }
+}
+
+/// Build the `level.dat` root for a fresh survival overworld at `seed` with the
+/// given block spawn point.
+///
+/// Only the fields the port and vanilla's world loader need are written; the
+/// generator is the standard multi-noise overworld, so a world created here has
+/// the same terrain as a default world for that seed.
+pub fn new_world_root(level_name: &str, seed: i64, spawn: (i32, i32, i32)) -> Tag {
+    let (spawn_x, spawn_y, spawn_z) = spawn;
+    let data = Tag::Compound(vec![
+        ("DataVersion".into(), Tag::Int(DATA_VERSION)),
+        (
+            "Version".into(),
+            Tag::Compound(vec![
+                ("Id".into(), Tag::Int(DATA_VERSION)),
+                ("Name".into(), Tag::String(TARGET_VERSION.into())),
+                ("Series".into(), Tag::String("main".into())),
+                ("Snapshot".into(), Tag::Byte(0)),
+            ]),
+        ),
+        ("LevelName".into(), Tag::String(level_name.to_owned())),
+        ("GameType".into(), Tag::Int(0)),
+        ("Difficulty".into(), Tag::Byte(2)),
+        ("DifficultyLocked".into(), Tag::Byte(0)),
+        ("hardcore".into(), Tag::Byte(0)),
+        ("allowCommands".into(), Tag::Byte(0)),
+        ("initialized".into(), Tag::Byte(1)),
+        ("Time".into(), Tag::Long(0)),
+        ("DayTime".into(), Tag::Long(0)),
+        ("LastPlayed".into(), Tag::Long(now_millis())),
+        (
+            "spawn".into(),
+            Tag::Compound(vec![
+                ("pos".into(), Tag::IntArray(vec![spawn_x, spawn_y, spawn_z])),
+                ("angle".into(), Tag::Float(0.0)),
+                (
+                    "dimension".into(),
+                    Tag::String("minecraft:overworld".into()),
+                ),
+            ]),
+        ),
+        (
+            "WorldGenSettings".into(),
+            Tag::Compound(vec![
+                ("seed".into(), Tag::Long(seed)),
+                ("generate_features".into(), Tag::Byte(1)),
+                ("bonus_chest".into(), Tag::Byte(0)),
+                (
+                    "dimensions".into(),
+                    Tag::Compound(vec![(
+                        "minecraft:overworld".into(),
+                        Tag::Compound(vec![
+                            ("type".into(), Tag::String("minecraft:overworld".into())),
+                            (
+                                "generator".into(),
+                                Tag::Compound(vec![
+                                    ("type".into(), Tag::String("minecraft:noise".into())),
+                                    (
+                                        "biome_source".into(),
+                                        Tag::Compound(vec![
+                                            (
+                                                "type".into(),
+                                                Tag::String("minecraft:multi_noise".into()),
+                                            ),
+                                            (
+                                                "preset".into(),
+                                                Tag::String("minecraft:overworld".into()),
+                                            ),
+                                        ]),
+                                    ),
+                                    ("settings".into(), Tag::String("minecraft:overworld".into())),
+                                ]),
+                            ),
+                        ]),
+                    )]),
+                ),
+            ]),
+        ),
+        (OWN_LEVEL_MARKER.into(), Tag::Byte(1)),
+    ]);
+    Tag::Compound(vec![("Data".into(), data)])
+}
+
+/// Write a new `level.dat` at `path`, replacing any previous file.
+///
+/// The image is written to a temporary file and renamed, so an interrupted
+/// write cannot leave a half-written level behind.
+pub fn write_new_world(
+    path: impl AsRef<Path>,
+    level_name: &str,
+    seed: i64,
+    spawn: (i32, i32, i32),
+) -> io::Result<()> {
+    write_root(path.as_ref(), &new_world_root(level_name, seed, spawn))
+}
+
+/// Persist the parts of the level state this run changed.
+///
+/// `elapsed_ticks` is added to `Time` and `DayTime` (this server only advances
+/// game time while its loop runs), `LastPlayed` is stamped with the current
+/// time, and `spawn.pos` is replaced when a spawn is given. Every other field
+/// in the file, including ones this port does not model, is preserved: the
+/// whole root is rewritten from what was read.
+pub fn record_session(
+    path: impl AsRef<Path>,
+    elapsed_ticks: u64,
+    spawn: Option<(i32, i32, i32)>,
+) -> io::Result<LevelData> {
+    let path = path.as_ref();
+    let bytes = fs::read(path)?;
+    let mut root = nbt::read_gzip_root(&bytes)?;
+    let data = match &mut root {
+        Tag::Compound(entries) => {
+            entries
+                .iter_mut()
+                .find(|(key, _)| key == "Data")
+                .and_then(|(_, tag)| match tag {
+                    Tag::Compound(data) => Some(data),
+                    _ => None,
+                })
+        }
+        _ => None,
+    }
+    .ok_or_else(|| invalid("level.dat is missing the Data compound"))?;
+
+    let ticks = i64::try_from(elapsed_ticks).unwrap_or(i64::MAX);
+    let time = data
+        .iter()
+        .find(|(key, _)| key == "Time")
+        .and_then(|(_, tag)| tag.as_long())
+        .unwrap_or(0)
+        .saturating_add(ticks);
+    set_long(data, "Time", time);
+    if let Some((_, tag)) = data.iter_mut().find(|(key, _)| key == "DayTime")
+        && let Tag::Long(day_time) = tag
+    {
+        *day_time = day_time.saturating_add(ticks);
+    }
+    set_long(data, "LastPlayed", now_millis());
+    if let Some((x, y, z)) = spawn
+        && let Some((_, Tag::Compound(spawn_data))) =
+            data.iter_mut().find(|(key, _)| key == "spawn")
+        && let Some((_, tag)) = spawn_data.iter_mut().find(|(key, _)| key == "pos")
+        && let Tag::IntArray(pos) = tag
+        && pos.len() == 3
+    {
+        pos[0] = x;
+        pos[1] = y;
+        pos[2] = z;
+    }
+
+    let level = parse_root(&root)?;
+    write_root(path, &root)?;
+    Ok(level)
+}
+
+fn set_long(entries: &mut Vec<(String, Tag)>, name: &str, value: i64) {
+    match entries.iter_mut().find(|(key, _)| key == name) {
+        Some((_, tag)) => *tag = Tag::Long(value),
+        None => entries.push((name.to_owned(), Tag::Long(value))),
+    }
+}
+
+fn write_root(path: &Path, root: &Tag) -> io::Result<()> {
+    let bytes = nbt::write_gzip_root(root)?;
+    let temp = path.with_extension("dat.tmp");
+    fs::write(&temp, bytes)?;
+    if path.exists() {
+        // Vanilla keeps the previous level file so a bad write can be undone.
+        fs::copy(path, path.with_extension("dat_old"))?;
+    }
+    fs::rename(&temp, path)
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// NBT booleans are bytes, but old or third-party writers sometimes use other
@@ -302,6 +497,140 @@ mod tests {
         let level = parse_root(&root).unwrap();
 
         assert!(level.allow_commands);
+    }
+
+    #[test]
+    fn written_level_round_trips_and_marks_the_level_as_ours() {
+        let root = new_world_root("Rust World", -1_234_567_890_123, (8, 71, -4));
+        let level = parse_root(&root).unwrap();
+
+        assert_eq!(level.data_version, DATA_VERSION);
+        assert_eq!(level.level_name, "Rust World");
+        assert_eq!(level.seed, Some(-1_234_567_890_123));
+        assert_eq!(level.spawn, Some((8, 71, -4)));
+        assert_eq!(level.version_name.as_deref(), Some(TARGET_VERSION));
+        assert_eq!(level.version_id, Some(DATA_VERSION));
+        assert_eq!(level.game_type, 0);
+        assert!(!level.hardcore);
+        assert!(!level.allow_commands);
+        assert!(level.own_level, "the marker identifies a level we created");
+
+        let generator = root
+            .get("Data")
+            .and_then(|data| data.get("WorldGenSettings"))
+            .and_then(|settings| settings.get("dimensions"))
+            .and_then(|dimensions| dimensions.get("minecraft:overworld"))
+            .and_then(|overworld| overworld.get("generator"))
+            .expect("overworld generator");
+        assert_eq!(
+            generator.get("settings").and_then(Tag::as_str),
+            Some("minecraft:overworld")
+        );
+    }
+
+    #[test]
+    fn foreign_levels_are_not_marked_as_ours() {
+        let root = root_with(vec![("DataVersion", Tag::Int(4189))]);
+        assert!(!parse_root(&root).unwrap().own_level);
+    }
+
+    #[test]
+    fn writes_a_level_file_and_replaces_it_atomically() {
+        let directory = std::env::temp_dir().join(format!(
+            "folia-rs-level-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("level.dat");
+
+        write_new_world(&path, "First", 7, (0, 64, 0)).unwrap();
+        assert_eq!(read(&path).unwrap().level_name, "First");
+
+        write_new_world(&path, "Second", 9, (0, 70, 0)).unwrap();
+        let level = read(&path).unwrap();
+        assert_eq!(level.level_name, "Second");
+        assert_eq!(level.seed, Some(9));
+        assert_eq!(level.spawn, Some((0, 70, 0)));
+        assert!(
+            !directory.join("level.dat.tmp").exists(),
+            "the temporary image is renamed into place"
+        );
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn recording_a_session_updates_time_and_preserves_unknown_fields() {
+        let directory = std::env::temp_dir().join(format!(
+            "folia-rs-level-session-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("level.dat");
+
+        let mut root = new_world_root("Session", 5, (0, 70, 0));
+        // A field this port does not model, like vanilla's DataPacks or Player.
+        if let Tag::Compound(entries) = &mut root
+            && let Some((_, Tag::Compound(data))) =
+                entries.iter_mut().find(|(key, _)| key == "Data")
+        {
+            data.push(("DataPacks".into(), Tag::String("keep me".into())));
+        }
+        write_root(&path, &root).unwrap();
+
+        let level = record_session(&path, 1_200, Some((4, 80, -4))).unwrap();
+        assert_eq!(level.day_time, 1_200, "elapsed ticks advance the day time");
+        assert_eq!(level.spawn, Some((4, 80, -4)));
+        assert!(level.last_played > 0, "LastPlayed is stamped");
+        assert_eq!(
+            crate::level::read(directory.join("level.dat_old"))
+                .unwrap()
+                .day_time,
+            0,
+            "the previous level file is kept as level.dat_old"
+        );
+
+        let reread_root = nbt::read_gzip_root(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            reread_root
+                .get("Data")
+                .and_then(|data| data.get("DataPacks")),
+            Some(&Tag::String("keep me".into())),
+            "unknown fields survive the rewrite"
+        );
+        assert_eq!(
+            reread_root
+                .get("Data")
+                .and_then(|data| data.get("Time"))
+                .and_then(Tag::as_long),
+            Some(1_200)
+        );
+
+        let again = record_session(&path, 300, None).unwrap();
+        assert_eq!(again.day_time, 1_500, "time accumulates across sessions");
+        assert_eq!(again.spawn, Some((4, 80, -4)), "no spawn means no change");
+        assert_eq!(
+            crate::level::read(directory.join("level.dat_old"))
+                .unwrap()
+                .day_time,
+            1_200,
+            "the backup holds the previous session's time"
+        );
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn recording_a_session_without_a_level_file_reports_not_found() {
+        let path = std::env::temp_dir().join(format!(
+            "folia-rs-level-missing-{}-{}.dat",
+            std::process::id(),
+            now_millis()
+        ));
+        let error = record_session(&path, 20, None).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

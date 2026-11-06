@@ -2,10 +2,14 @@ mod jvm;
 
 use anyhow::{Context, Result};
 use folia_core::config::ServerProperties;
+use folia_core::region::{ChunkPos, RegionScheduler};
 use folia_core::status::{StatusConfig, serve};
+use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 fn main() -> Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -24,7 +28,17 @@ fn main() -> Result<()> {
     let level_name =
         std::env::var("FOLIA_LEVEL_NAME").unwrap_or_else(|_| properties.level_name.clone());
     folia_core::join::configure_playerdata(root.join("run").join("playerdata"));
+    folia_core::join::configure_operators(root.join("run").join("ops.txt"));
     folia_core::join::configure_world_dir(root.join(&level_name));
+    folia_core::join::configure_view_distance(properties.view_distance);
+    folia_core::join::configure_game_mode(
+        match properties.gamemode.to_ascii_lowercase().as_str() {
+            "creative" => 1,
+            "adventure" => 2,
+            "spectator" => 3,
+            _ => 0,
+        },
+    );
     folia_core::entity::configure_world(root.join(&level_name));
     let seed = log_level_data(&root, &level_name);
     match folia_core::worldgen::generator::configure(seed.unwrap_or(0)) {
@@ -35,7 +49,106 @@ fn main() -> Result<()> {
         Err(error) => eprintln!("[rust] could not initialize world generator: {error}"),
     }
     start_status_server(&properties)?;
-    jvm::run(&root)
+    run_server(&root, &root.join(&level_name).join("level.dat"))
+}
+
+fn run_server(root: &std::path::Path, level_path: &std::path::Path) -> Result<()> {
+    // Java is only a compatibility layer for plugin jars. With no jars (or
+    // FOLIA_DISABLE_PLUGINS=1) the process runs entirely native.
+    let mut plugins = jvm::PluginRuntime::start(root)?;
+
+    let running = Arc::new(AtomicBool::new(true));
+    {
+        let running = Arc::clone(&running);
+        ctrlc::set_handler(move || running.store(false, Ordering::SeqCst))
+            .context("failed to install the Ctrl+C handler")?;
+    }
+
+    let max_ticks = std::env::var("FOLIA_MAX_TICKS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+
+    match max_ticks {
+        Some(limit) => println!("[rust] native server loop running for at most {limit} ticks"),
+        None => println!("[rust] native server loop running (Ctrl+C to stop)"),
+    }
+
+    start_console(Arc::clone(&running));
+    let mut regions = RegionScheduler::new(8);
+    regions.schedule_at(ChunkPos::new(0, 0), 5, 0, || {
+        println!("[rust] spawn region task fired");
+    });
+    regions.schedule_global(0, 100, || {
+        println!("[rust] global region heartbeat");
+    });
+
+    let mut ticks = 0u64;
+    while running.load(Ordering::SeqCst) {
+        let region_tasks = regions.tick_parallel(4);
+        if region_tasks > 0 {
+            println!("[rust] region scheduler ran {region_tasks} task(s)");
+        }
+        for joined in folia_core::join::take_pending_joins() {
+            if let Some(plugins) = plugins.as_mut() {
+                plugins.fire_player_join(&joined.name, &joined.uuid)?;
+            }
+        }
+        if let Some(plugins) = plugins.as_mut() {
+            plugins.tick()?;
+        }
+        folia_core::entity::tick_all();
+        ticks += 1;
+        if max_ticks.is_some_and(|limit| ticks >= limit) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    println!("[rust] server loop stopped after {ticks} ticks");
+    folia_core::join::shutdown_sessions(Duration::from_secs(5));
+    if let Err(error) = folia_core::world::flush_shared() {
+        eprintln!("[rust] could not flush terrain: {error}");
+    }
+    // The level file records game time and the last played stamp; the world
+    // spawn is unchanged because nothing moves it yet.
+    match folia_core::level::record_session(level_path, ticks, None) {
+        Ok(level) => println!(
+            "[rust] level.dat updated: day_time={} last_played={}",
+            level.day_time, level.last_played
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("[rust] could not update {}: {error}", level_path.display()),
+    }
+
+    if let Some(mut plugins) = plugins {
+        plugins.shutdown()?;
+    }
+    println!("[rust] shutdown complete");
+    Ok(())
+}
+
+fn start_console(running: Arc<AtomicBool>) {
+    println!("[rust] console ready: type 'help' for commands");
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.eq_ignore_ascii_case("stop") || line.eq_ignore_ascii_case("shutdown") {
+                println!("[console] stopping server");
+                running.store(false, Ordering::SeqCst);
+                break;
+            }
+            for output in folia_core::join::execute_console_command(line) {
+                println!("[console] {output}");
+            }
+        }
+        eprintln!("[console] input closed; use Ctrl+C to stop");
+    });
 }
 
 fn log_level_data(root: &std::path::Path, level_name: &str) -> Option<i64> {
@@ -125,7 +238,7 @@ fn start_status_server(properties: &ServerProperties) -> Result<()> {
         );
     }
     println!(
-        "[rust] note: offline-mode logins are accepted into the captured flat world; live simulation is not implemented"
+        "[rust] note: offline-mode logins get generated terrain streamed around them; block edits and live simulation are not implemented"
     );
 
     Ok(())

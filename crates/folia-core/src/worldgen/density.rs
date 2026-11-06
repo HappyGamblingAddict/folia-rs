@@ -9,9 +9,11 @@
 use crate::worldgen::noise::{BlendedNoise, NormalNoise};
 use folia_random::{XoroshiroPositionalRandomFactory, XoroshiroRandomSource};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const WORLDGEN_DATA: &str = include_str!("../../assets/worldgen.json");
 
@@ -112,6 +114,19 @@ impl WorldgenData {
             .get(name)
             .cloned()
             .ok_or_else(|| invalid(format!("unknown noise {name}")))
+    }
+
+    /// All instantiated noise samplers, keyed by their full registry name.
+    pub fn noises(&self) -> &HashMap<String, Arc<NormalNoise>> {
+        &self.noise_instances
+    }
+
+    /// The serialized `surface_rule` tree for this noise setting.
+    pub fn surface_rule(&self) -> io::Result<Value> {
+        self.settings
+            .get("surface_rule")
+            .cloned()
+            .ok_or_else(|| invalid("worldgen data is missing surface_rule"))
     }
 
     fn function_json(&self, name: &str) -> io::Result<Value> {
@@ -229,10 +244,18 @@ impl WorldgenData {
                 when_in_range: self.build_field(object, "when_in_range", cache)?,
                 when_out_of_range: self.build_field(object, "when_out_of_range", cache)?,
             }),
+            "minecraft:flat_cache" | "minecraft:cache_2d" => Arc::new(DensityFunction::Cache2D {
+                id: next_cache_id(),
+                argument: self.build_field(object, "argument", cache)?,
+            }),
+            "minecraft:cache_once" => Arc::new(DensityFunction::CacheOnce {
+                id: next_cache_id(),
+                argument: self.build_field(object, "argument", cache)?,
+            }),
+            // `interpolated` is applied by the generator's 4x8x4 grid,
+            // `cache_all_in_cell` is a per-cell marker, and `blend_density`
+            // only wraps the blended function during blending passes.
             "minecraft:interpolated"
-            | "minecraft:flat_cache"
-            | "minecraft:cache_2d"
-            | "minecraft:cache_once"
             | "minecraft:cache_all_in_cell"
             | "minecraft:blend_density" => Arc::new(DensityFunction::Marker(
                 self.build_field(object, "argument", cache)?,
@@ -437,6 +460,17 @@ pub enum DensityFunction {
         when_out_of_range: Arc<DensityFunction>,
     },
     Marker(Arc<DensityFunction>),
+    /// `DensityFunctions.Cache2D` / `FlatCache`: the wrapped function depends
+    /// only on x/z, so its last value is reused while the column does not move.
+    Cache2D {
+        id: u64,
+        argument: Arc<DensityFunction>,
+    },
+    /// `DensityFunctions.CacheOnce`: caches one exact block position.
+    CacheOnce {
+        id: u64,
+        argument: Arc<DensityFunction>,
+    },
     OldBlendedNoise(Arc<BlendedNoise>),
     FindTopSurface {
         density: Arc<DensityFunction>,
@@ -540,6 +574,22 @@ impl DensityFunction {
                 }
             }
             DensityFunction::Marker(input) => input.compute(x, y, z),
+            DensityFunction::Cache2D { id, argument } => {
+                if let Some(value) = cache_2d_get(*id, x, z) {
+                    return value;
+                }
+                let value = argument.compute(x, y, z);
+                cache_2d_set(*id, x, z, value);
+                value
+            }
+            DensityFunction::CacheOnce { id, argument } => {
+                if let Some(value) = cache_once_get(*id, x, y, z) {
+                    return value;
+                }
+                let value = argument.compute(x, y, z);
+                cache_once_set(*id, x, y, z, value);
+                value
+            }
             DensityFunction::OldBlendedNoise(noise) => {
                 noise.compute(f64::from(x), f64::from(y), f64::from(z))
             }
@@ -582,6 +632,51 @@ impl DensityFunction {
             }
         }
     }
+}
+
+static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_cache_id() -> u64 {
+    NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+thread_local! {
+    static CACHE_2D: RefCell<HashMap<u64, (i32, i32, f64)>> = RefCell::new(HashMap::new());
+    static CACHE_ONCE: RefCell<HashMap<u64, (i32, i32, i32, f64)>> = RefCell::new(HashMap::new());
+}
+
+fn cache_2d_get(id: u64, x: i32, z: i32) -> Option<f64> {
+    CACHE_2D.with(|cache| {
+        cache
+            .borrow()
+            .get(&id)
+            .filter(|(cached_x, cached_z, _)| *cached_x == x && *cached_z == z)
+            .map(|(_, _, value)| *value)
+    })
+}
+
+fn cache_2d_set(id: u64, x: i32, z: i32, value: f64) {
+    CACHE_2D.with(|cache| {
+        cache.borrow_mut().insert(id, (x, z, value));
+    });
+}
+
+fn cache_once_get(id: u64, x: i32, y: i32, z: i32) -> Option<f64> {
+    CACHE_ONCE.with(|cache| {
+        cache
+            .borrow()
+            .get(&id)
+            .filter(|(cached_x, cached_y, cached_z, _)| {
+                *cached_x == x && *cached_y == y && *cached_z == z
+            })
+            .map(|(_, _, _, value)| *value)
+    })
+}
+
+fn cache_once_set(id: u64, x: i32, y: i32, z: i32, value: f64) {
+    CACHE_ONCE.with(|cache| {
+        cache.borrow_mut().insert(id, (x, y, z, value));
+    });
 }
 
 fn shift_value(noise: &NormalNoise, x: f64, y: f64, z: f64) -> f64 {
@@ -740,10 +835,10 @@ fn noise_name(object: &serde_json::Map<String, Value>) -> io::Result<&str> {
     if let Some(name) = object.get("noise").and_then(Value::as_str) {
         return Ok(name);
     }
-    if let Some(holder) = object.get("noise").and_then(Value::as_object) {
-        if let Some(name) = holder.get("noise").and_then(Value::as_str) {
-            return Ok(name);
-        }
+    if let Some(holder) = object.get("noise").and_then(Value::as_object)
+        && let Some(name) = holder.get("noise").and_then(Value::as_str)
+    {
+        return Ok(name);
     }
     Err(invalid("density function is missing noise"))
 }
@@ -752,10 +847,10 @@ fn argument_noise_name(object: &serde_json::Map<String, Value>) -> io::Result<St
     if let Some(name) = object.get("argument").and_then(Value::as_str) {
         return Ok(name.to_owned());
     }
-    if let Some(holder) = object.get("argument").and_then(Value::as_object) {
-        if let Some(name) = holder.get("noise").and_then(Value::as_str) {
-            return Ok(name.to_owned());
-        }
+    if let Some(holder) = object.get("argument").and_then(Value::as_object)
+        && let Some(name) = holder.get("noise").and_then(Value::as_str)
+    {
+        return Ok(name.to_owned());
     }
     Err(invalid("shift density function is missing noise"))
 }

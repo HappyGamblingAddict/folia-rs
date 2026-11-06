@@ -15,13 +15,12 @@
 //! implementation yet.
 
 use crate::anvil::Compression;
-use crate::block_update::{
-    ACTION_START_DESTROY_BLOCK, ACTION_STOP_DESTROY_BLOCK, SERVERBOUND_PLAYER_ACTION,
-    SERVERBOUND_USE_ITEM_ON,
-};
-use crate::chunk::Chunk;
+use crate::block_breaking::{self, DigStart, DigState, DigStop, MiningContext};
+use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
+use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
 use crate::inventory;
+use crate::math::BlockPos;
 use crate::nbt::Tag;
 use crate::player::{PlayerSession, uuid_string};
 use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
@@ -727,6 +726,8 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
     let mut last_void_damage = Instant::now();
     let mut awaiting_respawn = false;
     let mut death_at: Option<Instant> = None;
+    let play_started = Instant::now();
+    let mut dig = DigState::default();
     let (_console_guard, console_commands) =
         ConsoleSessionGuard::register(&session.name, session.uuid);
 
@@ -840,6 +841,8 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
                             &mut stream,
                             world.storage,
                             &mut session,
+                            &mut dig,
+                            play_started,
                             &packet,
                             id,
                         ) {
@@ -979,6 +982,15 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.kind() == io::ErrorKind::TimedOut =>
             {
+                if let Err(tick_error) = tick_delayed_destroy(
+                    world.storage,
+                    &mut stream,
+                    &mut session,
+                    &mut dig,
+                    play_started,
+                ) {
+                    eprintln!("[join] delayed block break failed: {tick_error}");
+                }
                 autosave_playerdata(&session, &mut last_save);
                 if last_flush.elapsed() >= TERRAIN_FLUSH_INTERVAL {
                     if let Err(flush_error) = crate::world::lock(world.storage).flush() {
@@ -1962,9 +1974,13 @@ fn handle_block_action(
     stream: &mut TcpStream,
     storage: &Mutex<WorldStorage>,
     session: &mut PlayerSession,
+    dig: &mut DigState,
+    play_started: Instant,
     packet: &[u8],
     id: i32,
 ) -> io::Result<()> {
+    // Adventure and spectator block actions are not modelled yet; survival and
+    // creative share the vanilla dig state machine below.
     if matches!(session.game_mode, 2 | 3) {
         return Ok(());
     }
@@ -1972,19 +1988,95 @@ fn handle_block_action(
     match id {
         SERVERBOUND_PLAYER_ACTION => {
             let action = crate::block_update::parse_player_action(packet)?;
-            if action.action != ACTION_START_DESTROY_BLOCK
-                && action.action != ACTION_STOP_DESTROY_BLOCK
-            {
-                return Ok(());
-            }
-            let air = crate::chunk::BlockState {
-                name: "minecraft:air".into(),
-                properties: vec![],
-            };
-            if let Some(change) =
-                crate::block_update::set_block(storage, action.x, action.y, action.z, air)?
-            {
-                crate::block_update::broadcast_change(&change);
+            let pos = BlockPos::new(action.x, action.y, action.z);
+            let now = mining_tick(play_started);
+            match action.action {
+                block_breaking::ACTION_START_DESTROY_BLOCK => {
+                    // Vanilla resynchronises the old destroy position when the
+                    // player starts mining a different block mid-swing.
+                    if let Some(previous) = dig.active_target()
+                        && previous != pos
+                    {
+                        resync_block(stream, storage, previous)?;
+                    }
+                    let Some(state) = block_at(storage, pos)? else {
+                        return Ok(());
+                    };
+                    if block_breaking::is_air(&state) {
+                        return Ok(());
+                    }
+                    let creative = session.game_mode == 1;
+                    let held = session.selected_item().cloned();
+                    let context = mining_context(session, storage);
+                    match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
+                        DigStart::Instant => {
+                            finish_break(storage, session, pos, &state, held.as_ref())?;
+                            if !creative {
+                                send_container_content(stream, session)?;
+                                save_after_break(session);
+                            }
+                        }
+                        DigStart::Started | DigStart::Rejected => {}
+                    }
+                }
+                block_breaking::ACTION_STOP_DESTROY_BLOCK => {
+                    let Some(state) = block_at(storage, pos)? else {
+                        return Ok(());
+                    };
+                    if block_breaking::is_air(&state) {
+                        return Ok(());
+                    }
+                    let held = session.selected_item().cloned();
+                    let context = mining_context(session, storage);
+                    let had_target =
+                        dig.active_target().is_some() || dig.delayed_target().is_some();
+                    let creative = session.game_mode == 1;
+                    match dig.stop(pos, &state, held.as_ref(), &context, now) {
+                        DigStop::Destroyed => {
+                            finish_break(storage, session, pos, &state, held.as_ref())?;
+                            if !creative {
+                                send_container_content(stream, session)?;
+                                save_after_break(session);
+                            }
+                        }
+                        DigStop::Mismatch { active } => {
+                            resync_block(stream, storage, active)?;
+                        }
+                        DigStop::Ignored if !had_target => {
+                            // A real client always sends START first. Probe
+                            // clients (and the captured join fixture) may send
+                            // a lone STOP; treat it as a destroy that starts
+                            // now, so it still waits out the computed break
+                            // time instead of insta-mining.
+                            match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
+                                DigStart::Instant => {
+                                    finish_break(storage, session, pos, &state, held.as_ref())?;
+                                    if !creative {
+                                        send_container_content(stream, session)?;
+                                        save_after_break(session);
+                                    }
+                                }
+                                DigStart::Started => {
+                                    if dig.stop(pos, &state, held.as_ref(), &context, now)
+                                        == DigStop::Destroyed
+                                    {
+                                        finish_break(storage, session, pos, &state, held.as_ref())?;
+                                        send_container_content(stream, session)?;
+                                        save_after_break(session);
+                                    }
+                                }
+                                DigStart::Rejected => {}
+                            }
+                        }
+                        DigStop::Delayed | DigStop::Ignored => {}
+                    }
+                }
+                block_breaking::ACTION_ABORT_DESTROY_BLOCK => {
+                    if let Some(previous) = dig.abort(pos) {
+                        resync_block(stream, storage, previous)?;
+                    }
+                }
+                _ => {}
             }
         }
         SERVERBOUND_USE_ITEM_ON => {
@@ -2016,6 +2108,162 @@ fn handle_block_action(
         _ => {}
     }
     Ok(())
+}
+
+/// Ticks since the play loop started, at vanilla's 20 ticks per second.
+fn mining_tick(started: Instant) -> u64 {
+    (started.elapsed().as_millis() / 50) as u64
+}
+
+fn block_at(storage: &mut WorldStorage, pos: BlockPos) -> io::Result<Option<BlockState>> {
+    let chunk_x = pos.x().div_euclid(16);
+    let chunk_z = pos.z().div_euclid(16);
+    let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? else {
+        return Ok(None);
+    };
+    Ok(chunk
+        .block_state(
+            pos.x().rem_euclid(16) as usize,
+            pos.y(),
+            pos.z().rem_euclid(16) as usize,
+        )
+        .cloned())
+}
+
+fn mining_context(session: &PlayerSession, storage: &mut WorldStorage) -> MiningContext {
+    let eye = BlockPos::new(
+        session.x.floor() as i32,
+        (session.y + 1.62).floor() as i32,
+        session.z.floor() as i32,
+    );
+    let eye_in_water = block_at(storage, eye).ok().flatten().is_some_and(|state| {
+        matches!(
+            crate::block_behaviour::fluid(&state),
+            Some("minecraft:water" | "minecraft:flowing_water")
+        )
+    });
+    MiningContext {
+        on_ground: session.on_ground,
+        eye_in_water,
+        // Status effects and the block-break-speed attribute are not modelled
+        // on the session yet (TODO P4.x); vanilla defaults are used.
+        ..MiningContext::default()
+    }
+}
+
+/// Finish a block break: clear the world block, broadcast the existing block
+/// update, apply tool durability, and capture the drops.
+///
+/// Vanilla spawns `ItemEntity`s. This port has no item entities yet, so drops
+/// are inserted into the player's inventory; anything that does not fit is
+/// logged instead of silently vanishing.
+fn finish_break(
+    storage: &mut WorldStorage,
+    session: &mut PlayerSession,
+    pos: BlockPos,
+    state: &BlockState,
+    held: Option<&crate::inventory::ItemStack>,
+) -> io::Result<()> {
+    let creative = session.game_mode == 1;
+    let drops = if creative {
+        block_breaking::BlockDrops::empty()
+    } else {
+        block_breaking::block_drops(state, held, None)
+    };
+
+    let air = crate::chunk::BlockState {
+        name: "minecraft:air".into(),
+        properties: Vec::new(),
+    };
+    let Some(change) = crate::block_update::set_block(storage, pos.x(), pos.y(), pos.z(), air)?
+    else {
+        return Ok(());
+    };
+    crate::block_update::broadcast_change(&change);
+    if creative {
+        return Ok(());
+    }
+
+    if let Some(stack) = session
+        .inventory
+        .get_mut(session.selected_slot.max(0) as usize)
+    {
+        let wear = block_breaking::apply_block_durability(
+            stack,
+            false,
+            crate::block_behaviour::hardness(state),
+        );
+        if wear.broke {
+            println!("[join] {}'s tool broke", session.name);
+        }
+    }
+
+    for drop in drops.items {
+        let leftover = inventory::add_stack(&mut session.inventory, drop);
+        if !leftover.is_empty() {
+            eprintln!(
+                "[join] {}: inventory full, could not collect {} x{} (item entities are not modelled)",
+                session.name, leftover.item, leftover.count
+            );
+        }
+    }
+    // `drops.experience` is returned for a future experience-orb path; orbs do
+    // not exist in this port yet, so no XP is granted here.
+    Ok(())
+}
+
+/// Continue a vanilla `hasDelayedDestroy` target when the client stopped
+/// before its local progress reached the server's 0.7 threshold.
+fn tick_delayed_destroy(
+    storage: &Mutex<WorldStorage>,
+    stream: &mut TcpStream,
+    session: &mut PlayerSession,
+    dig: &mut DigState,
+    play_started: Instant,
+) -> io::Result<()> {
+    let Some(pos) = dig.delayed_target() else {
+        return Ok(());
+    };
+    let storage = &mut *crate::world::lock(storage);
+    let Some(state) = block_at(storage, pos)? else {
+        dig.cancel_delayed();
+        return Ok(());
+    };
+    if block_breaking::is_air(&state) {
+        dig.cancel_delayed();
+        return Ok(());
+    }
+    let held = session.selected_item().cloned();
+    let context = mining_context(session, storage);
+    if dig.tick_delayed(&state, held.as_ref(), &context, mining_tick(play_started)) {
+        finish_break(storage, session, pos, &state, held.as_ref())?;
+        send_container_content(stream, session)?;
+        save_after_break(session);
+    }
+    Ok(())
+}
+
+fn save_after_break(session: &PlayerSession) {
+    if let Err(error) = session.save(playerdata_dir()) {
+        eprintln!("[join] could not save inventory after a block break: {error}");
+    }
+}
+
+/// Send the current block state back to the client, clearing a block-damage
+/// overlay without introducing a new packet type.
+fn resync_block(
+    stream: &mut TcpStream,
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+) -> io::Result<()> {
+    let Some(state) = block_at(storage, pos)? else {
+        return Ok(());
+    };
+    let state_id = crate::chunk_packet::block_state_id(&state);
+    write_packet(
+        stream,
+        &crate::block_update::block_update_packet(pos.x(), pos.y(), pos.z(), state_id),
+    )
 }
 
 fn send_container_content(stream: &mut TcpStream, session: &PlayerSession) -> io::Result<()> {

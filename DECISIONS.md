@@ -1582,3 +1582,36 @@ Format:
 - Consequences: The production generator has no template manager yet; the
   caller must supply one. Template loading is already tested independently in
   `tests/structure_template.rs`.
+## 2026-11-06 - Block breaking uses wall-clock ticks and a deterministic drop table
+
+- Context: The server loop is packet-driven with a 1 s read timeout, so there
+  is no 20 Hz player tick to advance `ServerPlayerGameMode.gameTicks`. The
+  behaviour dump also lacks `requiresCorrectToolForDrops`, and item prototypes
+  (which carry `minecraft:tool`/`max_damage`) are not dumped yet. There are no
+  item entities, and `crate::loot` is still a stub.
+- Decision: `DigState` takes caller-supplied ticks; `join.rs` derives them as
+  `elapsed / 50 ms` from the start of the play loop. Port vanilla's 0.7 STOP
+  threshold and `hasDelayedDestroy` (continue from the original start tick).
+  Extract the `requiresCorrectToolForDrops` block set from the 1.21.11
+  `Blocks.java` registrations (including legacy-copy/stair inheritance) and
+  supplement it with the `needs_*_tool` tags for helper-registered blocks.
+  Use the exact `ToolMaterial` speeds/durabilities as the built-in tool table
+  when a stack has no explicit `minecraft:tool` component. Use a
+  deterministic common-block drop table whose vanilla count ranges are
+  collapsed to representative values, and expose a `LootProvider` hook for the
+  future loot module. Capture drops into the player inventory because item
+  entities do not exist yet. A lone `STOP_DESTROY_BLOCK` (no START) starts a
+  delayed destroy rather than insta-mining; this keeps the captured join
+  fixture/probe clients working while still charging the computed break time.
+- Why: Behaviour stays tied to the Java formulas and the block tags, while the
+  missing prototype/loot/item-entity infrastructure does not force fake
+  instant breaks or hard-coded guessed IDs. The 0.7 threshold and delayed path
+  are vanilla's own client/server reconciliation.
+- Consequences: Break timing is accurate to the tick for a live session but
+  quantized by the 1 s idle timeout for delayed destroys. Drop counts are not
+  yet vanilla RNG (redstone always 4, lapis always 6, ...), Fortune/Silk Touch
+  and Unbreaking are not applied, and dropped items appear in the inventory
+  instead of the world. `max_damage` is written onto a stack on first wear so
+  the client durability bar and playerdata stay self-describing until item
+  prototypes are dumped. A Java break-time/drop fixture is still needed before
+  claiming parity.

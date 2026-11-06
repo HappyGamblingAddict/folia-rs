@@ -338,3 +338,33 @@ These are expected gaps, not reasons to stop:
   pass `WorldGenerator.seed()` into `build_surface` directly and make the
   fallback a test-only path. Regenerate the Java fixture with `java-worldgen`
   when P0.5 is unblocked.
+## 2026-11-06 - P4.3 block breaking is a behaviour slice, not loot parity
+
+- Scope: `block_breaking.rs` ports the dig state machine, hardness/tool-tier
+  break-time formula, efficiency/haste/fatigue and water/air penalties,
+  harvest gating, durability/item break, and a deterministic common-block drop
+  table; `join.rs` validates elapsed ticks and continues delayed destroys.
+  13 lib + 9 integration tests pass.
+- Not ported (needs data or a larger model):
+  - Real block loot tables. Vanilla ranges are collapsed to representative
+    counts (redstone always 4, lapis always 6, copper ore always 3, ...);
+    Fortune, Silk Touch, grass-seed/flint/sapling secondary drops, and
+    experience orbs are not applied.
+  - `ItemEntity` drops. Items that fit are inserted into the player inventory;
+    overflow is logged and lost. There is no ground-drop or pickup path.
+  - `ClientboundBlockDestructionPacket` (block-damage overlay) and block-break
+    sounds/particles. The wire path uses only the existing block-update and
+    light-update packets, as required by the slice.
+  - Unbreaking, Mending, and tool attribute modifiers beyond
+    `BLOCK_BREAK_SPEED`. Haste/mining fatigue inputs exist in
+    `MiningContext` but the session has no status-effect source yet.
+  - Adventure `can_destroy`/`can_place_on` and spectator interactions;
+    adventure and spectator block actions are rejected conservatively.
+  - `minecraft:tool`/`max_damage` item prototypes are still not dumped
+    (P1.4), so the built-in `ToolMaterial` table is used unless a stack
+    carries an explicit component.
+  - No Java break-time or drop fixture yet; the tests encode the Java formulas
+    directly rather than a captured oracle trace.
+- Workaround: `LootProvider` is the intended hook for `crate::loot`; the
+  fallback table covers common survival blocks. Do not claim loot-table,
+  Fortune/Silk Touch, or item-entity parity until those land.

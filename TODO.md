@@ -1,11 +1,9 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: block-behaviour lighting/physics slice (see git log)
-> Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; the structure slice
-> adds 13 focused integration tests. Parity is 98.71% block-class /
-> 91.98% exact-name after the merged feature/surface changes.
+> Test status: **426 tests** on the last full gate; the breaking slice adds
+> 13 lib + 9 integration focused tests; parity is 98.71% block-class /
+> 91.98% exact-name.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -55,6 +53,9 @@ more expensive than designing for it now.
 | Lighting | ~30–35% | Real nibble storage/NBT, single-chunk sky + block BFS over the generated per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked with per-state friction/speed/jump metadata; block break is instant |
 | Entities | ~15% | Tracking, gravity/AABB, typed metadata packets, raw health/damage/death, attributes, and equipment; no AI, spawning, armor, or per-viewer metadata |
+| Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
+| Player simulation | ~28% | Movement is simulated and collision-checked; block break progress, tool tiers, drops, and durability are now server-validated |
+| Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
 | Blocks/redstone/fluids | ~10% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, and falling sand/gravel; fluids, redstone, pistons, block entities, and P1.5 metadata remain unported |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
@@ -93,6 +94,15 @@ more expensive than designing for it now.
   occupants with `nextInt(599)`/`min_ticks_in_hive: 600`. 171 of 224 configured
   features dispatch as supported (was 162). `tests/vegetation.rs` adds 3 shipped
   pale-forest/flower/dripleaf determinism tests.
+- 2026-11-06: Block-breaking gameplay — `block_breaking.rs` ports the vanilla
+  dig state machine, `getDestroyProgress`/`getDestroySpeed`, tier and harvest
+  gating via the block tags, sword/shears rules, durability, and a
+  deterministic common-block drop table. `join.rs` validates start/stop/abort
+  against elapsed ticks, breaks instantly in creative, applies tool wear and
+  item break, captures drops, and continues a delayed destroy on the idle
+  tick. 13 lib + 9 `tests/block_breaking.rs` tests. Real loot tables, item
+  entities, block-damage overlay packets, Unbreaking/Fortune/Silk Touch, and a
+  Java break-time fixture remain open.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
 - 2026-11-06: P2.12 surface fidelity - `surface::build_surface` resolves
   surface biomes through `biome_zoom::BiomeZoomer` (lazily per block Y) when a
@@ -1198,16 +1208,33 @@ instantly on start-destroy and places on use-item-on.
 - **Done when:** A simulated client cannot teleport through blocks and a legal
   walk is not rubber-banded.
 
-### P4.3 Block breaking progress, tools, and drops `[ ]` `L`
+### P4.3 Block breaking progress, tools, and drops `[~]` `L`
 
 - **What:** Implement start/stop/abort digging, hardness/tool tiers, efficiency,
   instant-break blocks, block drops, tool durability, incorrect-tool behavior,
   and creative mode.
-- **Why:** Current break is instantaneous for every block and item.
+- **Why:** Current break was instantaneous for every block and item.
 - **Reference:** `ServerPlayerGameMode.java`, `Player.java`,
   `BlockBehaviour.getDestroySpeed`, loot tables.
 - **Done when:** Break times and drops match Java for representative blocks and
   tools.
+- **Progress (2026-11-06):** `block_breaking.rs` ports
+  `ServerPlayerGameMode.handleBlockBreakAction`/`tick` (start, stop, abort,
+  the 0.7 stop threshold, and `hasDelayedDestroy`), `Player.getDestroySpeed`,
+  `Player.hasCorrectToolForDrops`, and
+  `BlockBehaviour.getDestroyProgress`. Tool material speeds/durabilities,
+  efficiency (`level^2 + 1`), haste/mining fatigue, water/air penalties,
+  sword/shears special rules, and the `mineable/*` + `incorrect_for_*_tool` +
+  `needs_*_tool` tags drive tier and harvest gates. `join.rs` keeps per-session
+  dig state, validates elapsed ticks, breaks instantly in creative, applies
+  tool durability (item break included), and captures drops into the
+  inventory. A deterministic drop table covers the common blocks and ores,
+  with a `LootProvider` hook for `crate::loot`; leaves/glass/ice no-self-drop
+  families are handled. 13 unit + 9 integration tests cover stone/wood,
+  dirt/shovel, obsidian tier gating, creative, durability, drop counts, and the
+  delayed-destroy path. Still open: real loot tables (ranges/Fortune/Silk
+  Touch), item entities, block-damage overlay packets, Unbreaking, adventure
+  `can_destroy`, and a Java break-time fixture.
 
 ### P4.4 Block placement rules `[ ]` `M`
 

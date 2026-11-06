@@ -3,7 +3,7 @@
 Last updated: 2026-11-06  
 Repository: https://github.com/HappyGamblingAddict/folia-rs  
 Branch: `main`  
-Last local commit: `6e0e5fe` — "Merge structure template loading and placement" (not pushed)
+Last local commit: `9be2f27` — "Implement vanilla block breaking progress, drops, and durability" (not pushed)
 
 This document is a status snapshot for continuing the Rust rewrite of Folia 1.21.11.
 It is not a claim of parity. The project is still a partial server.
@@ -107,7 +107,8 @@ Key files:
 - Block-state and biome palette decode/encode.
 - Dynamic `ClientboundLevelChunkWithLight` packets from `WorldStorage` chunks.
 - Heightmaps and sky/block light computed from chunk data.
-- Block break/place via `ServerboundPlayerAction` / `ServerboundUseItemOn`.
+- Block break progress, tool-tier/harvest gating, drops, and durability via
+  `ServerboundPlayerAction`; placement via `ServerboundUseItemOn`.
 - Chunk persistence, block and light update broadcasts.
 - 36-slot player inventory + cursor, container click/creative-slot handling,
   held-item placement, item consumption.
@@ -118,6 +119,7 @@ Key files:
 - `crates/folia-core/src/chunk.rs`
 - `crates/folia-core/src/chunk_packet.rs`
 - `crates/folia-core/src/block_update.rs`
+- `crates/folia-core/src/block_breaking.rs`
 - `crates/folia-core/src/inventory.rs`
 
 ### Feature framework
@@ -455,11 +457,15 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   rest fail loudly. Some world-dependent placement modifiers (non-ocean
   heightmaps, non-sapling predicates, environment scans, noise counts) still
   return explicit `PlacementFailure`s.
-- Item stacks still carry only `item + count`; data components are not encoded
-  (durability, enchants, container contents are not preserved).
-- Block behavior metadata (hardness, light, solidity, tool rules) is not
-  generated, so physics/lighting/breaking cannot be fully correct.
-- Generated chunks are at 98.71% class / 92.04% exact-name agreement, not
+- Item stacks are component-aware, but per-item prototype defaults
+  (`max_stack_size`, `max_damage`, `minecraft:tool`, food/tool defaults) are
+  not dumped yet. The breaking code falls back to the exact `ToolMaterial`
+  table for vanilla tools and writes `max_damage` on first wear.
+- Block behaviour metadata is generated (`block_state_behaviour.tsv.gz`) and
+  covers hardness, light, solidity, motion, friction, and fluids. Breaking uses
+  it, but loot tables, item entities, Unbreaking/Fortune/Silk Touch, and the
+  block-damage overlay packet are still open.
+- Generated chunks are at 98.71% class / 92.02% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is
   ~2.7 s; still too slow for a production login path.
@@ -468,6 +474,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 ### Gameplay
 
+- Block breaking validates dig start/stop/abort, break time, tool tiers,
+  efficiency/haste/fatigue, creative instant break, and durability. Drops use a
+  deterministic common-block table and go into the inventory because item
+  entities do not exist yet; real loot tables, Fortune/Silk Touch, Unbreaking,
+  block-break effects, and adventure `can_destroy` are missing.
 - Redstone is not ported.
 - Entity AI, goals, pathfinding, combat, and general damage are not ported.
   Players now take void damage, die, and respawn at world spawn; fall, fire,

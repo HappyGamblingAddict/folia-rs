@@ -4,8 +4,8 @@
 > Current commit: `513bb11` (baseline)  
 > Working tree: 30 pre-existing uncommitted paths, including all Nov 3 registry work  
 > Test status: **351-test baseline plus focused lighting, player-physics,
-> vegetation and placement suites (green)**; the coordinator runs the merged
-> full gate after combining slices.
+> vegetation, placement, dynamic-registry and structure-template suites
+> (green)**; the coordinator runs the merged full gate.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~15%** (range 10–25% depending on metric)
 
@@ -79,6 +79,15 @@ more expensive than designing for it now.
   Generation now runs `underground_decoration`, `vegetal_decoration`, and
   `top_layer_modification` (ores stay off). 8 unit + 15 integration tests;
   parity unchanged at 98.76% block-class / 92.09% exact-name.
+- 2026-11-06: Structure-template foundation — `worldgen/structure/template.rs`
+  parses gzip 1.21.11 structure NBT (DataVersion, size, palettes, blocks with
+  optional block-entity NBT, entities), ports `StructureTemplate.transform`
+  for block and vector positions with mirror/four rotations/pivot/origin, and
+  writes blocks through `FeatureLevel`. `place_into` returns written/rejected
+  counts, block-entity NBT, and transformed entity descriptors; it does not
+  spawn entities. Structure starts, pieces, sets, references, processor lists,
+  template pools, jigsaw expansion, and random palette selection are still
+  unported. 13 focused tests. 351 tests on the last full run.
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
   registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
   7,208 members) and
@@ -614,7 +623,7 @@ consumes it.
 - **Done when:** Water/lava counts and frozen surfaces match Java on the
   fixture.
 
-### P2.8 Structure framework and templates `[ ]` `XL`
+### P2.8 Structure framework and templates `[~]` `XL`
 
 - **What:** Implement structure starts, pieces, structure types, structure
   placement, structure sets, references, and biome checks. Add NBT structure
@@ -625,6 +634,30 @@ consumes it.
   `.../structure/structures/*`, `.../structure/templatesystem/*`.
 - **Done when:** A template-based structure generates at the same position and
   with the same blocks as Java.
+- **Progress (2026-11-06):** `worldgen/structure/template.rs` loads the shipped
+  gzip NBT format through `nbt::read_gzip_root`: `DataVersion` (default 500),
+  `size[3]`, one `palette` or a `palettes` list (Name + sorted Properties),
+  `blocks` (pos, state index, optional block-entity NBT), and `entities` (pos,
+  blockPos, nbt). Malformed roots, non-positive or non-3 sizes, out-of-range
+  palette indices, out-of-template block positions, and wrong tag types return
+  `io::ErrorKind::InvalidData`. `StructurePlaceSettings` carries mirror (none,
+  left-right, front-back), rotation (none, 90, 180, 270), rotation pivot,
+  ignore-entities, and ignore-air (default false, like vanilla block
+  placement). `transform`/`transform_vec3` port Java's mirror-then-rotation
+  formulas exactly, including non-square extent swaps in `rotated_size`.
+  `placement_blocks` yields transformed blocks (NBT-bearing blocks last, then
+  y/x/z) and `place_into(&mut dyn FeatureLevel, origin, settings)` writes them,
+  returning written/rejected counts plus block-entity NBT and transformed
+  entity descriptors instead of spawning entities. `tests/structure_template.rs`
+  covers `empty.nbt`, igloo middle, desert camel spawn (block entity + entity),
+  and nether fossil templates, all rotations/mirrors, pivot/origin, state
+  properties (facing/axis/jigsaw orientation), mock-level placement, and
+  malformed NBT. Still open: structure starts, pieces, structure sets,
+  references, processor lists, template pools, jigsaw expansion, random
+  multi-palette selection, entity spawning, waterlogging, shape updates, and
+  per-block state derivatives that need P1.5 block behaviour (stairs shape,
+  door hinge, rail shape, …). This slice is template loading/placement only,
+  not structure generation.
 
 ### P2.9 Jigsaw structures `[ ]` `XL`
 

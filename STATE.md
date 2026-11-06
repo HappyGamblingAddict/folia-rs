@@ -11,8 +11,8 @@ Last updated: 2026-11-06
 - Current commit (informational only): `513bb11`
 - Working tree: uncommitted by design; Git is not used for workflow.
 - Tests: **351 passing** baseline; focused lighting (7), player-physics (17),
-  vegetation (23), and placement (3) suites are green. The merged workspace
-  gate is run by the coordinator.
+  vegetation (23), placement (3), dynamic-registry (3) and structure-template
+  (13) suites are green. The merged workspace gate is run by the coordinator.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -165,6 +165,17 @@ Last updated: 2026-11-06
   lava currents, swimming, bubbles, powder snow, and sprint/sneak input packets
   are not ported yet.
 
+- Structure templates have a first P2.8 slice in
+  `worldgen/structure/template.rs`: gzip structure NBT parsing (DataVersion,
+  size, single or multi palettes, blocks, block-entity NBT, entities), Java
+  `StructureTemplate.transform`/`transform(Vec3)` coordinate math with mirror,
+  four rotations, rotation pivot and origin, and block placement through
+  `FeatureLevel`. `place_into` returns written/rejected counts, block-entity
+  NBT, and transformed entity descriptors; it does not spawn entities.
+  Structure starts, pieces, structure sets, references, processors, template
+  pools, jigsaw expansion, random palette selection, and exact per-block state
+  derivatives (stairs shape, door hinge, …) are still unported.
+
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
   beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
@@ -202,12 +213,14 @@ Last updated: 2026-11-06
 
 1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
    port `OreVeinifier`, and keep the 92.09% exact-name fixture.
-2. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
+2. P2.8 - structure starts/pieces/references, processor lists, random palette
+   selection, entity spawning, and a template-based Java parity fixture.
+3. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
    plants, vines, mushrooms/huge fungi, and a Java tree fixture.
-3. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
+4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
    P3.6–P3.8 with generated opacity/emission data, incremental section packets,
    and Java light-array/packet fixtures.
-4. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
+5. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
 ## Next queue
 
 - [x] P0.1 Fix formatting and warnings
@@ -225,6 +238,7 @@ Last updated: 2026-11-06
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
 - [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch` done; `schedule_tick`, `simple_random_selector`, most remaining aquatic plants, vines, mushrooms/huge fungi, and structures remain)
+- [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
@@ -235,6 +249,67 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+
+- 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
+  `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
+  `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
+  six-direction BFS under overhangs, block-light BFS over an explicit emitter
+  table, and one-block neighbour border propagation. `chunk_packet::light_bytes`
+  now prefers stored/computed layers (including real block-light updates) and
+  keeps the old height fallback only for chunks without light; the captured
+  `(0,-1)` packet fixture is still byte-identical. `block_update` reloads
+  existing neighbours, recomputes, persists, and broadcasts. `tests/lighting.rs`
+  adds 7 tests (nibble/NBT round-trip, overhang, torch radius, unsupported
+  emitter, packet masks, border torch, edit persistence). Emitter/opacity data
+  is still hand-written; incremental section-only light packets and Java light
+  fixtures remain open.
+- 2026-11-06: Player physics and movement validation — `player_physics.rs`
+  implements the vanilla walking/falling formulas, AABB collision against
+  `WorldStorage`, step-up, fall distance/damage, and movement reconciliation.
+  The live session keeps the ten-block safety net, accepts legal walking
+  without corrections, sends position corrections for blocked claims, and
+  sends health updates on fall damage. 12 focused `player_physics` tests plus
+  updated playerdata/movement tests pass; clippy is clean.
+- 2026-11-06: P2.5 ground-cover batch — `worldgen/feature/vegetation.rs`
+  ports `RandomPatchFeature` (also `flower`), `SimpleBlockFeature`,
+  `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`,
+  `VegetationPatchFeature`, and `WaterloggedVegetationPatchFeature`, including
+  inline nested placed features, the shipped state providers, and Java
+  `HashSet` bucket order for patch positions. `FeatureData` now dispatches
+  134/224 configured features. Generation runs `underground_decoration`,
+  `vegetal_decoration`, and `top_layer_modification`; `underground_ores` stays
+  off. Focused tests: 8 unit + 15 integration. Exact-name parity remains
+  92.04% (5655/6144), block-class 98.71% (6065/6144).
+- 2026-11-06: Structure-template foundation — `worldgen/structure/template.rs`
+  parses gzip 1.21.11 structure NBT (DataVersion, size, palettes, blocks with
+  optional block-entity NBT, entities), ports `StructureTemplate.transform`
+  for block and vector positions with mirror/four rotations/pivot/origin, and
+  writes blocks through `FeatureLevel`. `place_into` returns written/rejected
+  counts, block-entity NBT, and transformed entity descriptors; it does not
+  spawn entities. Structure starts, pieces, sets, references, processor lists,
+  template pools, jigsaw expansion, and random palette selection are still
+  unported. 13 focused tests.
+- [x] P3.5 Real light storage
+- [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
+- [~] P3.7 Block-light engine (hand-written emitter/opacity table)
+- [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
+  ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
+- [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
+  and burst validation done; teleport ack and special movement remain)
+
+## Recently completed
+
+- 2026-11-06: First structure-template slice — `worldgen/structure/` loads
+  gzip structure NBT (`empty.nbt`, igloo middle, desert camel spawn, nether
+  fossil fixtures), validates size/palette indices/block bounds, ports
+  `StructureTemplate.transform` for `BlockPos` and `Vec3` with mirror, four
+  rotations, pivot and origin, and writes blocks through `FeatureLevel`.
+  `place_into` returns block-entity NBT and transformed entity descriptors
+  instead of spawning them. `tests/structure_template.rs` adds 13 tests
+  covering real templates, all rotations/mirrors, pivot/offset, state
+  properties, mock-level placement, and malformed NBT rejection. Focused test
+  only; the coordinator runs the full workspace gate.
 
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,

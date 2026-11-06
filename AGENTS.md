@@ -199,8 +199,10 @@ The current active queue is:
 4. `P1.5` - shape-aware light occlusion and remaining support/waterlogging.
 5. `P9.3` - bridge live-session state and gameplay event dispatch.
 
-Item entities/XP orbs for the now table-driven block drops are the next P4
-follow-up. `TODO.md` is authoritative if this list is stale.
+Item entities/XP orbs from the table-driven block drops are now modeled
+(`item_entity.rs`, `spawn_drops_at` + `DigState::stop_with_entities`, 16
+`tests/item_entities.rs` + 6 lib tests; `join.rs` wiring remains open).
+`TODO.md` is authoritative if this list is stale.
 
 ## Architecture reminders
 

@@ -126,6 +126,21 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P4.3/P5.4 item entities + XP orbs — `item_entity.rs` models
+  `ItemEntity` (stack, pickup delay 10, lifetime 6000, magnet 4 blocks,
+  merge 3 blocks, gravity 0.04) and `ExperienceOrb` (value, attraction 8
+  blocks, `getExperienceValue` splits, merge 0.5 blocks, lifetime 6000) with
+  Add Entity (type 71/49), metadata at index 8 (item stack / value), position
+  sync, and remove packets via the existing entity encoders. `spawn_drops_at`
+  spawns items then split orbs at the block centre with Java initial
+  velocities; `DigState::stop_with_entities` rolls and spawns in one step
+  while `stop_with_loot` keeps its signature. Pickup collects through the
+  `PickupTarget` trait (`inventory::add_stack` + XP pool), so no `join.rs`
+  edit was needed. `entity.rs` gains item/orb type-id helpers and base
+  constructors. Focused: 6 lib + 16 `tests/item_entities.rs`; `block_breaking`
+  and `entity_physics` stay green; fmt/clippy clean. Gaps: live `join.rs`
+  spawning/ticking, fluids/fire/damage, overlay packets, Java pickup
+  fixture.
 - 2026-11-06: P5 join-session entity wiring — `entity.rs` adds a
   `SessionEntityTracker` that owns three deterministic mobs (cow, pig, zombie)
   per viewer, built from `spawn::entity_type` dimensions and real entity ids.

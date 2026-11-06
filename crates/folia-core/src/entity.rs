@@ -14,6 +14,17 @@ pub const CLIENTBOUND_ADD_ENTITY: i32 = 1;
 pub const CLIENTBOUND_ENTITY_POSITION_SYNC: i32 = 35;
 pub const CLIENTBOUND_REMOVE_ENTITIES: i32 = 75;
 
+/// Protocol entity-type id for `minecraft:item` (`EntityType.ITEM`).
+pub fn item_entity_type_id() -> i32 {
+    crate::registry::entity_type_id("minecraft:item").unwrap_or(71)
+}
+
+/// Protocol entity-type id for `minecraft:experience_orb`
+/// (`EntityType.EXPERIENCE_ORB`).
+pub fn experience_orb_type_id() -> i32 {
+    crate::registry::entity_type_id("minecraft:experience_orb").unwrap_or(49)
+}
+
 pub const GRAVITY: f64 = 0.08;
 pub const DRAG: f64 = 0.98;
 /// The fixed point of `(v - 0.08) * 0.98`; armor stands reach this terminal
@@ -60,6 +71,22 @@ impl Entity {
         let mut entity = Self::new(id, uuid, entity_type, x, y, z);
         entity.width = 0.5;
         entity.height = 1.975;
+        entity
+    }
+
+    /// Base entity for a dropped `minecraft:item` (0.25 x 0.25).
+    pub fn item(id: i32, uuid: [u8; 16], x: f64, y: f64, z: f64) -> Self {
+        let mut entity = Self::new(id, uuid, item_entity_type_id(), x, y, z);
+        entity.width = 0.25;
+        entity.height = 0.25;
+        entity
+    }
+
+    /// Base entity for a `minecraft:experience_orb` (0.5 x 0.5).
+    pub fn experience_orb(id: i32, uuid: [u8; 16], x: f64, y: f64, z: f64) -> Self {
+        let mut entity = Self::new(id, uuid, experience_orb_type_id(), x, y, z);
+        entity.width = 0.5;
+        entity.height = 0.5;
         entity
     }
 

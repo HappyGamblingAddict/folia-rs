@@ -1,7 +1,9 @@
 use crate::anvil::Compression;
 use crate::chunk::BlockState;
 use crate::chunk_packet::{block_state_id, heightmap_bytes, light_bytes};
+use crate::math::BlockPos;
 use crate::protocol::{PacketReader, PacketWriter};
+use crate::tick::UpdateFlags;
 use crate::world::WorldStorage;
 use std::io;
 use std::sync::{LazyLock, Mutex, mpsc};
@@ -53,8 +55,14 @@ pub struct BlockChange {
     pub light: Vec<u8>,
 }
 
-/// Mutate a block in the world, persist the chunk, and return the packet plus
-/// the recomputed heightmap/light payloads for that chunk.
+/// Mutate a block in the world, persist the chunk, queue the six neighbour
+/// updates, and process them before returning.
+///
+/// Vanilla `Level.setBlock(..., 3)` sends the client update, calls
+/// `updateNeighborsAt` for the six neighbours, and then runs
+/// `updateNeighbourShapes`. This entry point mirrors that order: the caller
+/// broadcasts the returned primary change, while neighbour-driven changes are
+/// applied and broadcast here.
 pub fn set_block(
     storage: &mut WorldStorage,
     x: i32,
@@ -62,6 +70,33 @@ pub fn set_block(
     z: i32,
     state: BlockState,
 ) -> io::Result<Option<BlockChange>> {
+    storage.tick_state_mut().last_neighbor_updates.clear();
+    perform_block_change(
+        storage,
+        BlockPos::new(x, y, z),
+        state,
+        UpdateFlags::ALL | UpdateFlags::SHAPE,
+        true,
+        false,
+    )
+}
+
+/// Shared mutation path for player edits, scheduled ticks, random ticks, and
+/// neighbour shape updates.
+///
+/// `process` drains the neighbour queue before returning; behaviour-driven
+/// changes use `false` so the enclosing tick owns the drain and the 512-update
+/// chain limit. `broadcast` sends the change packet from this path (used by
+/// ticks, whose caller has no return value to forward).
+pub(crate) fn perform_block_change(
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+    state: BlockState,
+    flags: u32,
+    process: bool,
+    broadcast: bool,
+) -> io::Result<Option<BlockChange>> {
+    let (x, y, z) = (pos.x(), pos.y(), pos.z());
     let chunk_x = x.div_euclid(16);
     let chunk_z = z.div_euclid(16);
     let local_x = x.rem_euclid(16) as usize;
@@ -94,7 +129,7 @@ pub fn set_block(
     storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
     storage.flush()?;
     let state_id = block_state_id(&state);
-    Ok(Some(BlockChange {
+    let mut change = BlockChange {
         chunk_x,
         chunk_z,
         x,
@@ -106,7 +141,30 @@ pub fn set_block(
         packet: block_update_packet(x, y, z, state_id),
         heightmaps: heightmap_bytes(&chunk),
         light: light_bytes(&chunk),
-    }))
+    };
+
+    if broadcast {
+        broadcast_change(&change);
+    }
+    crate::tick::on_block_change(
+        storage,
+        pos,
+        change.old_state.as_ref(),
+        &change.new_state,
+        flags,
+        process,
+    )?;
+    if !broadcast {
+        // Neighbour shape updates may have changed the same chunk again (for
+        // example, removing a plant above the edited block). The caller
+        // broadcasts this primary change after the neighbour packets, so
+        // refresh its whole-chunk payloads to the final chunk state.
+        if let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? {
+            change.heightmaps = heightmap_bytes(&chunk);
+            change.light = light_bytes(&chunk);
+        }
+    }
+    Ok(Some(change))
 }
 
 pub fn block_update_packet(x: i32, y: i32, z: i32, state_id: i32) -> Vec<u8> {

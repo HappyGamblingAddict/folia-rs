@@ -48,6 +48,34 @@ Format:
   P2.3's ore features are now ported; generator wiring waits on feature-RNG
   parity (see the 2026-11-06 ore blocker below).
 
+## 2026-11-06 — P3.10 tick slice is partial by design
+
+- Implemented: vanilla update-flag values, six-neighbour update queue and
+  shape/support checks, scheduled ticks (priority/delay/sub-tick/dedup/cancel),
+  random ticks (3 per 16x16x16 section), falling sand/gravel/concrete
+  powder/anvils, plant support, and grass spread.
+- Not implemented (needs P1.5 block metadata or a bigger tick model):
+  leaf `distance` propagation and decay, crop/sapling growth, torch/rail/door/
+  fence/piston/redstone neighbour reactions, fluid ticks and fluid flow, and
+  block-entity ticks.
+- Falling blocks move one block per scheduled tick instead of spawning a
+  `FallingBlockEntity` with gravity. The landing block and its neighbour
+  updates are correct, but fall timing differs from vanilla.
+- `ScheduledTick`s are not persisted to chunk NBT, so a restart loses pending
+  block ticks. They are also world-global rather than owned by a chunk/region.
+- `RandomTickQueue` derives its per-chunk RNG from
+  `(world seed, chunk, game tick)` with a deterministic hash. It is stable and
+  testable, but it is not Java's `Level.random` draw sequence; a Java random-tick
+  position fixture is still required before claiming positional parity.
+- `tick_world` iterates the `WorldStorage` decoded-chunk cache (up to 256
+  chunks) rather than a ticket/loaded-chunk set, so cached chunks outside a
+  player's view distance can still random-tick until evicted.
+- Cancelling a scheduled tick that was already collected for the current tick
+  (`LevelTicks.clearArea` removing from `toRunThisTick`) is not modeled;
+  cancellation between ticks works.
+- No Java differential neighbor-update or scheduled-tick fixture exists yet,
+  so this is a behavior-tested slice, not a parity claim.
+
 ## Known limitations (not hard blockers)
 
 These are expected gaps, not reasons to stop:

@@ -3,7 +3,8 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe`  
 > Working tree: clean; work is committed in coherent slices.  
-> Test status: **426 tests, 0 failed** on the merged workspace gate.
+> Test status: **426 tests, 0 failed** on the merged workspace gate; P3.10 adds
+> focused tick tests that were run separately (10 integration + 11 unit).
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -53,7 +54,7 @@ more expensive than designing for it now.
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
-| Blocks/redstone/fluids | ~5% | Only break/place; no neighbor updates, fluids, redstone, block entities |
+| Blocks/redstone/fluids | ~10% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, and falling sand/gravel; fluids, redstone, pistons, block entities, and P1.5 metadata remain unported |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
@@ -777,8 +778,10 @@ chunks, in-flight dedupe across sessions, or cross-player sharing.
 `light_bytes` prefers stored/computed sky and block layers from the new
 `light` module and keeps the old `column_height` sky approximation only for
 chunks with no light data yet. `block_update.rs` mutates + recomputes light
-with existing neighbours + saves + broadcasts, but does not run neighbor or
-scheduled updates; incremental section-only light packets are still open.
+with existing neighbours + saves + broadcasts; it now also queues the six
+neighbour updates, runs shape/support checks, schedules falling blocks, and the
+server loop drives `tick_world` for scheduled and random ticks. Incremental
+section-only light packets are still open.
 
 ### P3.1 Chunk ticket and load/unload manager `[~]` `L`
 
@@ -968,7 +971,7 @@ scheduled updates; incremental section-only light packets are still open.
   height fallback until they are edited/recomputed, and there is no queued
   cross-chunk relight or Java seam fixture yet.
 
-### P3.10 Neighbor updates, scheduled ticks, random ticks `[ ]` `L`
+### P3.10 Neighbor updates, scheduled ticks, random ticks `[~]` `L`
 
 - **What:** Port block update flags, shape updates, neighbor updates, scheduled
   ticks, and random ticks. Add a tick scheduler with deterministic ordering.
@@ -978,6 +981,33 @@ scheduled updates; incremental section-only light packets are still open.
   `BlockState.java`, `ScheduledTick.java`, `RandomTick`. 
 - **Done when:** A placed block triggers the same neighbor updates as Java in a
   fixture.
+- **Progress (2026-11-06):** `src/tick.rs` adds the vanilla `UPDATE_*` flag
+  values plus aliases (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
+  `SUPPRESS_NEIGHBORS`), a chunk-grouped `NeighborUpdateQueue` with
+  position deduplication and flag-union merging, a `ScheduledTickQueue` ordered
+  by trigger tick, priority, then sub-tick order with delay/cancel/dedup, and a
+  `RandomTickQueue` that draws `randomTickSpeed = 3` positions per 16x16x16
+  section from a deterministic per-chunk seed. `block_update::set_block` now
+  enqueues the six neighbours in `NeighborUpdater.UPDATE_ORDER`, drains them
+  (512-update chain limit), and applies shape/support updates. The hook table
+  implements falling sand/gravel/concrete-powder/anvil movement, plant support
+  from the `dirt`/farmland tags (including double-plant halves), and grass
+  spread; `BehaviorTable::with` is the callback interface for future blocks.
+  The server loop calls `tick::tick_world` after entity ticks and seeds the
+  shared storage from `level.dat`. Focused tests: 11 unit (flags, queue order,
+  priority/delay/cancel, random sampling, behavior classification) and 10
+  integration (six-neighbour edits, plant removal, falling placement/support
+  removal, scheduled ticks, deterministic grass spread, unsupported reporting,
+  deterministic repeated ticks).
+- **Still open:** leaf distance/decay updates, crop/sapling growth, redstone,
+  fluids, pistons, doors, rails, and torch support need P1.5 block metadata.
+  Falling blocks move one block per scheduled tick instead of using a
+  `FallingBlockEntity`; scheduled ticks are not persisted to chunk NBT; the
+  random-tick RNG is a deterministic hash of seed/chunk/tick rather than
+  Java's `Level.random` sequence; `tick_world` runs over the storage cache
+  rather than a ticket/loaded-chunk set; cancellation during a running tick
+  (`clearArea` of `toRunThisTick`) is not modeled. No Java differential
+  neighbor-update fixture yet.
 
 ### P3.11 Heightmap and chunk-packet exactness `[~]` `M`
 

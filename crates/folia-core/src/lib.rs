@@ -20,6 +20,7 @@ pub mod registry;
 pub mod snbt;
 pub mod status;
 pub mod tags;
+pub mod tick;
 pub mod varint;
 pub mod world;
 pub mod worldgen;

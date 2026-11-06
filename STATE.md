@@ -195,6 +195,18 @@ Last updated: 2026-11-06
   chunks are not retroactively decorated, so features appear in newly generated
   columns only.
 
+- P3.10 block simulation has a first vertical slice in `tick.rs`:
+  vanilla `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
+  `SUPPRESS_NEIGHBORS`, …), a chunk-grouped neighbour queue with position
+  deduplication and flag-union merging, a `ScheduledTickQueue` ordered by
+  trigger/priority/sub-tick with delay, dedup, and cancellation, and a
+  `RandomTickQueue` sampling 3 positions per 16x16x16 section from a
+  deterministic per-chunk seed. `block_update::set_block` queues and drains the
+  six neighbours; falling sand/gravel/concrete powder/anvils move one block per
+  scheduled tick, plant support uses `dirt`/farmland tags (including double
+  plants), and grass spreads to dirt. The server loop calls `tick::tick_world`
+  every tick. Leaf decay, crop growth, redstone, fluids, pistons, and NBT tick
+  persistence remain explicit gaps (see `BLOCKERS.md`).
 - Folia region threading is not implemented beyond task queues.
 
 ## Current focus
@@ -204,30 +216,25 @@ Last updated: 2026-11-06
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
   network codecs, implement `HashedStack` component hashing, and add a
   Java-captured component NBT/packet fixture.
+- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
+  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth, torch
+  support, redstone, fluids, and piston behaviour; persist `ScheduledTick`s in
+  chunk NBT; replace the deterministic per-chunk random sampler with Java's
+  level RNG once feature/level RNG parity lands; add a Java neighbor-update
+  differential fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
   powder snow, sprint/sneak input packets, real block shapes) and eventually
   move player simulation onto its own 20 Hz tick instead of packet-driven
   reconciliation.
-- P1.3 tag data is available; wire `stone_ore_replaceables` and the other ore
-  target tags through `folia_core::tags` instead of the hard-coded sets in
-  `worldgen/feature/ore.rs`, then add the remaining cosmetic registries.
+- P1.3 tag data is available and the ore feature already resolves its four
+  target tags through `folia_core::tags`; add the remaining cosmetic registries.
 - The P2.5 base features are in place. Next: wire the tree `pale_moss`
   decorator to the now-supported `pale_moss_patch`, then port remaining aquatic
   plants (`seagrass`, `kelp`, `sea_pickle`), vines, mushrooms/huge fungi, and the
   remaining patch containers (`simple_random_selector` for the dripleaf pools).
   Beehive occupant NBT is still the remaining P2.4 tree gap.
 
-1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
-   port `OreVeinifier`, and keep the 92.04% exact-name fixture.
-2. P2.8 - structure starts/pieces/references, processor lists, random palette
-   selection, entity spawning, and a template-based Java parity fixture.
-3. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
-   plants, vines, mushrooms/huge fungi, and a Java tree fixture.
-4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
-   P3.6–P3.8 with generated opacity/emission data, incremental section packets,
-   and Java light-array/packet fixtures.
-5. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
 ## Next queue
 
 - [x] P0.1 Fix formatting and warnings
@@ -250,31 +257,28 @@ Last updated: 2026-11-06
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
+  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
+  redstone, fluids, pistons, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
-
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
-  `{item, count}` stack with an insertion-ordered component patch
-  (`ComponentMap`), typed values for custom name/item name/lore, damage,
-  max damage, max stack size, enchantments, stored enchantments, attribute
-  modifiers, unbreakable, custom data, container contents, potion contents,
-  food, tool, repair cost, and rarity, plus opaque NBT for unknown components.
-  `item_stack_to_nbt`/`item_stack_from_nbt` round-trip the vanilla
-  `{id,count,components}` shape, including `!removed` markers and the
-  heterogeneous-list wrapper vanilla uses for lore. Inventory/playerdata save
-  and load preserve the exact component tags (legacy `Count` accepted on
-  read). Network encoding writes added/removed component ids and payloads for
-  custom/item name, lore, damage/max damage/max stack size/repair cost,
-  enchantments, unbreakable, custom data, container, food, and rarity;
-  unported network codecs are reported by `NetworkEncodingReport` instead of
-  writing malformed bytes. Inventory clicks/splits/merges use component
-  equality and per-stack max size, and selected-item consumption keeps the
-  patch. 8 unit + 17 integration tests; stone/dirt packet bodies and the
-  captured Java join fixture are unchanged.
+  `{item, count}` stack with an insertion-ordered component patch, typed values
+  for names/lore/damage/enchantments/attributes/container/potion/food/tool/
+  rarity, and opaque NBT for unknown components. Inventory/playerdata save and
+  load preserve the exact tags; network encoding writes the ported subset and
+  reports omitted components explicitly. 8 unit + 17 integration tests.
+- 2026-11-06: P3.10 tick slice — `tick.rs` adds vanilla update-flag values, a
+  chunk-grouped neighbour queue with dedup/flag merging, a scheduled-tick queue
+  ordered by trigger/priority/sub-tick with delay and cancellation, and a
+  deterministic 3-per-section random-tick sampler. `block_update::set_block`
+  drains six neighbour updates; falling blocks, plant support, and grass spread
+  execute. `tick::tick_world` is wired into the server loop. 11 unit + 10
+  integration tests.
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
@@ -318,6 +322,9 @@ Last updated: 2026-11-06
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
+  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
+  redstone, fluids, pistons, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

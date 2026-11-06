@@ -48,11 +48,18 @@ fn main() -> Result<()> {
         ),
         Err(error) => eprintln!("[rust] could not initialize world generator: {error}"),
     }
+    // The shared overworld storage owns the scheduled/random tick queues, so
+    // seed its sampler before any session can edit terrain.
+    {
+        let storage = folia_core::world::shared_overworld(root.join(&level_name));
+        folia_core::world::lock(storage).set_tick_seed(seed.unwrap_or(0));
+    }
     start_status_server(&properties)?;
-    run_server(&root, &root.join(&level_name).join("level.dat"))
+    run_server(&root, &root.join(&level_name))
 }
 
-fn run_server(root: &std::path::Path, level_path: &std::path::Path) -> Result<()> {
+fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()> {
+    let level_path = level_root.join("level.dat");
     // Java is only a compatibility layer for plugin jars. With no jars (or
     // FOLIA_DISABLE_PLUGINS=1) the process runs entirely native.
     let mut plugins = jvm::PluginRuntime::start(root)?;
@@ -96,8 +103,18 @@ fn run_server(root: &std::path::Path, level_path: &std::path::Path) -> Result<()
         if let Some(plugins) = plugins.as_mut() {
             plugins.tick()?;
         }
-        folia_core::entity::tick_all();
         ticks += 1;
+        // Block-level world tick: pending neighbour updates, scheduled ticks,
+        // and random ticks for every cached chunk. This precedes entity ticks,
+        // matching ServerLevel.tick's block-then-entity order. The storage lock
+        // is released before sleeping; sessions take it for edits and loads.
+        let storage = folia_core::world::shared_overworld(level_root.to_path_buf());
+        if let Err(error) =
+            folia_core::tick::tick_world(&mut folia_core::world::lock(storage), ticks)
+        {
+            eprintln!("[rust] world tick {ticks} failed: {error}");
+        }
+        folia_core::entity::tick_all();
         if max_ticks.is_some_and(|limit| ticks >= limit) {
             break;
         }
@@ -110,7 +127,7 @@ fn run_server(root: &std::path::Path, level_path: &std::path::Path) -> Result<()
     }
     // The level file records game time and the last played stamp; the world
     // spawn is unchanged because nothing moves it yet.
-    match folia_core::level::record_session(level_path, ticks, None) {
+    match folia_core::level::record_session(&level_path, ticks, None) {
         Ok(level) => println!(
             "[rust] level.dat updated: day_time={} last_played={}",
             level.day_time, level.last_played

@@ -97,12 +97,14 @@ These are expected gaps, not reasons to stop:
   `BlockStateProvider::simple` still samples through the weighted path and
   consumes a random draw that Java's `SimpleStateProvider` does not; exact
   tree RNG alignment needs a separate provider-representation fix.
-- Structure templates load and place blocks, but structure starts, pieces,
-  structure sets, references, processor lists, template pools, and jigsaw
-  expansion are unported. There is no structure generation or Java
-  block-for-block template fixture yet. Random multi-palette selection,
-  entity spawning, waterlogging, shape updates, and per-block state
-  derivatives (`shape`, `hinge`, `type`, …) are also open.
+- Structure templates, random-spread structure sets, weighted selection,
+  starts, pieces, bounds, references, and the igloo now exist. Still open:
+  dimension/biome filtering before set selection, processor lists, template
+  pools, jigsaw expansion, concentric-ring placement, structure NBT
+  serialization, random multi-palette selection, entity spawning, loot-table
+  block entities, waterlogging, shape updates, and per-block state derivatives
+  (`shape`, `hinge`, `type`, …). There is no Java block-for-block structure
+  fixture yet, and starts are not attached to chunk generation.
 - Item components are a first slice: per-item prototype defaults
   (`max_stack_size`, `max_damage`, food/tool/enchantment defaults) are not
   dumped, so a plain damageable item without a damage/max_damage component
@@ -218,23 +220,31 @@ These are expected gaps, not reasons to stop:
 - Workaround: Keep the unsupported paths explicit in `DECISIONS.md`; do not
   claim ladder, swimming, or elytra parity. The ten-block teleport net plus
   collider replay still rejects the common wall/teleport cases.
-## 2026-11-06 — P2.8 structure template is loading/placement only
+## 2026-11-06 — P2.8 structure starts/pieces/sets are partial
 
-- Scope: `worldgen/structure/template.rs` loads gzip structure NBT, validates
-  palettes/blocks/entities, transforms positions with mirror/rotation/pivot,
-  and writes blocks through `FeatureLevel`. `place_into` returns block-entity
-  NBT and entity descriptors rather than creating them.
-- Not ported: structure starts, pieces, structure sets, references, biome
-  checks, processor lists, template pools, jigsaw placement/junction expansion,
-  terrain adaptation, random multi-palette selection, entity spawning,
+- Scope: `worldgen/structure/template.rs` loads gzip structure NBT and writes
+  transformed blocks. `set.rs` parses all 20 shipped structure-set documents
+  and implements random-spread placement, legacy frequency reducers, exclusion
+  zones, weighted selection, and `structure_at_chunk`. `piece.rs` adds
+  `BoundingBox`, `StructurePiece`, template pieces, chunk-box clipping, and
+  data-marker reporting. `start.rs` adds deterministic starts, references,
+  terrain inflation, the igloo end to end, and explicit jigsaw failures.
+- Not ported: dimension/biome filtering before registry-level set selection,
+  concentric-ring placement, processor lists, template pools, jigsaw
+  placement/junction expansion, random multi-palette selection, structure NBT
+  serialization, entity spawning, loot-table/chest block entities,
   waterlogging, block-shape updates, and per-block state derivatives that need
   P1.5 block behaviour (stairs `shape`, door `hinge`, rail `shape`, …).
-- Why it is not a blocker: This is a deliberately scoped foundation slice. The
-  next P2.8 task is the start/piece/reference pipeline; template loading can be
-  tested and used independently of it.
-- Workaround: Call `StructureTemplate::placement_blocks`/`place_into` directly
-  from focused code and tests. Do not claim structure generation parity until
-  starts/references/pieces and a Java placement fixture exist.
+- Why it is not a blocker: Placement math, selection, starts, and one template
+  structure are independently testable without the chunk-status pipeline.
+  Biome/dimension filtering cannot be answered by the current
+  `structure_at_chunk(chunk_x, chunk_z, seed)` signature, so callers must not
+  treat its result as a generator decision yet.
+- Workaround: Call per-set placement (`StructureSetRegistry::is_structure_chunk`)
+  when a test needs to avoid nether/end sets, and use `TemplateProvider` to
+  supply the igloo templates. Do not claim structure generation parity until
+  biome checks, generator wiring, and a Java block-for-block structure fixture
+  exist.
 
 ## 2026-11-06 — P2.5 aquatic/vine/mushroom remaining placement and shape gaps
 

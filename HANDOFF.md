@@ -37,19 +37,20 @@ are still missing.
 The working tree is clean and work is committed in coherent slices on `main`.
 Do not branch, reset, or push unless the user asks. The latest local commits
 cover the baseline, tag registries, dynamic registry tables, real lighting,
-player physics, ground-cover vegetation, placement modifiers, and structure
-template loading.
+player physics, ground-cover vegetation, placement modifiers, structure
+template loading, and the structure start/piece/set foundation.
 
 
 The tree contains the biome/RTree/chunk-biome work, the surface-rules port,
 carvers, generation speedups, the optional-JVM plugin host, the full 1.21.11
 registry/tag tables, real light storage, server-side player physics,
-ground-cover vegetation features, and the structure-template foundation.
+ground-cover vegetation features, and the structure-template/start/set
+foundation.
 
 Verified state (2026-11-06, merged workspace):
 
 ```text
-426 tests (full workspace)
+426 tests (full workspace); this slice adds 13 focused structure tests
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -392,9 +393,17 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Ore and scattered-ore features are ported but not wired into generation;
   `OreVeinifier` is not ported.
 - The P2.5 ground-cover types are ported, but most aquatic plants (seagrass,
-  kelp, sea pickle, coral), vines, mushrooms/huge fungi, bamboo, structures, and
-  special features are not. The tree `pale_moss` decorator still needs wiring
+  kelp, sea pickle, coral), vines, mushrooms/huge fungi, bamboo, and special
+  features are not. The tree `pale_moss` decorator still needs wiring
   to the now-supported patch.
+- Structure template loading is ported, and the structure start/piece/set
+  foundation adds all 20 shipped structure sets, random-spread placement,
+  legacy frequency reducers, exclusion zones, weighted selection, starts,
+  pieces, bounds, references, and the igloo end to end. Only igloo is generated;
+  jigsaw structures (villages, ancient cities, trial chambers, bastions, …) fail
+  loudly. Biome/dimension filtering, processor lists, template pools, jigsaw
+  expansion, concentric rings, structure NBT, entity spawning, loot-table block
+  entities, and generator wiring remain.
 - `simple_block.schedule_tick: true` and `simple_random_selector` remain
   explicit unsupported paths, so pale forest flowers and the dripleaf pools do
   not execute. Vegetation noise providers use Xoroshiro-backed `NormalNoise`

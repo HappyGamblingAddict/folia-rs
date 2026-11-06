@@ -3,8 +3,8 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
+> Test status: **426 tests** on the last full gate; this slice adds 13 focused
+> structure integration tests and holds 98.71% block-class / 92.02%
 > exact-name parity.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
@@ -92,15 +92,25 @@ more expensive than designing for it now.
   Generation now runs `underground_decoration`, `vegetal_decoration`, and
   `top_layer_modification` (ores stay off). 8 unit + 15 integration tests;
   parity unchanged at 98.71% block-class / 92.04% exact-name.
-- 2026-11-06: Structure-template foundation — `worldgen/structure/template.rs`
+- 2026-11-06: Structure template foundation — `worldgen/structure/template.rs`
   parses gzip 1.21.11 structure NBT (DataVersion, size, palettes, blocks with
   optional block-entity NBT, entities), ports `StructureTemplate.transform`
   for block and vector positions with mirror/four rotations/pivot/origin, and
   writes blocks through `FeatureLevel`. `place_into` returns written/rejected
   counts, block-entity NBT, and transformed entity descriptors; it does not
   spawn entities. Structure starts, pieces, sets, references, processor lists,
-  template pools, jigsaw expansion, and random palette selection are still
-  unported. 13 focused tests. 426 tests on the last full run.
+  template pools, jigsaw expansion, and random palette selection were still
+  unported at that point. 13 focused tests. 426 tests on the last full run.
+- 2026-11-06: Structure start/piece/set foundation — `worldgen/structure/set.rs`
+  parses the 20 shipped `structure_set` JSON documents and ports random-spread
+  placement (spacing/separation/salt, linear/triangular spread, all four
+  frequency reducers, exclusion zones), weighted selection, and
+  `structure_at_chunk`. `piece.rs` adds `BoundingBox`, `StructurePiece`,
+  template pieces, Java rotation-pivot bounds, chunk-box clipping, block filters,
+  and data-marker reporting. `start.rs` adds deterministic generation contexts,
+  `StructureStart` references and terrain inflation, the igloo structure end to
+  end, and explicit `UnsupportedJigsaw` errors. 13 integration tests in
+  `tests/structure_starts.rs`; full workspace gate pending the coordinator merge.
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
   registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
   7,208 members) and
@@ -697,12 +707,23 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   covers `empty.nbt`, igloo middle, desert camel spawn (block entity + entity),
   and nether fossil templates, all rotations/mirrors, pivot/origin, state
   properties (facing/axis/jigsaw orientation), mock-level placement, and
-  malformed NBT. Still open: structure starts, pieces, structure sets,
-  references, processor lists, template pools, jigsaw expansion, random
-  multi-palette selection, entity spawning, waterlogging, shape updates, and
-  per-block state derivatives that need P1.5 block behaviour (stairs shape,
-  door hinge, rail shape, …). This slice is template loading/placement only,
-  not structure generation.
+  malformed NBT. The start/piece/set slice adds `set.rs` (all 20 shipped
+  structure-set JSON documents, random-spread linear/triangular placement,
+  legacy frequency reducers, exclusion zones, weighted selection, and
+  `structure_at_chunk`), `piece.rs` (`BoundingBox`, `StructurePiece`, template
+  pieces with Java rotation-pivot bounds, chunk-box clipping, structure-block
+  filtering, and data markers), and `start.rs` (deterministic generation
+  context, `StructureStart` with references/terrain inflation, the igloo
+  structure end to end, and explicit jigsaw failures). `tests/structure_starts.rs`
+  adds 13 integration tests for shipped set counts, fixed-seed placement chunk
+  sets, weighted picks, igloo bounds for two rotations, fixed-origin template
+  placement, an igloo placed at a fixed surface height, and jigsaw rejection.
+  Still open: biome/dimension filtering in registry-level selection, processor
+  lists, template pools, jigsaw expansion, random multi-palette selection,
+  structure NBT serialization, entity spawning, loot-table/chest block
+  entities, waterlogging, shape updates, and per-block state derivatives that
+  need P1.5 block behaviour (stairs shape, door hinge, rail shape, …). Starts
+  are not attached to the generator chunk-status pipeline yet.
 
 ### P2.9 Jigsaw structures `[ ]` `XL`
 
@@ -722,7 +743,10 @@ Implement in dependency order, each with loot/tags and a parity fixture:
 - [ ] Mineshafts and strongholds.
 - [ ] Villages, pillager outposts, woodland mansions.
 - [ ] Ocean ruins, shipwrecks, buried treasure, ocean monuments.
-- [ ] Desert temples, jungle temples, witch huts, igloos, ruined portals.
+- [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
+  branch, rotation, bounds, and surface snap done; loot-table block entities,
+  biome filtering, and generator wiring remain).
+- [ ] Desert temples, jungle temples, witch huts, ruined portals.
 - [ ] Ancient cities, trial chambers.
 - [ ] Nether fortresses, bastions, end cities (after P7 dimensions).
 - **Why:** Structures are content-heavy but mostly data-driven once P2.8/P2.9

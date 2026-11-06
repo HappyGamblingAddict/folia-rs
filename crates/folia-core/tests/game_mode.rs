@@ -62,10 +62,7 @@ fn game_mode_changes_round_trip_through_join_and_playerdata() {
     assert_eq!(abilities.flags & 0x0d, 0x0d, "creative abilities");
     drop(client);
 
-    wait_for_save(&root, uuid);
-    let saved = folia_core::player::PlayerSession::load(root.join("playerdata"), uuid)
-        .unwrap()
-        .expect("playerdata");
+    let saved = wait_for_saved_mode(&root, uuid, 1);
     assert_eq!(saved.game_mode, 1, "creative is persisted");
 
     // Second session: Join Game now reports creative. `/gamemode survival`
@@ -81,7 +78,7 @@ fn game_mode_changes_round_trip_through_join_and_playerdata() {
     assert_eq!(abilities.flags, 0, "survival has no creative abilities");
     drop(client);
 
-    wait_for_save(&root, uuid);
+    wait_for_saved_mode(&root, uuid, 0);
     let (game_type, client) = join(uuid);
     assert_eq!(game_type, 0, "the command result persists");
     drop(client);
@@ -242,13 +239,24 @@ fn chat_command(command: &str) -> Vec<u8> {
     writer.into_inner()
 }
 
-fn wait_for_save(root: &std::path::Path, uuid: [u8; 16]) {
-    let path = folia_core::player::PlayerSession::path(&root.join("playerdata"), &uuid);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !path.exists() && std::time::Instant::now() < deadline {
+fn wait_for_saved_mode(
+    root: &std::path::Path,
+    uuid: [u8; 16],
+    expected: i32,
+) -> folia_core::player::PlayerSession {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(Some(session)) =
+            folia_core::player::PlayerSession::load(root.join("playerdata"), uuid)
+            && session.game_mode == expected
+        {
+            return session;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("playerdata did not persist game mode {expected} on disconnect");
+        }
         std::thread::sleep(Duration::from_millis(25));
     }
-    assert!(path.exists(), "playerdata was written on disconnect");
 }
 
 fn packet_id(packet: &[u8]) -> i32 {

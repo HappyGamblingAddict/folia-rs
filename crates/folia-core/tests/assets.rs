@@ -6,6 +6,7 @@
 //! registry ids. The expected values live in `assets/ASSETS.md`; update both
 //! together when an asset is legitimately regenerated.
 
+use folia_core::loot::{LootCatalog, RecipeCatalog};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -17,6 +18,27 @@ fn asset(name: &str) -> Vec<u8> {
         .join(ASSETS)
         .join(name);
     fs::read(&path).unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+}
+
+/// Reads a generated asset and folds CRLF to LF on text files. The manifest
+/// records the canonical LF bytes; Windows checkouts with `core.autocrlf`
+/// would otherwise fail the guard even though the content is unchanged.
+fn manifest_asset(name: &str) -> Vec<u8> {
+    let bytes = asset(name);
+    if name.ends_with(".bin") || name.ends_with(".gz") {
+        return bytes;
+    }
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 1;
+            continue;
+        }
+        normalized.push(bytes[index]);
+        index += 1;
+    }
+    normalized
 }
 
 /// FNV-1a 64: dependency-free, stable across Rust versions, enough to detect
@@ -32,14 +54,14 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 18] = [
+    let expected: [(&str, usize, u64); 20] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
         (
             "block_state_behaviour.tsv.gz",
             284_415,
             0x11e9_f4a0_1cc0_afc7,
         ),
-        ("biome_climate.tsv", 2_161, 0x70a2_dbb7_6140_8aaa),
+        ("biome_climate.tsv", 2_096, 0x41c1_162e_e672_03b5),
         ("block_defaults.tsv", 37_605, 0x7c29_fe7e_3a74_07a8),
         ("item_ids.tsv", 45_873, 0xb3fc_5940_89ab_5bf7),
         ("entity_type_ids.tsv", 3_772, 0x4d7c_78e0_dac3_9e50),
@@ -59,10 +81,12 @@ fn generated_assets_match_the_manifest() {
             0x7808_a639_0eaa_7e0d,
         ),
         ("tags/worldgen.tsv", 35_799, 0xf2e0_3c73_7a04_1e7c),
+        ("loot_tables.json", 662_482, 0x8c3b_7afa_c27e_3096),
+        ("recipes.json", 356_848, 0x9b84_4794_502a_181f),
     ];
 
     for (name, length, hash) in expected {
-        let bytes = asset(name);
+        let bytes = manifest_asset(name);
         assert_eq!(bytes.len(), length, "{name} byte length changed");
         assert_eq!(fnv1a64(&bytes), hash, "{name} contents changed");
     }
@@ -73,51 +97,51 @@ fn dynamic_registry_assets_match_the_manifest() {
     let expected: [(&str, usize, u64); 23] = [
         (
             "registries/banner_pattern.tsv",
-            1_128,
-            0x4b33_0b3f_f4e5_08aa,
+            1_085,
+            0xb28b_4869_b8a9_3aeb,
         ),
-        ("registries/cat_variant.tsv", 232, 0x05cd_22d8_e030_50d4),
-        ("registries/chat_type.tsv", 229, 0xacb1_f362_d3ae_4a4b),
-        ("registries/chicken_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
-        ("registries/cow_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
-        ("registries/damage_type.tsv", 1_232, 0xde71_cad6_0a14_a36d),
-        ("registries/dialog.tsv", 81, 0xc91a_6533_5bb9_ab3f),
-        ("registries/dimension_type.tsv", 97, 0x858c_ec10_6a34_bab5),
-        ("registries/enchantment.tsv", 1_063, 0xcab6_64fa_6191_9ac0),
-        ("registries/frog_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
-        ("registries/instrument.tsv", 230, 0xbdf6_08bc_5edb_867a),
-        ("registries/jukebox_song.tsv", 426, 0x0816_3fe8_59c0_36b0),
+        ("registries/cat_variant.tsv", 221, 0x71d5_f236_0275_8e57),
+        ("registries/chat_type.tsv", 221, 0x889e_d8e3_1765_83eb),
+        ("registries/chicken_variant.tsv", 56, 0x91ed_138a_1da0_880c),
+        ("registries/cow_variant.tsv", 56, 0x91ed_138a_1da0_880c),
+        ("registries/damage_type.tsv", 1_182, 0x9ca3_ed99_9634_2bb1),
+        ("registries/dialog.tsv", 78, 0x8706_bf14_79ff_c1bc),
+        ("registries/dimension_type.tsv", 93, 0xe19f_2618_5e6a_fb71),
+        ("registries/enchantment.tsv", 1_020, 0x4317_03ed_a365_6761),
+        ("registries/frog_variant.tsv", 56, 0x91ed_138a_1da0_880c),
+        ("registries/instrument.tsv", 222, 0xeae6_2ed2_cafe_a822),
+        ("registries/jukebox_song.tsv", 405, 0x3c92_ea32_6c62_00a7),
         (
             "registries/painting_variant.tsv",
-            1_094,
-            0x4965_bd6b_c4d5_9df3,
+            1_043,
+            0x962b_525b_d33f_8528,
         ),
-        ("registries/pig_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
-        ("registries/test_environment.tsv", 21, 0x0e4b_680a_9d03_6869),
-        ("registries/test_instance.tsv", 25, 0x389b_5dee_903c_0053),
-        ("registries/timeline.tsv", 90, 0x8184_152a_d74b_900a),
-        ("registries/trim_material.tsv", 224, 0x57e7_5985_9709_6a73),
-        ("registries/trim_pattern.tsv", 346, 0x9df9_47cc_5a98_ff0c),
+        ("registries/pig_variant.tsv", 56, 0x91ed_138a_1da0_880c),
+        ("registries/test_environment.tsv", 20, 0x15a0_acd1_884e_492c),
+        ("registries/test_instance.tsv", 24, 0xb749_aaa8_45c6_7f6a),
+        ("registries/timeline.tsv", 86, 0x1be8_1df8_928d_6914),
+        ("registries/trim_material.tsv", 213, 0x8101_fd69_b4ce_da06),
+        ("registries/trim_pattern.tsv", 328, 0x495c_71f2_2448_7526),
         (
             "registries/wolf_sound_variant.tsv",
-            132,
-            0x5118_e273_9e78_63f0,
+            125,
+            0x4cd0_4d17_16fb_1647,
         ),
-        ("registries/wolf_variant.tsv", 177, 0x54a3_a531_0b0c_95d7),
+        ("registries/wolf_variant.tsv", 168, 0x4117_e7f6_0959_4e04),
         (
             "registries/worldgen_biome.tsv",
-            1_746,
-            0x6e48_37e8_fc4a_38c0,
+            1_681,
+            0x377b_853e_f131_1f77,
         ),
         (
             "registries/zombie_nautilus_variant.tsv",
-            41,
-            0x6188_bf5d_0dc1_6fd8,
+            39,
+            0x05e2_f622_b497_7cf0,
         ),
     ];
 
     for (name, length, hash) in expected {
-        let bytes = asset(name);
+        let bytes = manifest_asset(name);
         assert_eq!(bytes.len(), length, "{name} byte length changed");
         assert_eq!(fnv1a64(&bytes), hash, "{name} contents changed");
     }
@@ -169,6 +193,26 @@ fn block_states_cover_ids_from_zero_upward() {
             "block state ids must be dense and unique"
         );
     }
+}
+
+#[test]
+fn loot_and_recipe_catalogs_match_their_indexes() {
+    let loot_text = String::from_utf8(asset("loot_tables.json")).expect("loot catalog is UTF-8");
+    let loot = LootCatalog::from_json(&loot_text).expect("loot catalog parses");
+    assert_eq!(loot.index().total, 1_324);
+    assert_eq!(loot.index().by_type.get("minecraft:block"), Some(&1_083));
+    assert_eq!(loot.index().by_type.get("minecraft:entity"), Some(&114));
+    assert_eq!(loot.tables().count(), loot.index().total);
+
+    let recipe_text = String::from_utf8(asset("recipes.json")).expect("recipe catalog is UTF-8");
+    let recipes = RecipeCatalog::from_json(&recipe_text).expect("recipe catalog parses");
+    assert_eq!(recipes.index().total, 1_470);
+    assert_eq!(
+        recipes.index().by_type.get("minecraft:crafting_shaped"),
+        Some(&706)
+    );
+    assert_eq!(recipes.index().by_type.get("minecraft:smelting"), Some(&73));
+    assert_eq!(recipes.recipes().count(), recipes.index().total);
 }
 
 #[test]

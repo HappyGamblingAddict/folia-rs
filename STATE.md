@@ -10,8 +10,8 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `6e0e5fe`
 - Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Tests: **511 passing** on the last full gate; this slice adds 9 loot
+  integration tests and one asset-manifest test.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -23,6 +23,14 @@ Last updated: 2026-11-06
   Java (Rust water at `y=47`, Java gravel); the feature is faithful to the
   generated world, not a Java block-position match yet.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
+- P1.7 loot/recipe data is now versioned: `scripts/extract_loot_recipes.ps1`
+  emits `assets/loot_tables.json` (1,324 tables across 11 context types) and
+  `assets/recipes.json` (1,470 recipes across 22 serializers) as sorted,
+  compact catalogs. `src/loot.rs` embeds typed table/pool/entry/function/
+  condition models, a `folia_random::RandomSource` roll engine, and typed
+  shaped/shapeless/cooking/stonecutting/smithing recipe lookups. Unknown
+  functions and conditions are preserved as `Opaque` and reported by
+  `LootRoll::report`; `tests/loot.rs` has 9 focused tests.
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
   point-of-interest type, and worldgen tags into
@@ -227,6 +235,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P1.7 now has the vanilla loot and recipe catalogs plus loaders. Next: wire
+  block/entity drops through `LootCatalog::roll`, add the P4.8 crafting
+  matcher, and close the function gaps (`enchant_with_levels`,
+  `copy_components`, `copy_state`, `set_stew_effect`, `set_instrument`) once
+  the enchantment/instrument registries and block-state context are available.
 - P1.4 has a working component-aware stack model. Next: dump per-item prototype
   component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
@@ -273,6 +286,8 @@ Last updated: 2026-11-06
 - [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
 - [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
 - [ ] P1.5 Block behavior metadata
+- [~] P1.7 Loot and recipe assets (1,324 tables + 1,470 recipes extracted,
+  typed loaders/roll engine; drop wiring and crafting matcher remain)
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
@@ -292,6 +307,16 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+- 2026-11-06: P1.7 loot and recipe catalogs — `scripts/extract_loot_recipes.ps1`
+  normalizes 1,324 loot tables and 1,470 recipes into compact sorted JSON with
+  per-type indexes (block 1,083, entity 114, chest 65; shaped 706, shapeless
+  320, stonecutting 254, smelting 73). `src/loot.rs` adds typed pools, weighted
+  entries, number providers, 20 function kinds, all shipped condition kinds,
+  Java-order rolling through `folia_random::RandomSource`, and typed recipe
+  ingredients/results with tag matching. Unsupported payloads are preserved
+  opaquely and surface in `LootRoll::report`; `tests/loot.rs` covers the shipped
+  diamond-ore, stone, and simple-dungeon tables, recipe serializers, opaque
+  payloads, determinism, and component functions. 9 focused tests.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

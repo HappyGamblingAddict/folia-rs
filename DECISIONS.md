@@ -1309,3 +1309,56 @@ Format:
 - Consequences: The exact-name number in `STATE.md`/`PORT_MAP.md` is 92.02%
   until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
   the delta and its cause are recorded here.
+
+## 2026-11-06 - Loot and recipe data use one normalized catalog per kind
+
+- Context: 1.21.11 ships 1,324 loot-table JSON files and 1,470 recipe JSON
+  files. The pretty-printed tree is 1.18 MB + 384 KB; a naive copy would keep
+  per-file formatting and unversioned layout.
+- Decision: `scripts/extract_loot_recipes.ps1` emits one compact, sorted
+  catalog per kind with a `counts` index (total + per-type). Identifier fields
+  (entry names, tags, function/condition types, enchantments, potions, recipe
+  ingredients/results) are namespaced. Array order is preserved; object keys
+  are sorted ordinally. The extractor uses the framework JSON serializer
+  because PowerShell 5.1's `ConvertFrom-Json` rejects `anvil.json` (keys `I`
+  and `i`).
+- Why: The catalog is smaller than the source tree, deterministic across
+  runs/platforms, and a single `include_str!` per kind avoids 2,794 tracked
+  files. A per-kind index makes truncation obvious.
+- Consequences: `src/loot.rs` parses catalogs rather than individual files.
+  Regeneration requires `.\scripts\extract_loot_recipes.ps1` or
+  `tests/assets.rs` fails on the pinned byte/hash values.
+
+## 2026-11-06 - Unknown loot payloads fail closed and are reported
+
+- Context: Vanilla has 20 loot-function types and 15 condition types; several
+  need registries or world state this port does not model yet
+  (`enchant_with_levels`, `copy_components`, `copy_state`, `set_stew_effect`,
+  `set_instrument`, `entity_properties`, `location_check`,
+  `damage_source_properties`).
+- Decision: Parse every shipped type into a typed variant and preserve unknown
+  functions/conditions/entries as `Opaque`. When an unsupported payload is
+  reached, do not silently match: conditions return false and
+  `LootRoll::report` names the condition/function/entry/provider. A separate
+  `approximations` set marks the one deliberately approximate path
+  (`enchant_randomly` picks a level-1 enchantment from the resolved options
+  because min/max levels are not in the asset).
+- Why: A skipped condition that returned true would inflate drops; returning
+  false plus a report keeps the failure visible and testable.
+- Consequences: Unsupported conditions can suppress a drop, but never invent
+  one. Closing the gaps means adding the missing registries/context and
+  promoting the report entries to exact execution.
+
+## 2026-11-06 - Asset manifest hashes canonical LF text
+
+- Context: Windows checkouts with `core.autocrlf=true` convert text assets to
+  CRLF, while the recorded manifest mixed LF and CRLF hashes (the dynamic
+  registry tables were generated on Windows).
+- Decision: `tests/assets.rs` folds CRLF to LF before hashing text assets and
+  the manifest records canonical LF lengths/hashes. Binary assets
+  (`mth_sin.bin`, `block_state_behaviour.tsv.gz`) are hashed verbatim.
+- Why: The guard must fail on content changes, not on the checkout platform.
+  Regenerating the affected manifest values removed the last mixed line-ending
+  entries.
+- Consequences: A genuine CRLF-only content edit is not detected; any other
+  byte change is. Regenerate the manifest with LF output when adding assets.

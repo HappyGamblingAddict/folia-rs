@@ -11,10 +11,15 @@ pub mod system;
 
 use crate::chunk::{BlockState, Chunk};
 use crate::worldgen::biome::BiomeSampler;
+use crate::worldgen::biome_climate;
+use crate::worldgen::biome_zoom::BiomeZoomer;
 use crate::worldgen::density::DensityFunction;
+use crate::worldgen::simplex::temperature_noise;
 use crate::worldgen::surface::system::SurfaceSystem;
+use folia_math::BlockPos;
 use folia_random::{RandomSource, XoroshiroPositionalRandomFactory};
 use serde_json::Value;
+use std::cell::Cell;
 use std::io;
 
 /// `net.minecraft.world.level.levelgen.VerticalAnchor`.
@@ -187,9 +192,13 @@ impl ConditionSource {
                 depth <= 1 + offset + surface_depth + secondary
             }
             Self::Not(target) => !target.test(context),
-            Self::Temperature => {
-                cold_enough_to_snow(context.biome(), context.block_y, context.system.sea_level())
-            }
+            Self::Temperature => cold_enough_to_snow(
+                context.biome(),
+                context.block_x,
+                context.block_y,
+                context.block_z,
+                context.system.sea_level(),
+            ),
             Self::Steep => steep(context),
             Self::Hole => context.surface_depth <= 0,
             Self::AbovePreliminarySurface => context.block_y >= context.min_surface_level,
@@ -234,6 +243,15 @@ impl RuleSource {
     }
 }
 
+/// Server options that affect the parsed surface tree.
+///
+/// These are usually read from [`crate::config::generate_flat_bedrock`]. Tests
+/// pass them explicitly so both branches can be exercised in one process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SurfaceOptions {
+    pub generate_flat_bedrock: bool,
+}
+
 /// Parses a `surface_rule` JSON tree. Vertical-gradient random factories are
 /// derived from the level's positional factory, matching
 /// `RandomState.getOrCreateRandomFactory`.
@@ -243,7 +261,27 @@ pub fn parse_rules(
     min_y: i32,
     height: i32,
 ) -> io::Result<RuleSource> {
-    parse_rule(value, seed, min_y, height)
+    parse_rules_with_options(
+        value,
+        seed,
+        min_y,
+        height,
+        SurfaceOptions {
+            generate_flat_bedrock: crate::config::generate_flat_bedrock(),
+        },
+    )
+}
+
+/// [`parse_rules`] with explicit server options instead of the process-wide
+/// `server.properties` snapshot.
+pub fn parse_rules_with_options(
+    value: &Value,
+    seed: &XoroshiroPositionalRandomFactory,
+    min_y: i32,
+    height: i32,
+    options: SurfaceOptions,
+) -> io::Result<RuleSource> {
+    parse_rule(value, seed, min_y, height, options)
 }
 
 fn parse_rule(
@@ -251,6 +289,7 @@ fn parse_rule(
     seed: &XoroshiroPositionalRandomFactory,
     min_y: i32,
     height: i32,
+    options: SurfaceOptions,
 ) -> io::Result<RuleSource> {
     let kind = value
         .get("type")
@@ -265,7 +304,7 @@ fn parse_rule(
                 .ok_or_else(|| invalid("sequence rule is missing sequence"))?;
             let rules = sequence
                 .iter()
-                .map(|rule| parse_rule(rule, seed, min_y, height))
+                .map(|rule| parse_rule(rule, seed, min_y, height, options))
                 .collect::<io::Result<Vec<_>>>()?;
             Ok(RuleSource::Sequence(rules))
         }
@@ -283,8 +322,8 @@ fn parse_rule(
                 .get("then_run")
                 .ok_or_else(|| invalid("condition rule is missing then_run"))?;
             Ok(RuleSource::Test {
-                condition: parse_condition(if_true, seed, min_y, height)?,
-                then_run: Box::new(parse_rule(then_run, seed, min_y, height)?),
+                condition: parse_condition(if_true, seed, min_y, height, options)?,
+                then_run: Box::new(parse_rule(then_run, seed, min_y, height, options)?),
             })
         }
         "minecraft:bandlands" => Ok(RuleSource::Bandlands),
@@ -297,6 +336,7 @@ fn parse_condition(
     seed: &XoroshiroPositionalRandomFactory,
     min_y: i32,
     height: i32,
+    options: SurfaceOptions,
 ) -> io::Result<ConditionSource> {
     let kind = value
         .get("type")
@@ -334,14 +374,32 @@ fn parse_condition(
         // Paper's replacement for the vanilla bedrock gradient. With
         // `generate-flat-bedrock` disabled (the setting the captured world
         // used, confirmed by the oracle's random bedrock depths) it behaves
-        // exactly like a vertical gradient.
+        // exactly like a vertical gradient. With it enabled both bounds
+        // collapse to the flat layer, matching
+        // `OptionallyFlatBedrockConditionSource.apply`.
         "paper:optionally_flat_bedrock_condition_source" => {
             let name = string(value, "random_name")?;
             let factory = seed.from_hash_of(name).fork_positional();
+            let true_at_and_below = anchor(value, "true_at_and_below")?.resolve(min_y, height);
+            let false_at_and_above = anchor(value, "false_at_and_above")?.resolve(min_y, height);
+            let is_roof = value
+                .get("is_roof")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let (true_at_and_below, false_at_and_above) = if options.generate_flat_bedrock {
+                let flat = if is_roof {
+                    true_at_and_below.max(false_at_and_above) - 1
+                } else {
+                    true_at_and_below.min(false_at_and_above)
+                };
+                (flat, flat)
+            } else {
+                (true_at_and_below, false_at_and_above)
+            };
             ConditionSource::VerticalGradient {
                 factory,
-                true_at_and_below: anchor(value, "true_at_and_below")?.resolve(min_y, height),
-                false_at_and_above: anchor(value, "false_at_and_above")?.resolve(min_y, height),
+                true_at_and_below,
+                false_at_and_above,
             }
         }
         "minecraft:y_above" => ConditionSource::Y {
@@ -364,7 +422,9 @@ fn parse_condition(
             let target = value
                 .get("invert")
                 .ok_or_else(|| invalid("not condition is missing invert"))?;
-            ConditionSource::Not(Box::new(parse_condition(target, seed, min_y, height)?))
+            ConditionSource::Not(Box::new(parse_condition(
+                target, seed, min_y, height, options,
+            )?))
         }
         "minecraft:temperature" => ConditionSource::Temperature,
         "minecraft:steep" => ConditionSource::Steep,
@@ -436,6 +496,15 @@ pub struct Context<'a> {
     system: &'a SurfaceSystem,
     biomes: &'a BiomeSampler,
     biome_indices: &'a [usize],
+    /// `BiomeManager` for `SurfaceSystem.buildSurface`'s biome lookups. `None`
+    /// only when no configured world seed is available (direct
+    /// `WorldGenerator::overworld` construction); generation through the
+    /// server's `configure` path always has one.
+    zoomer: Option<BiomeZoomer>,
+    /// Biome entry selected by the zoom for the current `block_y`, computed
+    /// lazily like the memoized biome supplier
+    /// `SurfaceRules.Context.updateY` installs.
+    biome_index: Cell<Option<usize>>,
     preliminary_surface: &'a DensityFunction,
     /// First-air height (`Heightmap.WORLD_SURFACE_WG` value) per column,
     /// indexed by `local_x * 16 + local_z`.
@@ -462,6 +531,7 @@ impl<'a> Context<'a> {
         biome_indices: &'a [usize],
         preliminary_surface: &'a DensityFunction,
         chunk: &Chunk,
+        world_seed: Option<i64>,
     ) -> Self {
         let min_y = system.min_y();
         let height = system.height();
@@ -477,6 +547,8 @@ impl<'a> Context<'a> {
             system,
             biomes,
             biome_indices,
+            zoomer: world_seed.map(BiomeZoomer::new),
+            biome_index: Cell::new(None),
             preliminary_surface,
             heights,
             min_y,
@@ -514,6 +586,9 @@ impl<'a> Context<'a> {
         self.stone_depth_above = stone_depth_above;
         self.stone_depth_below = stone_depth_below;
         self.water_height = water_height;
+        // Java installs a fresh memoized biome supplier on every `updateY`;
+        // computing the zoom is deferred until a condition asks for it.
+        self.biome_index.set(None);
     }
 
     /// Java: `SurfaceRules.Context.getMinSurfaceLevel`.
@@ -551,6 +626,16 @@ impl<'a> Context<'a> {
     }
 
     fn biome(&self) -> &str {
+        if let Some(zoomer) = self.zoomer {
+            let index = self.biome_index.get().unwrap_or_else(|| {
+                let (quart_x, quart_y, quart_z) =
+                    zoomer.nearest_quart(BlockPos::new(self.block_x, self.block_y, self.block_z));
+                let index = self.biomes.sample_quart_index(quart_x, quart_y, quart_z);
+                self.biome_index.set(Some(index));
+                index
+            });
+            return self.biomes.biome_name(index);
+        }
         let local_x = (self.block_x & 15) >> 2;
         let local_z = (self.block_z & 15) >> 2;
         let quart_y = (self.block_y >> 2) - (self.min_y >> 2);
@@ -572,10 +657,42 @@ pub fn build_surface(
     biome_indices: &[usize],
     chunk: &mut Chunk,
 ) {
+    build_surface_with_seed(
+        system,
+        rules,
+        preliminary_surface,
+        biomes,
+        biome_indices,
+        chunk,
+        active_world_seed(),
+    );
+}
+
+/// [`build_surface`] with an explicit world seed for the `BiomeManager` fuzzy
+/// zoom. Production generation resolves the seed from the configured
+/// generator; tests and tools can pin it here.
+#[allow(clippy::too_many_arguments)]
+pub fn build_surface_with_seed(
+    system: &SurfaceSystem,
+    rules: &RuleSource,
+    preliminary_surface: &DensityFunction,
+    biomes: &BiomeSampler,
+    biome_indices: &[usize],
+    chunk: &mut Chunk,
+    world_seed: Option<i64>,
+) {
     let min_y = system.min_y();
     let height = system.height();
     let max_y = min_y + height - 1;
-    let mut context = Context::new(system, biomes, biome_indices, preliminary_surface, chunk);
+    let mut context = Context::new(
+        system,
+        biomes,
+        biome_indices,
+        preliminary_surface,
+        chunk,
+        world_seed,
+    );
+    let zoomer = context.zoomer;
     let default_block = system.default_block().clone();
 
     for local_x in 0..16usize {
@@ -587,21 +704,24 @@ pub fn build_surface(
             let mut first_air = context.heights[column];
             // `i4` in Java is the pre-extension height used by both the
             // extended-badlands test and the frozen-ocean extension.
-            let surface_y = first_air + 1;
+            let surface_y = first_air;
             let surface_biome = biome_name_at(
                 biomes,
                 biome_indices,
+                zoomer,
                 min_y,
                 height,
-                world_x,
-                surface_y,
-                world_z,
+                BlockPos::new(world_x, surface_y, world_z),
             );
-            let melts_slightly =
-                frozen_ocean_melt(surface_biome, world_x, world_z, system.sea_level());
+            let melts_slightly = should_melt_frozen_ocean_iceberg(
+                surface_biome,
+                world_x,
+                world_z,
+                system.sea_level(),
+            );
 
             if surface_biome == "minecraft:eroded_badlands" {
-                system.eroded_badlands_extension(chunk, world_x, world_z, first_air + 1);
+                system.eroded_badlands_extension(chunk, world_x, world_z, first_air);
                 first_air = column_first_air(chunk, local_x, local_z, min_y, max_y);
                 context.heights[column] = first_air;
             }
@@ -611,7 +731,7 @@ pub fn build_surface(
             let mut water_height = i32::MIN;
             let mut stone_depth_below = i32::MAX;
 
-            let mut y = first_air + 1;
+            let mut y = first_air;
             while y >= min_y {
                 let (is_air, is_fluid, is_default) =
                     block_flags(chunk, local_x, y, local_z, &default_block);
@@ -683,7 +803,44 @@ pub fn top_material(
     block_z: i32,
     has_fluid: bool,
 ) -> Option<BlockState> {
-    let mut context = Context::new(system, biomes, biome_indices, preliminary_surface, chunk);
+    top_material_with_seed(
+        system,
+        rules,
+        preliminary_surface,
+        biomes,
+        biome_indices,
+        chunk,
+        block_x,
+        block_y,
+        block_z,
+        has_fluid,
+        active_world_seed(),
+    )
+}
+
+/// [`top_material`] with an explicit world seed for the biome zoom.
+#[allow(clippy::too_many_arguments)]
+pub fn top_material_with_seed(
+    system: &SurfaceSystem,
+    rules: &RuleSource,
+    preliminary_surface: &DensityFunction,
+    biomes: &BiomeSampler,
+    biome_indices: &[usize],
+    chunk: &Chunk,
+    block_x: i32,
+    block_y: i32,
+    block_z: i32,
+    has_fluid: bool,
+    world_seed: Option<i64>,
+) -> Option<BlockState> {
+    let mut context = Context::new(
+        system,
+        biomes,
+        biome_indices,
+        preliminary_surface,
+        chunk,
+        world_seed,
+    );
     context.update_xz(block_x, block_z);
     context.update_y(
         1,
@@ -694,18 +851,30 @@ pub fn top_material(
     rules.try_apply(&context)
 }
 
+/// The world seed used by the active generator's `BiomeManager` equivalent.
+///
+/// `WorldGenerator::overworld` does not carry its seed into `SurfaceSystem`,
+/// so the surface pass asks the configured generator. Direct test harnesses
+/// that construct a generator without `generator::configure` should call the
+/// `*_with_seed` variants instead.
+pub fn active_world_seed() -> Option<i64> {
+    crate::worldgen::generator::configured().map(|generator| generator.seed())
+}
+
 fn biome_name_at<'a>(
     biomes: &'a BiomeSampler,
     biome_indices: &[usize],
+    zoomer: Option<BiomeZoomer>,
     min_y: i32,
     height: i32,
-    x: i32,
-    y: i32,
-    z: i32,
+    pos: BlockPos,
 ) -> &'a str {
-    let local_x = (x & 15) >> 2;
-    let local_z = (z & 15) >> 2;
-    let quart_y = (y >> 2) - (min_y >> 2);
+    if let Some(zoomer) = zoomer {
+        return zoomer.biome_at(biomes, pos);
+    }
+    let local_x = (pos.x() & 15) >> 2;
+    let local_z = (pos.z() & 15) >> 2;
+    let quart_y = (pos.y() >> 2) - (min_y >> 2);
     let max_quart_y = (height >> 2).max(1);
     let quart_y = quart_y.clamp(0, max_quart_y - 1) as usize;
     let index = (quart_y * 4 + local_z as usize) * 4 + local_x as usize;
@@ -774,43 +943,123 @@ fn lerp(delta: f64, start: f64, end: f64) -> f64 {
     start + delta * (end - start)
 }
 
-/// Approximation of `Biome.coldEnoughToSnow` for the frozen-ocean branch.
+/// Java: `Biome.getHeightAdjustedTemperature`.
 ///
-/// The overworld rule tree only asks for temperature inside the frozen-ocean
-/// hole branch. Base temperatures come from the biome data pack; the frozen
-/// temperature modifier is not modelled yet, so `frozen_ocean` is treated as
-/// cold while `deep_frozen_ocean` (base 0.5) is treated as warm.
-fn cold_enough_to_snow(biome: &str, y: i32, sea_level: i32) -> bool {
-    let base_temperature = match biome {
-        "minecraft:frozen_ocean" => 0.0,
-        "minecraft:deep_frozen_ocean" => 0.5,
-        _ => return false,
-    };
-    // `Biome.getHeightAdjustedTemperature` only cools above sea level + 17.
-    // `Biome.TEMPERATURE_NOISE` is a `PerlinSimplexNoise` that is not ported,
-    // so its term is omitted; frozen oceans sit near sea level where the
-    // height adjustment does not apply anyway.
-    let temperature = if y > sea_level + 17 {
-        base_temperature - f64::from(y - (sea_level + 17)) * 0.05 / 40.0
-    } else {
-        base_temperature
-    };
-    (temperature as f32) < 0.15
+/// `biome_climate::temperature_at` supplies the data-pack base temperature and
+/// the `frozen` modifier; the extra cooling above `seaLevel + 17` uses the
+/// ported `Biome.TEMPERATURE_NOISE` `PerlinSimplexNoise`.
+pub fn height_adjusted_temperature(
+    biome: &str,
+    x: i32,
+    y: i32,
+    z: i32,
+    sea_level: i32,
+) -> Option<f32> {
+    let mut temperature = biome_climate::temperature_at(biome, x, y, z)?;
+    let sea_level_plus_17 = sea_level + 17;
+    if y > sea_level_plus_17 {
+        // Java computes `pos.getX() / 8.0F` in f32 before promoting to the
+        // f64 noise input, and casts the scaled noise back to f32.
+        let noise = (temperature_noise().get_value(
+            f64::from(x as f32 / 8.0),
+            f64::from(z as f32 / 8.0),
+            false,
+        ) * 8.0) as f32;
+        temperature -= (noise + (y - sea_level_plus_17) as f32) * 0.05 / 40.0;
+    }
+    Some(temperature)
 }
 
-/// Approximation of `Biome.shouldMeltFrozenOceanIcebergSlightly`: only the
-/// deep frozen ocean is unconditionally above the 0.1 threshold.
-fn frozen_ocean_melt(biome: &str, x: i32, z: i32, sea_level: i32) -> Option<bool> {
+/// Java: `Biome.coldEnoughToSnow`.
+fn cold_enough_to_snow(biome: &str, x: i32, y: i32, z: i32, sea_level: i32) -> bool {
+    height_adjusted_temperature(biome, x, y, z, sea_level).is_some_and(|value| value < 0.15)
+}
+
+/// Java: `Biome.shouldMeltFrozenOceanIcebergSlightly`.
+///
+/// Returns `None` for non-frozen-ocean biomes; the surface extension only
+/// calls this for `frozen_ocean` / `deep_frozen_ocean`.
+pub fn should_melt_frozen_ocean_iceberg(
+    biome: &str,
+    x: i32,
+    z: i32,
+    sea_level: i32,
+) -> Option<bool> {
     if !matches!(
         biome,
         "minecraft:frozen_ocean" | "minecraft:deep_frozen_ocean"
     ) {
         return None;
     }
-    let temperature = crate::worldgen::biome_climate::temperature_at(biome, x, sea_level, z)?;
+    let temperature = height_adjusted_temperature(biome, x, sea_level, z, sea_level)?;
     Some(temperature > 0.1)
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn parse_floor(flat: bool) -> ConditionSource {
+        let value = json!({
+            "type": "minecraft:condition",
+            "if_true": {
+                "type": "paper:optionally_flat_bedrock_condition_source",
+                "random_name": "minecraft:bedrock_floor",
+                "true_at_and_below": {"above_bottom": 0},
+                "false_at_and_above": {"above_bottom": 5},
+                "is_roof": false
+            },
+            "then_run": {
+                "type": "minecraft:block",
+                "result_state": {"Name": "minecraft:bedrock"}
+            }
+        });
+        let mut random = folia_random::XoroshiroRandomSource::new(12_345);
+        let seed = random.fork_positional();
+        let rule = parse_rules_with_options(
+            &value,
+            &seed,
+            -64,
+            384,
+            SurfaceOptions {
+                generate_flat_bedrock: flat,
+            },
+        )
+        .unwrap();
+        match rule {
+            RuleSource::Test { condition, .. } => condition,
+            _ => panic!("expected a condition rule"),
+        }
+    }
+
+    #[test]
+    fn flat_bedrock_collapses_the_floor_gradient() {
+        match parse_floor(false) {
+            ConditionSource::VerticalGradient {
+                true_at_and_below,
+                false_at_and_above,
+                ..
+            } => {
+                assert_eq!(true_at_and_below, -64);
+                assert_eq!(false_at_and_above, -59);
+            }
+            _ => panic!("expected a vertical gradient"),
+        }
+        match parse_floor(true) {
+            ConditionSource::VerticalGradient {
+                true_at_and_below,
+                false_at_and_above,
+                ..
+            } => {
+                assert_eq!(true_at_and_below, -64);
+                assert_eq!(false_at_and_above, -64);
+            }
+            _ => panic!("expected a vertical gradient"),
+        }
+    }
 }

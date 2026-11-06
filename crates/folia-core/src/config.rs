@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Java `.properties` parser for `server.properties`.
 ///
@@ -26,6 +27,10 @@ pub struct ServerProperties {
     pub difficulty: String,
     pub gamemode: String,
     pub spawn_protection: i32,
+    /// Paper's `environment.generate-flat-bedrock`. Paper normally reads this
+    /// from `config/paper-world-defaults.yml`; this port accepts the same key
+    /// in `server.properties` so a single file configures the native server.
+    pub generate_flat_bedrock: bool,
     pub extra: BTreeMap<String, String>,
 }
 
@@ -48,6 +53,7 @@ impl Default for ServerProperties {
             difficulty: "easy".into(),
             gamemode: "survival".into(),
             spawn_protection: 16,
+            generate_flat_bedrock: false,
             extra: BTreeMap::new(),
         }
     }
@@ -93,11 +99,44 @@ impl ServerProperties {
             "difficulty" => self.difficulty = value,
             "gamemode" => self.gamemode = value,
             "spawn-protection" => self.spawn_protection = parse_i32(&value, 16),
+            "generate-flat-bedrock" => self.generate_flat_bedrock = parse_bool(&value),
             other => {
                 self.extra.insert(other.to_owned(), value);
             }
         }
     }
+}
+
+/// Paper's `environment.generate-flat-bedrock` setting for the active server.
+///
+/// `server.properties` is the native configuration file, so the worldgen
+/// surface pass reads this once at startup. `FOLIA_GENERATE_FLAT_BEDROCK`
+/// overrides the file, which keeps headless tests and captures deterministic.
+pub fn generate_flat_bedrock() -> bool {
+    static SETTING: OnceLock<bool> = OnceLock::new();
+    *SETTING.get_or_init(|| {
+        if let Ok(value) = std::env::var("FOLIA_GENERATE_FLAT_BEDROCK") {
+            return parse_bool(&value);
+        }
+        for path in server_properties_candidates() {
+            if let Ok(text) = fs::read_to_string(path) {
+                return ServerProperties::parse(&text).generate_flat_bedrock;
+            }
+        }
+        false
+    })
+}
+
+fn server_properties_candidates() -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from("server.properties")];
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    candidates.push(manifest.join("server.properties"));
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(directory) = exe.parent()
+    {
+        candidates.push(directory.join("server.properties"));
+    }
+    candidates
 }
 
 fn split_key_value(line: &str) -> (&str, &str) {
@@ -308,6 +347,15 @@ unknown-key=kept
         assert_eq!(properties.server_port, 25565);
         assert!(properties.online_mode);
         assert_eq!(properties.max_players, 20);
+    }
+
+    #[test]
+    fn parses_paper_generate_flat_bedrock() {
+        assert!(!ServerProperties::default().generate_flat_bedrock);
+        let properties = ServerProperties::parse("generate-flat-bedrock=true\n");
+        assert!(properties.generate_flat_bedrock);
+        let properties = ServerProperties::parse("generate-flat-bedrock=false\n");
+        assert!(!properties.generate_flat_bedrock);
     }
 
     #[test]

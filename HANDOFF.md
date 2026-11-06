@@ -252,6 +252,13 @@ Implemented:
 - Surface system port: surface depth/secondary noise, clay badlands bands,
   eroded-badlands extension, frozen-ocean iceberg extension, vertical
   gradients, badlands/swamp/mangrove/snow/ice/terracotta rules.
+- P2.12 surface fidelity: surface biome lookups use `BiomeManager`'s fuzzy
+  zoomer (memoized per block Y) when the configured generator seed is
+  available; `Biome.getHeightAdjustedTemperature` uses the extracted
+  `biome_climate` table plus `simplex::temperature_noise`; and Paper's
+  `generate-flat-bedrock` (`server.properties`) collapses the bedrock gradient
+  to one flat layer. The surface column starts at Java's
+  `Heightmap.getHeight + 1`.
 - Cave and canyon carvers: exact legacy large-feature seeding, the 17x17
   start-neighbourhood replay, shared carving masks, cave rooms/branches,
   canyon width profiles, aquifer-backed water/lava, and post-surface
@@ -277,9 +284,14 @@ Key files:
 - `crates/folia-core/src/worldgen/density.rs`
 - `crates/folia-core/src/worldgen/aquifer.rs`
 - `crates/folia-core/src/worldgen/biome.rs`
+- `crates/folia-core/src/worldgen/biome_zoom.rs`
+- `crates/folia-core/src/worldgen/biome_climate.rs`
+- `crates/folia-core/src/worldgen/simplex.rs`
 - `crates/folia-core/src/worldgen/generator.rs`
 - `crates/folia-core/src/worldgen/surface/mod.rs`
 - `crates/folia-core/src/worldgen/surface/system.rs`
+- `crates/folia-core/src/config.rs`
+- `crates/folia-core/tests/surface.rs`
 - `crates/folia-core/src/worldgen/carver.rs`
 - `crates/folia-core/assets/mth_sin.bin`
 - `crates/folia-core/assets/worldgen.json`
@@ -294,8 +306,8 @@ biome sampling: 1536/1536 quart cells exact
 chunk biomes: 1536/1536 cells exact
 bedrock layers: exact at 16 sampled Java columns
 block-class agreement (solid/air/water/lava): 98.71% (6065/6144)
-exact block names: 92.04% (5655/6144)
-water blocks: Rust 284 / Java 289, 35 water mismatches
+exact block names: 92.01% (5653/6144)
+water blocks: Rust 281 / Java 289, 36 water mismatches
 surface height difference: 0.62 blocks average
 ```
 
@@ -306,8 +318,9 @@ carver mask itself.
 
 `tests/worldgen_parity.rs` compares every block in the fixture's 16 sampled
 columns (6144 blocks) and reports class agreement, exact names, water counts,
-and the top class confusions. Enabling the P2.5 decoration steps did not change
-these numbers: 98.71% block-class / 92.04% exact-name.
+and the top class confusions. After P2.12 the numbers are 98.71% block-class /
+92.01% exact-name; the one-block exact-name change is the corrected surface
+column start, which shifts a single extension boundary on the captured chunk.
 
 Generation performance in the debug test profile:
 
@@ -399,15 +412,19 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   explicit unsupported paths, so pale forest flowers and the dripleaf pools do
   not execute. Vegetation noise providers use Xoroshiro-backed `NormalNoise`
   instead of Java's Legacy-seeded stream (see `DECISIONS.md`).
-- Surface rules are ported, but the frozen-ocean temperature modifier
-  (`Biome.FROZEN_TEMPERATURE_NOISE`/`BIOME_INFO_NOISE`, a
-  `PerlinSimplexNoise`) is approximated. Frozen/deep-frozen ocean temperature
-  and iceberg melt decisions are therefore not exact.
-- Surface `isBiome` checks use the exact quart biome from
-  `MultiNoiseBiomeSource`; placement's `biome` filter uses `BiomeManager`'s
-  fuzzy zoomer. Both match vanilla's separate lookup paths.
-- Paper's `generate-flat-bedrock` option is assumed disabled (the captured
-  oracle used random bedrock depths).
+- Surface rules now use `BiomeManager`'s fuzzy zoomer for both the
+  pre-extension biome and per-block `isBiome`/temperature checks when the
+  configured generator seed is available; placement's `biome` filter uses the
+  same zoomer. Direct `WorldGenerator::overworld` harnesses that never call
+  `generator::configure` fall back to the chunk-local quart and can pin the
+  seed with `build_surface_with_seed`.
+- Frozen-ocean temperature and iceberg-melt decisions use the exact
+  `biome_climate`/`PerlinSimplexNoise` tables. There is no captured Java
+  frozen-ocean fixture yet, so these are pinned behavior tests rather than a
+  differential chunk comparison.
+- Paper's `generate-flat-bedrock` is supported via `server.properties`
+  (`generate-flat-bedrock=true`); default `false` keeps the captured oracle's
+  random bedrock depths. The real Paper YAML is not read yet.
 - 134 of 224 configured feature types execute: `no_op`, trees, fallen trees,
   ores/scattered ores, random selectors, random patches/flowers, simple blocks,
   block piles, block columns, multiface growth, and vegetation patches. The
@@ -464,9 +481,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
    parity. `feature_data.json` already has every definition.
 3. **Real lighting (P3.5–P3.8).** Persisted sky/block light nibble arrays, the
    sky-light and block-light engines, then incremental light packets.
-4. **Finish surface fidelity.** Port `PerlinSimplexNoise` and the frozen-ocean
-   temperature modifier, and add `BiomeManager`'s fuzzy zoomer for surface
-   `isBiome` checks.
+4. **Surface fidelity (P2.12 code landed).** Capture a Java frozen-ocean /
+   iceberg fixture and thread `WorldGenerator.seed()` directly into
+   `build_surface` so direct harnesses do not need the configured-generator
+   fallback.
 5. **Broaden the parity harness.** Capture all 256 columns (and more seed/chunk
    fixtures) from Java; the current fixture samples 16 columns.
 6. **Then move to gameplay systems**: redstone, AI/damage, containers, online

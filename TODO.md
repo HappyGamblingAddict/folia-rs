@@ -3,9 +3,9 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
-> exact-name parity.
+> Test status: **426 tests** on the last full gate; the P2.12 surface slice
+> adds 1 surface unit test, 3 integration tests, and 1 config unit test, and
+> holds 98.71% block-class / 92.01% exact-name parity.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -65,7 +65,14 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
-- 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
+- 2026-11-06: P2.12 surface fidelity - `surface::build_surface` resolves
+  surface biomes through `biome_zoom::BiomeZoomer` (lazily per block Y) when a
+  configured generator seed exists, `Biome.getHeightAdjustedTemperature` uses
+  `biome_climate` + `simplex::temperature_noise`, and Paper's
+  `generate-flat-bedrock` is parsed from `server.properties`. The column start
+  was corrected to Java's `Heightmap.getHeight + 1`. Tests cover the zoomer,
+  flat-bedrock on/off, and fixed-coordinate frozen/deep-frozen melt.
+- 2026-11-06: P2.5 aquatic/vine/mushroom batch - `worldgen/feature/aquatic.rs`
   ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
   `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
   `twisting_vines`, and `weeping_vines`; `mushroom.rs` ports huge brown/red
@@ -740,17 +747,32 @@ Implement in dependency order, each with loot/tags and a parity fixture:
 - **Done when:** CI runs at least 4 seeds × 4 chunks and fails on unexplained
   regressions.
 
-### P2.12 Exact surface fixes `[ ]` `M`
+### P2.12 Exact surface fixes `[~]` `M`
 
 - **What:** Port `PerlinSimplexNoise` and the frozen-ocean
   `FROZEN_TEMPERATURE_NOISE` / `BIOME_INFO_NOISE` modifier. Add
-  `BiomeManager`’s fuzzy zoomer for surface `isBiome` checks. Support Paper’s
+  `BiomeManager`'s fuzzy zoomer for surface `isBiome` checks. Support Paper's
   `generate-flat-bedrock` option.
 - **Why:** These are known approximations in the current surface pass and cause
   wrong frozen-ocean temperature/iceberg decisions.
 - **Reference:** `net/minecraft/world/level/biome/BiomeManager.java`,
   `FuzzyOffsetConstantColumnBiomeZoomer`, `PerlinSimplexNoise`.
 - **Done when:** Frozen/deep-frozen ocean surface and iceberg fixtures match.
+- **Landed:** `surface::build_surface` now resolves biomes through
+  `biome_zoom::BiomeZoomer` (lazily memoized per block Y like
+  `SurfaceRules.Context.updateY`) whenever the active generator seed is
+  available; explicit `*_with_seed` entry points cover direct harnesses.
+  `Biome.getHeightAdjustedTemperature` now uses the extracted
+  `biome_climate` + `simplex::temperature_noise` modules for the snow/ice and
+  iceberg-melt branches, and Paper's `optionally_flat_bedrock_condition_source`
+  collapses to one flat layer when `generate-flat-bedrock` is true in
+  `server.properties`. The surface column start was corrected to Java's
+  `Heightmap.getHeight + 1` (first available block).
+- **Remaining:** no captured Java frozen-ocean/iceberg fixture yet, so the
+  pinned temperature and melt tests are behavior tests rather than a
+  differential fixture. Direct `WorldGenerator::overworld` harnesses that never
+  call `generator::configure` still use the chunk-local quart fallback because
+  the surface system does not receive the raw seed; the server path does.
 
 ### P2.13 Feature generation performance `[ ]` `M`
 

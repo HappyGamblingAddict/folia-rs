@@ -1255,15 +1255,20 @@ mod tests {
         assert_eq!(total, 888, "every placed feature's modifiers load");
         assert_eq!(supported + unsupported.values().sum::<usize>(), total);
         assert_eq!(
-            supported, 762,
+            supported, 781,
             "world-free modifiers, `biome`, ocean-floor heightmaps, water depth \
-             filters, and sapling survival predicates"
+             filters, block predicates, and the supported environment scans"
         );
         assert_eq!(unsupported["minecraft:heightmap"], 83);
-        assert_eq!(unsupported["minecraft:block_predicate_filter"], 12);
+        assert_eq!(unsupported["minecraft:environment_scan"], 2);
         assert_eq!(unsupported["minecraft:count_on_every_layer"], 8);
         assert_eq!(unsupported["minecraft:noise_threshold_count"], 6);
         assert_eq!(unsupported["minecraft:noise_based_count"], 4);
+        assert_eq!(
+            unsupported["minecraft:surface_relative_threshold_filter"],
+            3
+        );
+        assert_eq!(unsupported["minecraft:random_offset"], 1);
 
         // `end_platform` is a fixed position followed by a biome filter.
         let end_platform = data

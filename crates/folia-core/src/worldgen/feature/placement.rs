@@ -38,8 +38,30 @@ pub enum Heightmap {
 /// The subset of `BlockPredicate` the placement pipeline can evaluate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockPredicate {
-    /// `BlockPredicate.wouldSurvive(state, offset)` for a sapling.
-    WouldSurvive(BlockState),
+    /// `BlockPredicate.wouldSurvive(state, offset)`.
+    WouldSurvive { state: BlockState, offset: [i32; 3] },
+    /// `BlockPredicate.matchingBlocks(blocks, offset)`.
+    MatchingBlocks {
+        blocks: Vec<String>,
+        offset: [i32; 3],
+    },
+    /// `BlockPredicate.matchingBlockTag(tag, offset)`.
+    MatchingBlockTag { tag: String, offset: [i32; 3] },
+    /// `BlockPredicate.matchingFluids(fluids, offset)`.
+    MatchingFluids {
+        fluids: Vec<String>,
+        offset: [i32; 3],
+    },
+    /// `BlockPredicate.matchingFluidTag(tag, offset)`.
+    MatchingFluidTag { tag: String, offset: [i32; 3] },
+    /// `BlockPredicate.solid(offset)`.
+    Solid { offset: [i32; 3] },
+    /// `BlockPredicate.not(predicate)`.
+    Not(Box<BlockPredicate>),
+    /// `BlockPredicate.allOf(predicates)`.
+    AllOf(Vec<BlockPredicate>),
+    /// `BlockPredicate.anyOf(predicates)`.
+    AnyOf(Vec<BlockPredicate>),
     /// Parsed but not ported.
     Unsupported { vanilla_type: String },
 }
@@ -47,23 +69,107 @@ pub enum BlockPredicate {
 impl BlockPredicate {
     /// Whether this predicate can run against a [`PlacementWorld`].
     pub fn is_supported(&self) -> bool {
-        matches!(self, BlockPredicate::WouldSurvive(_))
+        match self {
+            Self::WouldSurvive { .. }
+            | Self::MatchingBlocks { .. }
+            | Self::MatchingBlockTag { .. }
+            | Self::MatchingFluids { .. }
+            | Self::MatchingFluidTag { .. }
+            | Self::Solid { .. } => true,
+            Self::Not(predicate) => predicate.is_supported(),
+            Self::AllOf(predicates) | Self::AnyOf(predicates) => {
+                predicates.iter().all(Self::is_supported)
+            }
+            Self::Unsupported { .. } => false,
+        }
     }
 
     /// `BlockPredicate.test(LevelReader, BlockPos)`.
     pub fn test(&self, world: &dyn PlacementWorld, pos: BlockPos) -> bool {
         match self {
-            BlockPredicate::WouldSurvive(_) => world
-                .block_at(pos.below())
-                .is_some_and(|below| is_sapling_soil(&below.name)),
-            BlockPredicate::Unsupported { .. } => false,
+            Self::WouldSurvive { state, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world
+                    .block_at(target.below())
+                    .is_some_and(|below| would_survive_soil(&state.name, &below.name))
+            }
+            Self::MatchingBlocks { blocks, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world
+                    .block_at(target)
+                    .is_some_and(|state| blocks.iter().any(|block| block == &state.name))
+            }
+            Self::MatchingBlockTag { tag, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world
+                    .block_at(target)
+                    .is_some_and(|state| crate::tags::block_has(tag, &state.name))
+            }
+            Self::MatchingFluids { fluids, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world
+                    .block_at(target)
+                    .is_some_and(|state| fluids.iter().any(|fluid| fluid == &state.name))
+            }
+            Self::MatchingFluidTag { tag, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world.block_at(target).is_some_and(|state| {
+                    crate::tags::has(crate::tags::TagRegistryKind::Fluid, tag, &state.name)
+                })
+            }
+            Self::Solid { offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world.block_at(target).is_some_and(is_solid_state)
+            }
+            Self::Not(predicate) => !predicate.test(world, pos),
+            Self::AllOf(predicates) => predicates
+                .iter()
+                .all(|predicate| predicate.test(world, pos)),
+            Self::AnyOf(predicates) => predicates
+                .iter()
+                .any(|predicate| predicate.test(world, pos)),
+            Self::Unsupported { .. } => false,
         }
     }
 }
 
-/// Vanilla's `minecraft:dirt` block tag; saplings can survive on all of it.
-fn is_sapling_soil(name: &str) -> bool {
-    crate::tags::block_has("minecraft:dirt", name)
+/// Vanilla `VegetationBlock.mayPlaceOn` for the shipped `would_survive`
+/// predicates: dirt tag or farmland. Mangrove propagules also accept clay;
+/// firefly bushes use the plain vegetation rule.
+fn would_survive_soil(state: &str, below: &str) -> bool {
+    let dirt = crate::tags::block_has("minecraft:dirt", below);
+    match state {
+        "minecraft:mangrove_propagule" => dirt || below == "minecraft:clay",
+        "minecraft:firefly_bush" => dirt || below == "minecraft:farmland",
+        _ if state.ends_with("_sapling") => dirt,
+        _ => false,
+    }
+}
+
+/// Conservative solidity for `BlockPredicate.solid`: plants, fluids, air, and
+/// replaceable blocks are not solid until P1.5 block-behaviour metadata lands.
+fn is_solid_state(state: &BlockState) -> bool {
+    if crate::chunk::is_air_state(state)
+        || matches!(state.name.as_str(), "minecraft:water" | "minecraft:lava")
+    {
+        return false;
+    }
+    for tag in [
+        "minecraft:replaceable",
+        "minecraft:flowers",
+        "minecraft:saplings",
+        "minecraft:crops",
+        "minecraft:rails",
+        "minecraft:buttons",
+        "minecraft:pressure_plates",
+        "minecraft:all_signs",
+        "minecraft:fire",
+    ] {
+        if crate::tags::block_has(tag, &state.name) {
+            return false;
+        }
+    }
+    true
 }
 
 /// World state a placement modifier may need.
@@ -416,8 +522,31 @@ pub enum PlacementModifierKind {
     SurfaceWaterDepth { max_water_depth: i32 },
     /// `BlockPredicateFilter`.
     BlockPredicate(BlockPredicate),
+    /// `EnvironmentScanPlacement`.
+    EnvironmentScan {
+        direction: ScanDirection,
+        max_steps: i32,
+        target: BlockPredicate,
+        allowed: BlockPredicate,
+    },
     /// Parsed but not ported.
     Unsupported { vanilla_type: String },
+}
+
+/// Direction used by `EnvironmentScanPlacement`'s vertical codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanDirection {
+    Up,
+    Down,
+}
+
+impl ScanDirection {
+    fn step(self, pos: BlockPos) -> BlockPos {
+        match self {
+            Self::Up => pos.above(),
+            Self::Down => pos.below(),
+        }
+    }
 }
 
 impl PlacementModifier {
@@ -436,6 +565,7 @@ impl PlacementModifier {
                 "minecraft:surface_water_depth_filter"
             }
             PlacementModifierKind::BlockPredicate(_) => "minecraft:block_predicate_filter",
+            PlacementModifierKind::EnvironmentScan { .. } => "minecraft:environment_scan",
             PlacementModifierKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -534,6 +664,34 @@ impl PlacementModifier {
                     Ok(Vec::new())
                 }
             }
+            PlacementModifierKind::EnvironmentScan {
+                direction,
+                max_steps,
+                target,
+                allowed,
+            } => {
+                let mut candidate = pos;
+                if !allowed.test(world, candidate) {
+                    return Ok(Vec::new());
+                }
+                for _ in 0..*max_steps {
+                    if target.test(world, candidate) {
+                        return Ok(vec![candidate]);
+                    }
+                    candidate = direction.step(candidate);
+                    if world.block_at(candidate).is_none() {
+                        return Ok(Vec::new());
+                    }
+                    if !allowed.test(world, candidate) {
+                        break;
+                    }
+                }
+                Ok(if target.test(world, candidate) {
+                    vec![candidate]
+                } else {
+                    Vec::new()
+                })
+            }
             PlacementModifierKind::Unsupported { vanilla_type } => {
                 Err(UnsupportedModifier::new(vanilla_type.clone()))
             }
@@ -551,6 +709,9 @@ impl PlacementModifier {
             | PlacementModifierKind::Heightmap(_)
             | PlacementModifierKind::SurfaceWaterDepth { .. } => true,
             PlacementModifierKind::BlockPredicate(predicate) => predicate.is_supported(),
+            PlacementModifierKind::EnvironmentScan {
+                target, allowed, ..
+            } => target.is_supported() && allowed.is_supported(),
             PlacementModifierKind::HeightRange(provider) => provider.is_supported(),
             PlacementModifierKind::RandomOffset {
                 xz_spread,
@@ -619,6 +780,35 @@ pub(crate) fn parse_modifier(value: &Value) -> io::Result<PlacementModifier> {
         "minecraft:block_predicate_filter" => PlacementModifierKind::BlockPredicate(
             parse_block_predicate(field(object, "predicate", &type_name)?)?,
         ),
+        "minecraft:environment_scan" => {
+            let direction = match field(object, "direction_of_search", &type_name)?
+                .as_str()
+                .ok_or_else(|| {
+                    invalid(format!("{type_name} needs a string `direction_of_search`"))
+                })? {
+                "up" => ScanDirection::Up,
+                "down" => ScanDirection::Down,
+                other => {
+                    return Ok(PlacementModifier {
+                        kind: PlacementModifierKind::Unsupported {
+                            vanilla_type: format!("{type_name}:{other}"),
+                        },
+                    });
+                }
+            };
+            let max_steps = int_field(object, "max_steps", &type_name)?;
+            let target = parse_block_predicate(field(object, "target_condition", &type_name)?)?;
+            let allowed = match object.get("allowed_search_condition") {
+                Some(value) => parse_block_predicate(value)?,
+                None => BlockPredicate::AllOf(Vec::new()),
+            };
+            PlacementModifierKind::EnvironmentScan {
+                direction,
+                max_steps,
+                target,
+                allowed,
+            }
+        }
         _ => PlacementModifierKind::Unsupported {
             vanilla_type: type_name,
         },
@@ -636,19 +826,111 @@ fn parse_block_predicate(value: &Value) -> io::Result<BlockPredicate> {
         .ok_or_else(|| invalid("block predicate is missing `type`"))?;
     let type_name = resource_location(type_name);
 
-    if type_name == "minecraft:would_survive" {
-        let state = parse_block_state(field(object, "state", &type_name)?)?;
-        if state.name.ends_with("_sapling") {
-            return Ok(BlockPredicate::WouldSurvive(state));
+    let offset = parse_predicate_offset(object)?;
+    match type_name.as_str() {
+        "minecraft:would_survive" => {
+            let state = parse_block_state(field(object, "state", &type_name)?)?;
+            if state.name.ends_with("_sapling")
+                || matches!(
+                    state.name.as_str(),
+                    "minecraft:mangrove_propagule" | "minecraft:firefly_bush"
+                )
+            {
+                Ok(BlockPredicate::WouldSurvive { state, offset })
+            } else {
+                Ok(BlockPredicate::Unsupported {
+                    vanilla_type: format!("{type_name}:{}", state.name),
+                })
+            }
         }
-        return Ok(BlockPredicate::Unsupported {
-            vanilla_type: format!("{type_name}:{}", state.name),
-        });
+        "minecraft:matching_blocks" => Ok(BlockPredicate::MatchingBlocks {
+            blocks: parse_string_list(field(object, "blocks", &type_name)?)?,
+            offset,
+        }),
+        "minecraft:matching_block_tag" => Ok(BlockPredicate::MatchingBlockTag {
+            tag: resource_location(
+                field(object, "tag", &type_name)?
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("{type_name} needs a string `tag`")))?,
+            ),
+            offset,
+        }),
+        "minecraft:matching_fluids" => Ok(BlockPredicate::MatchingFluids {
+            fluids: parse_string_list(field(object, "fluids", &type_name)?)?,
+            offset,
+        }),
+        "minecraft:matching_fluid_tag" => Ok(BlockPredicate::MatchingFluidTag {
+            tag: resource_location(
+                field(object, "tag", &type_name)?
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("{type_name} needs a string `tag`")))?,
+            ),
+            offset,
+        }),
+        "minecraft:solid" => Ok(BlockPredicate::Solid { offset }),
+        "minecraft:not" => Ok(BlockPredicate::Not(Box::new(parse_block_predicate(
+            field(object, "predicate", &type_name)?,
+        )?))),
+        "minecraft:all_of" => Ok(BlockPredicate::AllOf(parse_predicate_list(field(
+            object,
+            "predicates",
+            &type_name,
+        )?)?)),
+        "minecraft:any_of" => Ok(BlockPredicate::AnyOf(parse_predicate_list(field(
+            object,
+            "predicates",
+            &type_name,
+        )?)?)),
+        _ => Ok(BlockPredicate::Unsupported {
+            vanilla_type: type_name,
+        }),
     }
+}
 
-    Ok(BlockPredicate::Unsupported {
-        vanilla_type: type_name,
-    })
+fn parse_predicate_offset(object: &Map<String, Value>) -> io::Result<[i32; 3]> {
+    let Some(offset) = object.get("offset") else {
+        return Ok([0, 0, 0]);
+    };
+    let values = offset
+        .as_array()
+        .ok_or_else(|| invalid("block predicate `offset` must be a list"))?;
+    if values.len() != 3 {
+        return Err(invalid("block predicate `offset` must have three values"));
+    }
+    let mut out = [0i32; 3];
+    for (index, value) in values.iter().enumerate() {
+        out[index] = value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid("block predicate `offset` values must be integers"))?;
+    }
+    Ok(out)
+}
+
+fn parse_string_list(value: &Value) -> io::Result<Vec<String>> {
+    if let Some(single) = value.as_str() {
+        return Ok(vec![resource_location(single)]);
+    }
+    let list = value
+        .as_array()
+        .ok_or_else(|| invalid("expected a string or a list of strings"))?;
+    list.iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(resource_location)
+                .ok_or_else(|| invalid("expected a string or a list of strings"))
+        })
+        .collect()
+}
+
+fn parse_predicate_list(value: &Value) -> io::Result<Vec<BlockPredicate>> {
+    value
+        .as_array()
+        .ok_or_else(|| invalid("block predicate list must be an array"))?
+        .iter()
+        .map(parse_block_predicate)
+        .collect()
 }
 
 pub(crate) fn parse_block_state(value: &Value) -> io::Result<BlockState> {
@@ -1281,5 +1563,147 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    struct PredicateWorld {
+        blocks: std::collections::HashMap<BlockPos, BlockState>,
+    }
+
+    impl PredicateWorld {
+        fn new() -> Self {
+            Self {
+                blocks: std::collections::HashMap::new(),
+            }
+        }
+
+        fn with(mut self, pos: BlockPos, name: &str) -> Self {
+            self.blocks.insert(
+                pos,
+                BlockState {
+                    name: name.into(),
+                    properties: Vec::new(),
+                },
+            );
+            self
+        }
+    }
+
+    impl PlacementWorld for PredicateWorld {
+        fn biome_at(&self, _pos: BlockPos) -> &str {
+            "minecraft:plains"
+        }
+
+        fn biome_has_placed_feature(&self, _biome: &str, _placed_feature: &str) -> bool {
+            true
+        }
+
+        fn block_at(&self, pos: BlockPos) -> Option<&BlockState> {
+            self.blocks.get(&pos)
+        }
+    }
+
+    #[test]
+    fn block_predicates_match_blocks_tags_fluids_and_composites() {
+        let pos = BlockPos::new(4, 70, 8);
+        let world = PredicateWorld::new()
+            .with(pos, "minecraft:oak_log")
+            .with(pos.below(), "minecraft:grass_block")
+            .with(pos.east(), "minecraft:water");
+
+        let matching = parse_block_predicate(&json!({
+            "type": "minecraft:matching_blocks",
+            "blocks": ["minecraft:oak_log", "minecraft:birch_log"]
+        }))
+        .unwrap();
+        assert!(matching.test(&world, pos));
+        assert!(!matching.test(&world, pos.east()));
+
+        let tag = parse_block_predicate(&json!({
+            "type": "minecraft:matching_block_tag",
+            "tag": "minecraft:logs"
+        }))
+        .unwrap();
+        assert!(tag.test(&world, pos));
+
+        let fluid = parse_block_predicate(&json!({
+            "type": "minecraft:matching_fluids",
+            "fluids": "minecraft:water",
+            "offset": [1, 0, 0]
+        }))
+        .unwrap();
+        assert!(fluid.test(&world, pos));
+
+        let composite = parse_block_predicate(&json!({
+            "type": "minecraft:all_of",
+            "predicates": [
+                {"type": "minecraft:matching_block_tag", "tag": "minecraft:logs"},
+                {"type": "minecraft:not", "predicate": {
+                    "type": "minecraft:matching_blocks", "blocks": "minecraft:stone"
+                }}
+            ]
+        }))
+        .unwrap();
+        assert!(composite.test(&world, pos));
+
+        let solid = parse_block_predicate(&json!({"type": "minecraft:solid"})).unwrap();
+        assert!(solid.test(&world, pos.below()));
+        assert!(!solid.test(&world, pos.east()));
+    }
+
+    #[test]
+    fn would_survive_accepts_mangrove_and_firefly_soil() {
+        let pos = BlockPos::new(0, 64, 0);
+        let world = PredicateWorld::new().with(pos.below(), "minecraft:clay");
+        let mangrove = parse_block_predicate(&json!({
+            "type": "minecraft:would_survive",
+            "state": {"Name": "minecraft:mangrove_propagule"}
+        }))
+        .unwrap();
+        assert!(mangrove.test(&world, pos));
+
+        let world = PredicateWorld::new().with(pos.below(), "minecraft:farmland");
+        let firefly = parse_block_predicate(&json!({
+            "type": "minecraft:would_survive",
+            "state": {"Name": "minecraft:firefly_bush"}
+        }))
+        .unwrap();
+        assert!(firefly.test(&world, pos));
+
+        let unsupported = parse_block_predicate(&json!({
+            "type": "minecraft:would_survive",
+            "state": {"Name": "minecraft:torch"}
+        }))
+        .unwrap();
+        assert!(!unsupported.is_supported());
+    }
+
+    #[test]
+    fn environment_scan_walks_down_to_the_target() {
+        let origin = BlockPos::new(0, 72, 0);
+        let world = PredicateWorld::new()
+            .with(origin, "minecraft:air")
+            .with(origin.below(), "minecraft:air")
+            .with(origin.below_n(2), "minecraft:snow_block");
+
+        let scan = parse_modifier(&json!({
+            "type": "minecraft:environment_scan",
+            "direction_of_search": "down",
+            "max_steps": 8,
+            "target_condition": {
+                "type": "minecraft:matching_blocks",
+                "blocks": "minecraft:snow_block"
+            },
+            "allowed_search_condition": {
+                "type": "minecraft:matching_blocks",
+                "blocks": ["minecraft:air", "minecraft:snow_block"]
+            }
+        }))
+        .unwrap();
+        assert!(scan.is_supported());
+        let mut random = LegacyRandomSource::new(1);
+        let positions = scan
+            .get_positions(origin, &mut random, &world, "minecraft:test", -64, 384)
+            .unwrap();
+        assert_eq!(positions, vec![origin.below_n(2)]);
     }
 }

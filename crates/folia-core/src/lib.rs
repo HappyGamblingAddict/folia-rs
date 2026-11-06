@@ -6,6 +6,7 @@ pub mod compression;
 pub mod config;
 pub mod entity;
 pub mod inventory;
+pub mod item_components;
 pub mod join;
 pub mod level;
 pub mod light;

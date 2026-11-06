@@ -343,7 +343,7 @@ stacks only carry `item + count`.
   and replacing the ore feature's hard-coded target-tag sets with
   `tags::has`.
 
-### P1.4 Full item stack model and data components `[ ]` `L`
+### P1.4 Full item stack model and data components `[~]` `L`
 
 - **What:** Replace `ItemStack { item, count }` with a component-aware model:
   item ID, count, added/removed component patches, custom name/lore, damage,
@@ -357,6 +357,28 @@ stacks only carry `item + count`.
   `net/minecraft/network/HashedStack.java`.
 - **Done when:** Java-captured item stacks round-trip byte-for-byte through
   NBT and the play-protocol codec, including component patches.
+- **Progress (2026-11-06):** `src/item_components.rs` replaces the old
+  `{item, count}` pair with `ItemStack { item, count, components }`, where
+  `ComponentMap` keeps one insertion-ordered patch list of added values and
+  `!` removal markers (matching `PatchedDataComponentMap`/`DataComponentPatch`
+  order). NBT encode/decode covers `custom_name`, `item_name`, `lore`,
+  `damage`, `max_damage`, `max_stack_size`, `enchantments`,
+  `stored_enchantments`, `attribute_modifiers`, `unbreakable`, `custom_data`,
+  `container`, `potion_contents`, `food`, `tool`, `repair_cost`, and `rarity`;
+  unknown components and malformed known payloads survive as opaque NBT.
+  Player inventory/cursor save/load now writes the vanilla `{Slot,id,count,
+  components}` shape (legacy capital `Count` is still accepted on load).
+  Network encoding writes added/removed component ids and payloads for the
+  ported subset; `attribute_modifiers`, `potion_contents`, `tool`, and unknown
+  components are omitted and returned in `NetworkEncodingReport` rather than
+  emitted as malformed bytes. Inventory merge/split/click/creative-slot and
+  selected-item consumption respect full component equality and
+  `max_stack_size`. 8 unit + 17 integration tests; stone/dirt packet bodies and
+  the captured Java join fixture stay green. Still open: item prototype
+  component defaults (`max_stack_size`, `max_damage`, food/tool defaults) are
+  not dumped, `attribute_modifiers`/`potion_contents`/`tool` network codecs,
+  component hashing for `HashedStack`, and a Java-captured component NBT/packet
+  fixture.
 
 ### P1.5 Block behavior metadata table `[ ]` `L`
 

@@ -27,6 +27,7 @@ Rust tree: `crates/folia-core`.
 | `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn |
 | `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Whole-chunk sky+block light data after a block edit; incremental section-only updates not ported |
 | Hotbar/full inventory and cursor | `folia-core/src/inventory.rs`, `player.rs` | 36 slots + cursor, container content/slot packets, clicks, creative slots, NBT persistence, placement consumption |
+| `ItemStack`, `DataComponentMap`/`Patch`, `DataComponents`, `HashedStack` | `folia-core/src/item_components.rs` | Partial: insertion-ordered component patch, NBT + network subset (custom/item name, lore, damage/max damage/max stack size/repair cost, enchantments, unbreakable, custom data, container, food, rarity), opaque unknown NBT; attribute/potion/tool network and component hashing remain |
 | Entity tracking (`ClientboundAddEntity`, `RemoveEntities`, `EntityPositionSync`) | `folia-core/src/entity.rs` | Spawn/move/remove store, broadcasts, Java-matched packets |
 | Entity tick physics | `folia-core/src/entity.rs` | Gravity/drag, axis-separated AABB collision against `WorldStorage`, ground detection, per-tick sync |
 | `synth/NormalNoise`, `PerlinNoise`, `ImprovedNoise`, `BlendedNoise` | `folia-core/src/worldgen/noise.rs` | Java-matched noise primitives, positional seed factories, MD5 name hashing |
@@ -60,6 +61,15 @@ Rust tree: `crates/folia-core`.
   98.71% block-class / 92.04% exact-name (5655/6144).
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
   are clean (2026-11-06).
+- Item components (`tests/item_components.rs`): 17 integration + 8 unit tests
+  cover NBT round-trip for every ported component, mixed-style lore wrapping,
+  interleaved `!removed`/added order, unknown and malformed component
+  preservation, container contents, network encode/decode of the ported
+  subset, explicit omission reports for unported network codecs, merge/split
+  with component equality and max stack size, creative assignment, selected
+  item consumption, playerdata load/save, legacy `Count`, and pinned component
+  registry ids. Stone/dirt packet bodies and the captured-world join test are
+  unchanged.
 - Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members
   across 9 registries; `tests/tags.rs` checks membership, nested flattening,
   exact counts, and unknown keys.

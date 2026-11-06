@@ -52,6 +52,9 @@ Rust tree: `crates/folia-core`.
 | `tree.rs` state-provider path | `folia-core/src/worldgen/feature/tree.rs` | Unchanged on purpose: vegetation providers are independent so tree placement RNG and the existing simple-provider draw caveat stay stable |
 | `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror` | `folia-core/src/worldgen/structure/template.rs` | Partial: gzip structure NBT (palettes, blocks, block-entity NBT, entities), mirror/rotation/pivot/origin transforms, `FeatureLevel` block writing; starts, pieces, structure sets/references, processors, template pools, jigsaw, random palette selection, and entity spawning are not ported |
 | `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border; decrease queues, generated opacity/emission tables, and Java light fixtures still open |
+| `OreVeinifier` | `folia-core/src/worldgen/ore_vein.rs` | Standalone copper/iron vein pass over the noise router (toggle/ridged/gap, granite/tuff filler, raw-ore chance); generator wiring still pending |
+| `SimplexNoise`, `PerlinSimplexNoise`, `Biome.BIOME_INFO_NOISE`/`FROZEN_TEMPERATURE_NOISE` | `folia-core/src/worldgen/simplex.rs` | Ported with Java-pinned reference values; used by noise-count placement and the frozen-ocean temperature modifier |
+| `Biome.getTemperature`, `TemperatureModifier.FROZEN` | `folia-core/src/worldgen/biome_climate.rs` | 65 extracted biome base temperatures/modifiers; frozen-ocean iceberg melt now uses the exact noise branch |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs` | Partial: base entity physics for tracked entities; AI/goals/damage not ported |
 | `net/minecraft/world/level/block/*` redstone/gameplay | — | Not ported |
 

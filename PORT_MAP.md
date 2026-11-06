@@ -34,7 +34,7 @@ Rust tree: `crates/folia-core`.
 | `Block.UPDATE_*`, `BlockBehaviour.UPDATE_SHAPE_ORDER`, `NeighborUpdater` | `folia-core/src/tick.rs` | Partial: vanilla flag values plus an internal shape bit, chunk-grouped deterministic neighbour queue, six-direction enqueue, shape/support checks, 512-chain limit |
 | `ScheduledTick`, `TickPriority`, `LevelTicks`, `LevelChunkTicks` | `folia-core/src/tick.rs` | Partial: trigger/priority/sub-tick ordering, delay, dedup, cancellation between ticks; no NBT persistence, region ownership, or cancel-during-tick |
 | `ServerLevel.tickChunk`, `LevelChunk.tickBlocks`, `RandomTick` | `folia-core/src/tick.rs` | Partial: 3 samples per 16x16x16 section from a deterministic seed/chunk/tick hash; Java level-RNG sequence and ticking-block lists not matched |
-| `FallingBlock`, `VegetationBlock`, `GrassBlock`, `SpreadingSnowyDirtBlock` | `folia-core/src/tick.rs` | Partial: falling sand/gravel/concrete powder/anvils move one block per scheduled tick; plant support from `dirt`/farmland and double-plant halves; grass spread; leaf/crop/redstone/fluid/piston behavior remains explicit unsupported |
+| `FallingBlock`, `VegetationBlock`, `GrassBlock`, `SpreadingSnowyDirtBlock` | `folia-core/src/tick.rs` | Partial: falling sand/gravel/concrete powder/anvils move one block per scheduled tick; plant support from `dirt`/farmland and double-plant halves; grass spread; redstone behaviour lives in `redstone.rs`; leaf/crop/piston/rail/torch support remain explicit unsupported |
 | Hotbar/full inventory and cursor | `folia-core/src/inventory.rs`, `player.rs` | 36 slots + cursor, container content/slot packets, clicks, creative slots, NBT persistence, placement consumption, inventory merge/overflow for block drops |
 | `ItemStack`, `DataComponentMap`/`Patch`, `DataComponents`, `HashedStack` | `folia-core/src/item_components.rs` | Partial: insertion-ordered component patch, NBT + network subset (custom/item name, lore, damage/max damage/max stack size/repair cost, enchantments, unbreakable, custom data, container, food, rarity), opaque unknown NBT; attribute/potion/tool network and component hashing remain |
 | Entity tracking (`ClientboundAddEntity`, `RemoveEntities`, `EntityPositionSync`) | `folia-core/src/entity.rs` | Spawn/move/remove store, broadcasts, Java-matched packets |
@@ -67,7 +67,7 @@ Rust tree: `crates/folia-core`.
 | `SimplexNoise`, `PerlinSimplexNoise`, `Biome.BIOME_INFO_NOISE`/`FROZEN_TEMPERATURE_NOISE` | `folia-core/src/worldgen/simplex.rs` | Ported with Java-pinned reference values; used by noise-count placement and the frozen-ocean temperature modifier |
 | `Biome.getTemperature`, `TemperatureModifier.FROZEN` | `folia-core/src/worldgen/biome_climate.rs` | 65 extracted biome base temperatures/modifiers; frozen-ocean iceberg melt now uses the exact noise branch |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs`, `entity_metadata.rs` | Partial: base physics, typed metadata packets, attributes, equipment, raw damage/invulnerability/death; AI/goals, spawning, armor calculation, and per-viewer metadata not ported |
-| `net/minecraft/world/level/block/*` gameplay, `material/*`, redstone | `block_breaking.rs`, `fluid.rs`, `redstone.rs`, `tick.rs` | Partial: break progress/tool tiers/drops/durability, falling blocks, plant support, grass spread, water/lava flow, wire power, levers/buttons; pistons, repeaters/comparators, block entities, and full shapes remain |
+| `net/minecraft/world/level/block/*` gameplay, `material/*`, redstone | `block_breaking.rs`, `fluid.rs`, `redstone.rs`, `tick.rs` | Partial: break progress/tool tiers/drops/durability, falling blocks, plant support, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/redstone-torch/pressure-plate/tripwire redstone; pistons, block entities, redstone lamps/targets/tripwire hooks, analog block inputs, and full shapes remain |
 | Loot tables / recipes | `loot.rs` + `assets/{loot_tables,recipes}.json` | 1,324 loot tables and 1,470 recipes with typed roll/lookup engines; gameplay wiring and grid matching remain |
 
 ## Verification evidence
@@ -237,6 +237,15 @@ Rust tree: `crates/folia-core`.
   landing and support removal, scheduled delay/cancel, deterministic grass
   spread, unsupported leaf reporting, and deterministic repeated world ticks.
   `block_update` and `world` focused tests still pass; fmt and clippy are clean.
+- P3.10 redstone components: `tests/redstone2.rs` adds 10 end-to-end tests for
+  repeater delay 1–4 (2/4/6/8 ticks) and output direction, locked repeaters,
+  comparator compare/subtract against a fake `ContainerSignalSource` and
+  container-change refresh, observer single two-tick pulse, torch inversion and
+  vanilla 8-in-60 burn-out with the 160-tick restart, wooden/stone/weighted
+  pressure plates, tripwire connection/press/release, wall-torch attachment, and
+  deterministic wire power/update order with shape properties. `redstone` adds
+  10 focused unit tests and `tick` adds container/registration tests; the fluid
+  and tick integration suites remain green.
 - Plugin bridge: `cargo run` loads `HelloPlugin.jar`, dispatches
   `PluginEnableEvent`, registers and executes the `/hello` command, schedules a
   repeating task into the Rust task table, and receives the JNI `nativePing`

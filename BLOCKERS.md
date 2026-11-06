@@ -413,7 +413,6 @@ These are expected gaps, not reasons to stop:
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
 
-<<<<<<< HEAD
 ## 2026-11-06 - P4.8 crafting is a behaviour model, not menu/packet parity
 
 - Scope: `crafting.rs` implements shaped/shapeless/transmute matching, one-item
@@ -438,7 +437,6 @@ These are expected gaps, not reasons to stop:
 - Workaround / next task: Keep these as explicit gaps. `CraftOutput::deposit`
   already uses `inventory::add_stack`, so menu code can consume the model
   without changing the matcher.
-=======
 ## 2026-11-06 — P1.4 item prototypes are dumped; the component bridge is partial
 
 - Resolved: `scripts/extract_item_prototypes.ps1` boots the local 1.21.11 jar
@@ -462,4 +460,3 @@ These are expected gaps, not reasons to stop:
 - Workaround: use `prototype`/`prototype_or_default` for the full prototype and
   `defaults_for`/`apply_defaults` for the modeled component subset. Do not claim
   full prototype-patch, network, or hashing parity.
->>>>>>> task/item-prototypes

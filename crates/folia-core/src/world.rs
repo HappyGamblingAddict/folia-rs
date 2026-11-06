@@ -1,4 +1,8 @@
 use crate::anvil::{Compression, RegionFile};
+use crate::block_entity::{
+    BlockEntity, BlockEntityMap, BlockEntityPos, BlockEntityTicker, decode_block_entities,
+    store_block_entities,
+};
 use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
 use crate::nbt::Tag;
 use crate::tick::TickState;
@@ -113,6 +117,8 @@ pub struct WorldStorage {
     regions: HashMap<RegionPos, RegionFile>,
     /// Decoded chunks, so a second reader does not re-decompress and re-decode.
     chunks: HashMap<(i32, i32), Chunk>,
+    /// Block entities belonging to cached/loaded chunks, keyed by chunk.
+    block_entities: HashMap<(i32, i32), BlockEntityMap>,
     cache_order: VecDeque<(i32, i32)>,
     cache_hits: u64,
     cache_misses: u64,
@@ -126,6 +132,7 @@ impl WorldStorage {
             region_dir: region_dir.into(),
             regions: HashMap::new(),
             chunks: HashMap::new(),
+            block_entities: HashMap::new(),
             cache_order: VecDeque::new(),
             cache_hits: 0,
             cache_misses: 0,
@@ -190,6 +197,120 @@ impl WorldStorage {
             .cloned()
     }
 
+    /// All block entities of a chunk. Returns `None` when the chunk does not
+    /// exist (neither cached nor stored). An existing chunk with no block
+    /// entities returns `Some` with an empty map.
+    pub fn block_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<&BlockEntityMap>> {
+        if !self.ensure_block_entities(chunk_x, chunk_z)? {
+            return Ok(None);
+        }
+        Ok(self.block_entities.get(&(chunk_x, chunk_z)))
+    }
+
+    /// Owned copy of a chunk's block entities, loading them from disk when the
+    /// chunk is not cached yet.
+    pub fn load_block_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<BlockEntityMap>> {
+        if !self.ensure_block_entities(chunk_x, chunk_z)? {
+            return Ok(None);
+        }
+        Ok(self.block_entities.get(&(chunk_x, chunk_z)).cloned())
+    }
+
+    /// Look up one block entity by its absolute position.
+    pub fn block_entity(&mut self, position: BlockEntityPos) -> io::Result<Option<&BlockEntity>> {
+        if !self.ensure_block_entities(position.chunk_x(), position.chunk_z())? {
+            return Ok(None);
+        }
+        Ok(self
+            .block_entities
+            .get(&(position.chunk_x(), position.chunk_z()))
+            .and_then(|entities| entities.get(&position)))
+    }
+
+    /// Alias for [`block_entity`](Self::block_entity), matching the
+    /// get/insert/remove naming used by container callers.
+    pub fn get_block_entity(
+        &mut self,
+        position: BlockEntityPos,
+    ) -> io::Result<Option<&BlockEntity>> {
+        self.block_entity(position)
+    }
+
+    /// Insert or replace a block entity, returning the previous value at the
+    /// same position.
+    pub fn insert_block_entity(&mut self, entity: BlockEntity) -> io::Result<Option<BlockEntity>> {
+        let position = entity.pos();
+        let key = (position.chunk_x(), position.chunk_z());
+        self.ensure_block_entities(key.0, key.1)?;
+        Ok(self
+            .block_entities
+            .entry(key)
+            .or_default()
+            .insert(position, entity))
+    }
+
+    /// Remove one block entity by position. Returns the removed value.
+    pub fn remove_block_entity(
+        &mut self,
+        position: BlockEntityPos,
+    ) -> io::Result<Option<BlockEntity>> {
+        if !self.ensure_block_entities(position.chunk_x(), position.chunk_z())? {
+            return Ok(None);
+        }
+        Ok(self
+            .block_entities
+            .get_mut(&(position.chunk_x(), position.chunk_z()))
+            .and_then(|entities| entities.remove(&position)))
+    }
+
+    /// Tick every cached block entity through an explicit ticker. The server
+    /// tick loop does not call this yet; callers opt in.
+    pub fn tick_block_entities(&mut self, ticker: &mut dyn BlockEntityTicker) {
+        for entities in self.block_entities.values_mut() {
+            for entity in entities.values_mut() {
+                ticker.tick(entity);
+            }
+        }
+    }
+
+    fn ensure_block_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
+        let key = (chunk_x, chunk_z);
+        if self.block_entities.contains_key(&key) {
+            return Ok(true);
+        }
+        if let Some(entities) = self.read_stored_block_entities(chunk_x, chunk_z)? {
+            self.block_entities.insert(key, entities);
+            return Ok(true);
+        }
+        if self.chunks.contains_key(&key) {
+            self.block_entities.insert(key, BlockEntityMap::new());
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn read_stored_block_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<BlockEntityMap>> {
+        let position = RegionPos::from_chunk(chunk_x, chunk_z);
+        let (local_x, local_z) = position.local_chunk(chunk_x, chunk_z);
+        let region = self.region_mut(position)?;
+        match read_stored_chunk(region, local_x, local_z, chunk_x, chunk_z)? {
+            Some(tag) => Ok(Some(decode_block_entities(&tag)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn load_chunk(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Chunk>> {
         if let Some(cached) = self.chunks.get(&(chunk_x, chunk_z)) {
             self.cache_hits += 1;
@@ -204,6 +325,7 @@ impl WorldStorage {
             return Ok(None);
         };
         let chunk = decode_chunk(&tag)?;
+        let entities = decode_block_entities(&tag)?;
         if chunk.x != chunk_x || chunk.z != chunk_z {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -214,31 +336,68 @@ impl WorldStorage {
             ));
         }
         self.cache_chunk(chunk.clone());
+        self.block_entities
+            .entry((chunk_x, chunk_z))
+            .or_insert(entities);
         Ok(Some(chunk))
     }
 
     pub fn save_chunk(&mut self, chunk: &Chunk, compression: Compression) -> io::Result<()> {
+        // A generated column replaces the stored one, so it must not inherit
+        // block entities from whatever was there before.
+        self.write_chunk_with_entities(chunk, compression, &BlockEntityMap::new())
+    }
+
+    /// Save a chunk together with the block-entity map currently cached for
+    /// it.  Use this after [`insert_block_entity`](Self::insert_block_entity)
+    /// or [`remove_block_entity`](Self::remove_block_entity); ordinary
+    /// generated terrain should use [`save_chunk`](Self::save_chunk), which
+    /// deliberately writes an empty map.
+    pub fn save_chunk_with_block_entities(
+        &mut self,
+        chunk: &Chunk,
+        compression: Compression,
+    ) -> io::Result<()> {
+        let entities = self
+            .block_entities
+            .get(&(chunk.x, chunk.z))
+            .cloned()
+            .unwrap_or_default();
+        self.write_chunk_with_entities(chunk, compression, &entities)
+    }
+
+    fn write_chunk_with_entities(
+        &mut self,
+        chunk: &Chunk,
+        compression: Compression,
+        entities: &BlockEntityMap,
+    ) -> io::Result<()> {
         let position = RegionPos::from_chunk(chunk.x, chunk.z);
         let (local_x, local_z) = position.local_chunk(chunk.x, chunk.z);
-        let tag = stamp_chunk(encode_chunk(chunk)?, chunk);
+        let mut tag = encode_chunk(chunk)?;
+        store_block_entities(&mut tag, entities)?;
+        let tag = stamp_chunk(tag, chunk);
         let region = self.region_mut(position)?;
         region.write_chunk(local_x, local_z, &tag, compression)?;
         self.cache_chunk(chunk.clone());
+        self.block_entities
+            .insert((chunk.x, chunk.z), entities.clone());
         Ok(())
     }
 
     /// Save a chunk that was loaded from this level, keeping the top-level
-    /// fields this port does not decode (status, heightmaps, block entities,
-    /// entities, structures, post-processing, ...).
+    /// fields this port does not decode (status, heightmaps, entities,
+    /// structures, post-processing, ...). Block entities are handled by the
+    /// position-keyed map rather than copied from the stored root.
     ///
     /// Generated terrain goes through [`save_chunk`](Self::save_chunk) instead:
     /// it replaces the stored column, so merging fields such as block entities
     /// from whatever was there before would attach stale data to new terrain.
     ///
     /// `edited_blocks` are the world positions whose block changed in this
-    /// save; their block entities are dropped, because vanilla removes a block
-    /// entity when its block is replaced. Positions this port did not edit keep
-    /// their stored block entity.
+    /// save; the block entity at each of those positions is removed, because
+    /// vanilla removes a block entity when its block is replaced. Positions
+    /// this port did not edit keep their stored block entity.
     pub fn update_chunk(
         &mut self,
         chunk: &Chunk,
@@ -251,15 +410,27 @@ impl WorldStorage {
             let region = self.region_mut(position)?;
             read_stored_chunk(region, local_x, local_z, chunk.x, chunk.z)?
         };
+        let key = (chunk.x, chunk.z);
+        let mut entities = match self.block_entities.get(&key) {
+            Some(entities) => entities.clone(),
+            None => match &existing {
+                Some(existing) => decode_block_entities(existing)?,
+                None => BlockEntityMap::new(),
+            },
+        };
+        for &(x, y, z) in edited_blocks {
+            entities.remove(&BlockEntityPos::new(x, y, z));
+        }
         let mut tag = encode_chunk(chunk)?;
         if let Some(existing) = &existing {
             preserve_unknown_fields(existing, &mut tag);
         }
-        drop_edited_block_entities(&mut tag, edited_blocks);
+        store_block_entities(&mut tag, &entities)?;
         let tag = stamp_chunk(tag, chunk);
         let region = self.region_mut(position)?;
         region.write_chunk(local_x, local_z, &tag, compression)?;
         self.cache_chunk(chunk.clone());
+        self.block_entities.insert(key, entities);
         Ok(())
     }
 
@@ -280,6 +451,8 @@ impl WorldStorage {
             region.save_if_dirty()?;
         }
         self.chunks
+            .retain(|(chunk_x, chunk_z), _| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
+        self.block_entities
             .retain(|(chunk_x, chunk_z), _| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
         self.cache_order
             .retain(|(chunk_x, chunk_z)| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
@@ -361,40 +534,6 @@ fn stamp_chunk(mut tag: Tag, chunk: &Chunk) -> Tag {
     tag
 }
 
-/// Remove stored block entities whose block was replaced by this edit. Entries
-/// without integer `x`/`y`/`z` fields are left alone rather than guessed at.
-fn drop_edited_block_entities(tag: &mut Tag, edited_blocks: &[(i32, i32, i32)]) {
-    if edited_blocks.is_empty() {
-        return;
-    }
-    let Tag::Compound(entries) = tag else {
-        return;
-    };
-    let Some((_, Tag::List(block_entities))) =
-        entries.iter_mut().find(|(key, _)| key == "BlockEntities")
-    else {
-        return;
-    };
-    block_entities.retain(|entity| {
-        let Some(entity) = entity.as_compound() else {
-            return true;
-        };
-        let position = |name: &str| {
-            entity
-                .iter()
-                .find(|(key, _)| key == name)
-                .and_then(|(_, value)| match value {
-                    Tag::Int(value) => Some(*value),
-                    _ => None,
-                })
-        };
-        match (position("x"), position("y"), position("z")) {
-            (Some(x), Some(y), Some(z)) => !edited_blocks.contains(&(x, y, z)),
-            _ => true,
-        }
-    });
-}
-
 /// Copy top-level fields the chunk model does not decode from `existing` into
 /// `target`. Fields this server writes win, so a stale position or section list
 /// can never replace the chunk being saved.
@@ -403,7 +542,13 @@ fn preserve_unknown_fields(existing: &Tag, target: &mut Tag) {
         return;
     };
     for (key, value) in source {
-        if key == "xPos" || key == "zPos" || key == "sections" || key == WRITTEN_MARKER {
+        if key == "xPos"
+            || key == "zPos"
+            || key == "sections"
+            || key == WRITTEN_MARKER
+            || key == crate::block_entity::BLOCK_ENTITIES_KEY
+            || key == crate::block_entity::LEGACY_BLOCK_ENTITIES_KEY
+        {
             continue;
         }
         if destination.iter().any(|(written, _)| written == key) {
@@ -610,13 +755,18 @@ mod tests {
             "an edited chunk is saved with full status"
         );
         let block_entities = tag
-            .get("BlockEntities")
+            .get(crate::block_entity::BLOCK_ENTITIES_KEY)
             .and_then(Tag::as_list)
-            .expect("block entities are preserved");
+            .expect("block entities are written under the modern chunk key");
         assert_eq!(
             block_entities.len(),
             1,
             "the edited position loses its block entity"
+        );
+        assert!(
+            tag.get(crate::block_entity::LEGACY_BLOCK_ENTITIES_KEY)
+                .is_none(),
+            "the legacy key is removed after a rewrite"
         );
         let remaining = block_entities[0].as_compound().unwrap();
         assert_eq!(
@@ -656,6 +806,14 @@ mod tests {
             Some(crate::level::DATA_VERSION)
         );
         assert!(replaced.get("BlockEntities").is_none());
+        assert_eq!(
+            replaced
+                .get(crate::block_entity::BLOCK_ENTITIES_KEY)
+                .and_then(Tag::as_list)
+                .map(<[Tag]>::len),
+            Some(0),
+            "a generated column replaces the stored block entities"
+        );
         let heightmaps = replaced
             .get("Heightmaps")
             .and_then(Tag::as_compound)

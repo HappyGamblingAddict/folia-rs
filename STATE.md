@@ -8,10 +8,12 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Current commit (informational only): block-behaviour lighting/physics slice
+  (see `git log`).
+- Working tree: aquatic/vine/mushroom slice merged; this worktree adds the
+  block-behaviour lighting/physics slice.
+- Tests: **426 passing** on the last full gate; the block-behaviour slice adds
+  4 integration and 2 lib focused tests (focused lib gate: 272 passing).
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -72,13 +74,15 @@ Last updated: 2026-11-06
   fixture after the aquatic slice (was 92.04%).
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
-  block-light BFS for an explicit emitter table. Chunk NBT round-trips
+  block-light BFS. Opacity and emission come from the generated per-state
+  `block_behaviour` table (29,671 rows); unknown states keep the conservative
+  fallback (fully opaque, no emission). Chunk NBT round-trips
   `SkyLight`/`BlockLight`; `light_bytes` prefers stored/computed layers and
   keeps the height fallback only for chunks without light. Block edits reload
   existing neighbours, recompute both layers, persist them, and broadcast real
-  block-light updates. The emitter/opacity table is still hand-written, there
-  is no Java light fixture, and light updates are whole-chunk rather than
-  incremental sections.
+  block-light updates. There is still no Java light fixture, light updates are
+  whole-chunk rather than incremental sections, and the registry lookup per
+  BFS step is not cached.
 - Joins stream a square chunk column sized by the negotiated view distance
   (the probe client asks for 6, so 13×13; the shipped server allows 10 and a
   default client asks for 12, so a normal join streams 441 columns) and
@@ -169,14 +173,17 @@ Last updated: 2026-11-06
 - Server-side player physics is live: `player_physics.rs` models the
   standing/sneaking/swimming hitboxes, vanilla gravity/drag/friction, jump,
   sprint jump, step height, axis-separated collision against the shared world
-  storage, fall distance, and fall damage. Movement packets are reconciled
-  instead of accepted verbatim: deltas up to `0.75` blocks are replayed through
-  the collider, a reproducible claim is accepted exactly, and a blocked claim
-  sends a position correction. Longer packets are lag bursts that validate
-  their destination. Fall damage sends health updates and death; landing resets
-  fall distance. Non-full block shapes, ladders, cobwebs, slime, elytra, water/
-  lava currents, swimming, bubbles, powder snow, and sprint/sneak input packets
-  are not ported yet.
+  storage, fall distance, and fall damage. Collision, friction, speed and jump
+  metadata come from the generated per-state `block_behaviour` table
+  (`has_collision`, `blocks_motion`, `is_solid`, `friction`, `speed_factor`,
+  `jump_factor`); collision boxes are still full cubes because shape metadata
+  is not ported. Movement packets are reconciled instead of accepted verbatim:
+  deltas up to `0.75` blocks are replayed through the collider, a reproducible
+  claim is accepted exactly, and a blocked claim sends a position correction.
+  Longer packets are lag bursts that validate their destination. Fall damage
+  sends health updates and death; landing resets fall distance. Ladders,
+  cobwebs, slime bounce, elytra, water/lava currents, swimming, bubbles,
+  powder snow, and sprint/sneak input packets are not ported yet.
 
 - Structure templates have a first P2.8 slice in
   `worldgen/structure/template.rs`: gzip structure NBT parsing (DataVersion,
@@ -238,11 +245,12 @@ Last updated: 2026-11-06
   chunk NBT; replace the deterministic per-chunk random sampler with Java's
   level RNG once feature/level RNG parity lands; add a Java neighbor-update
   differential fixture.
-- P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
-  (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
-  powder snow, sprint/sneak input packets, real block shapes) and eventually
-  move player simulation onto its own 20 Hz tick instead of packet-driven
-  reconciliation.
+- P4.1/P4.2 now have a live physics slice: block collision, friction, speed and
+  jump factors come from the generated block-behaviour table. Next: finish the
+  movement feature gaps (ladders/vines/scaffolding, water/lava/swimming,
+  cobwebs, slime bounce, elytra, powder snow, sprint/sneak input packets, real
+  block shapes) and eventually move player simulation onto its own 20 Hz tick
+  instead of packet-driven reconciliation.
 - P1.3 tag data is available and the ore feature already resolves its four
   target tags through `folia_core::tags`; add the remaining cosmetic
   registries.
@@ -281,7 +289,7 @@ Last updated: 2026-11-06
 - [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
-- [~] P3.7 Block-light engine (hand-written emitter/opacity table)
+- [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook; leaf decay, crops,
@@ -292,6 +300,18 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+- 2026-11-06: Block-behaviour consumers for lighting and physics —
+  `light.rs` drops the hand-written opacity/emission tables and reads
+  `block_behaviour::light_block`/`light_emission` per state (torch 14,
+  glowstone/lava 15, water/leaves 1, glass 0, unknown states opaque and
+  non-emitting). `player_physics.rs` replaces its tag/name approximations with
+  `has_collision`, `blocks_motion`, `is_solid`, `friction`, `speed_factor`, and
+  `jump_factor`; speed factor scales horizontal velocity after the collision
+  move and jump factor multiplies the impulse. Collision boxes stay full cubes.
+  Focused tests: 4 new `tests/block_behaviour_integration.rs` tests (emission,
+  glass/water sky attenuation, glass-shaft overhang, ice/slime/blue-ice friction
+  plus water/plant passability) and the existing light/physics/packet suites
+  stay green; the captured `world_chunk_packet` body is unchanged.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/
@@ -368,7 +388,7 @@ Last updated: 2026-11-06
   unported. 13 focused tests.
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
-- [~] P3.7 Block-light engine (hand-written emitter/opacity table)
+- [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook; leaf decay, crops,

@@ -1,10 +1,10 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
+> Current commit: block-behaviour lighting/physics slice (see git log)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
+> Test status: **426 tests** on the last full gate; the block-behaviour slice
+> adds 4 focused integration + 2 lib tests and holds 98.71% block-class / 92.02%
 > exact-name parity.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
@@ -52,8 +52,8 @@ more expensive than designing for it now.
 | Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
 | Full worldgen | ~45-50% | Aquatic/vine/mushroom feature batch landed; ore/scattered features translated but unwired; veinifier, scheduled ticks, remaining placement modifiers, structures, and Nether/End content missing |
-| Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
-| Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
+| Lighting | ~30–35% | Real nibble storage/NBT, single-chunk sky + block BFS over the generated per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures still missing |
+| Player simulation | ~25% | Movement is simulated and collision-checked with per-state friction/speed/jump metadata; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
 | Blocks/redstone/fluids | ~10% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, and falling sand/gravel; fluids, redstone, pistons, block entities, and P1.5 metadata remain unported |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
@@ -65,6 +65,15 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: Block-behaviour consumers for lighting and player physics —
+  `light.rs` replaces its hand-written opacity/emission tables with
+  `block_behaviour::light_block`/`light_emission`; `player_physics.rs` replaces
+  its tag/name approximations with `has_collision`, `blocks_motion`, `is_solid`,
+  `friction`, `speed_factor`, and `jump_factor`. Collision boxes stay full cubes
+  because shape metadata is not ported, and unknown states fall back to the
+  conservative registry behaviour (opaque, non-emitting, collidable). Focused:
+  4 new `tests/block_behaviour_integration.rs` tests plus updated light/physics
+  unit tests; the captured `world_chunk_packet` body is unchanged.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
   ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
   `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
@@ -956,15 +965,16 @@ section-only light packets are still open.
 - **Done when:** Block-light arrays match Java for lava/torch/glowstone
   fixtures.
 - **Progress (2026-11-06):** `light.rs` scans emitters and runs a BFS increase
-  pass. The explicit emission table covers torch 14, soul torch 10, lantern 15,
-  soul lantern 10, glowstone/sea lantern/shroomlight/lava 15, magma 3 (vanilla;
-  the task brief’s “magma 15” was wrong), campfire 15, fire 15, redstone lamp
-  and furnace lit states, respawn anchor charges, sea pickle, cave vines,
-  froglight, amethyst buds, and a few more. Opacity rules cover air/glass
-  (0), water/leaves (1), tinted glass and unknown blocks (15). The table is
-  still hand-written; `TODO(P1.5/P3.7)` tracks replacing it with generated
-  block behaviour. Tests cover torch radius, unsupported emitters, and border
-  light. No Java block-light fixture yet.
+  pass. Emission and opacity now come from the generated per-state
+  `block_behaviour` table (29,671 rows), not a hand-written list. That covers
+  torch 14, soul torch 10, lantern 15, soul lantern 10,
+  glowstone/sea lantern/shroomlight/lava 15, magma 3 (vanilla; the task brief’s
+  “magma 15” was wrong), campfire 15, fire 15, redstone lamp and furnace lit
+  states, respawn anchor charges, sea pickle, cave vines, froglight, amethyst
+  buds, and every other shipped emitter. Opacity comes from `light_block`:
+  air/glass 0, water/leaves/ice 1, tinted glass and unknown states 15. Tests
+  cover torch radius, glass/water sky attenuation, a glass-shaft overhang,
+  unsupported emitters, and border light. No Java block-light array fixture yet.
 
 ### P3.8 Incremental light updates and packets `[~]` `M`
 
@@ -1078,14 +1088,19 @@ instantly on start-destroy and places on use-item-on.
 - **Progress (2026-11-06):** `player_physics.rs` ports the standing/sneaking/
   swimming AABBs, `travelInAir` gravity/drag/friction, jump impulse, sprint
   jump, step height, axis-separated collision, fall-distance accumulation, and
-  fall damage. Focused tests pin a 20-tick walk displacement within `1e-4`, the
-  jump apex `1.252203`, ten-block fall damage `7`, wall collision, and half-slab
-  step-up. The live session now simulates movement instead of accepting packets
-  verbatim and sends health updates on fall damage. Still open: ladder/vine/
-  scaffolding, cobweb, slime, elytra, water/lava/swimming physics, bubbles,
-  powder snow, levitation/slow falling, sprint/sneak input packets, and a
-  standalone 20 Hz player tick; non-full block shapes are full cubes until
-  P1.5.
+  fall damage. Collision, friction, speed and jump metadata now come from the
+  generated per-state `block_behaviour` table (`has_collision`, `blocks_motion`,
+  `is_solid`, `friction`, `speed_factor`, `jump_factor`); ice is 0.98, blue ice
+  0.989, slime 0.8, soul sand slows to 0.4, and honey halves the jump impulse.
+  Focused tests pin a 20-tick walk displacement within `1e-4`, the jump apex
+  `1.252203`, ten-block fall damage `7`, wall collision, half-slab step-up,
+  factor scaling, and water/plant passability. The live session now simulates
+  movement instead of accepting packets verbatim and sends health updates on
+  fall damage. Still open: ladder/vine/scaffolding, cobweb, slime bounce,
+  elytra, water/lava/swimming physics, bubbles, powder snow,
+  levitation/slow falling, sprint/sneak input packets, and a standalone 20 Hz
+  player tick; non-full block shapes are full cubes until shape metadata is
+  ported.
 
 ### P4.2 Movement validation, corrections, and teleports `[~]` `M`
 

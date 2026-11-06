@@ -81,13 +81,15 @@ Format:
 These are expected gaps, not reasons to stop:
 
 - Lighting is a first slice, not full vanilla light-engine parity. `light.rs`
-  recomputes a whole chunk (plus a one-block neighbour margin) with an explicit
-  hand-written opacity/emission table. Block behaviour metadata (P1.5) is still
-  missing, so unknown blocks are opaque and unsupported emitters return 0.
-  Incremental decrease/increase section bookkeeping, queued cross-chunk
-  relighting, generation-time lighting, and a Java light-array/packet fixture
-  remain open. `magma_block` deliberately emits 3 (vanilla) even though the
-  task brief listed it as 15.
+  recomputes a whole chunk (plus a one-block neighbour margin) from the
+  generated per-state `block_behaviour` light emission/attenuation table.
+  Unknown states stay opaque and non-emitting, which is conservative but can
+  still over-block light through datapack blocks. Incremental
+  decrease/increase section bookkeeping, queued cross-chunk relighting,
+  generation-time lighting, cached behaviour lookups, and a Java
+  light-array/packet fixture remain open. The table is exact where the old
+  hand-written list guessed: ice attenuates by 1 and blue ice uses friction
+  0.989, for example.
 - `BiomeManager` has no Java fixture. Its seed obfuscation is pinned to NIST
   SHA-256 vectors and its quart selection to values derived from the Java
   source; a Java `getBiome` dump would lock it down.
@@ -205,13 +207,17 @@ These are expected gaps, not reasons to stop:
 
 ## 2026-11-06 — P4.1/P4.2 special movement and block shapes remain unported
 
-- Blocker: Full vanilla player movement needs block behavior metadata (shape,
-  friction, jump factor, climbable, liquid, powder snow) that P1.5 has not
-  produced, plus player-input packets and a standalone player tick scheduler.
+- Blocker: Full vanilla player movement still needs block-shape metadata,
+  climbable/liquid/powder-snow handling, player-input packets, and a standalone
+  player tick scheduler. The generated per-state table now supplies collision,
+  friction, speed/jump factors, and motion/solid flags, but not the per-state
+  collision AABBs.
 - What was tried: Implemented walking/falling/jumping/step-up/fall damage and
-  packet reconciliation against full-cube collision. Non-full shapes are
-  approximated as full cubes; replaceable/plant tags are passable.
-- What is needed: P1.5 block-shape/friction metadata, `ServerboundPlayerInput`/
+  packet reconciliation against full-cube collision. `has_collision` replaces
+  the old tag list for passability, `blocks_motion`/`is_solid` gate support,
+  and `friction`/`speed_factor`/`jump_factor` come from the same generated
+  table. Non-full shapes are still approximated as full cubes.
+- What is needed: P1.5 shape metadata, `ServerboundPlayerInput`/
   `ServerboundPlayerCommand` parsing, water/lava fluid state and movement,
   ladder/vine/scaffolding/cobweb/slime/elytra/powder-snow handling, and a
   per-region player tick.

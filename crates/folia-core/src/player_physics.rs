@@ -8,18 +8,19 @@
 //!
 //! The formulas follow `LivingEntity.travelInAir`, `Entity.move`,
 //! `Entity.moveRelative`, `Entity.checkFallDamage`, and `Player.travel` for
-//! 1.21.11: gravity `0.08`, drag `0.98`, ground friction from the block below,
-//! jump impulse `0.42`, step height `0.6`, and `0.91` horizontal air/ground
-//! drag. Features that need block metadata this port does not carry yet
-//! (ladders, cobwebs, slime, elytra, water/lava currents, bubbles, powder snow,
-//! scaffolding, ice/slime jump factors) are intentionally not simulated; see
-//! `DECISIONS.md` for the exact remaining gaps.
+//! 1.21.11: gravity `0.08`, drag `0.98`, ground friction, speed and jump
+//! factors from the generated [`crate::block_behaviour`] table, jump impulse
+//! `0.42`, step height `0.6`, and `0.91` horizontal air/ground drag. Features
+//! that need movement metadata this port does not carry yet (ladders, cobwebs,
+//! slime bounce, elytra, water/lava currents, bubbles, powder snow,
+//! scaffolding) are intentionally not simulated; see `DECISIONS.md` for the
+//! exact remaining gaps. Collision shapes are still full cubes because shape
+//! metadata is not ported.
 
-use crate::chunk::Chunk;
+use crate::chunk::{BlockState, Chunk};
 use crate::world::WorldStorage;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 /// Vanilla living-entity gravity (`Attributes.GRAVITY` default).
 pub const GRAVITY: f64 = 0.08;
@@ -153,12 +154,30 @@ pub trait PhysicsWorld {
     fn friction(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
         DEFAULT_BLOCK_FRICTION
     }
+    /// `Block.getSpeedFactor()` for the block at this position.
+    fn speed_factor(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
+        1.0
+    }
+    /// `Block.getJumpFactor()` for the block at this position.
+    fn jump_factor(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
+        1.0
+    }
+    /// Whether the block's behaviour reports `blocksMotion()`.
+    fn blocks_motion(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.collision_box(x, y, z).is_some()
+    }
+    /// Whether the block's behaviour reports `isSolid()`.
+    fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.collision_box(x, y, z).is_some()
+    }
 }
 
 /// A simple flat world for tests and for servers without a configured level.
 pub struct FlatPhysicsWorld {
     pub ground_y: i32,
     pub friction: f64,
+    pub speed_factor: f64,
+    pub jump_factor: f64,
 }
 
 impl FlatPhysicsWorld {
@@ -166,6 +185,8 @@ impl FlatPhysicsWorld {
         Self {
             ground_y,
             friction: DEFAULT_BLOCK_FRICTION,
+            speed_factor: 1.0,
+            jump_factor: 1.0,
         }
     }
 }
@@ -178,74 +199,13 @@ impl PhysicsWorld for FlatPhysicsWorld {
     fn friction(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
         self.friction
     }
-}
 
-/// Block names with no full-cube collision. The full block-shape metadata
-/// (P1.5) is not ported yet, so this deliberately covers only the shapes that
-/// matter for walking through generated terrain: replaceable plants, flowers,
-/// saplings, crops, rails, signs, buttons, pressure plates, fire, and fluids.
-fn passable_blocks() -> &'static std::collections::HashSet<String> {
-    static PASSABLE: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
-    PASSABLE.get_or_init(|| {
-        let mut set = std::collections::HashSet::new();
-        for name in [
-            "minecraft:air",
-            "minecraft:cave_air",
-            "minecraft:void_air",
-            "minecraft:water",
-            "minecraft:lava",
-        ] {
-            set.insert(name.to_owned());
-        }
-        for tag in [
-            "minecraft:replaceable",
-            "minecraft:small_flowers",
-            "minecraft:saplings",
-            "minecraft:crops",
-            "minecraft:rails",
-            "minecraft:buttons",
-            "minecraft:pressure_plates",
-            "minecraft:wall_post_override",
-            "minecraft:all_signs",
-            "minecraft:fire",
-        ] {
-            for member in crate::tags::members(crate::tags::TagRegistryKind::Block, tag) {
-                set.insert(member.clone());
-            }
-        }
-        // Tall flowers have no collision but are not in `small_flowers`.
-        for name in [
-            "minecraft:sunflower",
-            "minecraft:lilac",
-            "minecraft:rose_bush",
-            "minecraft:peony",
-            "minecraft:pitcher_plant",
-        ] {
-            set.insert(name.to_owned());
-        }
-        // A snow layer has a real (thin) collision shape, unlike the other
-        // replaceable blocks. Treating it as a full cube is closer than
-        // letting the player sink through it until shapes land in P1.5.
-        set.remove("minecraft:snow");
-        // `minecraft:saplings` also contains the two azalea bushes, which are
-        // solid blocks (the tag exists for composting), so they must not be
-        // passable.
-        set.remove("minecraft:azalea");
-        set.remove("minecraft:flowering_azalea");
-        set
-    })
-}
+    fn speed_factor(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
+        self.speed_factor
+    }
 
-fn is_passable(name: &str) -> bool {
-    passable_blocks().contains(name)
-}
-
-/// Block friction for the vanilla friction materials.
-fn friction_for_block(name: &str) -> f64 {
-    match name {
-        "minecraft:ice" | "minecraft:packed_ice" | "minecraft:blue_ice" => 0.98,
-        "minecraft:slime_block" => 0.8,
-        _ => DEFAULT_BLOCK_FRICTION,
+    fn jump_factor(&mut self, _x: i32, _y: i32, _z: i32) -> f64 {
+        self.jump_factor
     }
 }
 
@@ -274,27 +234,53 @@ impl<'a> StoragePhysicsWorld<'a> {
         self.chunks.get(&key).and_then(Option::as_ref)
     }
 
-    fn block_name(&mut self, x: i32, y: i32, z: i32) -> Option<&str> {
+    fn block_state(&mut self, x: i32, y: i32, z: i32) -> Option<&BlockState> {
         let chunk_x = x.div_euclid(16);
         let chunk_z = z.div_euclid(16);
         let chunk = self.chunk(chunk_x, chunk_z)?;
         let local_x = x.rem_euclid(16) as usize;
         let local_z = z.rem_euclid(16) as usize;
-        chunk
-            .block_state(local_x, y, local_z)
-            .map(|state| state.name.as_str())
+        chunk.block_state(local_x, y, local_z)
     }
 }
 
 impl PhysicsWorld for StoragePhysicsWorld<'_> {
     fn collision_box(&mut self, x: i32, y: i32, z: i32) -> Option<Aabb> {
-        let name = self.block_name(x, y, z)?;
-        (!is_passable(name)).then(|| Aabb::block(x, y, z))
+        let state = self.block_state(x, y, z)?;
+        // Block shapes are still unported, so every collidable state is
+        // approximated as a full cube. `has_collision` is the vanilla property
+        // that decides whether a shape exists at all; air, fluids and
+        // replaceable plants report false.
+        crate::block_behaviour::has_collision(state).then(|| Aabb::block(x, y, z))
     }
 
     fn friction(&mut self, x: i32, y: i32, z: i32) -> f64 {
-        self.block_name(x, y, z)
-            .map_or(DEFAULT_BLOCK_FRICTION, friction_for_block)
+        self.block_state(x, y, z)
+            .map_or(DEFAULT_BLOCK_FRICTION, |state| {
+                f64::from(crate::block_behaviour::friction(state))
+            })
+    }
+
+    fn speed_factor(&mut self, x: i32, y: i32, z: i32) -> f64 {
+        self.block_state(x, y, z).map_or(1.0, |state| {
+            f64::from(crate::block_behaviour::speed_factor(state))
+        })
+    }
+
+    fn jump_factor(&mut self, x: i32, y: i32, z: i32) -> f64 {
+        self.block_state(x, y, z).map_or(1.0, |state| {
+            f64::from(crate::block_behaviour::jump_factor(state))
+        })
+    }
+
+    fn blocks_motion(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.block_state(x, y, z)
+            .is_some_and(crate::block_behaviour::blocks_motion)
+    }
+
+    fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.block_state(x, y, z)
+            .is_some_and(crate::block_behaviour::is_solid)
     }
 }
 
@@ -485,16 +471,54 @@ impl PlayerPhysics {
         }
     }
 
-    /// `LivingEntity.jumpFromGround`; a sprint jump adds the forward impulse.
+    /// `LivingEntity.jumpFromGround` with the default jump factor.
     pub fn jump(&mut self) {
+        self.jump_with_factor(1.0);
+    }
+
+    /// `LivingEntity.jumpFromGround` with the factor of the block under the
+    /// player. A sprint jump adds the forward impulse.
+    fn jump_with_factor(&mut self, jump_factor: f64) {
         if self.flying {
             return;
         }
-        self.velocity_y = self.velocity_y.max(JUMP_IMPULSE);
+        let jump_power = JUMP_IMPULSE * jump_factor;
+        if jump_power <= 1.0e-5 {
+            return;
+        }
+        self.velocity_y = self.velocity_y.max(jump_power);
         if self.sprinting {
             let yaw = f64::from(self.yaw).to_radians();
             self.velocity_x -= yaw.sin() * 0.2;
             self.velocity_z += yaw.cos() * 0.2;
+        }
+    }
+
+    /// `Entity.getBlockJumpFactor`: use the block at the player's feet unless
+    /// its factor is the default, in which case the block below the feet wins.
+    fn block_jump_factor(&self, world: &mut impl PhysicsWorld) -> f64 {
+        let x = self.x.floor() as i32;
+        let y = self.y.floor() as i32;
+        let z = self.z.floor() as i32;
+        let feet = world.jump_factor(x, y, z);
+        if feet == 1.0 {
+            world.jump_factor(x, (self.y - 0.500_001).floor() as i32, z)
+        } else {
+            feet
+        }
+    }
+
+    /// `Entity.getBlockSpeedFactor`: the block at the player's feet wins when
+    /// it is not the default, otherwise the block below the feet is used.
+    fn block_speed_factor(&self, world: &mut impl PhysicsWorld) -> f64 {
+        let x = self.x.floor() as i32;
+        let y = self.y.floor() as i32;
+        let z = self.z.floor() as i32;
+        let feet = world.speed_factor(x, y, z);
+        if feet == 1.0 {
+            world.speed_factor(x, (self.y - 0.500_001).floor() as i32, z)
+        } else {
+            feet
         }
     }
 
@@ -527,7 +551,8 @@ impl PlayerPhysics {
             self.velocity_z = 0.0;
         }
         if input.jumping && self.on_ground {
-            self.jump();
+            let jump_factor = self.block_jump_factor(world);
+            self.jump_with_factor(jump_factor);
         }
 
         let start = (self.x, self.y, self.z);
@@ -567,9 +592,12 @@ impl PlayerPhysics {
         let speed = self.friction_influenced_speed(friction);
         self.move_relative(speed, input);
         let moved = self.move_by(world, self.velocity_x, self.velocity_y, self.velocity_z);
-        self.velocity_x = moved.dx * friction * AIR_FRICTION;
+        // `Entity.move` scales horizontal delta movement by the destination
+        // block's speed factor after the collision move.
+        let speed_factor = self.block_speed_factor(world);
+        self.velocity_x = moved.dx * friction * AIR_FRICTION * speed_factor;
         self.velocity_y = (moved.dy - GRAVITY) * DRAG;
-        self.velocity_z = moved.dz * friction * AIR_FRICTION;
+        self.velocity_z = moved.dz * friction * AIR_FRICTION * speed_factor;
 
         let mut landed = false;
         let mut fall_damage = 0.0;
@@ -769,7 +797,12 @@ impl PlayerPhysics {
             aabb.min_y - EPSILON,
             aabb.max_z - EPSILON,
         );
-        !collision_boxes(world, probe).is_empty()
+        collision_boxes(world, probe).into_iter().any(|block| {
+            let x = block.min_x.floor() as i32;
+            let y = block.min_y.floor() as i32;
+            let z = block.min_z.floor() as i32;
+            world.blocks_motion(x, y, z) && world.is_solid(x, y, z)
+        })
     }
 
     /// Move by `(dx, dy, dz)` with vanilla's Y-first, largest-horizontal-first
@@ -1002,15 +1035,35 @@ mod tests {
         assert!(((TERMINAL_VELOCITY - GRAVITY) * DRAG - TERMINAL_VELOCITY).abs() < 1.0e-12);
     }
 
-    #[test]
-    fn block_friction_materials_match_vanilla() {
-        assert_eq!(friction_for_block("minecraft:stone"), 0.6);
-        assert_eq!(friction_for_block("minecraft:ice"), 0.98);
-        assert_eq!(friction_for_block("minecraft:slime_block"), 0.8);
+    fn state(name: &str) -> BlockState {
+        BlockState {
+            name: name.into(),
+            properties: vec![],
+        }
     }
 
     #[test]
-    fn passable_blocks_do_not_swallow_solid_leaves_or_azalea() {
+    fn block_friction_materials_match_vanilla() {
+        assert_eq!(
+            crate::block_behaviour::friction(&state("minecraft:stone")),
+            0.6
+        );
+        assert_eq!(
+            crate::block_behaviour::friction(&state("minecraft:ice")),
+            0.98
+        );
+        assert_eq!(
+            crate::block_behaviour::friction(&state("minecraft:blue_ice")),
+            0.989
+        );
+        assert_eq!(
+            crate::block_behaviour::friction(&state("minecraft:slime_block")),
+            0.8
+        );
+    }
+
+    #[test]
+    fn collision_metadata_covers_plants_fluids_and_solid_blocks() {
         for name in [
             "minecraft:short_grass",
             "minecraft:poppy",
@@ -1021,7 +1074,10 @@ mod tests {
             "minecraft:oak_sign",
             "minecraft:water",
         ] {
-            assert!(is_passable(name), "{name} should be passable");
+            assert!(
+                !crate::block_behaviour::has_collision(&state(name)),
+                "{name} should be passable"
+            );
         }
         for name in [
             "minecraft:stone",
@@ -1033,7 +1089,58 @@ mod tests {
             "minecraft:flowering_azalea",
             "minecraft:snow",
         ] {
-            assert!(!is_passable(name), "{name} must collide");
+            assert!(
+                crate::block_behaviour::has_collision(&state(name)),
+                "{name} must collide"
+            );
         }
+        assert!(!crate::block_behaviour::is_solid(&state(
+            "minecraft:short_grass"
+        )));
+        assert!(crate::block_behaviour::is_solid(&state("minecraft:stone")));
+        assert!(!crate::block_behaviour::blocks_motion(&state(
+            "minecraft:water"
+        )));
+        assert!(crate::block_behaviour::blocks_motion(&state(
+            "minecraft:ice"
+        )));
+    }
+
+    #[test]
+    fn speed_factor_scales_the_horizontal_velocity() {
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        physics.on_ground = true;
+        physics.yaw = -90.0;
+        let mut world = FlatPhysicsWorld::new(0);
+        world.speed_factor = 0.4;
+
+        physics.tick(&mut world, MovementInput::walking_forward());
+        let expected = 0.1 * 0.6 * AIR_FRICTION * 0.4;
+        assert!(
+            (physics.velocity_x - expected).abs() < 1.0e-7,
+            "velocity {} expected {expected}",
+            physics.velocity_x
+        );
+    }
+
+    #[test]
+    fn jump_factor_scales_the_jump_impulse() {
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        physics.on_ground = true;
+        let mut world = FlatPhysicsWorld::new(0);
+        world.jump_factor = 0.5;
+
+        physics.tick(
+            &mut world,
+            MovementInput {
+                jumping: true,
+                ..MovementInput::default()
+            },
+        );
+        assert!(
+            (physics.y - JUMP_IMPULSE * 0.5).abs() < 1.0e-12,
+            "jump height {}",
+            physics.y
+        );
     }
 }

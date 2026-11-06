@@ -53,11 +53,18 @@ Format:
 - Implemented: vanilla update-flag values, six-neighbour update queue and
   shape/support checks, scheduled ticks (priority/delay/sub-tick/dedup/cancel),
   random ticks (3 per 16x16x16 section), falling sand/gravel/concrete
-  powder/anvils, plant support, and grass spread.
+  powder/anvils, plant support, grass spread, scheduled water/lava flow, and
+  wire/lever/button redstone.
 - Not implemented (needs P1.5 block metadata or a bigger tick model):
   leaf `distance` propagation and decay, crop/sapling growth, torch/rail/door/
-  fence/piston/redstone neighbour reactions, fluid ticks and fluid flow, and
-  block-entity ticks.
+  fence/piston behaviour, the remaining redstone components (repeater,
+  comparator, torch, observer, pressure plates, lamps), lava fire spread, and
+  water/lava quenching to stone/obsidian/cobblestone, and block-entity ticks.
+- Fluid shape collision uses a full-cube/occlusion approximation instead of
+  `Shapes.mergedFaceOccludes`; flowing water/lava through partial shapes can
+  differ from Java. Block-destruction drops are not modeled for fluids.
+- Redstone wire tracks power but not its connection-shape properties
+  (`north/east/south/west` stay as placed); only power propagation is updated.
 - Falling blocks move one block per scheduled tick instead of spawning a
   `FallingBlockEntity` with gravity. The landing block and its neighbour
   updates are correct, but fall timing differs from vanilla.
@@ -73,7 +80,7 @@ Format:
 - Cancelling a scheduled tick that was already collected for the current tick
   (`LevelTicks.clearArea` removing from `toRunThisTick`) is not modeled;
   cancellation between ticks works.
-- No Java differential neighbor-update or scheduled-tick fixture exists yet,
+- No Java differential neighbor-update, fluid, or redstone fixture exists yet,
   so this is a behavior-tested slice, not a parity claim.
 
 ## 2026-11-06 — P5.1 entity metadata/health/equipment is a core slice
@@ -108,6 +115,23 @@ Format:
 - Workaround / next task: keep join/session wiring out of this slice; the next
   P5.1 task is initial metadata on spawn, per-viewer dirty tracking, remaining
   serializers, armor calculation, and a captured Java fixture.
+## 2026-11-06 — Asset hash tests fail on a CRLF-materialized checkout
+
+- Blocker: `tests/assets.rs` compares raw byte lengths/FNV hashes from
+  `assets/ASSETS.md`. This worktree materialized `crates/folia-core/assets/*.tsv`
+  with CRLF (`block_states.tsv` is 2,625,357 bytes instead of 2,595,686), so
+  `generated_assets_match_the_manifest` and
+  `dynamic_registry_assets_match_the_manifest` fail before any Rust code runs.
+- What was tried: confirmed `git status` shows no asset modifications; the
+  extra bytes are exactly one CR per line (29,671 lines). The content is the
+  repository's committed LF content transformed by the checkout's line-ending
+  settings.
+- What is needed: re-materialize the assets with their committed LF bytes
+  (or run the suite in a checkout with `core.autocrlf=false`).
+- Workaround / next task: all other workspace tests pass
+  (`cargo test --workspace -- --skip generated_assets_match_the_manifest
+  --skip dynamic_registry_assets_match_the_manifest`: 519 tests). Do not edit
+  the generated assets or their hashes for this slice.
 
 ## Known limitations (not hard blockers)
 

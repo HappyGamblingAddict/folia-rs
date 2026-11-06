@@ -248,8 +248,8 @@ Last updated: 2026-11-06
   chunks are not retroactively decorated, so features appear in newly generated
   columns only.
 
-- P3.10 block simulation has a first vertical slice in `tick.rs`:
-  vanilla `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
+- P3.10 block simulation has a first vertical slice in `tick.rs`: vanilla
+  `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
   `SUPPRESS_NEIGHBORS`, …), a chunk-grouped neighbour queue with position
   deduplication and flag-union merging, a `ScheduledTickQueue` ordered by
   trigger/priority/sub-tick with delay, dedup, and cancellation, and a
@@ -258,8 +258,14 @@ Last updated: 2026-11-06
   six neighbours; falling sand/gravel/concrete powder/anvils move one block per
   scheduled tick, plant support uses `dirt`/farmland tags (including double
   plants), and grass spreads to dirt. The server loop calls `tick::tick_world`
-  every tick. Leaf decay, crop growth, redstone, fluids, pistons, and NBT tick
-  persistence remain explicit gaps (see `BLOCKERS.md`).
+  every tick. `fluid.rs` now ports scheduled water/lava flow (source/flowing
+  levels, falling priority, 7-level water/2-drop lava, slope search toward
+  holes, water source conversion, waterlogged blocks, 5/30-tick delays), and
+  `redstone.rs` adds strong/weak `SignalGetter` queries, wire 0..15
+  propagation/dedup through the neighbour queue, and lever/button toggling with
+  the vanilla 20/30-tick button release. Leaf decay, crop growth, pistons,
+  lava fire/quenching, and NBT tick persistence remain explicit gaps (see
+  `BLOCKERS.md`).
 - Folia region threading is not implemented beyond task queues.
 
 ## Current focus
@@ -280,26 +286,16 @@ Last updated: 2026-11-06
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
   network codecs, implement `HashedStack` component hashing, and add a
   Java-captured component NBT/packet fixture.
-- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
-  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth, torch
-  support, redstone, fluids, and piston behaviour; persist `ScheduledTick`s in
-  chunk NBT; replace the deterministic per-chunk random sampler with Java's
-  level RNG once feature/level RNG parity lands; add a Java neighbor-update
-  differential fixture.
-- P4.1/P4.2 now have a live physics slice: block collision, friction, speed and
-  jump factors come from the generated block-behaviour table. Next: finish the
-  movement feature gaps (ladders/vines/scaffolding, water/lava/swimming,
-  cobwebs, slime bounce, elytra, powder snow, sprint/sneak input packets, real
-  block shapes) and eventually move player simulation onto its own 20 Hz tick
-  instead of packet-driven reconciliation.
+- Current commit (informational only): see `git log` (entity metadata,
+  block-behaviour, P2.4/P2.5 gaps, and P2.12 surface merged).
+- Working tree: clean; these slices are merged.
+- Tests: **426 passing** on the last full gate; focused entity-metadata
+  (6 lib + 12 integration), block-behaviour (4 integration), feature-gap
+  (74 lib + 18 vegetation), and surface (1 lib + 3 integration + 1 config)
+  suites are green. Parity: 98.71% block-class / 92.01% exact-name.
 - P1.3 tag data is available and the ore feature already resolves its four
   target tags through `folia_core::tags`; add the remaining cosmetic
   registries.
-- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
-  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth,
-  torch support, redstone, fluids, and piston behaviour; persist
-  `ScheduledTick`s in chunk NBT; replace the deterministic per-chunk random
-  sampler with Java's level RNG once parity lands; add a Java fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
   powder snow, sprint/sneak input packets, real block shapes) and move
@@ -350,8 +346,9 @@ Last updated: 2026-11-06
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
-  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
-  redstone, fluids, pistons, and NBT tick persistence remain)
+  falling blocks, plant support, grass spread, server hook, water/lava flow,
+  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
+  and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
@@ -407,6 +404,22 @@ Last updated: 2026-11-06
   integration tests. Real loot tables, item entities, block-damage overlay
   packets, Unbreaking/Fortune/Silk Touch, adventure `can_destroy`, and a Java
   fixture remain open.
+
+- 2026-11-06: P3.10 fluid/redstone slice — `fluid.rs` ports water/lava
+  scheduled flow: source/flowing/falling state mapping, 5-tick water vs
+  30-tick lava delay, 1/2 drop-off, downward priority, the 4/2-step slope
+  search toward water holes, two-source conversion (water only), waterlogged
+  placement, and source-removal drain. `redstone.rs` adds `SignalReader`
+  strong/weak queries, `getDirectSignalTo`, `getBestNeighborSignal`, wire
+  target strength (adjacent source or strongest wire minus one, 0..15), and
+  lever toggling plus button press with the vanilla 20/30-tick scheduled
+  release. Wire and fluid updates flow through the existing neighbour queue;
+  `behavior_for` registers all four behaviours. Focused: 8 fluid + 7 redstone
+  + 1 block-update lib tests and 7 `tests/fluids.rs` integration tests
+  (hole flow, 7 levels, lava delay, drain, waterlogging, source conversion,
+  determinism). Workspace run passes 519 tests when the two pre-existing CRLF
+  asset-hash checks are skipped; those fail only in this checkout because
+  `assets/*.tsv` were materialized with CRLF. See `BLOCKERS.md`.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/
@@ -508,8 +521,9 @@ Last updated: 2026-11-06
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
-  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
-  redstone, fluids, pistons, and NBT tick persistence remain)
+  falling blocks, plant support, grass spread, server hook, water/lava flow,
+  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
+  and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

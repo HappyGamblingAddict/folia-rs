@@ -19,26 +19,40 @@ use crate::block_breaking::{self, DigStart, DigState, DigStop, MiningContext};
 use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
+use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
 use crate::inventory;
 use crate::math::BlockPos;
 use crate::nbt::Tag;
 use crate::player::{PlayerSession, uuid_string};
 use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
 use crate::protocol::{
-    Handshake, PacketReader, PacketWriter, build_login_disconnect, parse_login_start, read_packet,
-    write_packet,
+    Connection, EncryptionRequest, GameProfile, Handshake, PacketReader, PacketWriter,
+    ProfileProperty, build_encryption_request, build_login_disconnect, build_login_success,
+    parse_encryption_response, parse_login_start,
 };
 use crate::world::WorldStorage;
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::net::TcpStream;
+use std::io::{self, Read, Write};
+use std::net::{IpAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const LOGIN_SUCCESS: i32 = 2;
+/// The login/configuration/play connection. Encryption is enabled in place
+/// after the encryption response, so every later packet is transformed at the
+/// frame boundary.
+type LoginStream = Connection<TcpStream>;
+
+fn read_packet(stream: &mut LoginStream) -> io::Result<Vec<u8>> {
+    stream.read_packet()
+}
+
+fn write_packet(stream: &mut LoginStream, payload: &[u8]) -> io::Result<()> {
+    stream.write_packet(payload)
+}
+
 const LOGIN_ACKNOWLEDGED: i32 = 3;
 
 const CONFIG_CLIENT_INFORMATION: i32 = 0;
@@ -486,19 +500,368 @@ fn world_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("world"))
 }
 
+/// Vanilla's translatable kick reasons. Clients render these in their own
+/// language, which is what a real server sends.
+const DISCONNECT_UNVERIFIED_USERNAME: &str =
+    r#"{"translate":"multiplayer.disconnect.unverified_username"}"#;
+const DISCONNECT_AUTH_SERVERS_DOWN: &str =
+    r#"{"translate":"multiplayer.disconnect.authservers_down"}"#;
+
+static ONLINE_MODE: OnceLock<bool> = OnceLock::new();
+
+/// Set `server.properties`' `online-mode`. The server binary calls this at
+/// startup; when it does not, [`online_mode`] reads `server.properties`
+/// directly so the login path still knows which mode it is in.
+///
+/// Enabling online mode generates the process-wide RSA key pair eagerly, like
+/// vanilla's startup path, so the first login does not pay for key generation.
+pub fn configure_online_mode(enabled: bool) {
+    let _ = ONLINE_MODE.set(enabled);
+    if enabled && let Err(error) = server_keypair() {
+        eprintln!("[join] online mode is enabled but no RSA key pair exists: {error}");
+    }
+}
+
+/// Whether logins must present a valid Mojang session.
+pub fn online_mode() -> bool {
+    *ONLINE_MODE.get_or_init(crate::config::online_mode)
+}
+
+fn prevent_proxy_connections() -> bool {
+    crate::config::prevent_proxy_connections()
+}
+
+/// Result of the encryption exchange.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncryptionOutcome {
+    /// Mojang accepted the session and returned the authoritative profile.
+    Authenticated(GameProfile),
+    /// Mojang rejected the session (`hasJoinedServer` returned no profile).
+    Unverified,
+    /// The authentication servers could not be reached.
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthError {
+    Unavailable(String),
+    Rejected,
+}
+
+/// Pluggable Mojang session check.
+///
+/// The real implementation is [`MojangSessionAuthenticator`]; tests inject a
+/// mock so no test touches the network.
+pub trait SessionAuthenticator {
+    fn has_joined_server(
+        &self,
+        username: &str,
+        server_hash: &str,
+        client_ip: Option<IpAddr>,
+    ) -> Result<Option<GameProfile>, AuthError>;
+}
+
+/// Mojang's `sessionserver.mojang.com/session/minecraft/hasJoined` endpoint.
+///
+/// The workspace has no TLS stack (and no HTTP client dependency), so the
+/// request is executed with the system `curl` binary, which ships with Windows
+/// 10+ and virtually every Unix. Arguments are passed directly to the process
+/// (never through a shell), and user-controlled values are percent-encoded.
+/// This is the only network call in the login path.
+pub struct MojangSessionAuthenticator {
+    endpoint: String,
+}
+
+impl Default for MojangSessionAuthenticator {
+    fn default() -> Self {
+        Self {
+            endpoint: "https://sessionserver.mojang.com/session/minecraft/hasJoined".to_owned(),
+        }
+    }
+}
+
+impl MojangSessionAuthenticator {
+    pub fn with_endpoint(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+        }
+    }
+
+    /// Build the `hasJoinedServer` URL. Exposed for tests; production uses it
+    /// through [`SessionAuthenticator`].
+    pub fn url_for(&self, username: &str, server_hash: &str, client_ip: Option<IpAddr>) -> String {
+        let mut url = format!(
+            "{}?username={}&serverId={}",
+            self.endpoint,
+            percent_encode(username),
+            percent_encode(server_hash)
+        );
+        if let Some(ip) = client_ip {
+            url.push_str("&ip=");
+            url.push_str(&percent_encode(&ip.to_string()));
+        }
+        url
+    }
+}
+
+impl SessionAuthenticator for MojangSessionAuthenticator {
+    fn has_joined_server(
+        &self,
+        username: &str,
+        server_hash: &str,
+        client_ip: Option<IpAddr>,
+    ) -> Result<Option<GameProfile>, AuthError> {
+        let url = self.url_for(username, server_hash, client_ip);
+        let output = std::process::Command::new("curl")
+            .args([
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "10",
+                "--user-agent",
+                "Folia-RS/0.1",
+            ])
+            .arg(&url)
+            .output()
+            .map_err(|error| AuthError::Unavailable(format!("could not run curl: {error}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AuthError::Unavailable(format!(
+                "session server request failed ({}): {}",
+                output.status,
+                stderr.trim()
+            )));
+        }
+        if output.stdout.is_empty() {
+            // 204 No Content: the session is not valid.
+            return Ok(None);
+        }
+        parse_session_profile(&output.stdout)
+            .map(Some)
+            .map_err(|error| AuthError::Unavailable(format!("invalid session response: {error}")))
+    }
+}
+
+/// Parse Mojang's `hasJoinedServer` JSON profile.
+pub fn parse_session_profile(json: &[u8]) -> Result<GameProfile, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(json).map_err(|error| format!("malformed JSON: {error}"))?;
+    let id = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "missing id".to_owned())?;
+    let uuid = parse_undashed_uuid(id).ok_or_else(|| "invalid profile id".to_owned())?;
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "missing name".to_owned())?;
+    if name.is_empty() || name.len() > 16 {
+        return Err("invalid profile name".to_owned());
+    }
+    let mut properties = Vec::new();
+    if let Some(entries) = value
+        .get("properties")
+        .and_then(serde_json::Value::as_array)
+    {
+        for entry in entries {
+            let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(value) = entry.get("value").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let signature = entry
+                .get("signature")
+                .and_then(serde_json::Value::as_str)
+                .filter(|signature| !signature.is_empty())
+                .map(str::to_owned);
+            properties.push(ProfileProperty {
+                name: name.to_owned(),
+                value: value.to_owned(),
+                signature,
+            });
+        }
+    }
+    Ok(GameProfile {
+        uuid,
+        name: name.to_owned(),
+        properties,
+    })
+}
+
+fn parse_undashed_uuid(value: &str) -> Option<[u8; 16]> {
+    let cleaned: String = value
+        .chars()
+        .filter(|character| *character != '-')
+        .collect();
+    if cleaned.len() != 32 {
+        return None;
+    }
+    let mut uuid = [0u8; 16];
+    for (index, byte) in uuid.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&cleaned[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(uuid)
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+/// Send the encryption request, verify and decrypt the response, enable
+/// encryption, then ask the [`SessionAuthenticator`] about the session.
+///
+/// The order matches vanilla: the challenge is verified before the shared
+/// secret, the cipher is installed before any further packet is written, and
+/// the authenticator sees the server hash computed from the DER public key and
+/// the decrypted secret.
+pub fn complete_encryption<S: Read + Write>(
+    connection: &mut Connection<S>,
+    server_id: &str,
+    keypair: &RsaKeyPair,
+    challenge: &[u8],
+    username: &str,
+    authenticator: &dyn SessionAuthenticator,
+    client_ip: Option<IpAddr>,
+) -> io::Result<EncryptionOutcome> {
+    if challenge.len() != 4 {
+        return Err(protocol_error("verify token must be four bytes"));
+    }
+    let public_key = keypair.public_key_der();
+    let request = EncryptionRequest {
+        server_id: server_id.to_owned(),
+        public_key: public_key.clone(),
+        verify_token: challenge.to_vec(),
+        should_authenticate: true,
+    };
+    connection.write_packet(&build_encryption_request(&request)?)?;
+
+    let packet = connection.read_packet()?;
+    let response = parse_encryption_response(&packet)?;
+    let token = keypair
+        .decrypt_pkcs1v15(&response.verify_token)
+        .map_err(crypto_error)?;
+    if !constant_time_eq(&token, challenge) {
+        return Err(protocol_error("encryption verify token mismatch"));
+    }
+    let secret = keypair
+        .decrypt_pkcs1v15(&response.shared_secret)
+        .map_err(crypto_error)?;
+    let secret: [u8; crypto::AES_KEY_SIZE] = secret
+        .try_into()
+        .map_err(|_| protocol_error("shared secret is not 128 bits"))?;
+    connection.enable_encryption(&secret)?;
+
+    let hash = server_hash(server_id, &public_key, &secret);
+    match authenticator.has_joined_server(username, &hash, client_ip) {
+        Ok(Some(profile)) => Ok(EncryptionOutcome::Authenticated(profile)),
+        Ok(None) | Err(AuthError::Rejected) => Ok(EncryptionOutcome::Unverified),
+        Err(AuthError::Unavailable(message)) => {
+            eprintln!("[join] session server unavailable for {username}: {message}");
+            Ok(EncryptionOutcome::Unavailable)
+        }
+    }
+}
+
+fn protocol_error(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
+}
+
+fn crypto_error(error: CryptoError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+}
+
+fn server_keypair() -> io::Result<&'static RsaKeyPair> {
+    static KEYPAIR: OnceLock<Result<RsaKeyPair, CryptoError>> = OnceLock::new();
+    KEYPAIR
+        .get_or_init(RsaKeyPair::generate)
+        .as_ref()
+        .map_err(|error| {
+            io::Error::other(format!(
+                "could not generate the server RSA key pair: {error}"
+            ))
+        })
+}
+
+fn authenticate_login(stream: &mut LoginStream, username: &str) -> io::Result<EncryptionOutcome> {
+    let keypair = server_keypair()?;
+    let mut challenge = [0u8; 4];
+    crypto::random_bytes(&mut challenge)
+        .map_err(|error| io::Error::other(format!("no secure randomness: {error}")))?;
+    let client_ip = if prevent_proxy_connections() {
+        stream.peer_addr().ok().map(|address| address.ip())
+    } else {
+        None
+    };
+    complete_encryption(
+        stream,
+        "",
+        keypair,
+        &challenge,
+        username,
+        &MojangSessionAuthenticator::default(),
+        client_ip,
+    )
+}
+
+fn send_login_disconnect(stream: &mut LoginStream, reason: &str) -> io::Result<()> {
+    stream.write_packet(&build_login_disconnect(reason)?)
+}
+
 /// Accept a login and walk the client through configuration into the captured
 /// flat world. The caller has already read and parsed the handshake.
-pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<()> {
+pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> {
     let _session = SessionGuard::new();
+    let mut stream = Connection::new(stream);
     stream.set_read_timeout(Some(Duration::from_secs(15)))?;
     stream.set_write_timeout(Some(Duration::from_secs(15)))?;
 
     let login_start = read_packet(&mut stream)?;
-    let start = parse_login_start(&login_start)?;
+    let mut start = parse_login_start(&login_start)?;
     println!(
         "[join] login start name={} uuid={:?} protocol={}",
         start.name, start.uuid, handshake.protocol_version
     );
+
+    let mut profile_properties: Vec<ProfileProperty> = Vec::new();
+    if online_mode() {
+        match authenticate_login(&mut stream, &start.name)? {
+            EncryptionOutcome::Authenticated(profile) => {
+                println!(
+                    "[join] authenticated {} as {}",
+                    start.name,
+                    uuid_string(&profile.uuid)
+                );
+                start.name = profile.name;
+                start.uuid = Some(profile.uuid);
+                profile_properties = profile.properties;
+            }
+            EncryptionOutcome::Unverified => {
+                send_login_disconnect(&mut stream, DISCONNECT_UNVERIFIED_USERNAME)?;
+                println!("[join] {} has an invalid session", start.name);
+                return Ok(());
+            }
+            EncryptionOutcome::Unavailable => {
+                send_login_disconnect(&mut stream, DISCONNECT_AUTH_SERVERS_DOWN)?;
+                println!(
+                    "[join] could not verify {} because the authentication servers are down",
+                    start.name
+                );
+                return Ok(());
+            }
+        }
+    }
 
     let uuid = start.uuid.unwrap_or_else(|| offline_uuid(&start.name));
     let world = open_world();
@@ -536,7 +899,7 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
     // playerdata position before settling.
     session.reset_physics();
 
-    send_login_success(&mut stream, &uuid, &start.name)?;
+    send_login_success(&mut stream, &uuid, &start.name, &profile_properties)?;
 
     // Login Acknowledged.
     loop {
@@ -1027,7 +1390,7 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
 }
 
 pub fn reject_login(mut stream: TcpStream, reason: &str) -> io::Result<()> {
-    write_packet(&mut stream, &build_login_disconnect(reason)?)
+    crate::protocol::write_packet(&mut stream, &build_login_disconnect(reason)?)
 }
 
 fn captured_spawn() -> (f64, f64, f64, f32, f32) {
@@ -1169,7 +1532,7 @@ fn parse_game_mode(value: &str) -> Option<i32> {
 }
 
 fn apply_game_mode(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     mode: i32,
 ) -> io::Result<()> {
@@ -1194,7 +1557,7 @@ fn apply_game_mode(
 }
 
 fn handle_command(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     packet: &[u8],
 ) -> io::Result<()> {
@@ -1343,7 +1706,7 @@ fn fall_damage_health(health: f32, damage: f32, game_mode: i32) -> Option<f32> {
 }
 
 fn apply_fall_damage(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     damage: f32,
 ) -> io::Result<bool> {
@@ -1367,7 +1730,7 @@ fn apply_fall_damage(
 }
 
 fn apply_void_damage(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     last_damage: &mut Instant,
 ) -> io::Result<bool> {
@@ -1394,7 +1757,7 @@ fn apply_void_damage(
 
 #[allow(clippy::too_many_arguments)]
 fn respawn_player(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     storage: &Mutex<WorldStorage>,
     trust_stored: bool,
@@ -1526,7 +1889,7 @@ fn generation_workers(pending: usize) -> usize {
 /// ones, so the first columns reach the client before the whole batch exists.
 /// Stored columns keep their place in the same order.
 fn send_columns(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     storage: &mut WorldStorage,
     generator: Option<&crate::worldgen::generator::WorldGenerator>,
     pending: &[(usize, i32, i32)],
@@ -1627,7 +1990,7 @@ fn send_columns(
 }
 
 fn record_and_send(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     batch: &mut ChunkBatch,
     source: ChunkSource,
     packet: &[u8],
@@ -1868,7 +2231,7 @@ fn open_world() -> WorldContext {
 /// radius, and sends every chunk in the radius that `sent` has not streamed
 /// yet.
 fn stream_chunks_around(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     storage: &Mutex<WorldStorage>,
     trust_stored: bool,
     radius: i32,
@@ -1971,7 +2334,7 @@ fn chunk_cache_center(chunk_x: i32, chunk_z: i32) -> Vec<u8> {
 }
 
 fn handle_block_action(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     storage: &Mutex<WorldStorage>,
     session: &mut PlayerSession,
     dig: &mut DigState,
@@ -2216,7 +2579,7 @@ fn finish_break(
 /// before its local progress reached the server's 0.7 threshold.
 fn tick_delayed_destroy(
     storage: &Mutex<WorldStorage>,
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     dig: &mut DigState,
     play_started: Instant,
@@ -2252,7 +2615,7 @@ fn save_after_break(session: &PlayerSession) {
 /// Send the current block state back to the client, clearing a block-damage
 /// overlay without introducing a new packet type.
 fn resync_block(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     storage: &mut WorldStorage,
     pos: BlockPos,
 ) -> io::Result<()> {
@@ -2266,7 +2629,7 @@ fn resync_block(
     )
 }
 
-fn send_container_content(stream: &mut TcpStream, session: &PlayerSession) -> io::Result<()> {
+fn send_container_content(stream: &mut LoginStream, session: &PlayerSession) -> io::Result<()> {
     write_packet(
         stream,
         &inventory::container_content_packet(&session.inventory, &session.cursor),
@@ -2274,7 +2637,7 @@ fn send_container_content(stream: &mut TcpStream, session: &PlayerSession) -> io
 }
 
 fn handle_set_carried(
-    stream: &mut TcpStream,
+    stream: &mut LoginStream,
     session: &mut PlayerSession,
     packet: &[u8],
 ) -> io::Result<()> {
@@ -2298,13 +2661,18 @@ fn handle_set_carried(
     Ok(())
 }
 
-fn send_login_success(stream: &mut TcpStream, uuid: &[u8; 16], name: &str) -> io::Result<()> {
-    let mut writer = PacketWriter::new();
-    writer.write_varint(LOGIN_SUCCESS)?;
-    writer.write_bytes(uuid);
-    writer.write_string(name)?;
-    writer.write_varint(0)?; // game profile properties
-    write_packet(stream, &writer.into_inner())
+fn send_login_success(
+    stream: &mut LoginStream,
+    uuid: &[u8; 16],
+    name: &str,
+    properties: &[ProfileProperty],
+) -> io::Result<()> {
+    let profile = GameProfile {
+        uuid: *uuid,
+        name: name.to_owned(),
+        properties: properties.to_vec(),
+    };
+    write_packet(stream, &build_login_success(&profile)?)
 }
 
 fn empty_known_packs() -> Vec<u8> {

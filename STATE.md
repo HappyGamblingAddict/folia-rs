@@ -22,6 +22,7 @@ Last updated: 2026-11-06
   slice adds 9 focused tests (1 lib + 8 `tests/light_incremental.rs`) and those
   targets pass. The coordinator owns the next full gate.
 - Tests: **631 passing** on the full workspace gate (0 failed).
+- Tests: **637 passing** on the final full workspace gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -95,6 +96,19 @@ Last updated: 2026-11-06
   and Java light fixtures, P5 sensors/brains/full node evaluators/persistence/
   despawn/armor, P6 pistons/block entities/full redstone, P7 Nether/End, P8
   online mode, P9 plugin API depth, P10 region ownership.
+  redstone, P7 Nether/End, P8 online-mode server wiring and chat signing, P9
+  plugin API depth, P10 region ownership.
+- Online-mode login core landed 2026-11-06. `crypto.rs` has dependency-free
+  RSA-1024 generation (OS CSPRNG), PKCS#1 v1.5, DER SubjectPublicKeyInfo,
+  AES-128/CFB8, SHA-1, Java signed big-int hex, and constant-time comparison.
+  `protocol.rs` encodes `ClientboundHello`/`ServerboundKey` and owns an
+  encrypted `Connection`; `join.rs` runs the exchange, calls a mockable
+  `SessionAuthenticator` (curl-backed Mojang implementation), sends profile
+  properties in Login Success, and supports `prevent-proxy-connections`.
+  `online-mode=false` frames are unchanged. 22 integration tests pin Java/JCE
+  and NIST fixtures; no test touches the network. The native server still sets
+  `accept_logins: !online_mode` in `folia-server`, so online mode is not yet
+  reachable from a real client (see `BLOCKERS.md`).
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,

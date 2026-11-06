@@ -47,7 +47,7 @@ where possible, a differential test against the Java oracle.
 | Blocks/redstone/fluids | ~27% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching, lava fire, bubble columns, wire/lever/button; pistons, block entities, full components missing |
 | Entities | ~23% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; P5.1 metadata + P5.5/P5.6/P5.12 AI/spawn foundations; AI sensors/brains, full pathing, persistence, armor, per-viewer metadata missing |
 | Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
-| Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
+| Networking | ~40% offline / ~35% online | Join path works offline; online crypto/auth core landed; server binary wiring and full packet coverage pending |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
@@ -2000,10 +2000,13 @@ storage stay Overworld-only. No time/weather/portals.
 subset of play packets. A public server needs encryption, Mojang auth, full
 packet coverage, multiple players, and robustness.
 
-**Current state:** Offline mode only; captured configuration registries; 7×7
-chunk stream; limited play packets; no online-mode encryption or chat signing.
+**Current state:** Offline mode works end-to-end. Online-mode crypto and the
+Mojang session check exist in `crypto.rs`/`join.rs`, but the server binary does
+not yet route online-mode logins into that path (see `BLOCKERS.md`). Captured
+configuration registries; view-distance chunk stream; limited play packets; no
+chat signing.
 
-### P8.1 Online-mode encryption `[ ]` `L`
+### P8.1 Online-mode encryption `[~]` `L`
 
 - **What:** Implement RSA key exchange, AES/CFB8 encryption, compression
   negotiation, Mojang session server authentication, and profile properties.
@@ -2011,6 +2014,16 @@ chunk stream; limited play packets; no online-mode encryption or chat signing.
 - **Reference:** `net/minecraft/server/network/ServerLoginPacketListenerImpl.java`,
   `Connection.java`, `Crypt.java`.
 - **Done when:** A real online-mode client can join with a valid session.
+- **Landed 2026-11-06:** `crypto.rs` (RSA-1024 generation from the OS CSPRNG,
+  PKCS#1 v1.5, DER SubjectPublicKeyInfo, AES-128/CFB8, SHA-1, Java signed
+  big-int hex, constant-time compare), `ClientboundHello`/`ServerboundKey`
+  codecs, encrypted `protocol::Connection` framing, `SessionAuthenticator` with
+  a mockable trait and a curl-backed Mojang implementation, profile properties
+  in Login Success, `prevent-proxy-connections`, and 22 focused tests with
+  Java/JCE and NIST fixtures. `online-mode=false` still writes identical bytes.
+- **Remaining:** `folia-server` must call `join::configure_online_mode` and set
+  `accept_logins: true`; then exercise a real Mojang session. Chat signing is
+  P8.2, and an in-process TLS client should replace the curl shell-out.
 
 ### P8.2 Chat signing and profile keys `[ ]` `L`
 

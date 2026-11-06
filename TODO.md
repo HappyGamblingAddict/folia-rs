@@ -6,13 +6,6 @@
 > Test status: focused suites are green; the merged full gate is run separately
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
-> Last updated: 2026-11-06  
-> Current commit: see the plugin-bridge slice commit on `task/plugin2`.
-> Working tree: plugin world/player/item/event slice being integrated.
-> Test status: **426 tests** on the last full gate; the plugin slice adds 6
-> `folia-server` unit tests, 18 Java checks, and a gated live bridge selftest.
-> Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
-> Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.

@@ -23,19 +23,12 @@ Last updated: 2026-11-06
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, and exact surface biome zoom.
+  block breaking/tools/drops/durability, exact surface biome zoom, and an expanded Bukkit bridge (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
   and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
   redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
   ownership.
-- Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full core gate; the plugin bridge slice
-  adds 6 `folia-server` unit tests, 18 Java `BridgeApiTest` checks, and the
-  gated `FOLIA_BRIDGE_SELFTEST=1` live run. The workspace run has one
-  pre-existing unrelated failure: `folia-core --test assets` reports
-  `block_states.tsv` byte length 2,625,357 vs the manifest's 2,595,686.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.

@@ -126,6 +126,19 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P10.1/P10.2/P10.6 region ownership slice — `region.rs` now makes
+  ownership real: public `Region` (owned task queue, `RegionWorldSlice` world
+  token + sparse cells, monotonic tick counter), `RegionOwned<T>`/`OwnedWorld`
+  with `OwnershipError` on cross-region access (explicit caller check plus a
+  per-thread current-region map and `ThreadingDetector`), `RegionMap` chunk /
+  section / block -> region math (vanilla 8x8 chunk, 4x4 section regions,
+  floor division for negatives, deterministic `RegionId` packing), and the
+  scheduler API (`run_for_region`, owned tasks, `tick_region_checked`).
+  Legacy `schedule_at`/`tick`/`tick_parallel` semantics are preserved.
+  Focused: 18 `tests/region_ownership.rs` + 3 new lib `region` tests;
+  `bulk_validation` scheduler suites stay green; fmt/clippy clean. Gaps:
+  live tick loop, world/entity/player state, and chunk tickets are not yet
+  region-owned (see `BLOCKERS.md`).
 - 2026-11-06: P5 join-session entity wiring — `entity.rs` adds a
   `SessionEntityTracker` that owns three deterministic mobs (cow, pig, zombie)
   per viewer, built from `spawn::entity_type` dimensions and real entity ids.

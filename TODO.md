@@ -2449,7 +2449,7 @@ world data is isolated per region and no cross-region safety exists.
 > gameplay state. Ideally introduce ownership handles during P5/P6 even if the
 > actual parallel tick loop comes later.
 
-### P10.1 Ownership model design `[ ]` `M`
+### P10.1 Ownership model design `[~]` `M`
 
 - **What:** Define region ownership for chunks, entities, block entities,
   players, POI, and tasks. Decide which data is region-local, shared/read-only,
@@ -2458,8 +2458,14 @@ world data is isolated per region and no cross-region safety exists.
   means rewriting gameplay state.
 - **Done when:** An ADR documents the model and a prototype enforces ownership
   on one subsystem.
+- **Progress (2026-11-06):** `region.rs` enforces ownership on the task
+  subsystem: `Region` owns its queue, world-slice token, and tick counter;
+  `RegionOwned<T>`/`OwnedWorld` reject cross-region access with
+  `OwnershipError`; a per-thread current-region map plus `ThreadingDetector`
+  model `TickThread`. The ADR is the 2026-11-06 entry in `DECISIONS.md`.
+  Entity/block-entity/player/POI ownership and cross-region messages remain.
 
-### P10.2 Regionizer `[ ]` `L`
+### P10.2 Regionizer `[~]` `L`
 
 - **What:** Implement chunk→region mapping, region merging/splitting, region
   lifecycle, and ownership transfer.
@@ -2468,6 +2474,11 @@ world data is isolated per region and no cross-region safety exists.
   `TickRegions.java`, `RegionizedWorldData.java`.
 - **Done when:** A region can grow/shrink and transfer chunks without data
   races.
+- **Progress (2026-11-06):** `RegionMap` covers chunk/section/block ->
+  region mapping (vanilla 8x8 chunk, 4x4 section regions, floor division for
+  negatives, deterministic `RegionId`, bounds, and sorted `group_chunks` for
+  migration). Region merging/splitting, lifecycle, and ownership transfer
+  are still open.
 
 ### P10.3 Per-region world state `[ ]` `XL`
 
@@ -2494,13 +2505,19 @@ world data is isolated per region and no cross-region safety exists.
 - **Done when:** A player can walk/teleport across regions without losing
   state or deadlocking.
 
-### P10.6 Folia scheduler APIs `[ ]` `M`
+### P10.6 Folia scheduler APIs `[~]` `M`
 
 - **What:** Implement RegionScheduler, EntityScheduler, AsyncScheduler,
   GlobalRegionScheduler, and their Bukkit bridge equivalents.
 - **Why:** Folia plugins depend on these instead of the legacy scheduler.
 - **Done when:** A Folia-style plugin schedules work on the correct region and
   observes cancellation on unload.
+- **Progress (2026-11-06):** `RegionScheduler` gains `run_for_region` /
+  `schedule_for_region`, owned-task scheduling (`schedule_owned_at`,
+  `schedule_owned_for_region`), `tick_region_checked`/`tick_checked`, and
+  `last_ownership_error`, with delay/period/cancellation preserved and
+  deterministic sorted-region tick order. Entity/async schedulers and the
+  Bukkit bridge equivalents remain open.
 
 ### P10.7 Chunk system integration `[ ]` `L`
 

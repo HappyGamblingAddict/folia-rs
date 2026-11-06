@@ -211,6 +211,11 @@ follow-up. `TODO.md` is authoritative if this list is stale.
   not write directly into arbitrary chunks.
 - Design per-region ownership before spreading gameplay state across global
   statics. Folia threading is not a bolt-on.
+- Region ownership is enforced in `region.rs` for tasks: `Region` owns its
+  queue, world-slice token, and tick counter; `RegionOwned<T>`/`OwnedWorld`
+  reject cross-region access with `OwnershipError`; `RegionMap` uses vanilla
+  8x8 chunk / 4x4 section regions. World/entity/player state is not yet
+  region-owned, so do not claim region isolation for it (see `BLOCKERS.md`).
 
 ## Recovery
 

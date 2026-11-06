@@ -411,3 +411,34 @@ These are expected gaps, not reasons to stop:
 - Workaround: `LootProvider` is the intended hook for `crate::loot`; the
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
+
+## 2026-11-06 — Fluid interactions are behaviour-tested, not Java-fixture parity
+
+- Scope: `fluid.rs` now covers lava/water quenching, lava fire ignition and
+  aging, soul-sand/magma bubble columns, per-tick bubble velocity, fluid
+  destruction of replaceable plants, and neighbour-scheduled source updates.
+  `tests/fluid_interactions.rs` adds 16 focused tests and `tests/fluids.rs` adds
+  one neighbour-update test.
+- Not wired in production:
+  - `tick::behavior_for` still routes `minecraft:fire` to the no-op behaviour.
+    Fire aging, burnout, and fire spread need one registration line in
+    `tick.rs` (outside this slice) or a caller that uses
+    `fluid::interaction_table()`. Lava ignition itself is live because lava is
+    a fluid.
+  - `minecraft:soul_sand`/`minecraft:magma_block` do not schedule their Java
+    20-tick column check. A water source above them performs the equivalent
+    `updateColumn` on its normal 5-tick fluid tick, so columns can form up to
+    15 ticks early.
+- Not modelled:
+  - Fire weather/rain, per-world difficulty, `fireSpreadRadiusAroundPlayer`,
+    increased-burnout environment attribute, and TNT priming. TNT burnout
+    consumes the Java random draws but leaves the block in place.
+  - `FlowingFluid.beforeDestroyingBlock` loot drops; fluids remove plants,
+    torches, and fire but spawn no item entities.
+  - The exact `CollisionShape` merged-face occlusion test; the full-cube
+    approximation remains.
+  - Java `Level.random` draw ordering for fire/lava; the tick engine's
+    deterministic per-position (`seed, pos, tick`) RNG is used instead.
+- Needed for a parity claim: a Java differential fixture for lava/water contact
+  (all faces), a fire spread/aging fixture, and a bubble column entity-velocity
+  fixture. The current tests encode the decompiled formulas directly.

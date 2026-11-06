@@ -122,11 +122,21 @@ Key files:
 - `fluid.rs` adds scheduled water/lava flow: source/flowing/falling levels,
   5-tick water vs 30-tick lava delays, drop-off, downward priority, slope search
   toward holes, water source conversion, waterlogged placement, and drain.
+  It also covers lava/water quenching (obsidian/cobblestone/stone at the exact
+  `LiquidBlock`/`LavaFluid` faces), lava fire ignition with the ported
+  `FireBlock.bootStrap` odds, `FireBlock.tick` aging/burnout through
+  `fluid::interaction_table()`, soul-sand/magma bubble columns, the
+  `Entity` inside/above-surface velocity update, and fluid destruction of
+  replaceable plants.
 - `redstone.rs` adds `SignalGetter` strong/weak queries, wire 0..15
   propagation/dedup through the neighbour queue, lever toggling, and button
   press with a scheduled release.
-- Tests: `tests/ticks.rs` (10), `tests/fluids.rs` (7), plus focused
+- Tests: `tests/ticks.rs` (10), `tests/fluids.rs` (8),
+  `tests/fluid_interactions.rs` (16), plus focused
   `--lib tick`/`--lib fluid`/`--lib redstone` unit tests.
+- Known gap: `tick::behavior_for` still maps `minecraft:fire` to no-op, so
+  production fire aging needs a one-line registration in `tick.rs`. Lava
+  ignition is live because lava is a fluid.
 
 ### Feature framework
 

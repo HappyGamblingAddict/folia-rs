@@ -19,9 +19,10 @@ Last updated: 2026-11-06
 - Major landed slices: registry/tag/loot assets, real light storage + sky/block
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
-  stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an
-  expanded Bukkit bridge (world/player/item/events).
+  stacks, scheduled/random/neighbour ticks, fluids (flow, quenching, lava fire,
+  bubble columns), redstone wire/lever/button, block breaking/tools/drops/
+  durability, exact surface biome zoom, and an expanded Bukkit bridge
+  (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
   and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
@@ -239,8 +240,10 @@ Last updated: 2026-11-06
   six neighbours; falling sand/gravel/concrete powder/anvils move one block per
   scheduled tick, plant support uses `dirt`/farmland tags (including double
   plants), and grass spreads to dirt. The server loop calls `tick::tick_world`
-  every tick. Leaf decay, crop growth, redstone, fluids, pistons, and NBT tick
-  persistence remain explicit gaps (see `BLOCKERS.md`).
+  every tick. Leaf decay, crop growth, redstone, pistons, and NBT tick
+  persistence remain explicit gaps (see `BLOCKERS.md`). Fluid flow now also
+  covers lava/water quenching, lava fire ignition, fire aging through
+  `fluid::interaction_table()`, bubble columns, and plant destruction.
 - Folia region threading is not implemented beyond task queues.
 
 ## Current focus
@@ -252,8 +255,8 @@ Last updated: 2026-11-06
 3. P3.6–P3.9 decrease queues, incremental section light packets, cross-chunk
    relighting, and Java light fixtures.
 4. P5 entity AI/goals, spawning, armor calculation, and join-session wiring.
-5. P6 pistons, block entities, repeaters/comparators, and the remaining fluid
-   quenching/fire behavior.
+5. P6 pistons, block entities, repeaters/comparators, and the remaining fire
+   environment inputs/TNT priming plus production `tick.rs` fire registration.
 - P9.3 now has the first world/player/item proxies and P9.2 has three
   cancellable block/interact events. Next: expose the live `join.rs` session
   state (health/food/inventory/position/messages) to the bridge, call the event
@@ -329,9 +332,10 @@ Last updated: 2026-11-06
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
-  falling blocks, plant support, grass spread, server hook, water/lava flow,
-  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
-  and NBT tick persistence remain)
+  falling blocks, plant support, grass spread, server hook, water/lava flow +
+  lava/water quenching, lava ignition, bubble columns, wire/lever/button
+  redstone; production fire aging, leaf decay, crops, pistons, remaining
+  redstone, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
@@ -342,6 +346,20 @@ Last updated: 2026-11-06
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-06: P6.2 fluid interactions — `fluid.rs` adds the exact 1.21.11
+  `LiquidBlock.shouldSpreadLiquid`/`LavaFluid.spreadTo` contacts (source+water
+  -> obsidian, flowing+water -> cobblestone, downward lava into water -> stone,
+  correct up/horizontal faces only, soul-soil blue-ice basalt branch), lava
+  random-tick ignition with the ported `FireBlock.bootStrap` odds and exact
+  `BaseFireBlock.getState`/`FireBlock.tick` aging/burnout in `FireBehavior`,
+  soul-sand/magma bubble columns with `BubbleColumnBlock.updateColumn`,
+  `Entity.handleOnInsideBubbleColumn`/`handleOnAboveBubbleColumn` velocity
+  updates, and fluid destruction of replaceable plants. `interaction_table()`
+  exposes the fire scheduled-tick behaviour without editing `tick.rs`.
+  Focused: 13 `--lib fluid` tests, 8 `tests/fluids.rs`, 16
+  `tests/fluid_interactions.rs` (all pass; `cargo clippy --lib --tests -D
+  warnings` clean). Production fire aging still needs the one-line
+  `behavior_for` registration; see `BLOCKERS.md`.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/
@@ -533,9 +551,10 @@ Last updated: 2026-11-06
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
-  falling blocks, plant support, grass spread, server hook, water/lava flow,
-  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
-  and NBT tick persistence remain)
+  falling blocks, plant support, grass spread, server hook, water/lava flow +
+  lava/water quenching, lava ignition, bubble columns, wire/lever/button
+  redstone; production fire aging, leaf decay, crops, pistons, remaining
+  redstone, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

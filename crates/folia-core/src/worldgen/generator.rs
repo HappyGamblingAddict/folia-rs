@@ -452,12 +452,14 @@ impl PlacementWorld for FeaturePlacementWorld<'_> {
             let Some(state) = self.chunk.block_state(x, y, z) else {
                 continue;
             };
+            let fluid = is_fluid_state(state);
             let blocks_motion = match kind {
-                Heightmap::WorldSurface => !is_air_state(state),
-                Heightmap::OceanFloor => {
-                    !is_air_state(state)
-                        && state.name != "minecraft:water"
-                        && state.name != "minecraft:lava"
+                Heightmap::WorldSurface | Heightmap::WorldSurfaceWg => !is_air_state(state),
+                Heightmap::OceanFloor | Heightmap::OceanFloorWg => heightmap_blocks_motion(state),
+                Heightmap::MotionBlocking => heightmap_blocks_motion(state) || fluid,
+                Heightmap::MotionBlockingNoLeaves => {
+                    (heightmap_blocks_motion(state) || fluid)
+                        && !crate::tags::block_has("minecraft:leaves", &state.name)
                 }
             };
             if blocks_motion {
@@ -471,6 +473,37 @@ impl PlacementWorld for FeaturePlacementWorld<'_> {
         let (x, z) = self.local_column(pos.x(), pos.z())?;
         self.chunk.block_state(x, pos.y(), z)
     }
+}
+
+fn is_fluid_state(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:water" | "minecraft:lava" | "minecraft:flowing_water" | "minecraft:flowing_lava"
+    )
+}
+
+/// Approximation of `BlockState.blocksMotion` until P1.5 block metadata lands:
+/// air, fluids, and tagged passable vegetation do not block motion.
+fn heightmap_blocks_motion(state: &BlockState) -> bool {
+    if is_air_state(state) || is_fluid_state(state) {
+        return false;
+    }
+    for tag in [
+        "minecraft:replaceable",
+        "minecraft:flowers",
+        "minecraft:saplings",
+        "minecraft:crops",
+        "minecraft:rails",
+        "minecraft:buttons",
+        "minecraft:pressure_plates",
+        "minecraft:all_signs",
+        "minecraft:fire",
+    ] {
+        if crate::tags::block_has(tag, &state.name) {
+            return false;
+        }
+    }
+    true
 }
 
 fn sample_grid(

@@ -5,7 +5,25 @@
 //! the Xoroshiro random source and positional random factories so noise
 //! instances match Folia for the same level seed.
 
-use folia_random::{RandomSource, XoroshiroPositionalRandomFactory, XoroshiroRandomSource};
+use folia_random::{
+    LegacyPositionalRandomFactory, LegacyRandomSource, RandomSource,
+    XoroshiroPositionalRandomFactory, XoroshiroRandomSource,
+};
+
+/// Positional factory used by `PerlinNoise.create(RandomSource, ...)`.
+enum PositionalFactory {
+    Xoroshiro(XoroshiroPositionalRandomFactory),
+    Legacy(LegacyPositionalRandomFactory),
+}
+
+impl PositionalFactory {
+    fn named(&self, name: &str) -> Box<dyn RandomSource> {
+        match self {
+            Self::Xoroshiro(factory) => Box::new(factory.from_hash_of(name)),
+            Self::Legacy(factory) => Box::new(factory.from_hash_of(name)),
+        }
+    }
+}
 
 /// `SimplexNoise.GRADIENT`.
 const GRADIENT: [[i32; 3]; 16] = [
@@ -85,7 +103,7 @@ pub struct ImprovedNoise {
 }
 
 impl ImprovedNoise {
-    pub fn new(random: &mut XoroshiroRandomSource) -> Self {
+    pub fn new(random: &mut dyn RandomSource) -> Self {
         let xo = random.next_double() * 256.0;
         let yo = random.next_double() * 256.0;
         let zo = random.next_double() * 256.0;
@@ -232,7 +250,19 @@ impl PerlinNoise {
         first_octave: i32,
         amplitudes: &[f64],
     ) -> Self {
-        Self::new(random, first_octave, amplitudes, true)
+        let factory = PositionalFactory::Xoroshiro(random.fork_positional());
+        Self::new_with_factory(factory, first_octave, amplitudes)
+    }
+
+    /// `PerlinNoise.create(RandomSource, ...)` when the source is a legacy
+    /// LCG, as used by `NoiseBasedStateProvider`'s `NormalNoise`.
+    pub fn create_legacy_seed(
+        random: &mut LegacyRandomSource,
+        first_octave: i32,
+        amplitudes: &[f64],
+    ) -> Self {
+        let factory = PositionalFactory::Legacy(random.fork_positional());
+        Self::new_with_factory(factory, first_octave, amplitudes)
     }
 
     /// Java: `createLegacyForLegacyNetherBiome` / `createLegacyForBlendedNoise`.
@@ -241,7 +271,7 @@ impl PerlinNoise {
         first_octave: i32,
         amplitudes: &[f64],
     ) -> Self {
-        Self::new(random, first_octave, amplitudes, false)
+        Self::new_legacy(random, first_octave, amplitudes)
     }
 
     /// Builds the amplitude list used by `PerlinNoise.create(random,
@@ -265,43 +295,52 @@ impl PerlinNoise {
         Self::create_legacy(random, first_octave, &amplitudes)
     }
 
-    fn new(
-        random: &mut XoroshiroRandomSource,
-        first_octave: i32,
-        amplitudes: &[f64],
-        use_new_factory: bool,
-    ) -> Self {
+    fn new_with_factory(factory: PositionalFactory, first_octave: i32, amplitudes: &[f64]) -> Self {
+        let size = amplitudes.len();
+        let mut noise_levels: Vec<Option<ImprovedNoise>> = vec![None; size];
+
+        for (index, amplitude) in amplitudes.iter().enumerate() {
+            if *amplitude != 0.0 {
+                let octave = first_octave + index as i32;
+                let mut octave_random = factory.named(&format!("octave_{octave}"));
+                noise_levels[index] = Some(ImprovedNoise::new(&mut *octave_random));
+            }
+        }
+
+        Self::finish(noise_levels, first_octave, amplitudes)
+    }
+
+    fn new_legacy(random: &mut dyn RandomSource, first_octave: i32, amplitudes: &[f64]) -> Self {
         let size = amplitudes.len();
         let lowest = -first_octave;
         let mut noise_levels: Vec<Option<ImprovedNoise>> = vec![None; size];
 
-        if use_new_factory {
-            let factory = random.fork_positional();
-            for (index, amplitude) in amplitudes.iter().enumerate() {
-                if *amplitude != 0.0 {
-                    let octave = first_octave + index as i32;
-                    let mut octave_random = factory.from_hash_of(&format!("octave_{octave}"));
-                    noise_levels[index] = Some(ImprovedNoise::new(&mut octave_random));
-                }
-            }
-        } else {
-            let improved = ImprovedNoise::new(random);
-            if lowest >= 0 && (lowest as usize) < size && amplitudes[lowest as usize] != 0.0 {
-                noise_levels[lowest as usize] = Some(improved);
-            }
-            for index in (0..lowest).rev() {
-                if (index as usize) < size {
-                    if amplitudes[index as usize] != 0.0 {
-                        noise_levels[index as usize] = Some(ImprovedNoise::new(random));
-                    } else {
-                        skip_octave(random);
-                    }
+        let improved = ImprovedNoise::new(random);
+        if lowest >= 0 && (lowest as usize) < size && amplitudes[lowest as usize] != 0.0 {
+            noise_levels[lowest as usize] = Some(improved);
+        }
+        for index in (0..lowest).rev() {
+            if (index as usize) < size {
+                if amplitudes[index as usize] != 0.0 {
+                    noise_levels[index as usize] = Some(ImprovedNoise::new(random));
                 } else {
                     skip_octave(random);
                 }
+            } else {
+                skip_octave(random);
             }
         }
 
+        Self::finish(noise_levels, first_octave, amplitudes)
+    }
+
+    fn finish(
+        noise_levels: Vec<Option<ImprovedNoise>>,
+        first_octave: i32,
+        amplitudes: &[f64],
+    ) -> Self {
+        let size = amplitudes.len();
+        let lowest = -first_octave;
         let lowest_freq_input_factor = 2f64.powi(-lowest);
         let lowest_freq_value_factor = 2f64.powi(size as i32 - 1) / (2f64.powi(size as i32) - 1.0);
         let mut noise = Self {
@@ -377,7 +416,7 @@ impl PerlinNoise {
     }
 }
 
-fn skip_octave(random: &mut XoroshiroRandomSource) {
+fn skip_octave(random: &mut dyn RandomSource) {
     random.consume_count(262);
 }
 
@@ -405,7 +444,19 @@ impl NormalNoise {
     ) -> Self {
         let first = PerlinNoise::create(random, first_octave, amplitudes);
         let second = PerlinNoise::create(random, first_octave, amplitudes);
+        Self::finish(first, second, amplitudes)
+    }
 
+    /// `NormalNoise.create(new WorldgenRandom(new LegacyRandomSource(seed)),
+    /// parameters)`, the path used by `NoiseBasedStateProvider`.
+    pub fn create_legacy_seed(seed: i64, first_octave: i32, amplitudes: &[f64]) -> Self {
+        let mut random = LegacyRandomSource::new(seed);
+        let first = PerlinNoise::create_legacy_seed(&mut random, first_octave, amplitudes);
+        let second = PerlinNoise::create_legacy_seed(&mut random, first_octave, amplitudes);
+        Self::finish(first, second, amplitudes)
+    }
+
+    fn finish(first: PerlinNoise, second: PerlinNoise, amplitudes: &[f64]) -> Self {
         let mut min_index = i32::MAX;
         let mut max_index = i32::MIN;
         for (index, amplitude) in amplitudes.iter().enumerate() {

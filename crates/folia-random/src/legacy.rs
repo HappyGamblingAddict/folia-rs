@@ -61,6 +61,57 @@ impl LegacyRandomSource {
     pub fn fork(&mut self) -> Self {
         Self::new(self.next_long())
     }
+
+    /// Creates a positional factory seeded from the next `nextLong` value.
+    ///
+    /// Java: `LegacyRandomSource.forkPositional()`.
+    pub fn fork_positional(&mut self) -> LegacyPositionalRandomFactory {
+        LegacyPositionalRandomFactory {
+            seed: self.next_long(),
+        }
+    }
+}
+
+/// `LegacyRandomSource.LegacyPositionalRandomFactory`.
+#[derive(Debug, Clone)]
+pub struct LegacyPositionalRandomFactory {
+    seed: i64,
+}
+
+impl LegacyPositionalRandomFactory {
+    /// `PositionalRandomFactory.at(int, int, int)`.
+    pub fn at(&self, x: i32, y: i32, z: i32) -> LegacyRandomSource {
+        LegacyRandomSource::new(mth_get_seed(x, y, z) ^ self.seed)
+    }
+
+    /// `PositionalRandomFactory.fromHashOf(String)`.
+    pub fn from_hash_of(&self, name: &str) -> LegacyRandomSource {
+        LegacyRandomSource::new(i64::from(java_string_hash(name)) ^ self.seed)
+    }
+
+    /// `PositionalRandomFactory.fromSeed(long)`.
+    pub fn from_seed(&self, seed: i64) -> LegacyRandomSource {
+        LegacyRandomSource::new(seed)
+    }
+}
+
+/// `Mth.getSeed(int, int, int)`.
+fn mth_get_seed(x: i32, y: i32, z: i32) -> i64 {
+    let mut value = i64::from(x.wrapping_mul(3_129_871))
+        ^ i64::from(z).wrapping_mul(116_129_781)
+        ^ i64::from(y);
+    value = value
+        .wrapping_mul(value)
+        .wrapping_mul(42_317_861)
+        .wrapping_add(value.wrapping_mul(11));
+    value >> 16
+}
+
+/// Java `String.hashCode()`.
+fn java_string_hash(value: &str) -> i32 {
+    value.encode_utf16().fold(0i32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(i32::from(unit))
+    })
 }
 
 impl RandomSource for LegacyRandomSource {
@@ -108,5 +159,45 @@ impl RandomSource for LegacyRandomSource {
 
     fn next_boolean(&mut self) -> bool {
         self.next_bits(1) != 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positional_factory_uses_legacy_seed_math() {
+        let mut first = LegacyRandomSource::new(42);
+        let factory = first.fork_positional();
+
+        let mut expected_parent = LegacyRandomSource::new(42);
+        let factory_seed = expected_parent.next_long();
+
+        let from_seed = factory.from_seed(7).next_long();
+        assert_eq!(from_seed, LegacyRandomSource::new(7).next_long());
+
+        let at = factory.at(1, 2, 3).next_long();
+        assert_eq!(
+            at,
+            LegacyRandomSource::new(mth_get_seed(1, 2, 3) ^ factory_seed).next_long()
+        );
+
+        let hashed = factory.from_hash_of("minecraft:aquifer").next_long();
+        assert_eq!(
+            hashed,
+            LegacyRandomSource::new(
+                i64::from(java_string_hash("minecraft:aquifer")) ^ factory_seed
+            )
+            .next_long()
+        );
+    }
+
+    #[test]
+    fn string_hash_matches_java() {
+        assert_eq!(java_string_hash(""), 0);
+        assert_eq!(java_string_hash("a"), 97);
+        assert_eq!(java_string_hash("abc"), 96354);
+        assert_eq!(java_string_hash("minecraft:aquifer"), -1_973_797_502);
     }
 }

@@ -24,7 +24,7 @@ use crate::registry;
 use crate::tags::{self, TagRegistryKind};
 use crate::worldgen::noise::NormalNoise;
 use folia_math::{BlockPos, Direction};
-use folia_random::{RandomSource, XoroshiroRandomSource};
+use folia_random::RandomSource;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::io;
@@ -407,15 +407,10 @@ fn parse_noise_parameters(seed: i64, value: &Value, scale: f32) -> io::Result<No
                 .ok_or_else(|| invalid("noise amplitude must be a number"))
         })
         .collect::<io::Result<Vec<_>>>()?;
-    // The tree/ore paths never needed a provider noise, and `NormalNoise` is
-    // only exposed with a Xoroshiro source. Vanilla seeds this provider through
-    // `WorldgenRandom(new LegacyRandomSource(seed))`; keep the deterministic
-    // Xoroshiro construction and record the mismatch in DECISIONS.md.
-    let noise = NormalNoise::create(
-        &mut XoroshiroRandomSource::new(seed),
-        first_octave,
-        &amplitudes,
-    );
+    // Vanilla seeds provider noise through
+    // `WorldgenRandom(new LegacyRandomSource(seed))`, so use the legacy
+    // positional factory rather than the xoroshiro noise factory.
+    let noise = NormalNoise::create_legacy_seed(seed, first_octave, &amplitudes);
     Ok(NoiseSettings { seed, scale, noise })
 }
 

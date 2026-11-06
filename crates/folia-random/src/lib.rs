@@ -12,16 +12,16 @@
 //! conversions to `f32`/`f64` happen at the same points as in the reference
 //! implementation. This crate intentionally has no dependencies.
 //!
-//! Not ported yet: the Marsaglia polar Gaussian generator (`nextGaussian`),
-//! the MD5-based `RandomSupport.seedFromHashOf`, and the positional random
-//! factories (`at`, `fromHashOf`, `fromSeed`).
+//! Not ported yet: the Marsaglia polar Gaussian generator (`nextGaussian`).
+//! The legacy and xoroshiro positional factories (`at`, `fromHashOf`,
+//! `fromSeed`) are available for worldgen noise construction.
 
 mod legacy;
 mod support;
 mod worldgen;
 mod xoroshiro;
 
-pub use legacy::LegacyRandomSource;
+pub use legacy::{LegacyPositionalRandomFactory, LegacyRandomSource};
 pub use md5::md5;
 pub use support::{
     GOLDEN_RATIO_64, SILVER_RATIO_64, Seed128bit, mix_stafford13, seed_from_hash_of,

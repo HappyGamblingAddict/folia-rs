@@ -30,9 +30,19 @@ pub enum Heightmap {
     /// `Heightmap.Types.WORLD_SURFACE`, the first empty block above the
     /// highest non-air block including fluids.
     WorldSurface,
+    /// `Heightmap.Types.WORLD_SURFACE_WG`, the worldgen copy of
+    /// `WORLD_SURFACE`.
+    WorldSurfaceWg,
     /// `Heightmap.Types.OCEAN_FLOOR`, the first empty block above the highest
     /// motion-blocking block, ignoring fluids.
     OceanFloor,
+    /// `Heightmap.Types.OCEAN_FLOOR_WG`, the worldgen copy of `OCEAN_FLOOR`.
+    OceanFloorWg,
+    /// `Heightmap.Types.MOTION_BLOCKING`, motion-blocking blocks plus fluids.
+    MotionBlocking,
+    /// `Heightmap.Types.MOTION_BLOCKING_NO_LEAVES`, as above but excluding
+    /// `minecraft:leaves`.
+    MotionBlockingNoLeaves,
 }
 
 /// The subset of `BlockPredicate` the placement pipeline can evaluate.
@@ -518,6 +528,14 @@ pub enum PlacementModifierKind {
     Biome,
     /// `HeightmapPlacement`.
     Heightmap(Heightmap),
+    /// `CountOnEveryLayerPlacement`.
+    CountOnEveryLayer(IntProvider),
+    /// `SurfaceRelativeThresholdFilter`.
+    SurfaceRelativeThreshold {
+        heightmap: Heightmap,
+        min_inclusive: i32,
+        max_inclusive: i32,
+    },
     /// `SurfaceWaterDepthFilter`.
     SurfaceWaterDepth { max_water_depth: i32 },
     /// `BlockPredicateFilter`.
@@ -561,6 +579,10 @@ impl PlacementModifier {
             PlacementModifierKind::RandomOffset { .. } => "minecraft:random_offset",
             PlacementModifierKind::Biome => "minecraft:biome",
             PlacementModifierKind::Heightmap(_) => "minecraft:heightmap",
+            PlacementModifierKind::CountOnEveryLayer(_) => "minecraft:count_on_every_layer",
+            PlacementModifierKind::SurfaceRelativeThreshold { .. } => {
+                "minecraft:surface_relative_threshold_filter"
+            }
             PlacementModifierKind::SurfaceWaterDepth { .. } => {
                 "minecraft:surface_water_depth_filter"
             }
@@ -647,6 +669,57 @@ impl PlacementModifier {
                     Ok(Vec::new())
                 }
             }
+            PlacementModifierKind::CountOnEveryLayer(count) => {
+                let mut positions = Vec::new();
+                let mut layer = 0;
+                loop {
+                    let mut placed_any = false;
+                    let mut placed = 0;
+                    loop {
+                        let limit = count.sample(random)?;
+                        if placed >= limit {
+                            break;
+                        }
+                        let x = random.next_int_bound(16) + pos.x();
+                        let z = random.next_int_bound(16) + pos.z();
+                        let Some(height) = world.heightmap(Heightmap::MotionBlocking, x, z) else {
+                            placed += 1;
+                            continue;
+                        };
+                        let Some(y) = find_on_ground_y_position(world, min_y, x, height, z, layer)
+                        else {
+                            placed += 1;
+                            continue;
+                        };
+                        positions.push(BlockPos::new(x, y, z));
+                        placed_any = true;
+                        placed += 1;
+                    }
+                    if !placed_any {
+                        break;
+                    }
+                    layer += 1;
+                }
+                Ok(positions)
+            }
+            PlacementModifierKind::SurfaceRelativeThreshold {
+                heightmap,
+                min_inclusive,
+                max_inclusive,
+            } => {
+                let Some(surface) = world.heightmap(*heightmap, pos.x(), pos.z()) else {
+                    return Ok(Vec::new());
+                };
+                let surface = i64::from(surface);
+                let y = i64::from(pos.y());
+                if surface + i64::from(*min_inclusive) <= y
+                    && y <= surface + i64::from(*max_inclusive)
+                {
+                    Ok(vec![pos])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             PlacementModifierKind::SurfaceWaterDepth { max_water_depth } => {
                 let ocean_floor = world.heightmap(Heightmap::OceanFloor, pos.x(), pos.z());
                 let world_surface = world.heightmap(Heightmap::WorldSurface, pos.x(), pos.z());
@@ -707,7 +780,9 @@ impl PlacementModifier {
             | PlacementModifierKind::FixedPlacement(_)
             | PlacementModifierKind::Biome
             | PlacementModifierKind::Heightmap(_)
+            | PlacementModifierKind::SurfaceRelativeThreshold { .. }
             | PlacementModifierKind::SurfaceWaterDepth { .. } => true,
+            PlacementModifierKind::CountOnEveryLayer(count) => count.is_supported(),
             PlacementModifierKind::BlockPredicate(predicate) => predicate.is_supported(),
             PlacementModifierKind::EnvironmentScan {
                 target, allowed, ..
@@ -720,6 +795,40 @@ impl PlacementModifier {
             PlacementModifierKind::Unsupported { .. } => false,
         }
     }
+}
+
+/// `CountOnEveryLayerPlacement.findOnGroundYPosition`.
+fn find_on_ground_y_position(
+    world: &dyn PlacementWorld,
+    min_y: i32,
+    x: i32,
+    height: i32,
+    z: i32,
+    count: i32,
+) -> Option<i32> {
+    let mut state = world.block_at(BlockPos::new(x, height, z))?.clone();
+    let mut found = 0;
+    let mut y = height;
+    while y > min_y {
+        let below = world.block_at(BlockPos::new(x, y - 1, z))?.clone();
+        if !is_empty_layer_state(&below)
+            && is_empty_layer_state(&state)
+            && below.name != "minecraft:bedrock"
+        {
+            if found == count {
+                return Some(y);
+            }
+            found += 1;
+        }
+        state = below;
+        y -= 1;
+    }
+    None
+}
+
+fn is_empty_layer_state(state: &BlockState) -> bool {
+    crate::chunk::is_air_state(state)
+        || matches!(state.name.as_str(), "minecraft:water" | "minecraft:lava")
 }
 
 /// `SectionPos.blockToSectionCoord`.
@@ -768,10 +877,46 @@ pub(crate) fn parse_modifier(value: &Value) -> io::Result<PlacementModifier> {
                 .ok_or_else(|| invalid(format!("{type_name} needs a string `heightmap`")))?;
             match heightmap {
                 "WORLD_SURFACE" => PlacementModifierKind::Heightmap(Heightmap::WorldSurface),
+                "WORLD_SURFACE_WG" => PlacementModifierKind::Heightmap(Heightmap::WorldSurfaceWg),
                 "OCEAN_FLOOR" => PlacementModifierKind::Heightmap(Heightmap::OceanFloor),
+                "OCEAN_FLOOR_WG" => PlacementModifierKind::Heightmap(Heightmap::OceanFloorWg),
+                "MOTION_BLOCKING" => PlacementModifierKind::Heightmap(Heightmap::MotionBlocking),
+                "MOTION_BLOCKING_NO_LEAVES" => {
+                    PlacementModifierKind::Heightmap(Heightmap::MotionBlockingNoLeaves)
+                }
                 _ => PlacementModifierKind::Unsupported {
                     vanilla_type: type_name.clone(),
                 },
+            }
+        }
+        "minecraft:count_on_every_layer" => PlacementModifierKind::CountOnEveryLayer(
+            parse_int_provider(field(object, "count", &type_name)?)?,
+        ),
+        "minecraft:surface_relative_threshold_filter" => {
+            let kind = match field(object, "heightmap", &type_name)?
+                .as_str()
+                .ok_or_else(|| invalid(format!("{type_name} needs a string `heightmap`")))?
+            {
+                "WORLD_SURFACE" => Heightmap::WorldSurface,
+                "WORLD_SURFACE_WG" => Heightmap::WorldSurfaceWg,
+                "OCEAN_FLOOR" => Heightmap::OceanFloor,
+                "OCEAN_FLOOR_WG" => Heightmap::OceanFloorWg,
+                "MOTION_BLOCKING" => Heightmap::MotionBlocking,
+                "MOTION_BLOCKING_NO_LEAVES" => Heightmap::MotionBlockingNoLeaves,
+                other => {
+                    return Ok(PlacementModifier {
+                        kind: PlacementModifierKind::Unsupported {
+                            vanilla_type: format!("{type_name}:{other}"),
+                        },
+                    });
+                }
+            };
+            PlacementModifierKind::SurfaceRelativeThreshold {
+                heightmap: kind,
+                min_inclusive: optional_int(object, "min_inclusive", &type_name)?
+                    .unwrap_or(i32::MIN),
+                max_inclusive: optional_int(object, "max_inclusive", &type_name)?
+                    .unwrap_or(i32::MAX),
             }
         }
         "minecraft:surface_water_depth_filter" => PlacementModifierKind::SurfaceWaterDepth {
@@ -1447,8 +1592,12 @@ mod tests {
 
     #[test]
     fn unported_modifier_fails_loudly() {
-        let modifier =
-            parse(json!({"type": "minecraft:heightmap", "heightmap": "MOTION_BLOCKING"}));
+        let modifier = parse(json!({
+            "type": "minecraft:noise_based_count",
+            "noise_to_count_ratio": 20,
+            "noise_factor": 400.0,
+            "noise_offset": 0.0
+        }));
         let mut random = ScriptedRandom::new([], []);
         let error = modifier
             .get_positions(
@@ -1460,7 +1609,7 @@ mod tests {
                 384,
             )
             .unwrap_err();
-        assert_eq!(error.vanilla_type, "minecraft:heightmap");
+        assert_eq!(error.vanilla_type, "minecraft:noise_based_count");
         assert!(!modifier.is_supported());
     }
 

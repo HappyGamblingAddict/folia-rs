@@ -693,6 +693,31 @@ These are expected gaps, not reasons to stop:
     pin packet ids and bodies against the decompiled layouts.
 - Workaround / next task: keep the explicit `SessionEntityTracker` boundary and
   extend it for P5.13/P5.2 rather than reintroducing global broadcasts.
+
+## 2026-11-06 - P4.3/P5.4 item entities + XP orbs are a behaviour slice
+
+- Scope: `item_entity.rs` models ItemEntity/XP orb physics, magnet/attraction,
+  merges, splitting, `PickupTarget` collection, and add/metadata/sync/remove
+  packets. `spawn_drops_at` + `DigState::stop_with_entities` connect block
+  drops to ground entities. 6 lib + 16 `tests/item_entities.rs` tests pass.
+- Not wired: `join.rs` still deposits drops directly into the inventory and
+  does not spawn, tick, track, or collect ground entities. The live slice
+  needs a `PickupTarget` impl for sessions, per-session storage (like
+  `SessionEntityTracker`), chunk-appear/disappear packet routing, and world
+  RNG plumbing. No packet is sent by this slice in production.
+- Not modelled: fluids (water/lava drag), fire/lava damage (`health` is
+  carried but never hurt), `noCollision` ejection, Paper merge/despawn
+  events, Bukkit pickup events, `takeXpDelay` cooldown, mending,
+  chunk persistence, and per-viewer tracking.
+- Deviations: item magnet (4 blocks) and merge (3 blocks) are task values;
+  vanilla has no item magnet and a `1.0` merge radius. XP merge ignores
+  Paper's `xpOrbGroupsPerArea` grouping. See `DECISIONS.md`.
+- Parity: packet bodies are pinned against the Java layouts and round-trip
+  decoders, but there is no Java-captured item/XP pickup trajectory fixture.
+  Do not claim pickup parity from this slice.
+- Workaround: call `stop_with_entities` (or `spawn_drops_at`) from tests or a
+  future session slice; keep `stop_with_loot` for inventory callers.
+
 ## 2026-11-06 - P4.7/P6 block entities are persistence-only, not gameplay parity
 
 - Status: `block_entity.rs` implements typed chest/trapped chest,

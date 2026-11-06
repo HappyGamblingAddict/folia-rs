@@ -440,11 +440,23 @@ pub enum DigStart {
     Instant,
 }
 
-/// Loot inputs bundled for [`DigState::stop_with_loot`].
+/// Loot inputs bundled for [`DigState::stop_with_loot`] and
+/// [`DigState::stop_with_entities`].
 #[derive(Clone, Copy)]
 pub struct DigLootContext<'a> {
     pub context: &'a BlockLootContext<'a>,
     pub provider: Option<&'a dyn LootProvider>,
+}
+
+/// Result of a [`DigState::stop_with_entities`] call: the stop outcome, the
+/// rolled drops (for inventory fallback), and the spawned drop entities.
+/// When the stop does not destroy the block, `drops` is `None` and
+/// `entities` is empty.
+#[derive(Debug, Clone)]
+pub struct DigStopEntities {
+    pub stop: DigStop,
+    pub drops: Option<BlockDrops>,
+    pub entities: Vec<crate::item_entity::DroppedEntity>,
 }
 
 /// Result of a `STOP_DESTROY_BLOCK` action.
@@ -585,6 +597,36 @@ impl DigState {
             None
         };
         (stop, drops)
+    }
+
+    /// Handle `STOP_DESTROY_BLOCK`, roll drops, and spawn them as item
+    /// entities / XP orbs at `pos` in one step.
+    ///
+    /// This is the entity-spawning counterpart of [`DigState::stop_with_loot`]:
+    /// the loot roll and the spawn velocities share `random`, so a fixed
+    /// seed reproduces both. The existing `stop_with_loot` signature is
+    /// kept for callers that still feed drops straight into an inventory;
+    /// callers that want ground drops (and XP orbs) use this method instead.
+    /// Durability is left to the caller exactly as with `stop_with_loot`.
+    pub fn stop_with_entities(
+        &mut self,
+        pos: BlockPos,
+        state: &BlockState,
+        context: &MiningContext,
+        now_tick: u64,
+        loot: &DigLootContext<'_>,
+        random: &mut dyn RandomSource,
+    ) -> DigStopEntities {
+        let (stop, drops) = self.stop_with_loot(pos, state, context, now_tick, loot, random);
+        let entities = match &drops {
+            Some(rolled) => crate::item_entity::spawn_drops_at(pos, rolled, random),
+            None => Vec::new(),
+        };
+        DigStopEntities {
+            stop,
+            drops,
+            entities,
+        }
     }
 
     /// Advance a vanilla `hasDelayedDestroy` target. Returns `true` when the

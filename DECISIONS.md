@@ -13,7 +13,43 @@ Format:
 - Consequences:
 ```
 
-## 2026-11-06 - Pistons use explicit moving-block payloads
+## 2026-11-06 — Item entities use a 4-block magnet and 3-block merge
+- Context: vanilla `ItemEntity` has no in-tick magnet (pickup is a player-box
+  inflate), and its merge radius is the spigot `itemMerge` value (default
+  `1.0`), while the task requires magnet movement and merge within 3 blocks.
+- Decision: model an item magnet within `4.0` blocks (pickup radius `1.5`,
+  pull `(1-d/4)^2 * 0.2` toward the eye-half target) and merge within `3.0`
+  blocks requiring same item + components and a combined count within the
+  destination max stack. XP attraction keeps Java's `8`-block `(1-d/8)^2 *
+  0.1` formula; XP merge is equal-value within `0.5` without Paper's
+  `xpOrbGroupsPerArea` modulo. Metadata uses index `8` for both types
+  (item-stack / int serializer), matching Java's first accessor after the
+  base `Entity` indices.
+- Why: deterministic, testable, and close enough to vanilla pickup feel
+  without a player-session tick loop; the deviations are explicit.
+- Consequences: pickup trajectories differ from a Java capture on edge cases
+  (3-block merges, 4-block magnet). A Java pickup fixture is still required
+  before claiming parity.
+
+## 2026-11-06 — Pickup goes through a session-free trait; spawner keeps the loot signature backward-compatible
+- Context: the task forbids `join.rs` edits and requires ground drops from
+  block breaking without breaking the existing `stop_with_loot` caller.
+- Decision: add `item_entity::PickupTarget` (`position`/`add_item`/
+  `add_experience`) with a `SlicePickupTarget` adapter over a `36`-slot slice
+  + XP pool that calls `inventory::add_stack`. Add `spawn_drops_at(pos,
+  drops, rng)` (items first, then split orbs, block centre, Java velocity
+  order) and `DigState::stop_with_entities` returning
+  `DigStopEntities { stop, drops, entities }` that shares one `RandomSource`
+  between the loot roll and the spawn velocities. `stop_with_loot` is
+  unchanged. Drop ids come from a process-wide atomic counter starting at
+  `20000` (distinct from session mob ids).
+- Why: deterministic sequences for a fixed seed, no session writes, and no
+  signature churn for inventory callers.
+- Consequences: live spawning/ticking still needs a `join.rs` slice that
+  implements `PickupTarget` for sessions and streams the packets; until then
+  `finish_break` in `join.rs` still deposits drops directly.
+
+## 2026-11-06 — Pistons use explicit moving-block payloads
 
 - Context: `block_entity.rs` is still a stub with no typed moving-block API, but
   pistons must preserve the moved state across two movement ticks.

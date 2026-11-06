@@ -1573,6 +1573,19 @@ instantly on start-destroy and places on use-item-on.
   adventure `can_destroy`, a Java break-time fixture, and replacing the legacy
   `block_drops` per-block deterministic seed with the session/world RNG once
   `join.rs` can pass it through.
+- **Progress (2026-11-06, item entities/XP orbs):** `item_entity.rs` models
+  `ItemEntity` (stack, delay 10, lifetime 6000, magnet 4 blocks, merge 3
+  blocks) and `ExperienceOrb` (value, attraction 8 blocks, split via
+  `getExperienceValue`, merge 0.5 blocks, lifetime 6000) with Add Entity,
+  metadata (item stack / value at index 8), position sync, and remove
+  packets through the existing entity encoders. `spawn_drops_at(pos, drops,
+  rng)` spawns items then split orbs at the block centre with Java initial
+  velocities. `DigState::stop_with_entities` rolls and spawns in one step
+  while `stop_with_loot` keeps its signature for inventory callers. Pickup
+  collects through the `PickupTarget` trait (`add_stack` + XP pool), so no
+  `join.rs` edit was needed. Focused: 6 lib + 16 `tests/item_entities.rs`
+  tests. Still open: live `join.rs` spawning/ticking, fluid/fire/damage,
+  block-damage overlay, Unbreaking, and a Java pickup trajectory fixture.
 
 ### P4.4 Block placement rules `[ ]` `M`
 
@@ -1805,12 +1818,18 @@ are still open.
 - **Why:** Armor-stand gravity is only the first physics case.
 - **Done when:** Differential traces cover water, ladders, and vehicles.
 
-### P5.4 Item, projectile, and falling entities `[ ]` `M`
+### P5.4 Item, projectile, and falling entities `[~]` `M`
 
 - **What:** Implement item entities, XP orbs, arrows, tridents, snowballs, eggs,
   fireballs, fireworks, falling blocks, TNT, and pickup/despawn behavior.
 - **Why:** These connect combat, mining, farming, and redstone.
 - **Done when:** Projectile trajectories and item pickup match Java traces.
+- **Progress (2026-11-06, item/XP slice):** `item_entity.rs` implements
+  `ItemEntity` + `ExperienceOrb` owners, velocities/gravity, magnet/
+  attraction, merges, splitting, `PickupTarget` collection, and add/metadata/
+  sync/remove packets. `spawn_drops_at` + `DigState::stop_with_entities`
+  connect block drops to ground entities. Projectiles, falling blocks, TNT,
+  live-session ticking, and Java pickup fixtures remain open.
 
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 

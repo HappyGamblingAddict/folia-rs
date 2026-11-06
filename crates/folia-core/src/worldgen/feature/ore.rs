@@ -3,42 +3,19 @@
 //! `OreFeature` builds a chain of ellipsoids from its size, rejects targets
 //! exposed to air at the configured chance, and replaces the first matching
 //! target state. `ScatteredOreFeature` samples a small number of independent
-//! positions around the origin. Both use the exact four overworld/nether
-//! `RuleTest` tags that the shipped configs reference; unknown predicates make
-//! the whole config unsupported rather than guessing.
+//! positions around the origin. The four `RuleTest` tags used by the shipped
+//! configs resolve through the generated vanilla block-tag table; unknown
+//! predicates make the whole config unsupported rather than guessing.
 
 use super::placement::parse_block_state;
 use super::{FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
+use crate::tags;
 use crate::worldgen::carver::mth_sin;
 use folia_math::BlockPos;
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
 use std::io;
-
-const BASE_STONE_OVERWORLD: &[&str] = &[
-    "minecraft:stone",
-    "minecraft:granite",
-    "minecraft:diorite",
-    "minecraft:andesite",
-    "minecraft:tuff",
-    "minecraft:deepslate",
-];
-
-const STONE_ORE_REPLACEABLES: &[&str] = &[
-    "minecraft:stone",
-    "minecraft:granite",
-    "minecraft:diorite",
-    "minecraft:andesite",
-];
-
-const DEEPSLATE_ORE_REPLACEABLES: &[&str] = &["minecraft:deepslate", "minecraft:tuff"];
-
-const BASE_STONE_NETHER: &[&str] = &[
-    "minecraft:netherrack",
-    "minecraft:basalt",
-    "minecraft:blackstone",
-];
 
 #[derive(Debug, Clone)]
 pub struct OreFeature {
@@ -56,14 +33,14 @@ struct OreTargetBlock {
 #[derive(Debug, Clone)]
 enum OreTarget {
     Block(String),
-    Tag(&'static [&'static str]),
+    Tag(&'static str),
 }
 
 impl OreTarget {
     fn matches(&self, state: &BlockState) -> bool {
         match self {
             Self::Block(name) => state.name == *name,
-            Self::Tag(values) => values.contains(&state.name.as_str()),
+            Self::Tag(tag) => tags::block_has(tag, &state.name),
         }
     }
 }
@@ -164,12 +141,18 @@ fn parse_target(object: &Map<String, Value>) -> io::Result<Option<OreTarget>> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| invalid("tag_match ore target is missing `tag`"))?;
             Ok(match tag {
-                "minecraft:base_stone_overworld" => Some(OreTarget::Tag(BASE_STONE_OVERWORLD)),
-                "minecraft:stone_ore_replaceables" => Some(OreTarget::Tag(STONE_ORE_REPLACEABLES)),
-                "minecraft:deepslate_ore_replaceables" => {
-                    Some(OreTarget::Tag(DEEPSLATE_ORE_REPLACEABLES))
+                "minecraft:base_stone_overworld" => {
+                    Some(OreTarget::Tag("minecraft:base_stone_overworld"))
                 }
-                "minecraft:base_stone_nether" => Some(OreTarget::Tag(BASE_STONE_NETHER)),
+                "minecraft:stone_ore_replaceables" => {
+                    Some(OreTarget::Tag("minecraft:stone_ore_replaceables"))
+                }
+                "minecraft:deepslate_ore_replaceables" => {
+                    Some(OreTarget::Tag("minecraft:deepslate_ore_replaceables"))
+                }
+                "minecraft:base_stone_nether" => {
+                    Some(OreTarget::Tag("minecraft:base_stone_nether"))
+                }
                 _ => None,
             })
         }

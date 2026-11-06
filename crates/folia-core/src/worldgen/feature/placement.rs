@@ -61,20 +61,9 @@ impl BlockPredicate {
     }
 }
 
-/// Blocks the vanilla `minecraft:dirt` tag contains; saplings can survive on
-/// all of them.
+/// Vanilla's `minecraft:dirt` block tag; saplings can survive on all of it.
 fn is_sapling_soil(name: &str) -> bool {
-    matches!(
-        name,
-        "minecraft:dirt"
-            | "minecraft:grass_block"
-            | "minecraft:coarse_dirt"
-            | "minecraft:podzol"
-            | "minecraft:mycelium"
-            | "minecraft:rooted_dirt"
-            | "minecraft:moss_block"
-            | "minecraft:muddy_mangrove_roots"
-    )
+    crate::tags::block_has("minecraft:dirt", name)
 }
 
 /// World state a placement modifier may need.

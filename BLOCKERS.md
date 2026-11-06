@@ -14,6 +14,31 @@ Format:
 - Workaround / next task:
 ```
 
+## 2026-11-06 — P10 region ownership is task-scoped, not world-scoped
+
+- Status: Not a hard blocker. `region.rs` now enforces ownership on the
+  task subsystem (`Region` queue + world-slice token + tick counter,
+  `RegionOwned<T>`/`OwnedWorld`, `OwnershipError`, `RegionMap` vanilla
+  8x8/4x4 math). 18 `tests/region_ownership.rs` tests plus the existing
+  scheduler suites in `bulk_validation` pass.
+- Not wired (needs P10.3-P10.7, outside this slice's files):
+  - `WorldStorage` (`world.rs`), entity state (`entity.rs`), players, and
+    chunk tickets are still shared/global; the server loop in `main.rs`
+    still ticks the world globally. `RegionWorldSlice` cells are a token
+    model, not yet the real chunk/entity/block-entity store.
+  - Legacy `schedule_at` tasks receive no `OwnedWorld`; only owned tasks
+    and `RegionOwned` values are checked. A legacy task can still mutate
+    global state without an ownership error.
+  - No region merge/split, ownership transfer, cross-region teleport, or
+    entity handoff; `RegionMap::group_chunks` only groups chunks for
+    migration.
+  - The global queue uses the `GLOBAL_REGION_KEY` sentinel so it can
+    never collide with a real region; it is not a real region.
+- Workaround / next task: Use `schedule_owned_*` plus `RegionOwned` for
+  new region-local work. Wire `Region` into the tick loop and per-region
+  world state before claiming Folia region parity; do not treat the
+  current scheduler isolation as world-state isolation.
+
 ## 2026-11-04 — P0.5 Make oracle data reproducible
 
 - Blocker: Regenerating the Java oracle dumps requires starting the

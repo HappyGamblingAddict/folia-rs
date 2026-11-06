@@ -31,6 +31,30 @@ Format:
   block-entity contents are not part of the payload. Entity pushing/velocity
   and Java differential traces remain open.
 
+## 2026-11-06 — Region ownership is enforced on tasks, not yet on world state
+
+- Context: `region.rs` was a task-queue shim: region ids and per-region
+  counters existed, but nothing owned world state and nothing rejected
+  cross-region access, so "regionized" only meant "queued separately".
+- Decision: Make `Region` public and owner-shaped: it holds its task queue,
+  a `RegionWorldSlice` (world-slice token plus sparse block cells), and a
+  monotonic tick counter. Owned tasks receive an `OwnedWorld` for their own
+  region and fail with `OwnershipError` when they touch another region;
+  `RegionOwned<T>` checks both an explicit caller region and the ticking
+  region on the current thread (per-thread map + `ThreadingDetector`, the
+  `TickThread` analogue). Access with no active region on the thread is
+  denied, matching Folia's tick-thread-only rule. `RegionMap` uses vanilla
+  8x8 chunk regions and 4x4 section regions with floor division, and
+  `RegionId` packs key bits so equal regions always get equal ids.
+- Why: This is the smallest slice that makes ownership a real, testable
+  invariant instead of a scheduling hint, while keeping the legacy
+  scheduler API (delay/period/cancel, `tick`/`tick_parallel`) intact.
+- Consequences: The live server loop, `WorldStorage`, entities, players,
+  and chunk tickets are still global; `Region` is not yet wired into them.
+  Legacy (unowned) tasks still run, but any state they touch through
+  `RegionOwned`/`OwnedWorld` is checked. Region merge/split, cross-region
+  teleports, and entity transfer remain open (P10.2-P10.5, P10.7).
+
 ## 2026-11-04 â€” Git is not part of the workflow
 
 - Context: The working tree contains large uncommitted changes and the user

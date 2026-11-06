@@ -9,11 +9,12 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit (informational only): see `git log` (entity metadata,
-  block-behaviour integration, and P2.4/P2.5 feature gaps merged).
+  block-behaviour, P2.4/P2.5 gaps, and P2.12 surface merged).
 - Working tree: clean; these slices are merged.
 - Tests: **426 passing** on the last full gate; focused entity-metadata
-  (6 lib + 12 integration), block-behaviour (4 integration), and feature
-  gap (74 feature lib + 18 vegetation integration) suites are green.
+  (6 lib + 12 integration), block-behaviour (4 integration), feature-gap
+  (74 lib + 18 vegetation), and surface (1 lib + 3 integration + 1 config)
+  suites are green. Parity: 98.71% block-class / 92.01% exact-name.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -75,8 +76,8 @@ Last updated: 2026-11-06
   variants. Generation wiring is now complete for the supported subset.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
-- Worldgen parity: 98.71% block-class / 92.02% exact-name on the 16-column
-  fixture after the aquatic slice (was 92.04%).
+- Worldgen parity: 98.71% block-class / 92.01% exact-name on the 16-column
+  fixture after the P2.12 surface slice (pre-slice exact-name was 92.02%).
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
   block-light BFS. Opacity and emission come from the generated per-state
@@ -367,6 +368,19 @@ Last updated: 2026-11-06
   `simple_random_selector`. Focused: 74 feature lib tests + 18 vegetation
   integration tests; 171/224 configured features supported.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch - three new feature modules.
+- 2026-11-06: P2.12 surface fidelity — `surface::build_surface` now resolves
+  the pre-extension and per-block `isBiome`/temperature biome through
+  `biome_zoom::BiomeZoomer`, memoized per block Y like Java, and falls back to
+  the chunk-local quart only when no configured generator seed exists. Surface
+  temperature uses `biome_climate` plus `simplex::temperature_noise` for
+  `getHeightAdjustedTemperature`; frozen-ocean iceberg melt goes through the
+  same helper. `config` gains Paper's `generate-flat-bedrock` and
+  `paper:optionally_flat_bedrock_condition_source` collapses the floor gradient
+  to one layer when enabled. The column start was corrected to Java's
+  `Heightmap.getHeight + 1`. `tests/surface.rs` covers zoom selection,
+  flat-bedrock on/off, and fixed-coordinate frozen/deep-frozen melt. Parity:
+  98.71% block-class / 92.01% exact-name (5653/6144).
+- 2026-11-06: P2.5 aquatic/vine/mushroom batch — three new feature modules.
   `aquatic.rs` ports `SeagrassFeature` (short/tall, half pairing),
   `KelpFeature` (head age and body fallback), `SeaPickleFeature`,
   `CoralFeature` plus tree/claw/mushroom shapes (tag-ordered coral picks,

@@ -308,3 +308,23 @@ These are expected gaps, not reasons to stop:
   bamboo. Parity is 98.71% block-class / 92.02% exact-name (5654/6144); the
   one-block exact delta is a tall-seagrass pair on a column whose Rust terrain
   already differs from Java.
+
+## 2026-11-06 - P2.12 surface fixtures and direct-seed harness gap
+
+- Blocker: The P2.12 code paths are implemented and behavior-tested, but there
+  is no captured Java frozen-ocean/iceberg fixture and no way to regenerate one
+  from this session (same oracle-regeneration blocker as P0.5). Direct
+  `WorldGenerator::overworld` harnesses also do not carry the raw seed into
+  `SurfaceSystem`, so they use the chunk-local quart fallback unless the test
+  calls `build_surface_with_seed`/`top_material_with_seed`.
+- What was tried: Extracted the real biome climate table and `PerlinSimplexNoise`
+  tables, wired `BiomeZoomer` into the surface context through
+  `generator::configured()`, and pinned fixed-coordinate temperature/melt
+  values in `tests/surface.rs`.
+- What is needed: A Java capture of a frozen-ocean/deep-frozen-ocean chunk with
+  icebergs, and either a surface seed parameter threaded through
+  `generator.rs` or a test helper that always calls `*_with_seed`.
+- Workaround / next task: Keep the focused tests; when generator.rs is in scope,
+  pass `WorldGenerator.seed()` into `build_surface` directly and make the
+  fallback a test-only path. Regenerate the Java fixture with `java-worldgen`
+  when P0.5 is unblocked.

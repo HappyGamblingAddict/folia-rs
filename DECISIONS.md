@@ -150,10 +150,12 @@ Format:
 - Why: Ores cannot be placed without `biome`, and the zoomer is the only
   missing ingredient that needs no block-tag data. Keeping world access behind
   a trait lets placement tests stay generator-free.
-- Consequences: Surface rules still use the exact quart biome and features the
-  fuzzy one, matching vanilla's two different lookup paths. `biome_zoom.rs`
-  has no Java fixture yet (the zoomer was checked against a Python reference
-  of the Java code); `end_platform` now places instead of failing.
+- Consequences: At this point surface rules used the exact quart biome and
+  features used the fuzzy one, matching vanilla's two different lookup paths;
+  P2.12 later wired the same zoomer into the surface context as well.
+  `biome_zoom.rs` has no Java fixture yet (the zoomer was checked against a
+  Python reference of the Java code); `end_platform` now places instead of
+  failing.
 
 ## 2026-11-04 â€” Feature framework scope and unsupported behavior
 
@@ -1426,3 +1428,56 @@ Format:
   count as unsupported, while the pale-oak tree configs, pale flowers, and both
   dripleaf pools execute. Do not hide the selector gap by treating
   `pale_oak_checked` as a configured feature.
+## 2026-11-06 - Surface biome lookup uses `BiomeManager` when the generator seed is known
+
+- Context: `SurfaceSystem.buildSurface` asks `BiomeManager.getBiome` at the
+  pre-extension height and at every `updateY`, but `WorldGenerator::overworld`
+  does not pass its raw seed into `SurfaceSystem::new`.
+- Decision: `surface::build_surface` resolves the world seed from
+  `generator::configured()` at generation time and installs
+  `biome_zoom::BiomeZoomer`; the zoom is memoized per block Y like Java's
+  `Suppliers.memoize`. Explicit `build_surface_with_seed`/
+  `top_material_with_seed` entry points let harnesses pin the seed. If no
+  configured generator exists, the earlier chunk-local quart lookup remains as
+  an explicit fallback.
+- Why: Editing `generator.rs` was outside this slice, and the server always
+  calls `generator::configure` before streaming chunks, so the production path
+  gets vanilla's fuzzy lookup. Direct `WorldGenerator::overworld` harnesses
+  (including `worldgen_parity`) run without that global and keep the old
+  fallback instead of guessing a seed.
+- Consequences: Production generation matches Java's surface biome source;
+  differential fixtures must call `*_with_seed` if they want zoom parity before
+  `configure`. This is recorded as a residual gap in `TODO.md`/`BLOCKERS.md`.
+
+## 2026-11-06 - Paper `generate-flat-bedrock` is read from `server.properties`
+
+- Context: Paper stores `environment.generate-flat-bedrock` in
+  `config/paper-world-defaults.yml`, but the native server already has one
+  configuration file and the P2.12 task names `server.properties`.
+- Decision: Accept `generate-flat-bedrock` as a `ServerProperties` field, read
+  it once through `config::generate_flat_bedrock` (with
+  `FOLIA_GENERATE_FLAT_BEDROCK` as an override), and use it while parsing
+  `paper:optionally_flat_bedrock_condition_source`. Enabled collapses the
+  floor gradient to the lower anchor (one flat layer); disabled keeps the
+  vanilla random gradient.
+- Why: It keeps the native server to one config file and makes the behavior
+  testable without a YAML loader. The parsed condition source is otherwise
+  identical to Paper's `OptionallyFlatBedrockConditionSource`.
+- Consequences: A real Paper YAML is not consulted yet; a future Paper config
+  loader should populate the same boolean. Default `false` preserves the
+  captured oracle's random bedrock depths.
+
+## 2026-11-06 - Surface column start is `Heightmap.getHeight + 1`
+
+- Context: `Heightmap.getHeight` returns the highest taken block, while Rust's
+  `column_first_air` returns the first available (air) Y. The surface driver
+  was adding one more block on top of that value for the biome sample, the
+  badlands/frozen-ocean extensions, and the downward walk.
+- Decision: Treat `column_first_air` as Java's `i4` / `i5` directly. The
+  downward walk starts at that first air block; extension heights receive the
+  same value.
+- Why: `ChunkAccess.getHeight` is `getFirstAvailable - 1`, so Java's
+  `getHeight(...) + 1` is exactly the first available block.
+- Consequences: The extra air iteration disappears and the extension boundary
+  tests use Java's height. The fixture's exact-name count moves by one block
+  (92.02% -> 92.01%, 5654 -> 5653); block-class stays 98.71%.

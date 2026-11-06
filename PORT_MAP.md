@@ -23,7 +23,7 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/network/protocol/login/*`, configuration/play initial packets | `folia-core/src/join.rs` + `assets/join_*.bin` | Login → configuration → Join Game; captured registries, live chunk stream |
 | `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light; stored/computed sky+block layers take precedence over the height fallback |
 | Player session / movement / playerdata | `folia-core/src/player.rs` | Movement packet parsing, gzip-NBT persistence, join session |
-| Player physics / movement validation | `folia-core/src/player_physics.rs` | AABB, gravity/drag, ground friction, jump, step-up, fall distance/damage, collision reconciliation; water/ladders/cobwebs/elytra and other special movement remain unported |
+| Player physics / movement validation | `folia-core/src/player_physics.rs` | AABB, gravity/drag, per-state friction/speed/jump factors, jump, step-up, fall distance/damage, collision reconciliation; full-cube collision only, and water/ladders/cobwebs/elytra and other special movement remain unported |
 | `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn; edits now queue six neighbour updates and drain shape/support changes |
 | `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Whole-chunk sky+block light data after a block edit; incremental section-only updates not ported |
 | `Block.UPDATE_*`, `BlockBehaviour.UPDATE_SHAPE_ORDER`, `NeighborUpdater` | `folia-core/src/tick.rs` | Partial: vanilla flag values plus an internal shape bit, chunk-grouped deterministic neighbour queue, six-direction enqueue, shape/support checks, 512-chain limit |
@@ -41,6 +41,7 @@ Rust tree: `crates/folia-core`.
 | `BiomeManager` fuzzy zoom | `folia-core/src/worldgen/biome_zoom.rs` | SHA-256 seed obfuscation, LCG fiddled-distance search over eight quart corners, `biome_at` against `BiomeSampler` |
 | `NoiseBasedChunkGenerator` base terrain | `folia-core/src/worldgen/generator.rs` | 4x8x4 density grid, trilinear interpolation, aquifer substance, bedrock/deepslate gradients, simple surface, sea-level water |
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
+| `BlockBehaviour`, `BlockStateBase` per-state metadata | `folia-core/src/block_behaviour.rs` + `assets/block_state_behaviour.tsv.gz` | 29,671 per-state rows (air/motion/solid/collision, light emission/block, random tick, occlusion, replaceable, hardness/blast, friction/speed/jump, fluid); consumed by lighting and player physics; ticking/breaking consumers still partial |
 | `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
 | `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features, default `FeatureLevel::heightmap`; 162/224 configured features dispatch as supported |
@@ -51,7 +52,7 @@ Rust tree: `crates/folia-core`.
 | `HugeBrownMushroomFeature`, `HugeRedMushroomFeature`, `HugeFungusFeature`, `GlowstoneFeature`, `BlockBlobFeature`, `FillLayerFeature`, `NetherForestVegetationFeature`, `RandomBooleanSelectorFeature` | `folia-core/src/worldgen/feature/mushroom.rs` | Ported: huge mushroom caps/trunks with connection properties, huge crimson/warped fungus stem/hat/decor plus weeping vines, glowstone blob, `forest_rock`, fill layer, nether vegetation, mushroom-island boolean selector (empty nested placement only) |
 | `tree.rs` state-provider path | `folia-core/src/worldgen/feature/tree.rs` | Unchanged on purpose: vegetation providers are independent so tree placement RNG and the existing simple-provider draw caveat stay stable |
 | `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror` | `folia-core/src/worldgen/structure/template.rs` | Partial: gzip structure NBT (palettes, blocks, block-entity NBT, entities), mirror/rotation/pivot/origin transforms, `FeatureLevel` block writing; starts, pieces, structure sets/references, processors, template pools, jigsaw, random palette selection, and entity spawning are not ported |
-| `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border; decrease queues, generated opacity/emission tables, and Java light fixtures still open |
+| `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border, and per-state emission/attenuation from `block_behaviour`; decrease queues, incremental updates, and Java light fixtures still open |
 | `OreVeinifier` | `folia-core/src/worldgen/ore_vein.rs` | Standalone copper/iron vein pass over the noise router (toggle/ridged/gap, granite/tuff filler, raw-ore chance); generator wiring still pending |
 | `SimplexNoise`, `PerlinSimplexNoise`, `Biome.BIOME_INFO_NOISE`/`FROZEN_TEMPERATURE_NOISE` | `folia-core/src/worldgen/simplex.rs` | Ported with Java-pinned reference values; used by noise-count placement and the frozen-ocean temperature modifier |
 | `Biome.getTemperature`, `TemperatureModifier.FROZEN` | `folia-core/src/worldgen/biome_climate.rs` | 65 extracted biome base temperatures/modifiers; frozen-ocean iceberg melt now uses the exact noise branch |
@@ -61,7 +62,8 @@ Rust tree: `crates/folia-core`.
 ## Verification evidence
 
 - `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
-  29 random tests (426 total), 0 failed (2026-11-06).
+  29 random tests (426 total), 0 failed (2026-11-06, last full gate before the
+  block-behaviour slice). That slice adds 4 integration + 2 lib focused tests.
 - P2.5 focused evidence: `worldgen::feature::vegetation` adds 8 unit tests and
   `tests/vegetation.rs` adds 15 integration tests covering shipped
   `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,
@@ -114,6 +116,12 @@ Rust tree: `crates/folia-core`.
   under a roofed shaft, torch block-light radius, unsupported emitter, packet
   masks vs stored arrays, neighbour torch across a chunk border, and a block
   edit that persists/reloads block light.
+- Block-behaviour integration (`tests/block_behaviour_integration.rs`): 4 tests
+  cover generated torch/glowstone/lava emission, glass transmission vs water
+  attenuation, sky light under a stone overhang lit through a glass shaft, and
+  `StoragePhysicsWorld` ice/slime/blue-ice friction, soul-sand speed factor,
+  honey jump factor, water/plant passability, and `blocks_motion`/`is_solid`
+  flags. The captured `world_chunk_packet` body stays byte-identical.
 - `read_player` prints the persisted position after the probe:
   `pos=(12.50, -60.00, 8.25) on_ground=true`.
 - `PlayerJoinEvent` is delivered to the Java bridge:

@@ -1355,3 +1355,24 @@ Format:
   create a living record, so callers must use `spawn_living`. Initial
   non-default metadata, per-viewer tracking, armor calculation, other
   serializers, and a Java packet fixture remain open (see `BLOCKERS.md`).
+## 2026-11-06 - Lighting and physics consume the generated block-behaviour table
+
+- Context: `light.rs` still had a hand-written opacity/emission table, and
+  `player_physics.rs` approximated collision/friction with block tags and short
+  name lists. The new `block_behaviour` asset provides 29,671 per-state rows.
+- Decision: Lighting reads `block_behaviour::light_block` and
+  `block_behaviour::light_emission`. Player physics reads `has_collision`,
+  `blocks_motion`, `is_solid`, `friction`, `speed_factor`, and `jump_factor`.
+  Unknown states resolve through the registry fallback (stone), so they stay
+  opaque, non-emitting, and collidable. Collision boxes remain full cubes
+  because shape metadata is still missing.
+- Why: One generated source of truth replaces two hand-maintained lists, and
+  the values now match Java exactly where the old tables guessed (blue ice
+  friction 0.989, ice light block 1, glass 0, water/leaves 1, soul sand speed
+  0.4, honey jump 0.5).
+- Consequences: Speed factor is applied to horizontal velocity after the
+  collision move and jump factor multiplies the jump impulse, matching
+  `Entity.move` / `LivingEntity.jumpFromGround`. The water/bubble-column
+  speed-factor special case is not modeled, thin shapes are still full cubes,
+  and the registry lookup per light BFS step is uncached until profiling says
+  it matters.

@@ -5,13 +5,11 @@
 //! per-column sky-light source scan from `ChunkSkyLightSources`, and the
 //! breadth-first increase propagation from `SkyLightEngine`/`BlockLightEngine`.
 //!
-//! The block-behaviour table from P1.5 is not ported yet, so opacity and
-//! emission currently use a small explicit table (`light_opacity`,
-//! `light_emission`). Unknown blocks are treated as fully opaque and emit no
-//! light. This is intentionally conservative: it cannot fabricate light, but it
-//! does mean translucent blocks outside the table block light. Replace the
-//! table with generated `BlockBehaviour` data before claiming full parity.
-//! TODO(P1.5/P3.7): generate emission/opacity/occlusion from the block registry.
+//! Opacity and emission come from the generated per-state
+//! [`crate::block_behaviour`] table. Unknown states resolve the same way
+//! [`crate::block_behaviour::light_block`] does: fully opaque and non-emitting,
+//! which is conservative because it can never fabricate light.
+//! TODO(P3.7): port the incremental decrease queues and Java light fixtures.
 
 use crate::chunk::{BlockState, Chunk};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -324,7 +322,8 @@ impl<'a> Volume<'a> {
             // wrap around a roof or cave wall at the loaded chunk's edge.
             return 15;
         }
-        self.state(local_x, local_z, y).map_or(0, light_opacity)
+        self.state(local_x, local_z, y)
+            .map_or(0, crate::block_behaviour::light_block)
     }
 
     fn has_column(&self, local_x: i32, local_z: i32) -> bool {
@@ -409,7 +408,7 @@ fn compute_block(volume: &Volume<'_>) -> Vec<u8> {
                 let Some(state) = volume.state(local_x, local_z, y) else {
                     continue;
                 };
-                let emission = light_emission(state);
+                let emission = crate::block_behaviour::light_emission(state);
                 if emission == 0 {
                     continue;
                 }
@@ -496,7 +495,7 @@ fn block_top_section(volume: &Volume<'_>) -> i8 {
                     let Some(state) = volume.state(x as i32, z as i32, world_y) else {
                         continue;
                     };
-                    if light_emission(state) > 0 {
+                    if crate::block_behaviour::light_emission(state) > 0 {
                         top = top.max(section.y);
                     }
                 }
@@ -520,126 +519,17 @@ fn extract_layer(volume: &Volume<'_>, section_y: i8, light: &[u8]) -> DataLayer 
     layer
 }
 
-/// Ported from `BlockBehaviour.getLightBlock` for the block families the port
-/// currently understands.
-///
-/// `tinted_glass` is deliberately opaque (vanilla overrides it to 15). Water
-/// and leaves use 1, matching vanilla's `getLightBlock`; glass propagates sky
-/// light unchanged. Every other unknown block is opaque, so the engine never
-/// leaks light through unported geometry.
-pub fn light_opacity(state: &BlockState) -> u8 {
-    let name = short_block_name(&state.name);
-    match name {
-        "air" | "cave_air" | "void_air" => 0,
-        "tinted_glass" => 15,
-        "glass" | "glass_pane" => 0,
-        "water" | "bubble_column" => 1,
-        n if n.ends_with("_leaves") || n == "leaves" => 1,
-        n if is_colored_glass(n) => 0,
-        _ => 15,
-    }
-}
-
-fn is_colored_glass(name: &str) -> bool {
-    name.ends_with("_stained_glass") || name.ends_with("_stained_glass_pane")
-}
-
-/// Explicit emission table for the emitters covered by the current slices.
-///
-/// This is not the generated vanilla table: unsupported emitters return 0
-/// instead of guessing. That keeps light storage valid while leaving the
-/// remaining emitters to the P1.5 block-behaviour asset.
-pub fn light_emission(state: &BlockState) -> u8 {
-    let name = short_block_name(&state.name);
-    match name {
-        "torch" | "wall_torch" | "copper_torch" | "copper_wall_torch" => 14,
-        "soul_torch" | "soul_wall_torch" => 10,
-        "redstone_torch" | "redstone_wall_torch" => property_emission(state, "lit", true, 7),
-        "lantern"
-        | "copper_lantern"
-        | "exposed_copper_lantern"
-        | "weathered_copper_lantern"
-        | "oxidized_copper_lantern" => 15,
-        "soul_lantern" => 10,
-        "campfire" => property_emission(state, "lit", true, 15),
-        "soul_campfire" => property_emission(state, "lit", true, 10),
-        "glowstone"
-        | "sea_lantern"
-        | "shroomlight"
-        | "lava"
-        | "jack_o_lantern"
-        | "ochre_froglight"
-        | "verdant_froglight"
-        | "pearlescent_froglight"
-        | "beacon"
-        | "conduit"
-        | "end_gateway" => 15,
-        "magma_block" => 3,
-        "crying_obsidian" => 10,
-        "fire" => 15,
-        "soul_fire" => 10,
-        "nether_portal" => 11,
-        "end_rod" => 14,
-        "redstone_lamp" => property_emission(state, "lit", false, 15),
-        "furnace" | "blast_furnace" | "smoker" => property_emission(state, "lit", false, 13),
-        "respawn_anchor" => {
-            let charges = property_int(state, "charges", 0).clamp(0, 4);
-            (charges * 15 / 4) as u8
-        }
-        "glow_lichen" => 7,
-        "amethyst_cluster" => 5,
-        "large_amethyst_bud" => 4,
-        "medium_amethyst_bud" => 2,
-        "small_amethyst_bud" => 1,
-        "brown_mushroom" => 1,
-        "sculk_catalyst" => 6,
-        "cave_vines" | "cave_vines_plant" => property_emission(state, "berries", true, 14),
-        "sea_pickle" => {
-            if property_bool(state, "dead", false) {
-                0
-            } else {
-                let pickles = property_int(state, "pickles", 1).clamp(1, 4);
-                (3 + 3 * pickles) as u8
-            }
-        }
-        "light" => property_int(state, "level", 15).clamp(0, 15) as u8,
-        _ => 0,
-    }
-}
-
-fn short_block_name(name: &str) -> &str {
-    name.rsplit_once(':').map_or(name, |(_, short)| short)
-}
-
-fn property_bool(state: &BlockState, key: &str, default: bool) -> bool {
-    state
-        .properties
-        .iter()
-        .find(|(name, _)| name == key)
-        .map(|(_, value)| value == "true")
-        .unwrap_or(default)
-}
-
-fn property_emission(state: &BlockState, key: &str, default: bool, level: u8) -> u8 {
-    if property_bool(state, key, default) {
-        level
-    } else {
-        0
-    }
-}
-
-fn property_int(state: &BlockState, key: &str, default: i32) -> i32 {
-    state
-        .properties
-        .iter()
-        .find(|(name, _)| name == key)
-        .and_then(|(_, value)| value.parse().ok())
-        .unwrap_or(default)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block_behaviour::{light_block, light_emission};
+
+    fn state(name: &str) -> BlockState {
+        BlockState {
+            name: name.into(),
+            properties: vec![],
+        }
+    }
 
     #[test]
     fn data_layer_packs_nibbles_like_vanilla() {
@@ -666,30 +556,49 @@ mod tests {
     }
 
     #[test]
-    fn known_emitters_match_the_ported_table() {
-        let air = BlockState {
-            name: "minecraft:air".into(),
-            properties: vec![],
-        };
-        assert_eq!(light_opacity(&air), 0);
+    fn generated_block_behaviour_drives_light_values() {
+        let air = state("minecraft:air");
+        assert_eq!(light_block(&air), 0);
         assert_eq!(light_emission(&air), 0);
 
-        let torch = BlockState {
-            name: "minecraft:torch".into(),
-            properties: vec![],
-        };
+        let torch = state("minecraft:torch");
         assert_eq!(light_emission(&torch), 14);
+        assert_eq!(light_block(&torch), 0);
 
-        let magma = BlockState {
-            name: "minecraft:magma_block".into(),
-            properties: vec![],
-        };
+        for name in ["minecraft:glowstone", "minecraft:lava"] {
+            assert_eq!(light_emission(&state(name)), 15, "{name}");
+        }
+
+        let magma = state("minecraft:magma_block");
         assert_eq!(light_emission(&magma), 3, "vanilla magma emits 3, not 15");
 
-        let unknown = BlockState {
-            name: "minecraft:not_a_real_emitter".into(),
-            properties: vec![],
-        };
+        assert_eq!(
+            light_block(&state("minecraft:water")),
+            1,
+            "water attenuates by one"
+        );
+        assert_eq!(
+            light_block(&state("minecraft:oak_leaves")),
+            1,
+            "leaves attenuate by one"
+        );
+        assert_eq!(
+            light_block(&state("minecraft:glass")),
+            0,
+            "glass does not attenuate light"
+        );
+        assert_eq!(
+            light_block(&state("minecraft:tinted_glass")),
+            15,
+            "tinted glass is opaque"
+        );
+
+        let unknown = state("minecraft:not_a_real_emitter");
         assert_eq!(light_emission(&unknown), 0);
+        assert_eq!(
+            light_block(&unknown),
+            15,
+            "unknown states stay conservative and opaque"
+        );
     }
 }

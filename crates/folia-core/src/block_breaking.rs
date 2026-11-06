@@ -25,10 +25,14 @@
 use crate::block_behaviour;
 use crate::chunk::BlockState;
 use crate::item_components::{ComponentValue, ItemStack, Tool};
+use crate::loot::{LootCatalog, LootContext, LootReport};
 use crate::math::BlockPos;
 use crate::tags;
-use std::collections::HashSet;
+use folia_random::{LegacyRandomSource, RandomSource};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
+
+pub use crate::loot::ToolContext;
 
 /// `ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK`.
 pub const ACTION_START_DESTROY_BLOCK: i32 = 0;
@@ -436,6 +440,13 @@ pub enum DigStart {
     Instant,
 }
 
+/// Loot inputs bundled for [`DigState::stop_with_loot`].
+#[derive(Clone, Copy)]
+pub struct DigLootContext<'a> {
+    pub context: &'a BlockLootContext<'a>,
+    pub provider: Option<&'a dyn LootProvider>,
+}
+
 /// Result of a `STOP_DESTROY_BLOCK` action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DigStop {
@@ -545,6 +556,35 @@ impl DigState {
             self.delayed = Some(dig);
             DigStop::Delayed
         }
+    }
+
+    /// Handle `STOP_DESTROY_BLOCK` and roll drops in one step.
+    ///
+    /// The drop roll only runs when the stop destroys the block. Counts and
+    /// tool gates come from the supplied provider or the shipped
+    /// [`LootCatalog`]; durability is left to the caller exactly as with
+    /// [`DigState::stop`].
+    pub fn stop_with_loot(
+        &mut self,
+        pos: BlockPos,
+        state: &BlockState,
+        context: &MiningContext,
+        now_tick: u64,
+        loot: &DigLootContext<'_>,
+        random: &mut dyn RandomSource,
+    ) -> (DigStop, Option<BlockDrops>) {
+        let stop = self.stop(pos, state, loot.context.tool, context, now_tick);
+        let drops = if stop == DigStop::Destroyed {
+            Some(block_drops_with_context(
+                state,
+                loot.context,
+                loot.provider,
+                random,
+            ))
+        } else {
+            None
+        };
+        (stop, drops)
     }
 
     /// Advance a vanilla `hasDelayedDestroy` target. Returns `true` when the
@@ -668,18 +708,165 @@ pub fn apply_block_durability(
     }
 }
 
-/// A loot-table provider hook for `crate::loot` once it lands.
+/// Inputs for one block-loot roll.
 ///
-/// The embedded table below is intentionally the fallback for the common
-/// blocks; a future loot module can take over by returning `Some(items)`.
+/// `tool_context` is explicit so callers that do not put enchantments on the
+/// [`ItemStack`] can still supply Silk Touch and Fortune. Use
+/// [`BlockLootContext::from_tool`] to derive both from a held stack, or
+/// [`BlockLootContext::default`] for an unenchanted bare-hand break.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockLootContext<'a> {
+    pub tool: Option<&'a ItemStack>,
+    pub tool_context: ToolContext,
+    /// Pre-computed `hasCorrectToolForDrops` result. `None` lets
+    /// [`block_drops_with_context`] compute it from `tool`.
+    pub correct_tool: Option<bool>,
+    pub explosion_radius: Option<f32>,
+}
+
+impl<'a> BlockLootContext<'a> {
+    /// Derives the tool context from the held stack's enchantment components.
+    pub fn from_tool(tool: Option<&'a ItemStack>) -> Self {
+        Self {
+            tool,
+            tool_context: ToolContext::from_stack(tool),
+            ..Self::default()
+        }
+    }
+
+    /// An unenchanted context with an explicit tool item.
+    pub fn new(tool: Option<&'a ItemStack>) -> Self {
+        Self {
+            tool,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_tool_context(mut self, tool_context: ToolContext) -> Self {
+        self.tool_context = tool_context;
+        self
+    }
+
+    pub fn with_silk_touch(mut self, silk_touch: bool) -> Self {
+        self.tool_context.silk_touch = silk_touch;
+        self
+    }
+
+    pub fn with_fortune(mut self, fortune: i32) -> Self {
+        self.tool_context.fortune = fortune.max(0);
+        self
+    }
+
+    pub fn with_correct_tool(mut self, correct_tool: bool) -> Self {
+        self.correct_tool = Some(correct_tool);
+        self
+    }
+
+    pub fn with_explosion_radius(mut self, radius: f32) -> Self {
+        self.explosion_radius = Some(radius.max(0.0));
+        self
+    }
+}
+
+/// The result of a provider roll before the block-breaking gate is applied.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProvidedDrops {
+    pub items: Vec<ItemStack>,
+    pub report: LootReport,
+    pub table_id: Option<String>,
+}
+
+/// A loot-table provider hook for `crate::loot`.
+///
+/// Providers should implement [`LootProvider::roll_block`]. The legacy
+/// [`LootProvider::block_drops`] method is kept for simple callers and is
+/// adapted by the default `roll_block` implementation.
 pub trait LootProvider {
     fn block_drops(&self, state: &BlockState, tool: Option<&ItemStack>) -> Option<Vec<ItemStack>>;
+
+    /// Rolls a block's drops with the full context and a caller-supplied
+    /// [`RandomSource`]. Returns `None` to let the caller fall back.
+    fn roll_block(
+        &self,
+        state: &BlockState,
+        context: &BlockLootContext<'_>,
+        random: &mut dyn RandomSource,
+    ) -> Option<ProvidedDrops> {
+        let _ = random;
+        self.block_drops(state, context.tool)
+            .map(|items| ProvidedDrops {
+                items,
+                ..ProvidedDrops::default()
+            })
+    }
+}
+
+/// A [`LootProvider`] backed by the shipped [`LootCatalog`].
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogLootProvider<'a> {
+    catalog: &'a LootCatalog,
+}
+
+impl<'a> CatalogLootProvider<'a> {
+    pub fn new(catalog: &'a LootCatalog) -> Self {
+        Self { catalog }
+    }
+
+    /// Resolves `minecraft:blocks/<block>` (or an exact table id) and rolls it.
+    pub fn roll_block(
+        &self,
+        state: &BlockState,
+        context: &BlockLootContext<'_>,
+        random: &mut dyn RandomSource,
+    ) -> Option<ProvidedDrops> {
+        let table_id = self.catalog.block_table_id(&state.name)?;
+        let properties: BTreeMap<String, String> = state.properties.iter().cloned().collect();
+        let mut loot_context = LootContext::new()
+            .with_tool_context(context.tool_context)
+            .with_block_state(&state.name, &properties);
+        if let Some(tool) = context.tool {
+            loot_context = loot_context.with_tool(tool);
+        }
+        if let Some(radius) = context.explosion_radius {
+            loot_context = loot_context.with_explosion_radius(radius);
+        }
+        let roll = self.catalog.roll(table_id, random, &loot_context)?;
+        Some(ProvidedDrops {
+            items: roll.stacks,
+            report: roll.report,
+            table_id: Some(table_id.to_owned()),
+        })
+    }
+}
+
+impl CatalogLootProvider<'static> {
+    /// The process-wide shipped catalog.
+    pub fn global() -> Self {
+        Self::new(LootCatalog::global())
+    }
+}
+
+impl LootProvider for CatalogLootProvider<'_> {
+    fn block_drops(&self, state: &BlockState, tool: Option<&ItemStack>) -> Option<Vec<ItemStack>> {
+        let context = BlockLootContext::from_tool(tool);
+        let mut random = LegacyRandomSource::new(default_drop_seed(state, tool));
+        CatalogLootProvider::roll_block(self, state, &context, &mut random).map(|drops| drops.items)
+    }
+
+    fn roll_block(
+        &self,
+        state: &BlockState,
+        context: &BlockLootContext<'_>,
+        random: &mut dyn RandomSource,
+    ) -> Option<ProvidedDrops> {
+        CatalogLootProvider::roll_block(self, state, context, random)
+    }
 }
 
 /// Where a drop list came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropSource {
-    /// The built-in per-block table.
+    /// A shipped loot table or the built-in per-block fallback table.
     Table,
     /// A family rule (`*_leaves`, glass, ice, `*_wall_torch`, `*_wall_sign`).
     Family,
@@ -699,6 +886,11 @@ pub struct BlockDrops {
     pub requires_correct_tool: bool,
     pub had_correct_tool: bool,
     pub source: DropSource,
+    /// Diagnostics from the loot-table roll. Unknown functions and conditions
+    /// are named here instead of being silently skipped.
+    pub report: LootReport,
+    /// Shipped table id when the drops came from a loot table.
+    pub loot_table: Option<String>,
 }
 
 impl BlockDrops {
@@ -709,6 +901,8 @@ impl BlockDrops {
             requires_correct_tool: false,
             had_correct_tool: false,
             source: DropSource::None,
+            report: LootReport::default(),
+            loot_table: None,
         }
     }
 
@@ -876,6 +1070,7 @@ fn family_drop(block: &str, held: Option<&ItemStack>) -> Option<FamilyDrop> {
     if let Some(sign) = block.strip_suffix("_wall_sign") {
         // `oak_wall_sign` -> `oak_sign`; the item name is the block name with
         // the `_wall_` infix removed.
+        let sign = sign.strip_prefix("minecraft:").unwrap_or(sign);
         return Some(match sign {
             "oak" => FamilyDrop::Item("minecraft:oak_sign"),
             "spruce" => FamilyDrop::Item("minecraft:spruce_sign"),
@@ -897,13 +1092,42 @@ fn family_drop(block: &str, held: Option<&ItemStack>) -> Option<FamilyDrop> {
 
 /// Drops for a broken block, applying vanilla's harvest gate and the optional
 /// loot-table hook.
+///
+/// With no explicit provider this rolls the shipped `LootCatalog` table for the
+/// block. The built-in [`DROP_TABLE`] is only consulted when no shipped table
+/// exists or a shipped table cannot be evaluated with the current context.
+/// Because this legacy signature has no caller RNG stream, it seeds
+/// `folia_random::LegacyRandomSource` deterministically from the block state
+/// and held stack; use [`block_drops_with_context`] to supply the world's
+/// random source.
 pub fn block_drops(
     state: &BlockState,
     held: Option<&ItemStack>,
     loot: Option<&dyn LootProvider>,
 ) -> BlockDrops {
+    let context = BlockLootContext::from_tool(held);
+    let mut random = LegacyRandomSource::new(default_drop_seed(state, held));
+    block_drops_with_context(state, &context, loot, &mut random)
+}
+
+/// Context-aware block drops with an explicit random source.
+///
+/// The harvest gate (`requiresCorrectToolForDrops` + `hasCorrectToolForDrops`)
+/// is applied first, exactly like `Player.destroyBlock`. A caller-supplied
+/// provider is tried before the shipped catalog. A known shipped table is
+/// never silently discarded: if its roll reaches an unsupported condition with
+/// no items, the fallback is used only after the report has recorded the
+/// unsupported payload.
+pub fn block_drops_with_context(
+    state: &BlockState,
+    context: &BlockLootContext<'_>,
+    loot: Option<&dyn LootProvider>,
+    random: &mut dyn RandomSource,
+) -> BlockDrops {
     let requires_correct_tool = requires_correct_tool_for_drops(state);
-    let had_correct_tool = has_correct_tool_for_drops(state, held);
+    let had_correct_tool = context
+        .correct_tool
+        .unwrap_or_else(|| has_correct_tool_for_drops(state, context.tool));
     if requires_correct_tool && !had_correct_tool {
         return BlockDrops {
             items: Vec::new(),
@@ -911,19 +1135,47 @@ pub fn block_drops(
             requires_correct_tool,
             had_correct_tool,
             source: DropSource::None,
+            report: LootReport::default(),
+            loot_table: None,
         };
     }
 
+    let experience = table_entry(&state.name).map_or(0, |entry| entry.experience);
+
     if let Some(loot) = loot
-        && let Some(items) = loot.block_drops(state, held)
+        && let Some(provided) = loot.roll_block(state, context, random)
     {
         return BlockDrops {
-            items,
-            experience: 0,
+            items: provided.items,
+            experience,
             requires_correct_tool,
             had_correct_tool,
             source: DropSource::LootHook,
+            report: provided.report,
+            loot_table: provided.table_id,
         };
+    }
+
+    let mut table_report = LootReport::default();
+    let mut table_id = None;
+    if let Some(provided) = CatalogLootProvider::global().roll_block(state, context, random) {
+        let unsupported = report_has_unsupported_payload(&provided.report);
+        // A known table always wins unless it produced nothing and the empty
+        // result is explained by an unsupported condition/entry. That is the
+        // documented fallback case.
+        if !unsupported || !provided.items.is_empty() {
+            return BlockDrops {
+                items: provided.items,
+                experience,
+                requires_correct_tool,
+                had_correct_tool,
+                source: DropSource::Table,
+                report: provided.report,
+                loot_table: provided.table_id,
+            };
+        }
+        table_report = provided.report;
+        table_id = provided.table_id;
     }
 
     if let Some(entry) = table_entry(&state.name) {
@@ -933,10 +1185,12 @@ pub fn block_drops(
             requires_correct_tool,
             had_correct_tool,
             source: DropSource::Table,
+            report: table_report,
+            loot_table: table_id,
         };
     }
 
-    if let Some(family) = family_drop(&state.name, held) {
+    if let Some(family) = family_drop(&state.name, context.tool) {
         let (items, source) = match family {
             FamilyDrop::Nothing => (Vec::new(), DropSource::None),
             FamilyDrop::SelfState => (
@@ -947,30 +1201,82 @@ pub fn block_drops(
         };
         return BlockDrops {
             items,
-            experience: 0,
+            experience,
             requires_correct_tool,
             had_correct_tool,
             source,
+            report: table_report,
+            loot_table: table_id,
         };
     }
 
     if crate::registry::item_id(&state.name).is_some() {
         return BlockDrops {
             items: vec![ItemStack::new(state.name.clone(), 1)],
-            experience: 0,
+            experience,
             requires_correct_tool,
             had_correct_tool,
             source: DropSource::SelfDrop,
+            report: table_report,
+            loot_table: table_id,
         };
     }
 
     BlockDrops {
         items: Vec::new(),
-        experience: 0,
+        experience,
         requires_correct_tool,
         had_correct_tool,
         source: DropSource::None,
+        report: table_report,
+        loot_table: table_id,
     }
+}
+
+fn report_has_unsupported_payload(report: &LootReport) -> bool {
+    !report.unsupported_conditions.is_empty()
+        || !report.unsupported_functions.is_empty()
+        || !report.unsupported_entries.is_empty()
+        || !report.unsupported_number_providers.is_empty()
+        || report.recursion_guard
+}
+
+/// Deterministic seed for the legacy `block_drops` signature. The live join
+/// loop has no loot RNG stream yet; this keeps the legacy path reproducible
+/// until it passes a `Level.random`-equivalent through
+/// [`block_drops_with_context`].
+fn default_drop_seed(state: &BlockState, held: Option<&ItemStack>) -> i64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
+
+    let mut hash = FNV_OFFSET;
+    hash = mix(hash, state.name.as_bytes());
+    for (name, value) in &state.properties {
+        hash = mix(hash, name.as_bytes());
+        hash = mix(hash, b"=");
+        hash = mix(hash, value.as_bytes());
+    }
+    if let Some(held) = held {
+        hash = mix(hash, held.item.as_bytes());
+        hash = mix(hash, &held.count.to_le_bytes());
+        if let Some(ComponentValue::Enchantments(enchantments)) =
+            held.get_component("minecraft:enchantments")
+        {
+            for (enchantment, level) in enchantments {
+                hash = mix(hash, enchantment.as_bytes());
+                hash = mix(hash, &level.to_le_bytes());
+            }
+        }
+    }
+    hash as i64
 }
 
 /// Vanilla `Properties.requiresCorrectToolForDrops()` blocks, extracted from

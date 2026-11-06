@@ -1413,10 +1413,6 @@ instantly on start-destroy and places on use-item-on.
 - **Why:** Current break was instantaneous for every block and item.
 - **Reference:** `ServerPlayerGameMode.java`, `Player.java`,
   `BlockBehaviour.getDestroySpeed`, loot tables.
-- **Progress (2026-11-06):** block loot tables are loaded and rollable through
-  `LootCatalog::roll`, including tool, silk-touch, fortune, and explosion
-  conditions. The break path is still instant and does not call the roll engine
-  yet.
 - **Done when:** Break times and drops match Java for representative blocks and
   tools.
 - **Progress (2026-11-06):** `block_breaking.rs` ports
@@ -1429,13 +1425,29 @@ instantly on start-destroy and places on use-item-on.
   `needs_*_tool` tags drive tier and harvest gates. `join.rs` keeps per-session
   dig state, validates elapsed ticks, breaks instantly in creative, applies
   tool durability (item break included), and captures drops into the
-  inventory. A deterministic drop table covers the common blocks and ores,
-  with a `LootProvider` hook for `crate::loot`; leaves/glass/ice no-self-drop
-  families are handled. 13 unit + 9 integration tests cover stone/wood,
-  dirt/shovel, obsidian tier gating, creative, durability, drop counts, and the
-  delayed-destroy path. Still open: real loot tables (ranges/Fortune/Silk
-  Touch), item entities, block-damage overlay packets, Unbreaking, adventure
-  `can_destroy`, and a Java break-time fixture.
+  inventory. 13 unit + 9 integration tests cover stone/wood, dirt/shovel,
+  obsidian tier gating, creative, durability, drop counts, and the
+  delayed-destroy path.
+- **Progress (2026-11-06, shipped drop tables):** every break now resolves
+  `minecraft:blocks/<block>` through `LootCatalog::roll_block` with a
+  `folia_random::RandomSource`. `BlockLootContext` carries the tool, explicit
+  `ToolContext { silk_touch, fortune }`, the correct-tool flag, and an optional
+  explosion radius. `survives_explosion`, `match_tool`, `random_chance`,
+  `table_bonus`, `entity_properties` (reported unsupported), and the function
+  pipeline execute; `set_count`, `set_damage`, `set_name`, `enchant_randomly`,
+  `explosion_decay`, and `limit_count` are applied through `item_components`.
+  The fallback table is only used for blocks without a shipped table or a known
+  table whose roll reaches an unsupported context; the unsupported payload is
+  preserved in `BlockDrops::report`. `DigState::stop_with_loot` rolls drops on a
+  destroyed stop without touching durability, and `CatalogLootProvider` is the
+  reusable hook. New `tests/loot_drops.rs` (13 tests) pins stone hand/pickaxe,
+  diamond ore silk/fortune, redstone 4..=5, grass seeds + Fortune, leaf
+  sapling/stick/apple chances, explosion survival/decay, unknown-function
+  reports, deterministic seeds, and the documented fallback families. Still
+  open: item entities, XP orbs, block-damage overlay packets, Unbreaking,
+  adventure `can_destroy`, a Java break-time fixture, and replacing the legacy
+  `block_drops` per-block deterministic seed with the session/world RNG once
+  `join.rs` can pass it through.
 
 ### P4.4 Block placement rules `[ ]` `M`
 

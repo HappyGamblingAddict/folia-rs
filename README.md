@@ -22,10 +22,15 @@ classes. With no plugin jars the server runs fully native and never loads Java.
 - Live server-list status server (status + ping/pong + legacy ping).
 - Login → configuration → play handshake, with captured 1.21.11 registry data.
   With `online-mode=false`, a client reaches Join Game.
-- Live chunk streaming: a 7×7 area is generated as
+- Live chunk streaming: a view-distance-sized area is generated as
   `ClientboundLevelChunkWithLight` packets from `WorldStorage` chunks, centered
   on the player's chunk. Heightmaps and sky/block light are computed from the
   Rust chunk data.
+- Real light storage (P3.5-P3.8 slice): vanilla 2048-byte nibble layers per
+  section, `SkyLight`/`BlockLight` NBT round-trip, per-column sky sources with
+  BFS under overhangs, block-light BFS over an explicit emitter table, stored
+  layers preferred in chunk packets, and neighbour-aware relighting on edits.
+  The captured `(0,-1)` packet fixture is still byte-identical.
 - Overworld noise generation: the real `minecraft:overworld` noise router,
   splines, density functions, noise aquifer, surface-rule tree and cave/canyon
   carvers are embedded and evaluated in Rust. Missing chunks use a 4x8x4
@@ -43,6 +48,9 @@ classes. With no plugin jars the server runs fully native and never loads Java.
 - Live player sessions: movement packets update position, gzip-NBT playerdata is
   saved under `run/playerdata`, and server keepalives are driven by the Rust
   session loop.
+- Server-side player physics: vanilla walking/falling formulas, AABB collision
+  against `WorldStorage`, jump/step-up, fall distance and damage, legal walking
+  accepted without rubber-banding, and blocked/oversized moves corrected.
 - Block update path: mutate a chunk block, recompute its heightmaps/light,
   persist through `WorldStorage`, and broadcast `ClientboundBlockUpdate`,
   `ClientboundSectionBlocksUpdate` and `ClientboundLightUpdate`.
@@ -64,19 +72,32 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   (including properties) and 1,166 block defaults, item IDs, entity type IDs and
   biome IDs. Lookups resolve the exact property set and fall back to the
   block's default state, not to stone.
+- Vanilla tag tables and all 23 synchronized dynamic registries are embedded:
+  nine tag registries (602 non-empty tags / 7,208 flattened members) and
+  compact id/name tables for biomes, damage types, enchantments, dimensions,
+  paintings, trims, wolf variants, and the other configuration registries.
+- Component-aware item stacks: `{item, count, components}` with NBT and network
+  codecs for names, lore, damage, enchantments, attributes, containers,
+  potions, food, tools, and opaque preservation of unknown components.
 - Feature framework: `Feature`, `ConfiguredFeature`, `PlacedFeature`,
   `FeaturePlaceContext`, a chunk-bounded write region, and the 11 vanilla
   generation steps. `assets/feature_data.json` (224 configured features, 258
   placed features, 65 biome feature lists) is loaded and reference-validated;
   unported feature types fail loudly instead of no-oping. Placement modifiers
   are typed; all 888 execute in vanilla RNG order and none report an
-  explicit failure. Supported vegetation runs after carvers; supported trees
+  explicit failure. Ground-cover features include random patches/flowers,
+  simple blocks, piles, columns, multiface growth, vegetation patches and
+  waterlogged patches. Supported vegetation runs after carvers; supported trees
   include oak, birch, jungle, swamp oak, spruce, pine, dark oak, fancy oak,
   cherry, acacia, mega spruce/pine, mega jungle, jungle bush, azalea,
   mangrove, and fallen trees. Ore and scattered-ore configs (30 + 2) parse
   and place, but are not wired into chunk generation until feature-RNG parity.
   Attached-to-leaves decoration, randomized integer block states, weighted
   foliage providers, and waterlogged mangrove roots are supported.
+- Structure-template foundation: gzip 1.21.11 structure NBT loading (palettes,
+  blocks, block-entity NBT, entities), Java mirror/rotation/pivot/origin
+  transforms, and placement through the feature write API. Structure starts and
+  jigsaw expansion are not wired into chunk generation yet.
 - Anvil `.mca` region reader/writer with gzip/zlib/uncompressed chunks.
 - Chunk section decoder: block-state and biome palettes, packed indices.
 - Chunk encoder: generated chunks round-trip through Anvil storage.

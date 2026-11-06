@@ -857,3 +857,40 @@ Format:
   remain ore-free for now. `OreVeinifier` and block-for-block ore positions are
   still open; P2.3 stays `[~]`.
 
+## 2026-11-06 — Tags are flattened at extraction, not resolved at runtime
+
+- Context: P1.3 needs block/item/entity/fluid/game-event/damage-type/
+  enchantment/POI/worldgen tag membership. The reference tree stores one JSON
+  file per tag with nested `#tag` references; parsing and recursively resolving
+  them in Rust would duplicate a data-loading error surface and add a startup
+  cost for data that never changes between builds.
+- Decision: `scripts/extract_tags.ps1` resolves every tag once and emits one
+  sorted `tag<TAB>member` row per member into `assets/tags/*.tsv`. `src/tags.rs`
+  embeds the nine files with `include_str!` behind a single `OnceLock`, stores
+  members in sorted `Vec<String>`s, and uses binary search for `has`. Bare keys
+  are normalized to `minecraft:`; unknown tags return an empty slice and
+  unknown members return `false`.
+- Decision: Empty tags emit no rows, exactly as specified. Consequently
+  `tags::tag_count` counts non-empty tags: 1.21.11 has two empty block tags
+  (`incorrect_for_diamond_tool`, `incorrect_for_netherite_tool`), so block
+  reports 202 tags from 204 files. The extractor prints the file count, empty
+  count, and flattened member count separately so the distinction is visible.
+- Decision: The four worldgen subregistries share one `worldgen.tsv`. Tag keys
+  are relative to their subregistry directory (`biome/is_forest` ->
+  `minecraft:is_forest`, `structure/village` -> `minecraft:village`,
+  `biome/has_structure/village_plains` ->
+  `minecraft:has_structure/village_plains`); those keys are disjoint in
+  1.21.11, and the extractor fails loudly on a duplicate.
+- Decision: `replace` is parsed by the schema but has no merge step because the
+  decompiled tree is the complete vanilla set, not an overlay. Datapack tags
+  and `replace` overlays remain future work (P1.7/P2.14).
+- Why: Extraction makes nested-reference and cycle errors build-time data
+  problems, keeps runtime I/O at zero, and gives tests one canonical sorted
+  representation to pin.
+- Consequences: Regenerating tags requires updating `ASSETS.md`,
+  `tests/assets.rs`, and the exact counts in `tests/tags.rs`; the script prints
+  all of those numbers. Cosmetic registries (`banner_pattern`, `dialog`,
+  `instrument`, `painting_variant`, `timeline`) are deliberately not extracted
+  yet, and `worldgen/feature/ore.rs` still hard-codes its four target-tag sets
+  until it is switched to `tags::has`.
+

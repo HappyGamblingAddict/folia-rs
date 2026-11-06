@@ -32,7 +32,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 7] = [
+    let expected: [(&str, usize, u64); 16] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
         ("block_defaults.tsv", 37_605, 0x7c29_fe7e_3a74_07a8),
         ("item_ids.tsv", 45_873, 0xb3fc_5940_89ab_5bf7),
@@ -40,6 +40,19 @@ fn generated_assets_match_the_manifest() {
         ("biome_ids.txt", 1_681, 0x377b_853e_f131_1f77),
         ("mth_sin.bin", 262_144, 0x115b_15b6_ad9d_2006),
         ("feature_data.json", 295_053, 0xf68d_8c86_ee52_ea65),
+        ("tags/block.tsv", 195_706, 0x1a25_6d60_d13e_9b9e),
+        ("tags/item.tsv", 94_764, 0x6a67_eb5a_b9ee_97f6),
+        ("tags/entity_type.tsv", 17_999, 0xbd26_ce82_b892_592e),
+        ("tags/fluid.tsv", 139, 0x1aa5_2d04_22f1_5857),
+        ("tags/game_event.tsv", 5_652, 0x483b_5e4e_c73f_bd60),
+        ("tags/damage_type.tsv", 9_146, 0x2678_e893_14c3_df1c),
+        ("tags/enchantment.tsv", 14_614, 0x6ebb_8076_d622_d277),
+        (
+            "tags/point_of_interest_type.tsv",
+            1_273,
+            0x7808_a639_0eaa_7e0d,
+        ),
+        ("tags/worldgen.tsv", 35_799, 0xf2e0_3c73_7a04_1e7c),
     ];
 
     for (name, length, hash) in expected {
@@ -57,6 +70,15 @@ fn registry_tables_have_the_expected_line_counts() {
         ("item_ids.tsv", 1_505),
         ("entity_type_ids.tsv", 157),
         ("biome_ids.txt", 65),
+        ("tags/block.tsv", 3_655),
+        ("tags/item.tsv", 1_897),
+        ("tags/entity_type.tsv", 368),
+        ("tags/fluid.tsv", 4),
+        ("tags/game_event.tsv", 119),
+        ("tags/damage_type.tsv", 196),
+        ("tags/enchantment.tsv", 308),
+        ("tags/point_of_interest_type.tsv", 30),
+        ("tags/worldgen.tsv", 631),
     ];
 
     for (name, expected) in cases {

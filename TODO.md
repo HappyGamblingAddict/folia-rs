@@ -1,9 +1,9 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: `bd29b74` (2026-11-02)  
+> Current commit: `513bb11` (baseline)  
 > Working tree: 30 pre-existing uncommitted paths, including all Nov 3 registry work  
-> Test status: **341 tests, 0 failed**  
+> Test status: **351 tests, 0 failed**  
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~15%** (range 10–25% depending on metric)
 
@@ -63,6 +63,12 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
+  registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
+  7,208 members) and
+  `src/tags.rs` provides namespaced membership lookups with nested references
+  resolved at extraction time. Focused tests cover block/item/fluid/entity
+  membership, flattening, exact counts, and unknown keys. 351 tests passing.
 - 2026-11-06: Ore slice — `minecraft:ore` and `minecraft:scattered_ore`
   parse and place with the shipped target tags and states; all 30 ore + 2
   scattered-ore configs are supported. Generator wiring is held back until
@@ -285,7 +291,7 @@ stacks only carry `item + count`.
 - **Done when:** New code uses typed keys; only serialization boundaries use
   raw IDs.
 
-### P1.3 Port tags `[ ]` `M`
+### P1.3 Port tags `[~]` `M`
 
 - **What:** Extract and load block, item, entity type, fluid, game-event,
   biome, and damage-type tags. Start with:
@@ -296,6 +302,21 @@ stacks only carry `item + count`.
 - **Reference:** `net/minecraft/tags/*`, `data/minecraft/tags/**`.
 - **Done when:** Tag membership matches Java for the shipped 1.21.11 data and
   feature_data’s ore tags are no longer special-cased.
+- **Progress (2026-11-06):** `scripts/extract_tags.ps1` recursively flattens
+  every nested `#tag` reference (cycle-checked, de-duplicated, ordinal-sorted)
+  from `decompiled/data/minecraft/tags`. Nine registries are emitted into
+  `assets/tags/*.tsv` and embedded by `src/tags.rs`:
+  block (202 non-empty tags / 3,655 members), item (198/1,897), entity type
+  (46/368), fluid (2/4), game event (5/119), damage type (33/196), enchantment
+  (22/308), point-of-interest type (3/30), and worldgen (91/631, covering the
+  biome, structure, flat-preset, and world-preset subregistries). Lookups accept
+  bare or namespaced keys and unknown tags/members return empty/false.
+  `tests/tags.rs` covers membership, nested flattening, exact per-registry
+  totals, and unknown lookups; `tests/assets.rs` pins line counts, bytes, and
+  FNV hashes. Remaining: cosmetic registries (`banner_pattern`, `dialog`,
+  `instrument`, `painting_variant`, `timeline`), datapack `replace` overlays,
+  and replacing the ore feature's hard-coded target-tag sets with
+  `tags::has`.
 
 ### P1.4 Full item stack model and data components `[ ]` `L`
 

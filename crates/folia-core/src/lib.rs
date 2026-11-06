@@ -15,6 +15,7 @@ pub mod region;
 pub mod registry;
 pub mod snbt;
 pub mod status;
+pub mod tags;
 pub mod varint;
 pub mod world;
 pub mod worldgen;

@@ -35,6 +35,7 @@ Rust tree: `crates/folia-core`.
 | `BiomeManager` fuzzy zoom | `folia-core/src/worldgen/biome_zoom.rs` | SHA-256 seed obfuscation, LCG fiddled-distance search over eight quart corners, `biome_at` against `BiomeSampler` |
 | `NoiseBasedChunkGenerator` base terrain | `folia-core/src/worldgen/generator.rs` | 4x8x4 density grid, trilinear interpolation, aquifer substance, bedrock/deepslate gradients, simple surface, sea-level water |
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
+| `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
 | `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay; `no_op` implemented, other feature types explicitly unsupported |
 | `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; 6 world-free modifiers plus `BiomeFilter` (via `PlacementWorld`) execute with vanilla draw order (667/888 shipped), the rest report `PlacementFailure` |
@@ -44,10 +45,13 @@ Rust tree: `crates/folia-core`.
 
 ## Verification evidence
 
-- `cargo test --workspace` → 158 core unit + 35 core integration + 62 math + 23
-  random tests (278 total), 0 failed.
+- `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
+  27 random tests (351 total), 0 failed (2026-11-06).
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
-  are clean (2026-11-04).
+  are clean (2026-11-06).
+- Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members
+  across 9 registries; `tests/tags.rs` checks membership, nested flattening,
+  exact counts, and unknown keys.
 - Status server responds to status/ping, legacy ping, and login.
 - End-to-end login probe: `cargo run -p folia-core --example join_probe -- 127.0.0.1:25565`
   prints `login accepted`, `configuration complete`, `Join Game received`,

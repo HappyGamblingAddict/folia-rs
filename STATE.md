@@ -8,13 +8,22 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): `bd29b74`
+- Current commit (informational only): `513bb11`
 - Working tree: uncommitted by design; Git is not used for workflow.
-- Tests: **341 passing, 0 failing** as of the last full run.
+- Tests: **351 passing, 0 failing** as of the last full run.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
+- P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
+  block, item, entity type, fluid, game event, damage type, enchantment,
+  point-of-interest type, and worldgen tags into
+  `crates/folia-core/assets/tags/*.tsv` (602 non-empty tags across 604 files,
+  7,208 members).
+  `folia_core::tags` embeds them with `include_str!` and normalizes bare keys
+  to `minecraft:`. Cosmetic registries (`banner_pattern`, `dialog`,
+  `instrument`, `painting_variant`, `timeline`) and replacing the ore
+  feature's hard-coded target-tag sets are still open.
 - Feature generation is now wired into chunk generation. The vegetation slice
   places oak and birch trees (straight trunk + blob foliage, driven by the
   vanilla placed features and `random_selector`) in new forest, plains, and
@@ -150,6 +159,9 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P1.3 tag data is available; wire `stone_ore_replaceables` and the other ore
+  target tags through `folia_core::tags` instead of the hard-coded sets in
+  `worldgen/feature/ore.rs`, then add the remaining cosmetic registries.
 - Pale moss (blocked on `pale_moss_patch` and block tags) and beehive
   occupant NBT are the remaining P2.4 tree gaps; blob/bush/random-spread/
   spruce/pine/dark oak/acacia/fancy/cherry/mega-pine/jungle foliage, bending
@@ -174,7 +186,7 @@ After P2.3, move to P3.5–P3.8 (real light storage and engines).
 - [ ] P0.5 Make oracle data reproducible (deferred, see `BLOCKERS.md`)
 - [x] P0.6 Decide commit/backup policy
 - [ ] P1.1 Complete remaining registry dumps
-- [ ] P1.3 Port tags
+- [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
 - [ ] P1.4 Full item component model
 - [ ] P1.5 Block behavior metadata
 - [~] P2.1 Feature framework core (framework + loader done)
@@ -187,6 +199,18 @@ After P2.3, move to P3.5–P3.8 (real light storage and engines).
 - [ ] P3.8 Incremental light updates
 
 ## Recently completed
+
+- 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` walks the
+  decompiled tag tree, resolves nested `#tag` references with cycle detection
+  and de-duplication, and writes nine sorted `tag<TAB>member` assets under
+  `crates/folia-core/assets/tags/`: block (202 non-empty tags/3,655 members),
+  item (198/1,897), entity type (46/368), fluid (2/4), game event (5/119),
+  damage type (33/196), enchantment (22/308), point-of-interest type (3/30),
+  worldgen (91/631). `src/tags.rs` embeds them in `OnceLock`s, accepts bare or
+  namespaced keys, and returns empty/false for unknown tags. `tests/tags.rs`
+  adds 5 membership/count tests; `tests/assets.rs` pins the new assets. Full
+  suite 351 passing (one pre-existing `game_mode` save race can fail under
+  timing; see the session report).
 
 - 2026-11-06: Ore features — `worldgen/feature/ore.rs` ports `minecraft:ore`
   and `minecraft:scattered_ore`, including ellipsoid elimination, air-exposure

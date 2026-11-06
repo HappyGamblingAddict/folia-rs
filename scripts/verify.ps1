@@ -50,6 +50,15 @@ $assets = @(
     "crates/folia-core/assets/join_config.bin",
     "crates/folia-core/assets/join_play.bin",
     "crates/folia-core/assets/mth_sin.bin",
+    "crates/folia-core/assets/tags/block.tsv",
+    "crates/folia-core/assets/tags/damage_type.tsv",
+    "crates/folia-core/assets/tags/enchantment.tsv",
+    "crates/folia-core/assets/tags/entity_type.tsv",
+    "crates/folia-core/assets/tags/fluid.tsv",
+    "crates/folia-core/assets/tags/game_event.tsv",
+    "crates/folia-core/assets/tags/item.tsv",
+    "crates/folia-core/assets/tags/point_of_interest_type.tsv",
+    "crates/folia-core/assets/tags/worldgen.tsv",
     "crates/folia-core/assets/worldgen.json"
 )
 foreach ($asset in $assets) {

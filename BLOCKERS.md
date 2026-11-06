@@ -626,3 +626,38 @@ These are expected gaps, not reasons to stop:
 - Additional limitation: there is no TLS stack in the workspace, so the real
   session lookup shells out to `curl`. Replace it with an in-process TLS client
   when a dependency is allowed (P11 hardening).
+
+## 2026-11-06 - Real jigsaw villages need shipped structure-template assets
+
+- Status: recursive `JigsawPlacement`, biome/dimension filtering, and generator
+  wiring are implemented. `tests/jigsaw.rs` proves the expander with synthetic
+  templates and `tests/structure_generation.rs` proves igloo placement in a real
+  generated chunk.
+- Blocker: the repository contains no `data/minecraft/structure/**.nbt` asset
+  and this slice could not add asset files. `StructureGenerator` therefore
+  requires a caller-supplied template map; a real village selected from the
+  shipped pools fails with `UnknownTemplate` (loud, not an empty start).
+- What was tried: reused the byte-for-byte igloo fixtures embedded in
+  `tests/structure_starts.rs`; the synthetic village tests build NBT through
+  `StructureTemplate::from_nbt`.
+- What is needed: an extractor that walks the local decompiled data pack, gzip
+  copies every `structure/**.nbt`, and emits a compact catalog (name, bytes,
+  FNV/SHA) analogous to `template_pools.json`. Then a provider can load all
+  village town-centers/houses/streets/terminators.
+- Other explicit gaps:
+  - `FeaturePoolElement` placement returns `UnsupportedPoolElement`; many
+    village decor pools include `feature_pool_element` entries.
+  - Terrain adaptation (`beard_thin`, `beard_box`, `bury`, `encapsulate`) is
+    not applied; only start-bounds inflation is modeled.
+  - `StructureGenerator` caches no starts and samples heights from the current
+    chunk region only, so pieces spanning chunks can use different heights.
+  - `StructureGenerator` chooses the first matching structure set per chunk;
+    vanilla can create several starts in one chunk.
+  - Structure block-entity NBT, chest loot seeding, suspicious-sand gameplay,
+    and template entities are returned as data and discarded by the generator.
+  - Desert-pyramid placement random is deterministic but not Java-exact.
+  - `pool_aliases` and non-absolute `start_height` providers fail explicitly.
+- Workaround / next task: add the NBT asset extractor, then a
+  `TemplateProvider` backed by it; implement `FeaturePoolElement` through the
+  configured-feature pipeline; then add a start cache/region manager so
+  cross-chunk height sampling and terrain adaptation can be exact.

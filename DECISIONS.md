@@ -2309,3 +2309,92 @@ Format:
   `ServerboundHelloPacket`'s `readUtf(16)`; legitimate offline clients are
   unaffected. The server binary still needs `accept_logins` and
   `configure_online_mode` wiring (see `BLOCKERS.md`).
+
+## 2026-11-06 - Recursive jigsaw uses block-aligned AABB occupancy
+
+- Context: Java `JigsawPlacement` uses `VoxelShape`/`AABB` with a 0.25 deflate
+  and `BooleanOp` unions. This crate has no generic voxel-shape boolean engine,
+  and the existing `block_shapes` metadata is for blocks, not arbitrary AABBs.
+- Decision: model the allowed max-distance window and every placed start/piece
+  as inclusive `BoundingBox`es. Reject a candidate when its integer box leaves
+  the allowed window or intersects an occupied box. A connector that points
+  back into its own piece starts a fresh occupancy list containing only that
+  piece, matching Java's branch; otherwise the shared per-start occupancy list
+  is consulted. Chains that would place a child nearly entirely inside the
+  parent are rejected rather than approximated with a fractional deflate.
+- Why: block-aligned structure windows and templates are integer grids; this is
+  deterministic, testable, and conservative. It never accepts an overlapping
+  rigid piece.
+- Consequences: exact edge-touching parity for fractional/rotated shapes and
+  terrain-adaptive pieces is not guaranteed. Terrain adaptation itself
+  (`beard_thin`, `beard_box`, `bury`, `encapsulate`) is still not applied to
+  block placement; only the 12-block start bounding-box inflation is modeled.
+
+## 2026-11-06 - Jigsaw starts take the level through the generation context
+
+- Context: `StructureDefinition::generate_start` previously had no level, while
+  `JigsawPlacement` needs `getFirstFreeHeight`, `getMaxY`, and dimension-padding
+  checks. Adding a mutable world to the start API would break the data-only
+  start contract.
+- Decision: `StructureGenerationContext` carries
+  `Option<&dyn FeatureLevel>` via `with_level`. Jigsaw generation fails with
+  `MissingHeightSource` when it is absent. The generator passes the chunk's
+  `WorldGenRegion`, so height sampling is chunk-local and reads terrain after
+  surface/carvers but before decoration features.
+- Why: keeps starts deterministic and testable with `MockLevel`, while making
+  the missing-world failure explicit instead of silently using y=0.
+- Consequences: starts that span chunks sample only the chunk currently being
+  generated. The next structure manager slice should cache one start and expose
+  a region height source so cross-chunk pieces use the same ground height.
+
+## 2026-11-06 - Structure generation is opt-in and template data is caller-supplied
+
+- Context: the repository has no shipped structure-template NBT asset (the
+  decompiled tree is reference material and must not be published). Adding one
+  was outside this worker's file budget. Making structures always run would
+  also change the default worldgen/parity path.
+- Decision: `WorldGenerator::overworld` leaves `structures: None`. Callers add a
+  `StructureGenerator` through `with_structure_generator` or a
+  `HashMap<String, StructureTemplate>` through `with_shipped_structures`. The
+  manager regenerates starts deterministically per candidate placement chunk
+  (radius 8), filters by the 34 shipped biome tags and the Overworld dimension,
+  and runs before the first decoration feature step at/after
+  `surface_structures`. Tests embed the shipped igloo NBT and enable only
+  `minecraft:igloo`.
+- Why: parity fixtures stay byte-for-byte unchanged, and a missing template is a
+  loud `UnknownTemplate`/`MissingHeightSource` error rather than an empty start.
+- Consequences: a real village currently fails loudly because its NBT templates
+  are not embedded. Feature-pool elements also remain an explicit
+  `UnsupportedPoolElement`; many village decor pools contain them. A future
+  asset extractor should populate the template provider and add a start cache.
+
+## 2026-11-06 - Waterlogging wraps the feature level; markers stay data
+
+- Context: the shared `PoolExpansion::place` path cannot be edited in this
+  slice, and the chunk has no typed block-entity storage yet.
+- Decision: `JigsawPiece` wraps the caller's `FeatureLevel` in a
+  `WaterloggingLevel` that reads the existing fluid at the target and flips a
+  `waterlogged=false` property to true when `apply_waterlogging` is selected.
+  `structure_void` replacement continues to drop blocks through the existing
+  `JigsawReplacement` processor. Data markers, chest/brushable block-entity NBT,
+  and template entities are returned on `StartPlacement`/`StructureChunkPlacement`;
+  no entity is spawned and no loot table is rolled.
+- Why: explicit, local behavior without changing the pool API or pretending
+  block entities exist.
+- Consequences: non-source fluid propagation, fluid containers beyond the
+  waterlogged property, loot seeding, chest block-entity creation, and entity
+  spawning remain open. `StructureGenerator` currently discards the returned
+  marker/entity payload after placement; callers of the start API can consume it.
+
+## 2026-11-06 - Desert pyramid random stream is deterministic but not Java-exact
+
+- Context: `DesertPyramidPiece.postProcess` consumes the chunk generator's
+  decoration random, which this port does not expose to structure starts.
+- Decision: derive a local `LegacyRandomSource` from the world seed and the
+  chunk's minimum X/Z. Use it for the height offset, cellar stairs boolean,
+  collapsed-roof chance, and suspicious-sand subset. The piece body, chest
+  positions, cellar geometry, and loot-table markers are direct ports.
+- Why: keeps generation deterministic and testable without adding a chunk RNG
+  plumbing slice.
+- Consequences: collapsed-roof/suspicious-sand choices can differ from Java for
+  the same seed. The four chests and main pyramid body are position-stable.

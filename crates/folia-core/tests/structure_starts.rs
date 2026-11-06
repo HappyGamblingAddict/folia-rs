@@ -704,19 +704,27 @@ fn jigsaw_structure_generation_fails_explicitly() {
     let context = StructureGenerationContext::new(12_345, ChunkPos::new(-59, 17), 0, &templates);
     let error = definition
         .generate_start(&context)
-        .expect_err("jigsaw expansion must fail loudly");
-    let StructureError::UnsupportedJigsaw {
-        structure,
-        start_pool,
-    } = &error
-    else {
-        panic!("expected UnsupportedJigsaw, got {error:?}");
-    };
-    assert_eq!(structure, "minecraft:village_plains");
-    assert!(start_pool.contains("minecraft:village/plains/town_centers"));
-    let message = error.to_string();
-    assert!(message.contains("jigsaw"), "{message}");
-    assert!(message.contains("not implemented"), "{message}");
+        .expect_err("jigsaw expansion without a level must fail loudly");
+    assert!(matches!(
+        error,
+        StructureError::MissingHeightSource { ref structure }
+            if structure == "minecraft:village_plains"
+    ));
+
+    // With a level the shipped start pool is selected, but a minimal template
+    // provider does not contain the chosen town-center NBT. That must surface
+    // as a missing-template error, never as an empty valid start.
+    let level = MockLevel::new(0, 384);
+    let context = StructureGenerationContext::new(12_345, ChunkPos::new(-59, 17), 0, &templates)
+        .with_level(&level);
+    let error = definition
+        .generate_start(&context)
+        .expect_err("missing jigsaw templates must fail loudly");
+    assert!(matches!(
+        error,
+        StructureError::UnknownTemplate { ref structure, .. }
+            if structure == "minecraft:village/plains/town_centers"
+    ));
 }
 
 #[test]

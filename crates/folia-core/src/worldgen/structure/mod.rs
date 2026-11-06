@@ -33,6 +33,7 @@
 //! entities, and template entities are returned rather than spawned. Those
 //! remain explicit later slices.
 
+pub mod jigsaw;
 pub mod piece;
 pub mod pool;
 pub mod processor;
@@ -61,6 +62,31 @@ pub enum StructureError {
     },
     /// A piece kind cannot be placed by this slice.
     UnsupportedPiece { piece_type: String },
+    /// A template pool was referenced before it was registered.
+    UnknownPool { pool: String },
+    /// A referenced template pool has no elements.
+    EmptyPool { pool: String },
+    /// `start_jigsaw_name` did not match any connector in the start element.
+    StartJigsawNotFound { structure: String, name: String },
+    /// Jigsaw expansion needs a level for heightmap/dimension queries.
+    MissingHeightSource { structure: String },
+    /// A jigsaw start was placed without its template/processor catalogs.
+    JigsawRequiresTemplates { structure: String },
+    /// A pool element kind cannot be expanded/placed by this slice.
+    UnsupportedPoolElement { pool: String, element_type: String },
+    /// `pool_aliases` are not implemented.
+    UnsupportedPoolAliases { structure: String },
+    /// A `start_height` provider kind is not implemented.
+    UnsupportedHeightProvider {
+        structure: String,
+        type_name: String,
+    },
+    /// A template-pool placement error.
+    Pool { message: String },
+    /// A structure-set or biome-filter error.
+    StructureSet { message: String },
+    /// A structure has no biome rule in the shipped catalog.
+    MissingBiomeRule { structure: String },
 }
 
 impl fmt::Display for StructureError {
@@ -97,12 +123,63 @@ impl fmt::Display for StructureError {
                     "structure piece type `{piece_type}` is not supported"
                 )
             }
+            StructureError::UnknownPool { pool } => {
+                write!(formatter, "unknown structure template pool `{pool}`")
+            }
+            StructureError::EmptyPool { pool } => {
+                write!(
+                    formatter,
+                    "structure template pool `{pool}` has no elements"
+                )
+            }
+            StructureError::StartJigsawNotFound { structure, name } => write!(
+                formatter,
+                "structure `{structure}` start element has no jigsaw named `{name}`"
+            ),
+            StructureError::MissingHeightSource { structure } => write!(
+                formatter,
+                "structure `{structure}` needs a level/height source for jigsaw expansion"
+            ),
+            StructureError::JigsawRequiresTemplates { structure } => write!(
+                formatter,
+                "structure `{structure}` is a jigsaw start; use place_jigsaw_in_chunk with its \
+                 template and processor catalogs"
+            ),
+            StructureError::UnsupportedPoolElement { pool, element_type } => write!(
+                formatter,
+                "template pool `{pool}` selected unsupported element `{element_type}`"
+            ),
+            StructureError::UnsupportedPoolAliases { structure } => write!(
+                formatter,
+                "structure `{structure}` uses pool aliases, which are not implemented"
+            ),
+            StructureError::UnsupportedHeightProvider {
+                structure,
+                type_name,
+            } => write!(
+                formatter,
+                "structure `{structure}` uses unsupported start_height provider `{type_name}`"
+            ),
+            StructureError::Pool { message } => {
+                write!(formatter, "structure pool error: {message}")
+            }
+            StructureError::StructureSet { message } => {
+                write!(formatter, "structure set error: {message}")
+            }
+            StructureError::MissingBiomeRule { structure } => write!(
+                formatter,
+                "structure `{structure}` has no shipped biome rule"
+            ),
         }
     }
 }
 
 impl std::error::Error for StructureError {}
 
+pub use jigsaw::{
+    JigsawBlockInfo, JigsawConfig, JigsawJunction, JigsawPiece, JigsawPlacement, JigsawStart,
+    JointType, SequencedPriorityQueue, element_bounds, front_facing, shuffle, top_facing,
+};
 pub use piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
     StructurePieceKind, TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,
@@ -120,13 +197,15 @@ pub use processor::{
 };
 pub use set::{
     ConcentricRingsStructurePlacement, ExclusionZone, FrequencyReductionMethod, PlacementError,
-    RandomSpreadStructurePlacement, RandomSpreadType, SelectedStructure, StructurePlacement,
-    StructureSelectionEntry, StructureSet, StructureSetConfig, StructureSetError,
-    StructureSetRegistry,
+    RandomSpreadStructurePlacement, RandomSpreadType, SHIPPED_STRUCTURE_BIOME_RULES,
+    SelectedStructure, StructureBiomeLookup, StructureBiomeRule, StructureDimension,
+    StructurePlacement, StructureSelectionEntry, StructureSet, StructureSetConfig,
+    StructureSetError, StructureSetRegistry, set_dimension, structure_biome_rule,
 };
 pub use start::{
-    BiomeSet, IglooStructure, StartPlacement, StructureDefinition, StructureGenerationContext,
-    StructureKind, StructureStart, TemplateProvider, TerrainAdjustment,
+    BiomeSet, DesertPyramidPiece, DesertPyramidStart, IglooStructure, SHIPPED_STRUCTURE_JSON,
+    StartPlacement, StructureChunkPlacement, StructureDefinition, StructureGenerationContext,
+    StructureGenerator, StructureKind, StructureStart, TemplateProvider, TerrainAdjustment,
 };
 pub use template::{
     Mirror, PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,

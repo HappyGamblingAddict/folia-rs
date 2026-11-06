@@ -1862,3 +1862,35 @@ Format:
   extraction, and campfire slot count/lit state must be widened when the
   campfire block entity lands. Furnace fuel crafting remainders are only handled
   for lava buckets (to empty buckets).
+## 2026-11-06 — Item prototypes are a Java dump, not a hand-written table
+
+- Context: Stack limits, durability, tool rules, food values, equippable slots,
+  enchantability, repair ingredients, fire resistance, and rarity were guessed
+  from item names or the presence of a damage component. The decompiled
+  `Items.java` builds them through `ToolMaterial`, `ArmorMaterial`, `Foods`, and
+  `Consumables`, so re-deriving the table in Rust would duplicate a lot of
+  Mojang data and drift.
+- Decision: `scripts/extract_item_prototypes.ps1` boots the local 1.21.11
+  server jar (`Bootstrap.bootStrap`), reads `Item.components()` for every
+  non-air registry item, and emits a compact JSON catalog keyed by namespaced
+  id. Only non-default fields are stored, so a plain block item is `{}` and the
+  Rust loader applies the explicit stack-64/no-durability fallback. Tool tier is
+  not a 1.21.11 component; the extractor derives it from the repair tag
+  (`*_tool_materials`) or the `incorrect_for_*_tool` rule and stores the
+  canonical `wood`/`stone`/`copper`/`iron`/`gold`/`diamond`/`netherite` name.
+  Attack damage/speed come from the prototype attribute modifiers and are cast
+  to `f32` because the vanilla tool builder creates them from float constants.
+- Decision: The loader rejects unknown fields, out-of-range values, damageable
+  entries whose stack size is not 1, and a `counts` index that disagrees with
+  the item entries. The extractor sorts item and object keys ordinally, writes
+  one trailing LF, and supports `-Check` for byte comparison.
+- Why: The data is exact and reproducible from the same jar, the asset stays
+  small (79,369 bytes for 1,504 items), and malformed generator output fails at
+  load instead of silently changing stack or durability behavior.
+- Consequences: Regeneration needs Java 21 and the local server jar/dependency
+  tree; without them the checked-in asset and its pinned FNV hash still load.
+  `defaults_for` can only emit components `item_components::ComponentValue`
+  models, so equippable/enchantability/repairable/fire resistance remain on the
+  prototype rather than being invented as opaque tags. `block_breaking.rs` is
+  not wired to the new catalog yet; it keeps its built-in `ToolMaterial` table
+  until a follow-up owns that file.

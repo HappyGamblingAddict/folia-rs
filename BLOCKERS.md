@@ -170,14 +170,14 @@ These are expected gaps, not reasons to stop:
   block entities, waterlogging, shape updates, and per-block state derivatives
   (`shape`, `hinge`, `type`, …). There is no Java block-for-block structure
   fixture yet, and starts are not attached to chunk generation.
-- Item components are a first slice: per-item prototype defaults
-  (`max_stack_size`, `max_damage`, food/tool/enchantment defaults) are not
-  dumped, so a plain damageable item without a damage/max_damage component
-  still reports stack size 64. `attribute_modifiers`,
-  `potion_contents`, and `tool` are NBT-only; their network codecs are omitted
-  and reported by `NetworkEncodingReport`. `HashedStack` component hashes are
-  parsed but not matched against a reconstructed stack, and there is no
-  Java-captured component NBT/packet fixture yet.
+- Item components are a first slice. The per-item prototype catalog is now
+  generated (`assets/item_prototypes.json`, 1,504 items), so stack limits,
+  durability, tool rules, food, rarity, and the fallback are data-driven rather
+  than guessed. `attribute_modifiers`, `potion_contents`, and `tool` are still
+  NBT-only; their network codecs are omitted and reported by
+  `NetworkEncodingReport`. `HashedStack` component hashes are parsed but not
+  matched against a reconstructed stack, and there is no Java-captured component
+  NBT/packet fixture yet.
 
 - Some Java oracle data requires starting `java-worldgen`; if the server cannot
   start, use the existing dumps in `crates/folia-core/assets`.
@@ -403,8 +403,9 @@ These are expected gaps, not reasons to stop:
     `MiningContext` but the session has no status-effect source yet.
   - Adventure `can_destroy`/`can_place_on` and spectator interactions;
     adventure and spectator block actions are rejected conservatively.
-  - `minecraft:tool`/`max_damage` item prototypes are still not dumped
-    (P1.4), so the built-in `ToolMaterial` table is used unless a stack
+  - The `minecraft:tool`/`max_damage` prototype catalog now exists
+    (`item_prototypes.rs`), but `block_breaking.rs` is not wired to it in this
+    slice; it still uses its built-in `ToolMaterial` table unless a stack
     carries an explicit component.
   - No Java break-time or drop fixture yet; the tests encode the Java formulas
     directly rather than a captured oracle trace.
@@ -412,6 +413,7 @@ These are expected gaps, not reasons to stop:
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
 
+<<<<<<< HEAD
 ## 2026-11-06 - P4.8 crafting is a behaviour model, not menu/packet parity
 
 - Scope: `crafting.rs` implements shaped/shapeless/transmute matching, one-item
@@ -436,3 +438,28 @@ These are expected gaps, not reasons to stop:
 - Workaround / next task: Keep these as explicit gaps. `CraftOutput::deposit`
   already uses `inventory::add_stack`, so menu code can consume the model
   without changing the matcher.
+=======
+## 2026-11-06 — P1.4 item prototypes are dumped; the component bridge is partial
+
+- Resolved: `scripts/extract_item_prototypes.ps1` boots the local 1.21.11 jar
+  and dumps all 1,504 non-air item prototypes to
+  `assets/item_prototypes.json` (79,369 B). `src/item_prototypes.rs` validates
+  the catalog, exposes by-name/by-id lookups, and returns component patches for
+  the subset `src/item_components.rs` models (stack size, max damage/damage,
+  food, tool, rarity).
+- Not in the patch: 1.21.11 prototypes also carry `equippable`, `enchantable`,
+  `repairable`, and `damage_resistant` (fire resistance).
+  `item_components::ComponentValue` has no variants for them yet, so
+  `defaults_for` does not emit them; callers must read them from
+  `ItemPrototype`. Do not treat the patch as the complete prototype.
+- Not ported: the `attribute_modifiers`, `potion_contents`, and `tool` network
+  codecs; `HashedStack` component hashing; and a Java-captured component
+  NBT/packet fixture.
+- Extraction dependency: the oracle needs Java 21 plus the local server jar and
+  dependency tree. `tests/item_prototypes.rs` runs the extractor `-Check` only
+  when that jar is present (and skips on non-Windows), so CI without the
+  reference tree still validates the pinned bytes and catalog semantics.
+- Workaround: use `prototype`/`prototype_or_default` for the full prototype and
+  `defaults_for`/`apply_defaults` for the modeled component subset. Do not claim
+  full prototype-patch, network, or hashing parity.
+>>>>>>> task/item-prototypes

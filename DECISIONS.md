@@ -1309,3 +1309,82 @@ Format:
 - Consequences: The exact-name number in `STATE.md`/`PORT_MAP.md` is 92.02%
   until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
   the delta and its cause are recorded here.
+
+## 2026-11-06 - Plugin player state mirrors playerdata, not the live session
+
+- Context: `join.rs` owns each network session's `PlayerSession` on its own
+  thread and exposes no registry. The bridge runs on the Rust main thread and
+  must answer Bukkit `Player` calls without editing core files outside this
+  slice.
+- Decision: `BridgeState` keeps one `PlayerSession` per UUID, seeds it from
+  `playerdata` on join, and persists every plugin mutation immediately. The
+  bridge is authoritative for the next login (and for offline players). Only
+  `setGameMode` is forwarded to the live session through the existing
+  `execute_console_command("gamemode ...")` channel, because that path already
+  exists.
+- Why: Persisting through the real playerdata model is a genuine state change
+  and keeps the bridge inside its allowed file boundary. Inventing a second
+  live-session registry would require core changes and duplicate authority.
+- Consequences: Live movement, fall damage, inventory clicks, and the 5 s
+  autosave can overwrite bridge-side health/food/inventory/teleport changes
+  until `join.rs` exposes a shared session handle. Teleports and messages are
+  therefore partial: teleport persists and returns true, `sendMessage` logs to
+  the server console, but neither reaches the connected client yet. These gaps
+  are recorded in `TODO.md` (P9.3) and in the bridge self-test output.
+
+## 2026-11-06 - Plugin world reads use stored/cached chunks only
+
+- Context: `WorldStorage` can load saved chunks but generating on demand needs
+  the chunk-status pipeline, which is still owned by the join streamer.
+- Decision: `World.getBlockAt`, `getHighestBlockYAt`, biome, and light getters
+  read the process-wide overworld storage and never generate. A missing chunk
+  reads as air, the highest block returns the world minimum, and writes to a
+  missing chunk return false.
+- Why: Generating from a JNI callback would bypass the chunk-status pipeline
+  and risk blocking plugin code on a full generation batch.
+- Consequences: Plugins can read and edit any stored or currently cached
+  column (the spawn area after a join), but cannot explore new terrain through
+  the Bukkit API until ticket/generation APIs land. Stored chunks without light
+  data are recomputed read-only for the light getters.
+
+## 2026-11-06 - Bridge item meta is the component subset Rust already stores
+
+- Context: The Rust item model has custom name, lore, damage, unbreakable,
+  enchantments, attribute modifiers, containers, potions, food, and tool data.
+  The Bukkit API needs `ItemStack`/`ItemMeta` objects before the JVM can expose
+  any of it, and the plain API class delegates to a CraftBukkit object that does
+  not exist here.
+- Decision: Provide `BridgeItemStack` (a subclass with its own fields) and a
+  `BridgeItemMeta` proxy. Round-trip type, count, damage, custom name, lore, and
+  unbreakable through the Rust component model. Keep enchantments, item flags,
+  and custom model data on the proxy for the object's lifetime but do not persist
+  them yet.
+- Decision: Install a `RegistryAccess` service provider so
+  `Material.asItemType()` and `new ItemStack(Material, count)` work without
+  CraftBukkit, plus an `InternalAPIBridge` service provider so `Biome` can
+  initialize.
+- Why: Without these services, a plugin fails before reading a single block:
+  modern `ItemStack` construction throws `No RegistryAccess implementation
+  found`, and `Biome` initialization throws from its static initializer.
+- Consequences: Standard item creation and the common meta operations work.
+  Enchantments and persistent data containers remain explicit gaps (P9.8).
+  `PlayerInventory` covers storage slots 0-35; armor and off-hand slots read as
+  air and ignore writes.
+
+## 2026-11-06 - Block/place/interact events are host-callable, not yet live-wired
+
+- Context: `join.rs` performs block break/place and item use directly through
+  `block_update::set_block`; it has no plugin callback hook and is outside this
+  slice's allowed files.
+- Decision: Implement real Bukkit event construction, listener dispatch, and
+  cancellation in the bridge, expose `PluginRuntime::fire_block_break`,
+  `fire_block_place`, and `fire_player_interact` for the Rust host, and add a
+  gated `FOLIA_BRIDGE_SELFTEST=1` end-to-end check. Do not fake a live hook by
+  watching broadcast packets.
+- Why: The event objects and cancellation semantics are the reusable part; a
+  packet watcher would attribute someone else's edit to the wrong player.
+- Consequences: Plugins that call the `Bridge.fire*` entry points (or the Rust
+  host once join handlers are wired) observe and cancel these events. Vanilla
+  break/place/interact still bypass the event bus until a follow-up changes
+  `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
+  covered; the rest of P9.2 remains open.

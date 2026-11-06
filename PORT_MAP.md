@@ -20,6 +20,10 @@ Rust tree: `crates/folia-core`.
 | Server list ping / status | `folia-core/src/status.rs` | Ported: status JSON, ping/pong, live listener |
 | `net/minecraft/server/MinecraftServer` tick loop | `crates/folia-server/src/jvm.rs` | Partial: Rust loop drives plugins and region tasks |
 | Folia plugin schedulers | `java/bridge` + Rust `TASKS` table | Partial: sync tasks are Rust-owned; region/async/entity schedulers not yet |
+| Bukkit `World`/`Block`/`BlockData` | `java/bridge` `BridgeWorld` + `crates/folia-server/src/jvm.rs` | Partial: block/material, highest-Y, biome, sky/block light, chunk/state proxies over stored/cached `WorldStorage`; no on-demand generation, fluid data, entities, or world border |
+| Bukkit `Player`/`PlayerInventory`/`ItemStack` | `java/bridge` `BridgePlayer`/`BridgeInventory`/`BridgeItemStack` + `jvm.rs` | Partial: identity, location, game mode, health/food/saturation, teleport, messages, storage slots 0-35, item type/count/damage/name/lore/unbreakable; live-session sync, armor/off-hand, enchantment/PDC persistence, entity APIs remain |
+| Bukkit `BlockBreakEvent`/`BlockPlaceEvent`/`PlayerInteractEvent` | `java/bridge` `BridgeEventBus`/`BridgeServer` + `jvm.rs` | Partial: real event construction, listener dispatch, cancellation, and host-callable Rust entry points; vanilla `join.rs` break/place handlers do not fire them yet |
+| Paper `RegistryAccess`/`InternalAPIBridge` services | `java/bridge` `BridgeRegistryAccess`/`BridgeInternalApi` | Shim for `Material`/`ItemType`/`BlockType`/`Biome` lookups and item construction; the Rust registry remains authoritative for gameplay |
 | `net/minecraft/network/protocol/login/*`, configuration/play initial packets | `folia-core/src/join.rs` + `assets/join_*.bin` | Login → configuration → Join Game; captured registries, live chunk stream |
 | `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light; stored/computed sky+block layers take precedence over the height fallback |
 | Player session / movement / playerdata | `folia-core/src/player.rs` | Movement packet parsing, gzip-NBT persistence, join session |
@@ -187,7 +191,13 @@ Rust tree: `crates/folia-core`.
 - Plugin bridge: `cargo run` loads `HelloPlugin.jar`, dispatches
   `PluginEnableEvent`, registers and executes the `/hello` command, schedules a
   repeating task into the Rust task table, and receives the JNI `nativePing`
-  round trip.
+  round trip. The game-state slice adds `BridgeApiTest` (item/registry/event
+  checks) and a `FOLIA_BRIDGE_SELFTEST=1` run that edits a spawn block,
+  round-trips a named/damaged item, sets player vitals/game mode, and fires all
+  three cancellable events from Rust.
+- The Rust bridge enforces the native-only path: `FOLIA_DISABLE_PLUGINS=1`
+  never starts the JVM, and the same `cargo run` command served the selftest
+  with `plugins/` populated.
 
 ## Porting rule
 

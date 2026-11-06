@@ -10,8 +10,11 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `6e0e5fe`
 - Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Tests: **426 passing** on the last full core gate; the plugin bridge slice
+  adds 6 `folia-server` unit tests, 18 Java `BridgeApiTest` checks, and the
+  gated `FOLIA_BRIDGE_SELFTEST=1` live run. The workspace run has one
+  pre-existing unrelated failure: `folia-core --test assets` reports
+  `block_states.tsv` byte length 2,625,357 vs the manifest's 2,595,686.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -66,6 +69,19 @@ Last updated: 2026-11-06
   pre-generation queries and `FeaturePlacementWorld` handles the chunk being
   generated. The remaining 126 modifiers parse as explicit unsupported
   variants. Generation wiring is now complete for the supported subset.
+- Plugin bridge (2026-11-06): `World`/`Block` read/write (`getBlockAt`,
+  `getType`/`setType`, `getLocation`, `getHighestBlockYAt`, biome, sky/block
+  light), `Player` identity/location/game mode/vitals/teleport/messages,
+  `PlayerInventory` slots 0-35, and `ItemStack` type/count/damage/name/lore/
+  unbreakable now cross JNI. `new ItemStack(...)` works through a Paper
+  `RegistryAccess`/`InternalAPIBridge` service shim. `BlockBreakEvent`,
+  `BlockPlaceEvent`, and `PlayerInteractEvent` are constructed with cancel
+  support and host-callable; vanilla break/place handlers still bypass them.
+  Java `BridgeApiTest` passes, and the `FOLIA_BRIDGE_SELFTEST=1` server run
+  edits a spawn block, round-trips a named/damaged sword, changes vitals/game
+  mode, and fires all three events with the expected cancellation results.
+  Live-session sync for health/food/inventory/teleport/messages, armor/off-hand
+  slots, enchantment/PDC persistence, and live event dispatch remain open.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
 - Worldgen parity: 98.71% block-class / 92.02% exact-name on the 16-column
@@ -227,6 +243,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P9.3 now has the first world/player/item proxies and P9.2 has three
+  cancellable block/interact events. Next: expose the live `join.rs` session
+  state (health/food/inventory/position/messages) to the bridge, call the event
+  entry points from the real break/place/interact handlers, and add armor/
+  off-hand plus enchantment/PDC item persistence.
 - P1.4 has a working component-aware stack model. Next: dump per-item prototype
   component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
@@ -292,6 +313,15 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+- 2026-11-06: Plugin world/player/item/event bridge — `jvm.rs` adds a
+  process-wide bridge state backed by `PlayerSession` playerdata and the shared
+  overworld storage, 25 JNI getters/setters, and host-callable event methods.
+  `java/bridge` adds `BridgeWorld`, `BridgePlayer`, `BridgeInventory`,
+  `BridgeItemStack`, `BridgeItemMeta`, `BridgeRegistryAccess`, and
+  `BridgeInternalApi`; `HelloPlugin` exercises the new API. 6 `folia-server`
+  unit tests, 18 Java `BridgeApiTest` checks, and the gated live selftest pass.
+  Gaps: live-session sync, armor/off-hand, enchant/PDC persistence, and live
+  `join.rs` event wiring.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

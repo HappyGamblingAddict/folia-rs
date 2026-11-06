@@ -141,7 +141,9 @@ To use `.jar` plugins, build the compatibility layer once and put plugin jars
 in `plugins/`:
 
 ```powershell
-.\scripts\build-java.ps1   # compiles the bridge + example plugin
+# compiles the bridge + example plugin and runs the Java API test
+.\scripts\build-java.ps1 -LibrariesDirectory C:\Users\austr\Downloads\rustfol\libraries
+$env:FOLIA_LIBRARIES = "C:\Users\austr\Downloads\rustfol\libraries"
 cargo run
 ```
 
@@ -150,6 +152,16 @@ For a bounded demo run:
 ```powershell
 $env:FOLIA_MAX_TICKS = "40"
 cargo run
+```
+
+To run the end-to-end bridge self-test (world edit, player/item round trip, and
+the three cancellable events):
+
+```powershell
+$env:FOLIA_BRIDGE_SELFTEST = "1"
+$env:FOLIA_MAX_TICKS = "20"
+$env:FOLIA_LIBRARIES = "C:\Users\austr\Downloads\rustfol\libraries"
+cargo run -p folia-server
 ```
 
 Query the live status server from Rust while it is running:
@@ -289,10 +301,13 @@ See `PORT_MAP.md` for the decompiled-Java → Rust-module mapping.
 |---|---|
 | Lifecycle + logger + `plugin.yml` | Works |
 | Bukkit `@EventHandler` events fired by the host | Works (host bus) |
+| `BlockBreakEvent` / `BlockPlaceEvent` / `PlayerInteractEvent` | Constructed, dispatched, cancellable; Rust host entry points exist, live `join.rs` wiring pending |
 | `plugin.yml` commands + `PluginCommand` executors | Registered; dispatch hook available |
 | `runTask*` sync scheduling | Works (Rust task table) |
-| Public API-only plugins | Partial; API surface grows incrementally |
-| Services, inventories, players, worlds | Not yet |
+| `World` / `Block` reads and edits | Partial: stored/cached overworld columns, highest-Y, biome, light; no on-demand generation |
+| `Player` identity/vitals/game mode/teleport/messages | Partial: persisted through playerdata; game mode reaches the live session; other live sync pending |
+| `PlayerInventory` / `ItemStack` (type, count, damage, name, lore, unbreakable) | Partial: slots 0-35; `new ItemStack(...)` works; armor/off-hand and enchant/PDC persistence pending |
+| Services, entities, full `PluginManager` | Not yet |
 | NMS / `CraftBukkit` / reflection plugins | Not yet; requires Java shims for those classes |
 
 **Important:** a pure Rust binary cannot load JVM bytecode by itself. Keeping
@@ -310,8 +325,11 @@ JVM; the Rust core is still the owner of the server.
   clients and ticked with gravity/AABB collision, but there is no AI, damage or
   entity-tracking range logic. Redstone is not ported.
 - Online-mode encryption and Mojang session authentication.
-- Full player/world/entity API objects; only the minimal `PlayerJoinEvent`
-  player proxy exists.
-- The current API shim covers bootstrap, events, commands and scheduling only.
+- Full player/world/entity API objects. The bridge now covers world/block
+  access, player identity/vitals/game mode/teleport, storage-slot inventories,
+  and basic item meta, but live-session sync, entities, armor/off-hand,
+  enchantment/PDC persistence, services, and NMS shims remain open.
+- The current API shim covers bootstrap, events, commands, scheduling, world
+  blocks, players, and items; it is not yet a complete Bukkit surface.
 - There is no full 1:1 parity test suite yet. See `PORTING.md` for the staged
   plan and `PORT_MAP.md` for what is already ported.

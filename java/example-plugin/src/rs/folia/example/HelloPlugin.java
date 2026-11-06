@@ -1,20 +1,44 @@
 package rs.folia.example;
 
+import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.server.PluginEnableEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import rs.folia.bridge.Bridge;
 
+import java.util.List;
+import java.util.UUID;
+
 /**
- * Demo plugin: uses only the normal Bukkit/Paper API for lifecycle, events and
- * scheduling. The single call into {@link Bridge#nativePing(String)} is only to
- * demonstrate the JNI round trip from the Rust host.
+ * Demo plugin: uses only the normal Bukkit/Paper API for lifecycle, events,
+ * world/block access, player state, inventory items, and scheduling.
+ *
+ * <p>Set {@code FOLIA_BRIDGE_SELFTEST=1} to make the plugin exercise every
+ * bridge primitive on enable with a synthetic player. Without that variable the
+ * plugin only reads and logs the spawn surface.</p>
  */
 public final class HelloPlugin extends JavaPlugin implements Listener {
+    private static final String PROBE_NAME = "BridgeProbe";
+    private static final UUID PROBE_ID = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
+
+    private boolean selfTest;
+
     @Override
     public void onEnable() {
+        selfTest = "1".equals(System.getenv("FOLIA_BRIDGE_SELFTEST"));
         getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("HelloPlugin enabled on " + getServer().getName()
                 + " " + getServer().getMinecraftVersion());
@@ -30,8 +54,13 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
             getLogger().warning("Command /hello was not registered");
         }
 
+        readSpawnSurface();
+        if (selfTest) {
+            runSelfTest();
+        }
+
         getServer().getScheduler().runTaskTimer(this, () ->
-                getLogger().info("scheduler tick from the embedded JVM"), 1L, 5L);
+                getLogger().info("scheduler tick from the embedded JVM"), 1L, 20L);
     }
 
     @EventHandler
@@ -43,8 +72,141 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
-        getLogger().info("PlayerJoinEvent: " + event.getPlayer().getName()
-                + " (" + event.getPlayer().getUniqueId() + ")");
+        Player player = event.getPlayer();
+        getLogger().info("PlayerJoinEvent: " + player.getName()
+                + " (" + player.getUniqueId() + ") at " + player.getLocation().getBlockX()
+                + "," + player.getLocation().getBlockY() + ","
+                + player.getLocation().getBlockZ());
+        if (selfTest && PROBE_ID.equals(player.getUniqueId())) {
+            exercisePlayer(player);
+        }
+    }
+
+    @EventHandler
+    public void onBlockBreak(BlockBreakEvent event) {
+        Material type = event.getBlock().getType();
+        getLogger().info("BlockBreakEvent: " + type + " at " + event.getBlock().getLocation());
+        if (type == Material.BEDROCK) {
+            event.setCancelled(true);
+            getLogger().info("cancelled bedrock break through the Rust event bridge");
+        }
+    }
+
+    @EventHandler
+    public void onBlockPlace(BlockPlaceEvent event) {
+        Material placed = event.getBlockPlaced().getType();
+        Material held = event.getItemInHand() == null
+                ? Material.AIR : event.getItemInHand().getType();
+        getLogger().info("BlockPlaceEvent: placed=" + placed + " held=" + held);
+        if (placed == Material.BEDROCK || held == Material.BEDROCK) {
+            event.setCancelled(true);
+            getLogger().info("cancelled bedrock place through the Rust event bridge");
+        }
+    }
+
+    @EventHandler
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        if (event.getClickedBlock() == null) {
+            return;
+        }
+        Material type = event.getClickedBlock().getType();
+        if (type == Material.BEDROCK) {
+            event.setCancelled(true);
+            getLogger().info("cancelled bedrock interact through the Rust event bridge");
+        }
+    }
+
+    private void readSpawnSurface() {
+        World world = getServer().getWorld("world");
+        if (world == null) {
+            getLogger().warning("world 'world' was not exposed by the bridge");
+            return;
+        }
+        int y = world.getHighestBlockYAt(0, 0);
+        Block block = world.getBlockAt(0, y, 0);
+        getLogger().info("spawn surface: " + block.getType() + " at y=" + y
+                + ", biome=" + world.getBiome(0, y, 0)
+                + ", light=" + block.getLightLevel()
+                + " (sky=" + block.getLightFromSky()
+                + ", block=" + block.getLightFromBlocks() + ")");
+    }
+
+    private void runSelfTest() {
+        World world = getServer().getWorld("world");
+        if (world == null) {
+            getLogger().warning("bridge self-test skipped: no world");
+            return;
+        }
+        int y = world.getHighestBlockYAt(0, 0);
+        Block target = world.getBlockAt(0, y + 2, 0);
+        Material previous = target.getType();
+        target.setType(Material.GLOWSTONE);
+        Material after = target.getType();
+        target.setType(previous);
+        if (after != Material.GLOWSTONE) {
+            getLogger().severe("bridge self-test failed: block write did not stick (" + after + ")");
+        } else {
+            getLogger().info("world block self-test passed: " + previous + " -> GLOWSTONE -> "
+                    + target.getType());
+        }
+        // The Rust host fires the block/interact events after plugin boot; this
+        // synthetic join exercises the player and inventory proxies now.
+        Bridge.firePlayerJoin(PROBE_NAME, PROBE_ID.toString());
+    }
+
+    private void exercisePlayer(Player player) {
+        getLogger().info("player self-test start: gamemode=" + player.getGameMode()
+                + " health=" + player.getHealth() + " food=" + player.getFoodLevel()
+                + " saturation=" + player.getSaturation());
+
+        Location location = player.getLocation();
+        boolean teleported = player.teleport(location);
+        player.sendMessage("Hello from the Rust player bridge at " + location);
+
+        PlayerInventory inventory = player.getInventory();
+        ItemStack previous = inventory.getItem(0);
+        ItemStack sword = new ItemStack(Material.DIAMOND_SWORD, 1);
+        sword.setDurability((short) 5);
+        ItemMeta meta = sword.getItemMeta();
+        meta.setDisplayName("Bridge Blade");
+        meta.setLore(List.of("created by HelloPlugin", "stored by the Rust component model"));
+        meta.setUnbreakable(true);
+        sword.setItemMeta(meta);
+        inventory.setItem(0, sword);
+        ItemStack read = inventory.getItem(0);
+        boolean itemOk = read.getType() == Material.DIAMOND_SWORD
+                && read.getAmount() == 1
+                && read.getDurability() == 5
+                && read.getItemMeta() != null
+                && "Bridge Blade".equals(read.getItemMeta().getDisplayName())
+                && read.getItemMeta().isUnbreakable();
+        inventory.setItem(0, previous);
+
+        GameMode previousMode = player.getGameMode();
+        player.setGameMode(GameMode.CREATIVE);
+        GameMode creative = player.getGameMode();
+        player.setGameMode(previousMode);
+
+        player.setHealth(18.0D);
+        player.setFoodLevel(17);
+        player.setSaturation(3.5F);
+        boolean vitalsOk = Math.abs(player.getHealth() - 18.0D) < 0.001D
+                && player.getFoodLevel() == 17
+                && Math.abs(player.getSaturation() - 3.5F) < 0.001F;
+        player.setHealth(20.0D);
+        player.setFoodLevel(20);
+        player.setSaturation(5.0F);
+
+        getLogger().info("player self-test: teleport=" + teleported
+                + " item=" + itemOk + " itemType=" + read.getType()
+                + " itemDamage=" + read.getDurability()
+                + " creative=" + creative
+                + " vitals=" + vitalsOk);
+        if (!teleported || !itemOk || creative != GameMode.CREATIVE || !vitalsOk) {
+            getLogger().severe("bridge player/inventory self-test FAILED");
+        } else {
+            getLogger().info("bridge player/inventory self-test passed");
+        }
     }
 
     @Override

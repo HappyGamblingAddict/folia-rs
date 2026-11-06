@@ -3,7 +3,8 @@
 > Last updated: 2026-11-06  
 > Current commit: `513bb11` (baseline)  
 > Working tree: 30 pre-existing uncommitted paths, including all Nov 3 registry work  
-> Test status: **351 tests, 0 failed**  
+> Test status: **351 tests + 17 new focused player-physics tests** at the last
+> focused run; the coordinator runs the full gate after merging  
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~15%** (range 10–25% depending on metric)
 
@@ -51,7 +52,7 @@ more expensive than designing for it now.
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
 | Full worldgen | ~35–40% | Ore/scattered features translated; generator wiring and veinifier pending; vegetation/trees partial; structures and Nether/End missing |
 | Lighting | ~5–10% | Current light payload is a height-based sky-light approximation; no block light |
-| Player simulation | ~10–15% | Movement is parsed, not simulated; block break is instant |
+| Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
 | Blocks/redstone/fluids | ~5% | Only break/place; no neighbor updates, fluids, redstone, block entities |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
@@ -63,6 +64,12 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: Server-side player physics — `player_physics.rs` ports the vanilla
+  walking/falling formulas (AABB 0.6x1.8 standing, 0.6x1.5 sneaking, gravity
+  0.08, drag 0.98, ground friction, jump 0.42, step 0.6, fall distance/damage),
+  collides against `WorldStorage`, and reconciles movement packets with
+  corrections. Live fall damage sends health updates and death. 12 focused
+  tests.
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
   registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
   7,208 members) and
@@ -879,11 +886,12 @@ server does not simulate player physics or validate movement. Block breaking is
 instant, and only a 36-slot inventory exists. This phase turns the join demo
 into actual gameplay.
 
-**Current state:** `player.rs` parses movement and persists it; there is no player
-collision/physics tick. `block_update.rs` breaks instantly on start-destroy and
-places on use-item-on.
+**Current state:** `player.rs` parses movement and persists it;
+`player_physics.rs` now simulates walking, jumping, falling, step-up, collision,
+and fall damage and reconciles movement packets. `block_update.rs` breaks
+instantly on start-destroy and places on use-item-on.
 
-### P4.1 Player entity and physics `[ ]` `L`
+### P4.1 Player entity and physics `[~]` `L`
 
 - **What:** Give each player a real entity with pose, dimensions, collision,
   gravity, drag, step height, jump, sprint, sneak, swim, fly, ladder, water,
@@ -894,6 +902,17 @@ places on use-item-on.
   `ServerPlayer.java`, `LivingEntity.travel`.
 - **Done when:** Movement traces match Java for walking, jumping, falling,
   swimming, and ladders within `1e-4`.
+- **Progress (2026-11-06):** `player_physics.rs` ports the standing/sneaking/
+  swimming AABBs, `travelInAir` gravity/drag/friction, jump impulse, sprint
+  jump, step height, axis-separated collision, fall-distance accumulation, and
+  fall damage. Focused tests pin a 20-tick walk displacement within `1e-4`, the
+  jump apex `1.252203`, ten-block fall damage `7`, wall collision, and half-slab
+  step-up. The live session now simulates movement instead of accepting packets
+  verbatim and sends health updates on fall damage. Still open: ladder/vine/
+  scaffolding, cobweb, slime, elytra, water/lava/swimming physics, bubbles,
+  powder snow, levitation/slow falling, sprint/sneak input packets, and a
+  standalone 20 Hz player tick; non-full block shapes are full cubes until
+  P1.5.
 
 ### P4.2 Movement validation, corrections, and teleports `[~]` `M`
 
@@ -901,6 +920,13 @@ places on use-item-on.
   exceeds 100 (ten blocks) is reverted and answered with a position packet
   carrying the last accepted position; the integration test joins, sends a
   500-block jump, and asserts the correction restores the joined position.
+- **Progress (2026-11-06):** movement deltas up to `0.75` blocks are replayed
+  through the same collision code used by the simulation; a claim that cannot
+  reach the requested position beyond `1e-3` gets a position correction. Longer
+  packets are treated as lag bursts, validate their destination, and lift out
+  of terrain by up to eight blocks. Normal walking is accepted exactly and is
+  covered by a no-rubber-band test. Teleport acknowledgement is still ignored,
+  and block-shape metadata limits collision exactness.
 
 - **What:** Validate movement packets, handle on-ground/sprint/sneak flags,
   send position corrections, implement teleport/ack, and reject impossible

@@ -894,3 +894,42 @@ Format:
   yet, and `worldgen/feature/ore.rs` still hard-codes its four target-tag sets
   until it is switched to `tags::has`.
 
+
+## 2026-11-06 - Player physics reconciles client movement against the world
+
+- Context: Vanilla's server accepts the client's position with only coarse
+  checks, but this port needs a simulated player for collision, fall damage, and
+  future interaction. The client movement packet does not carry WASD input, so a
+  pure server-side `travel` tick cannot reproduce a player's acceleration from a
+  standstill without rubber-banding.
+- Decision: `PlayerPhysics` implements the vanilla `LivingEntity.travelInAir`
+  formulas (gravity 0.08, drag 0.98, ground friction, jump 0.42, step 0.6,
+  0.91 horizontal drag) and a `tick` entry point for future server ticks, but
+  live movement packets are reconciled by replaying their claimed delta through
+  the axis-separated collider. A legal claim within 1e-3 blocks is accepted
+  exactly; a blocked claim sends a correction and leaves the simulation at the
+  collision limit. The existing ten-block teleport net remains as the first
+  check.
+- Decision: A single packet moving more than 0.75 blocks horizontally is
+  treated as a client lag burst (vanilla's fastest grounded movement is well
+  below that). Its destination is validated instead of replaying every tick, so
+  the existing 8.5-block chunk-border tests do not rubber-band over natural
+  terrain. An endpoint inside terrain is lifted by up to eight blocks to the
+  first free position (`Adjusted`); if none exists it is rejected.
+- Decision: Player collision uses full-cube shapes with vanilla friction values
+  (ice 0.98, slime 0.8, otherwise 0.6), and treats the block tags
+  `replaceable`/`flowers`/`saplings`/`crops`/`rails`/`buttons`/
+  `pressure_plates`/`wall_post_override`/`all_signs`/`fire` plus air and fluids
+  as passable. `minecraft:snow` is excluded because its thin layer has real
+  collision.
+- Why: This keeps normal walking stable, catches normal-speed wall clipping and
+  teleports, and still lets fall distance come from the server simulation.
+- Consequences: Non-full block shapes (slabs, stairs, fences, snow layers) are
+  full cubes until P1.5 block-shape metadata lands. Burst moves validate the
+  destination rather than the path; a lagging client is lifted out of terrain
+  instead of being pushed back. Unported and therefore not simulated: ladders,
+  vines/scaffolding, cobwebs, slime blocks, elytra, water/lava currents and
+  swimming physics, bubble columns, powder snow, soulsand/magma jump factors,
+  levitation/slow falling, sprint/sneak input packets, and real teleport
+  acknowledgement. The player tick still follows movement packets rather than a
+  standalone 20 Hz player scheduler.

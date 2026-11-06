@@ -1,5 +1,8 @@
 use crate::inventory::{HOTBAR_SLOTS, INVENTORY_SLOTS, ItemStack, default_inventory};
 use crate::nbt::{self, Tag};
+use crate::player_physics::{
+    ClientMove, MovementCorrection, PhysicsWorld, PlayerPhysics, Reconciliation,
+};
 use crate::protocol::PacketReader;
 use std::fs;
 use std::io;
@@ -36,6 +39,59 @@ pub const SERVERBOUND_MOVE_POS_ROT: i32 = 30;
 pub const SERVERBOUND_MOVE_ROT: i32 = 31;
 pub const SERVERBOUND_MOVE_STATUS: i32 = 32;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MovementUpdate {
+    Position {
+        x: f64,
+        y: f64,
+        z: f64,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    },
+    Rotation {
+        yaw: f32,
+        pitch: f32,
+        on_ground: bool,
+    },
+    Status {
+        on_ground: bool,
+    },
+}
+
+fn parse_movement(packet: &[u8]) -> io::Result<Option<MovementUpdate>> {
+    let mut reader = PacketReader::new(packet);
+    let id = reader.read_varint()?;
+    let update = match id {
+        SERVERBOUND_MOVE_POS => MovementUpdate::Position {
+            x: reader.read_f64()?,
+            y: reader.read_f64()?,
+            z: reader.read_f64()?,
+            yaw: None,
+            pitch: None,
+            on_ground: reader.read_u8()? & 1 != 0,
+        },
+        SERVERBOUND_MOVE_POS_ROT => MovementUpdate::Position {
+            x: reader.read_f64()?,
+            y: reader.read_f64()?,
+            z: reader.read_f64()?,
+            yaw: Some(reader.read_f32()?),
+            pitch: Some(reader.read_f32()?),
+            on_ground: reader.read_u8()? & 1 != 0,
+        },
+        SERVERBOUND_MOVE_ROT => MovementUpdate::Rotation {
+            yaw: reader.read_f32()?,
+            pitch: reader.read_f32()?,
+            on_ground: reader.read_u8()? & 1 != 0,
+        },
+        SERVERBOUND_MOVE_STATUS => MovementUpdate::Status {
+            on_ground: reader.read_u8()? & 1 != 0,
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(update))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSession {
     pub name: String,
@@ -71,8 +127,39 @@ pub struct PlayerSession {
     pub score: i32,
     /// `Air`, remaining breath ticks; vanilla's default is 300.
     pub air: i16,
+    /// Server-authoritative movement state. `x`/`y`/`z` mirror its position.
+    pub physics: PlayerPhysics,
     /// Playerdata fields this server does not model, preserved across saves.
     pub extra: Vec<(String, Tag)>,
+}
+
+/// Result of applying one movement packet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MovementOutcome {
+    pub was_movement: bool,
+    pub position_changed: bool,
+    pub correction: Option<MovementCorrection>,
+    pub fall_damage: f32,
+}
+
+impl MovementOutcome {
+    fn not_movement() -> Self {
+        Self {
+            was_movement: false,
+            position_changed: false,
+            correction: None,
+            fall_damage: 0.0,
+        }
+    }
+
+    fn from_reconciliation(reconciliation: Reconciliation) -> Self {
+        Self {
+            was_movement: true,
+            position_changed: reconciliation.moved,
+            correction: reconciliation.correction,
+            fall_damage: reconciliation.fall_damage,
+        }
+    }
 }
 
 impl PlayerSession {
@@ -99,8 +186,30 @@ impl PlayerSession {
             xp_total: 0,
             score: 0,
             air: 300,
+            physics: PlayerPhysics::new(x, y, z),
             extra: Vec::new(),
         }
+    }
+
+    /// Rebuild the simulation state from the session's position. Used after
+    /// login settling, teleports, respawn, and playerdata loads so the first
+    /// movement packet is measured from the accepted position.
+    pub fn reset_physics(&mut self) {
+        self.physics.teleport(self.x, self.y, self.z);
+        self.physics.yaw = self.yaw;
+        self.physics.pitch = self.pitch;
+        self.physics.on_ground = self.on_ground;
+    }
+
+    /// Move the session and its simulation together, discarding velocity and
+    /// fall distance like a vanilla teleport.
+    pub fn teleport(&mut self, x: f64, y: f64, z: f64, on_ground: bool) {
+        self.x = x;
+        self.y = y;
+        self.z = z;
+        self.on_ground = on_ground;
+        self.physics.teleport(x, y, z);
+        self.physics.on_ground = on_ground;
     }
 
     pub fn selected_item(&self) -> Option<&ItemStack> {
@@ -123,43 +232,72 @@ impl PlayerSession {
         true
     }
 
-    /// Parse a serverbound play movement packet. Returns true when the packet
-    /// was a movement packet and the session was updated.
-    pub fn apply_movement(&mut self, packet: &[u8]) -> io::Result<bool> {
-        let mut reader = PacketReader::new(packet);
-        let id = reader.read_varint()?;
-        match id {
-            SERVERBOUND_MOVE_POS => {
-                self.x = reader.read_f64()?;
-                self.y = reader.read_f64()?;
-                self.z = reader.read_f64()?;
-                let flags = reader.read_u8()?;
-                self.on_ground = flags & 1 != 0;
-                Ok(true)
+    /// Parse a serverbound play movement packet and reconcile its claimed
+    /// position with the simulated player. Returns whether the packet was a
+    /// movement packet, whether the simulated position changed, and any
+    /// correction the caller must send back to the client.
+    pub fn apply_movement(
+        &mut self,
+        packet: &[u8],
+        world: &mut impl PhysicsWorld,
+    ) -> io::Result<MovementOutcome> {
+        let Some(update) = parse_movement(packet)? else {
+            return Ok(MovementOutcome::not_movement());
+        };
+        match update {
+            MovementUpdate::Position {
+                x,
+                y,
+                z,
+                yaw,
+                pitch,
+                on_ground,
+            } => {
+                let client = ClientMove {
+                    x,
+                    y,
+                    z,
+                    on_ground,
+                    yaw,
+                    pitch,
+                };
+                let reconciliation = self.physics.reconcile(world, &client);
+                self.x = self.physics.x;
+                self.y = self.physics.y;
+                self.z = self.physics.z;
+                self.yaw = self.physics.yaw;
+                self.pitch = self.physics.pitch;
+                self.on_ground = reconciliation.on_ground;
+                Ok(MovementOutcome::from_reconciliation(reconciliation))
             }
-            SERVERBOUND_MOVE_POS_ROT => {
-                self.x = reader.read_f64()?;
-                self.y = reader.read_f64()?;
-                self.z = reader.read_f64()?;
-                self.yaw = reader.read_f32()?;
-                self.pitch = reader.read_f32()?;
-                let flags = reader.read_u8()?;
-                self.on_ground = flags & 1 != 0;
-                Ok(true)
+            MovementUpdate::Rotation {
+                yaw,
+                pitch,
+                on_ground,
+            } => {
+                self.yaw = yaw;
+                self.pitch = pitch;
+                self.on_ground = on_ground;
+                self.physics.yaw = yaw;
+                self.physics.pitch = pitch;
+                self.physics.on_ground = on_ground;
+                Ok(MovementOutcome {
+                    was_movement: true,
+                    position_changed: false,
+                    correction: None,
+                    fall_damage: 0.0,
+                })
             }
-            SERVERBOUND_MOVE_ROT => {
-                self.yaw = reader.read_f32()?;
-                self.pitch = reader.read_f32()?;
-                let flags = reader.read_u8()?;
-                self.on_ground = flags & 1 != 0;
-                Ok(true)
+            MovementUpdate::Status { on_ground } => {
+                self.on_ground = on_ground;
+                self.physics.on_ground = on_ground;
+                Ok(MovementOutcome {
+                    was_movement: true,
+                    position_changed: false,
+                    correction: None,
+                    fall_damage: 0.0,
+                })
             }
-            SERVERBOUND_MOVE_STATUS => {
-                let flags = reader.read_u8()?;
-                self.on_ground = flags & 1 != 0;
-                Ok(true)
-            }
-            _ => Ok(false),
         }
     }
 
@@ -337,6 +475,19 @@ impl PlayerSession {
             .and_then(Tag::as_int)
             .unwrap_or(-1)
             .clamp(-1, 3);
+        let x = coordinate(0)?;
+        let y = coordinate(1)?;
+        let z = coordinate(2)?;
+        let yaw = angle(0)?;
+        let pitch = angle(1)?;
+        let on_ground = root
+            .get("OnGround")
+            .and_then(Tag::as_byte)
+            .is_some_and(|value| value != 0);
+        let mut physics = PlayerPhysics::new(x, y, z);
+        physics.yaw = yaw;
+        physics.pitch = pitch;
+        physics.on_ground = on_ground;
 
         let extra = root
             .as_compound()
@@ -352,15 +503,12 @@ impl PlayerSession {
         Ok(Some(Self {
             name,
             uuid,
-            x: coordinate(0)?,
-            y: coordinate(1)?,
-            z: coordinate(2)?,
-            yaw: angle(0)?,
-            pitch: angle(1)?,
-            on_ground: root
-                .get("OnGround")
-                .and_then(Tag::as_byte)
-                .is_some_and(|value| value != 0),
+            x,
+            y,
+            z,
+            yaw,
+            pitch,
+            on_ground,
             game_mode,
             selected_slot,
             inventory,
@@ -374,6 +522,7 @@ impl PlayerSession {
             xp_total,
             score,
             air,
+            physics,
             extra,
         }))
     }
@@ -431,6 +580,9 @@ mod tests {
         session.yaw = 90.0;
         session.pitch = -15.0;
         session.on_ground = true;
+        session.physics.on_ground = true;
+        session.physics.yaw = 90.0;
+        session.physics.pitch = -15.0;
         session.selected_slot = 2;
         session.inventory[0] = ItemStack::new("minecraft:dirt", 3);
         session.cursor = ItemStack::new("minecraft:stone", 2);
@@ -568,7 +720,10 @@ mod tests {
 
     #[test]
     fn parses_all_movement_packets() {
+        use crate::player_physics::FlatPhysicsWorld;
+
         let mut session = PlayerSession::new("Alex".into(), [0x33; 16], 0.0, 0.0, 0.0);
+        let mut world = FlatPhysicsWorld::new(-100);
 
         let mut writer = PacketWriter::new();
         writer.write_varint(SERVERBOUND_MOVE_POS).unwrap();
@@ -576,7 +731,10 @@ mod tests {
         writer.write_f64(2.0).unwrap();
         writer.write_f64(3.0).unwrap();
         writer.write_u8(1).unwrap();
-        assert!(session.apply_movement(&writer.into_inner()).unwrap());
+        let outcome = session
+            .apply_movement(&writer.into_inner(), &mut world)
+            .unwrap();
+        assert!(outcome.was_movement);
         assert_eq!((session.x, session.y, session.z), (1.0, 2.0, 3.0));
         assert!(session.on_ground);
 
@@ -588,7 +746,10 @@ mod tests {
         writer.write_f32(45.0).unwrap();
         writer.write_f32(-10.0).unwrap();
         writer.write_u8(0).unwrap();
-        assert!(session.apply_movement(&writer.into_inner()).unwrap());
+        let outcome = session
+            .apply_movement(&writer.into_inner(), &mut world)
+            .unwrap();
+        assert!(outcome.was_movement);
         assert_eq!((session.yaw, session.pitch), (45.0, -10.0));
         assert!(!session.on_ground);
 
@@ -597,17 +758,28 @@ mod tests {
         writer.write_f32(90.0).unwrap();
         writer.write_f32(0.0).unwrap();
         writer.write_u8(1).unwrap();
-        assert!(session.apply_movement(&writer.into_inner()).unwrap());
+        let outcome = session
+            .apply_movement(&writer.into_inner(), &mut world)
+            .unwrap();
+        assert!(outcome.was_movement);
         assert_eq!(session.yaw, 90.0);
 
         let mut writer = PacketWriter::new();
         writer.write_varint(SERVERBOUND_MOVE_STATUS).unwrap();
         writer.write_u8(0).unwrap();
-        assert!(session.apply_movement(&writer.into_inner()).unwrap());
+        let outcome = session
+            .apply_movement(&writer.into_inner(), &mut world)
+            .unwrap();
+        assert!(outcome.was_movement);
         assert!(!session.on_ground);
 
         let mut writer = PacketWriter::new();
         writer.write_varint(99).unwrap();
-        assert!(!session.apply_movement(&writer.into_inner()).unwrap());
+        assert!(
+            !session
+                .apply_movement(&writer.into_inner(), &mut world)
+                .unwrap()
+                .was_movement
+        );
     }
 }

@@ -3,7 +3,7 @@
 Last updated: 2026-11-06  
 Repository: https://github.com/HappyGamblingAddict/folia-rs  
 Branch: `main`  
-Last pushed commit: `bd29b74` — "Port noise worldgen, aquifers, biomes, and entity physics"
+Last local commit: `6e0e5fe` — "Merge structure template loading and placement" (not pushed)
 
 This document is a status snapshot for continuing the Rust rewrite of Folia 1.21.11.
 It is not a claim of parity. The project is still a partial server.
@@ -34,36 +34,22 @@ are still missing.
 
 ## Working tree state
 
-The baseline below was committed on 2026-11-06 at the user's explicit request.
-Later slices are committed individually; do not branch, reset, or push unless
-the user asks.
+The working tree is clean and work is committed in coherent slices on `main`.
+Do not branch, reset, or push unless the user asks. The latest local commits
+cover the baseline, tag registries, dynamic registry tables, real lighting,
+player physics, ground-cover vegetation, placement modifiers, and structure
+template loading.
 
-```text
- M PORTING.md, README.md
- M crates/folia-core/examples/dump_registries.rs
- M crates/folia-core/src/{anvil,chunk,chunk_packet,config,entity,inventory,join,lib}.rs
- M crates/folia-core/src/worldgen/{aquifer,biome,density,generator,mod,noise}.rs
- M crates/folia-core/tests/bulk_validation.rs
- M crates/folia-server/src/{jvm,main}.rs
- M scripts/run.ps1
- M world/region/r.-1.0.mca            # left as-is; fixture caution below
-?? AGENTS.md, BLOCKERS.md, DECISIONS.md, HANDOFF.md, STATE.md, TODO.md
-?? crates/folia-core/assets/{biome_ids.txt,block_defaults.tsv,block_states.tsv,
-     entity_type_ids.tsv,feature_data.json,item_ids.tsv,mth_sin.bin}
-?? crates/folia-core/examples/dump_biomes.rs
-?? crates/folia-core/src/registry.rs
-?? crates/folia-core/src/worldgen/{carver.rs,surface/}
-?? crates/folia-core/tests/worldgen_parity.rs
-```
 
 The tree contains the biome/RTree/chunk-biome work, the surface-rules port,
-carvers, generation speedups, the optional-JVM plugin host, and the full 1.21.11
-registry tables with `registry.rs`.
+carvers, generation speedups, the optional-JVM plugin host, the full 1.21.11
+registry/tag tables, real light storage, server-side player physics,
+ground-cover vegetation features, and the structure-template foundation.
 
-Verified state (2026-11-04):
+Verified state (2026-11-06, merged workspace):
 
 ```text
-341 tests (full workspace, 2026-11-06)
+426 tests (full workspace)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -167,7 +153,7 @@ Key files:
   first. `BiomePlacementWorld` implements the `PlacementWorld` trait
   (`biome_at`, `biome_has_placed_feature`) over `BiomeSampler` and the loaded
   biome feature lists.
-- Coverage from the shipped data: 888 modifiers, 762 execute, 126 unsupported
+- Coverage from the shipped data: 888 modifiers, 875 execute, 13 unsupported (2 environment-scan predicates, 10 noise counts, 1 clamped-normal offset)
   (`heightmap` 83, `block_predicate_filter` 12, environment scan 9,
   count-on-every-layer 8, noise counts 10, surface
   relative 3, one `clamped_normal` offset).
@@ -307,8 +293,8 @@ final-density grid: 1225/1225 values within 1e-9
 biome sampling: 1536/1536 quart cells exact
 chunk biomes: 1536/1536 cells exact
 bedrock layers: exact at 16 sampled Java columns
-block-class agreement (solid/air/water/lava): 98.76% (6068/6144)
-exact block names: 92.09% (5658/6144)
+block-class agreement (solid/air/water/lava): 98.71% (6065/6144)
+exact block names: 92.04% (5655/6144)
 water blocks: Rust 284 / Java 289, 35 water mismatches
 surface height difference: 0.62 blocks average
 ```
@@ -321,7 +307,7 @@ carver mask itself.
 `tests/worldgen_parity.rs` compares every block in the fixture's 16 sampled
 columns (6144 blocks) and reports class agreement, exact names, water counts,
 and the top class confusions. Enabling the P2.5 decoration steps did not change
-these numbers: 98.76% block-class / 92.09% exact-name.
+these numbers: 98.71% block-class / 92.04% exact-name.
 
 Generation performance in the debug test profile:
 
@@ -432,7 +418,7 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   (durability, enchants, container contents are not preserved).
 - Block behavior metadata (hardness, light, solidity, tool rules) is not
   generated, so physics/lighting/breaking cannot be fully correct.
-- Generated chunks are at 98.76% class / 92.09% exact-name agreement, not
+- Generated chunks are at 98.71% class / 92.04% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is
   ~2.7 s; still too slow for a production login path.
@@ -529,7 +515,7 @@ alternate world directory; `FOLIA_BIND` overrides the bind address;
 - [ ] Run `cargo fmt --check` and
       `cargo clippy --workspace --all-targets -- -D warnings`; both must be
       clean.
-- [ ] Run `cargo test --workspace`; expect 341 tests, 0 failed.
+- [ ] Run `cargo test --workspace`; expect 426 tests, 0 failed.
 - [ ] If `world/region` was modified by a manual run, restore the fixture from
       `snapshots/folia-rs-20261104-193508-p2-biome-filter.zip` before debugging
       `world_chunk_packet`, and probe scratch levels with `FOLIA_LEVEL_NAME`.

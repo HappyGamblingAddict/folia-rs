@@ -34,8 +34,8 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   at 16 sample points within `1e-12`; all 1225 final-density grid values for
   chunk `(0,-1)` match Java within `1e-9`.
 - Chunk differential: at 16 sampled Java chunk columns, bedrock layers match
-  exactly, block-class agreement (solid/air/water/lava) is 98.76%, exact block
-  names are 92.09%, and surface heights differ by 0.62 blocks on average.
+  exactly, block-class agreement (solid/air/water/lava) is 98.71%, exact block
+  names are 92.04%, and surface heights differ by 0.62 blocks on average.
 - Multi-noise biome sampling: the real overworld parameter list and all 1536
   biome cells of chunk `(0,-1)` match the Java server exactly.
 - Cave and canyon carvers: exact legacy seeding, the 17x17 neighbouring-start
@@ -69,7 +69,7 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   generation steps. `assets/feature_data.json` (224 configured features, 258
   placed features, 65 biome feature lists) is loaded and reference-validated;
   unported feature types fail loudly instead of no-oping. Placement modifiers
-  are typed; 762 of 888 execute in vanilla RNG order and the rest report an
+  are typed; 875 of 888 execute in vanilla RNG order and the rest report an
   explicit failure. Supported vegetation runs after carvers; supported trees
   include oak, birch, jungle, swamp oak, spruce, pine, dark oak, fancy oak,
   cherry, acacia, mega spruce/pine, mega jungle, jungle bush, azalea,
@@ -201,7 +201,7 @@ add the same TCP 25565 allow rule in AVG's firewall settings.
 Run the core test suite:
 
 ```powershell
-cargo test --workspace    # 341 tests
+cargo test --workspace    # 426 tests
 ```
 
 The baseline is clean: `cargo fmt --check` and

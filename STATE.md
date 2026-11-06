@@ -8,11 +8,9 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): `513bb11`
-- Working tree: uncommitted by design; Git is not used for workflow.
-- Tests: **351 passing** baseline; focused lighting (7), player-physics (17),
-  vegetation (23), placement (3), dynamic-registry (3) and structure-template
-  (13) suites are green. The merged workspace gate is run by the coordinator.
+- Current commit (informational only): `6e0e5fe`
+- Working tree: clean; work is committed in coherent slices.
+- Tests: **426 passing, 0 failed** on the merged workspace gate.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -41,12 +39,12 @@ Last updated: 2026-11-06
   `place_on_ground` leaf litter,
   `beehive`, `leave_vine`, `trunk_vine`, `cocoa`, `attached_to_leaves`,
   `attached_to_logs`, and `creaking_heart` decorators execute; unsupported
-  decorator types make the whole tree config unsupported. 762 of 888 shipped
+  decorator types make the whole tree config unsupported. 875 of 888 shipped
   placement modifiers execute; 126 remain explicit unsupported variants.
   Beehive occupants and the chunk-status pipeline are still open; pale moss
   is blocked on the unported `pale_moss_patch` vegetation feature.
 - P2.1/P2.2 core is in `worldgen/feature/{mod,placement}.rs`: framework,
-  typed loading, and a placement pipeline that executes 762 of 888 shipped
+  typed loading, and a placement pipeline that executes 875 of 888 shipped
   modifiers (world-free transforms, `biome`, `OCEAN_FLOOR`/`WORLD_SURFACE`
   heightmaps, surface-water depth, and sapling `would_survive`). `biome` reads
   world state through `PlacementWorld`; `BiomePlacementWorld` handles
@@ -55,7 +53,7 @@ Last updated: 2026-11-06
   variants. Generation wiring is now complete for the supported subset.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
-- Worldgen parity: 98.76% block-class / 92.09% exact-name on the 16-column
+- Worldgen parity: 98.71% block-class / 92.04% exact-name on the 16-column
   fixture.
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
@@ -212,7 +210,7 @@ Last updated: 2026-11-06
   Beehive occupant NBT is still the remaining P2.4 tree gap.
 
 1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
-   port `OreVeinifier`, and keep the 92.09% exact-name fixture.
+   port `OreVeinifier`, and keep the 92.04% exact-name fixture.
 2. P2.8 - structure starts/pieces/references, processor lists, random palette
    selection, entity spawning, and a template-based Java parity fixture.
 3. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
@@ -339,8 +337,9 @@ Last updated: 2026-11-06
   `HashSet` bucket order for patch positions. `FeatureData` now dispatches
   134/224 configured features. Generation runs `underground_decoration`,
   `vegetal_decoration`, and `top_layer_modification`; `underground_ores` stays
-  off. Focused tests: 8 unit + 15 integration. Exact-name parity remains
-  92.09% (5658/6144), block-class 98.76% (6068/6144).
+  off. Focused tests: 8 unit + 15 integration. After the later placement
+  modifiers landed, exact-name parity is 92.04% (5655/6144) and block-class is
+  98.71% (6065/6144).
 
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` walks the
   decompiled tag tree, resolves nested `#tag` references with cycle detection
@@ -350,9 +349,8 @@ Last updated: 2026-11-06
   damage type (33/196), enchantment (22/308), point-of-interest type (3/30),
   worldgen (91/631). `src/tags.rs` embeds them in `OnceLock`s, accepts bare or
   namespaced keys, and returns empty/false for unknown tags. `tests/tags.rs`
-  adds 5 membership/count tests; `tests/assets.rs` pins the new assets. Full
-  suite 351 passing (one pre-existing `game_mode` save race can fail under
-  timing; see the session report).
+  adds 5 membership/count tests; `tests/assets.rs` pins the new assets. The
+  merged workspace gate is 426 passing.
 
 - 2026-11-06: Ore features — `worldgen/feature/ore.rs` ports `minecraft:ore`
   and `minecraft:scattered_ore`, including ellipsoid elimination, air-exposure

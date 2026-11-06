@@ -1,13 +1,11 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: `513bb11` (baseline)  
-> Working tree: 30 pre-existing uncommitted paths, including all Nov 3 registry work  
-> Test status: **351-test baseline plus focused lighting, player-physics,
-> vegetation, placement, dynamic-registry and structure-template suites
-> (green)**; the coordinator runs the merged full gate.
+> Current commit: `6e0e5fe`  
+> Working tree: clean; work is committed in coherent slices.  
+> Test status: **426 tests, 0 failed** on the merged workspace gate.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
-> Overall completion estimate: **~15%** (range 10–25% depending on metric)
+> Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -59,7 +57,7 @@ more expensive than designing for it now.
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
-| Overall rewrite | **~15%** | Foundation-heavy, content-light |
+| Overall rewrite | **~18%** | Foundation-heavy, content-light |
 
 ---
 
@@ -78,7 +76,7 @@ more expensive than designing for it now.
   shipped state provider types. 134 of 224 configured features execute.
   Generation now runs `underground_decoration`, `vegetal_decoration`, and
   `top_layer_modification` (ores stay off). 8 unit + 15 integration tests;
-  parity unchanged at 98.76% block-class / 92.09% exact-name.
+  parity unchanged at 98.71% block-class / 92.04% exact-name.
 - 2026-11-06: Structure-template foundation — `worldgen/structure/template.rs`
   parses gzip 1.21.11 structure NBT (DataVersion, size, palettes, blocks with
   optional block-entity NBT, entities), ports `StructureTemplate.transform`
@@ -87,13 +85,13 @@ more expensive than designing for it now.
   counts, block-entity NBT, and transformed entity descriptors; it does not
   spawn entities. Structure starts, pieces, sets, references, processor lists,
   template pools, jigsaw expansion, and random palette selection are still
-  unported. 13 focused tests. 351 tests on the last full run.
+  unported. 13 focused tests. 426 tests on the last full run.
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
   registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
   7,208 members) and
   `src/tags.rs` provides namespaced membership lookups with nested references
   resolved at extraction time. Focused tests cover block/item/fluid/entity
-  membership, flattening, exact counts, and unknown keys. 351 tests passing.
+  membership, flattening, exact counts, and unknown keys. 426 tests passing.
 - 2026-11-06: Ore slice — `minecraft:ore` and `minecraft:scattered_ore`
   parse and place with the shipped target tags and states; all 30 ore + 2
   scattered-ore configs are supported. Generator wiring is held back until
@@ -177,7 +175,7 @@ These are the checkpoints that should be preserved while building forward.
 - [x] Differential armor-stand physics trace.
 - [x] Overworld noise/density/aquifer/biome/surface/carver generation.
 - [x] Exact 1225/1225 density grid, 1536/1536 biome cells, exact bedrock.
-- [x] 98.76% block-class / 92.09% exact-name agreement on the 16-column fixture.
+- [x] 98.71% block-class / 92.04% exact-name agreement on the 16-column fixture.
 - [x] Full block/item/entity/biome registry tables (Nov 3, uncommitted).
 - [x] Feature metadata extracted to `assets/feature_data.json` (not wired yet).
 
@@ -409,7 +407,7 @@ remaining worldgen gap is almost entirely **what is placed on top of the
 terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
-**Current state:** 98.76% block-class and 92.09% exact-name agreement on a
+**Current state:** 98.71% block-class and 92.04% exact-name agreement on a
 16-column fixture, with remaining errors concentrated in unported lush-cave
 and ocean features. `feature_data.json` has the definitions but no Rust code
 consumes it.
@@ -480,7 +478,7 @@ consumes it.
   so P2.3 is unblocked.
 - **Progress (2026-11-05):** Tree generation added `OCEAN_FLOOR` heightmaps
   (25), `surface_water_depth_filter` (25), and 45 sapling `would_survive`
-  predicates, so **762 of 888** modifiers now execute. The 126 remaining are
+  predicates, so **875 of 888** modifiers now execute. The 13 remaining are
   `heightmap` 83 (MOTION_BLOCKING / WG variants), `block_predicate_filter` 12
   (non-sapling predicates), `environment_scan` 9, `count_on_every_layer` 8,
   noise counts 10, `surface_relative_threshold` 3, and one `clamped_normal`
@@ -593,7 +591,7 @@ consumes it.
   bamboo, and structure features. The tree `pale_moss` decorator still needs
   to be wired to the now-supported `pale_moss_patch`.
 - **Parity note:** Enabling the three decoration steps did not change the
-  fixture: 98.76% block-class / 92.09% exact-name. The new placed features
+  fixture: 98.71% block-class / 92.04% exact-name. The new placed features
   remain mostly gated by unported top-level placement modifiers, so they are
   parsed but do not yet affect the fixture.
 

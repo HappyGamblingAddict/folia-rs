@@ -50,14 +50,14 @@ Rust tree: `crates/folia-core`.
 ## Verification evidence
 
 - `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
-  27 random tests (351 total), 0 failed (2026-11-06).
+  29 random tests (426 total), 0 failed (2026-11-06).
 - P2.5 focused evidence: `worldgen::feature::vegetation` adds 8 unit tests and
   `tests/vegetation.rs` adds 15 integration tests covering shipped
   `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,
   random-patch success/failure, all provider draw orders, block pile/column,
   multiface attachment, vegetation and waterlogged patch behavior, Java
   HashSet ordering, and deterministic generation. Parity is unchanged at
-  98.76% block-class / 92.09% exact-name (5658/6144).
+  98.71% block-class / 92.04% exact-name (5655/6144).
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
   are clean (2026-11-06).
 - Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members
@@ -125,7 +125,7 @@ Rust tree: `crates/folia-core`.
 - All 1225 `final_density` values on the chunk `(0,-1)` 4x8x4 interpolation grid
   match Java within `1e-9` (`worldgen/generator.rs` test,
   `assets/java-density-grid.txt`).
-- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.76% (6068/6144 sampled positions), exact block names are 92.09% (5658/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
+- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.71% (6065/6144 sampled positions), exact block names are 92.04% (5655/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
 - `tests/worldgen_join.rs` logs in with no region directory, streams 49
   generated terrain chunks, and checks the palette contains bedrock.
 - Live server startup logs `[rust] noise world generator ready (seed=0)`.

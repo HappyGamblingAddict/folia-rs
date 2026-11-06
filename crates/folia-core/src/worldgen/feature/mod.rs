@@ -785,12 +785,16 @@ impl FeatureData {
     /// `(step, first-encounter index)` order, and the post-order result is
     /// reversed. The position in each returned list is the `featureIndex`
     /// vanilla uses in `WorldgenRandom.setFeatureSeed`.
-    pub fn step_feature_order(&self, possible_biomes: &[&str]) -> Vec<Vec<String>> {
+    pub fn step_feature_order(&self) -> Vec<Vec<String>> {
         let mut feature_indices: HashMap<String, usize> = HashMap::new();
         let mut features: Vec<String> = Vec::new();
         let mut graph: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
 
-        for biome in possible_biomes {
+        // `FeatureSorter.buildFeaturesPerStep` iterates the biome registry, not
+        // the multi-noise parameter list. `biome_ids.txt` preserves that
+        // registry order and therefore the feature-index part of
+        // `WorldgenRandom.setFeatureSeed`.
+        for biome in self.biome_registry_order() {
             let Some(steps) = self.biome_features(biome) else {
                 continue;
             };
@@ -831,6 +835,15 @@ impl FeatureData {
             }
         }
         by_step
+    }
+
+    fn biome_registry_order(&self) -> Vec<&str> {
+        const BIOME_IDS: &str = include_str!("../../../assets/biome_ids.txt");
+        BIOME_IDS
+            .lines()
+            .filter_map(|line| line.split_once('\t').map(|(_, name)| name))
+            .filter(|name| self.biome_features.contains_key(*name))
+            .collect()
     }
 
     /// Values of one extracted block tag, e.g. `stone_ore_replaceables`.
@@ -1430,7 +1443,7 @@ mod tests {
     fn ore_placement_matches_the_java_oracle() {
         let data = FeatureData::vanilla();
         let sampler = BiomeSampler::overworld(12_345).unwrap();
-        let order = data.step_feature_order(&sampler.possible_biomes());
+        let order = data.step_feature_order();
         assert_eq!(order[Decoration::UndergroundOres.index()].len(), 34);
         assert_eq!(
             order[Decoration::UndergroundOres.index()][0],

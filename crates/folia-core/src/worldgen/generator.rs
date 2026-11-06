@@ -291,8 +291,7 @@ impl WorldGenerator {
             chunk_biomes.insert(self.biomes.biome_name(*entry));
         }
 
-        let possible_biomes = self.biomes.possible_biomes();
-        let step_order = data.step_feature_order(&possible_biomes);
+        let step_order = data.step_feature_order();
         let mut worldgen_random = WorldgenRandom::new(0);
         let decoration_seed = worldgen_random.set_decoration_seed(
             self.seed,

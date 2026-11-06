@@ -1376,3 +1376,53 @@ Format:
   speed-factor special case is not modeled, thin shapes are still full cubes,
   and the registry lookup per light BFS step is uncached until profiling says
   it matters.
+## 2026-11-06 - Pale moss embeds the parsed patch instead of a runtime registry lookup
+
+- Context: `PaleMossDecorator.place` asks the configured-feature registry for
+  `minecraft:pale_moss_patch` at generation time. The Rust tree parser runs
+  while configured features are still being built, and `WorldGenRegion` has no
+  registry handle.
+- Decision: Parse trees after vegetation patches and pass the parsed
+  `pale_moss_patch` into `parse_tree_config_with_pale_moss`; the decorator owns
+  a clone. The public test-only `parse_tree_config` keeps pale moss
+  unsupported when no patch is supplied.
+- Why: The embedded feature is exactly the shipped patch, needs no global
+  lookup, and lets synthetic feature data provide its own patch. It keeps the
+  dependency explicit instead of silently skipping the ground pass.
+- Consequences: A datapack that replaces `minecraft:pale_moss_patch` without
+  reparsing the tree still uses the embedded copy. The generator now parses
+  trees after vegetation patches, which is safe for the shipped data because
+  no patch branch references a tree.
+
+## 2026-11-06 - Scheduled ticks and block entities are region sinks
+
+- Context: `simple_block.schedule_tick` and beehive occupants need the
+  `WorldGenLevel` tick queue and block-entity store. `generator.rs` creates a
+  short-lived `WorldGenRegion` per placement and is outside this slice.
+- Decision: Add default `FeatureLevel::schedule_tick`/`set_block_entity`
+  methods. `WorldGenRegion` implements both through
+  `crate::tick::ScheduledTickQueue` and a `Vec<FeatureBlockEntity>` exposed by
+  `scheduled_ticks()`/`take_block_entities()`. Ticks are queued from tick zero
+  because a generation-only region has no game time.
+- Why: The feature layer now produces the real vanilla payloads and tick
+  entries through the existing tick API instead of dropping them. The caller
+  owns persistence, matching `StructurePlacement::block_entities`.
+- Consequences: Generated chunks do not yet persist these sinks because
+  `generator.rs` does not drain the region. That remains an explicit gap in
+  `TODO.md`, not a silent no-op in the feature code.
+
+## 2026-11-06 - Selector branches that reference placed features stay unsupported
+
+- Context: Vanilla `random_selector`/`simple_random_selector` branches are
+  `PlacedFeature` entries, so `oak_checked`/`pale_oak_checked` and
+  `warm_ocean_vegetation`'s coral branches must resolve through the placed
+  registry. The loader parses configured features before placed features and
+  currently resolves branch references only against configured ids.
+- Decision: Keep those selectors explicit `Unsupported`. `simple_random_selector`
+  itself is ported and resolves inline or configured-feature branches, which
+  covers `dripleaf` and `forest_flowers`; the pale garden's top-level selector
+  remains a known gap until a two-registry resolver lands.
+- Consequences: `pale_garden_vegetation` and `warm_ocean_vegetation` still
+  count as unsupported, while the pale-oak tree configs, pale flowers, and both
+  dripleaf pools execute. Do not hide the selector gap by treating
+  `pale_oak_checked` as a configured feature.

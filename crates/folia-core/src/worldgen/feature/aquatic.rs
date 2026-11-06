@@ -867,6 +867,11 @@ pub(crate) fn non_negative_count(provider: &IntProvider) -> bool {
         IntProvider::WeightedList(entries) => {
             entries.iter().all(|entry| non_negative_count(&entry.data))
         }
+        IntProvider::ClampedNormal {
+            min_inclusive,
+            max_inclusive,
+            ..
+        } => *min_inclusive >= 0 && *max_inclusive >= 0,
         IntProvider::Unsupported { .. } => false,
     }
 }

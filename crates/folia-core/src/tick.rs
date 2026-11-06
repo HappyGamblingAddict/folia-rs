@@ -1073,6 +1073,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::PRESSURE_PLATE_BEHAVIOR
     } else if crate::redstone::is_tripwire(state) {
         &crate::redstone::TRIPWIRE_BEHAVIOR
+    } else if state.name == "minecraft:fire" {
+        &crate::fluid::FIRE
     } else if is_falling_block(state.name.as_str()) {
         &FALLING
     } else if plant_soil(state).is_some() {
@@ -1994,6 +1996,10 @@ mod tests {
         assert!(std::ptr::addr_eq(
             behavior_for(&state("minecraft:tripwire")),
             &redstone::TRIPWIRE_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:fire")),
+            &fluid::FIRE as &dyn BlockBehavior
         ));
     }
 

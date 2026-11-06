@@ -1550,12 +1550,10 @@ impl BlockBehavior for FireBehavior {
 /// A behaviour table that adds [`FIRE`] on top of the built-in fluid/redstone/
 /// falling/plant/grass table.
 ///
-/// `tick::behavior_for` cannot be edited by the fluid slice, so production
-/// `tick::tick_world` still routes `minecraft:fire` through the no-op
-/// behaviour. Lava ignition is live because lava itself is a fluid and uses
-/// [`FluidBehavior::random_tick`]; fire aging/spread runs whenever the caller
-/// ticks with this table (tests, and a future one-line registration in
-/// `tick.rs`).
+/// Production `tick::behavior_for` registers `minecraft:fire` directly, and
+/// lava ignition is live because lava itself is a fluid and uses
+/// [`FluidBehavior::random_tick`]. This helper remains for callers that build
+/// their own table and for the focused tests.
 pub fn interaction_table() -> crate::tick::BehaviorTable {
     crate::tick::BehaviorTable::vanilla().with("minecraft:fire", &FIRE)
 }

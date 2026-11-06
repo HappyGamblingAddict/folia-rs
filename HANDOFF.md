@@ -568,10 +568,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   entities do not exist yet; real loot tables, Fortune/Silk Touch, Unbreaking,
   block-break effects, and adventure `can_destroy` are missing.
 - Redstone is not ported.
-- Redstone is partial: wire, lever, and button are ported; repeaters,
-  comparators, torches, observers, pressure plates, lamps, pistons, and other
-  components are not. Fluids flow on scheduled ticks but lava fire/quenching
-  and block-destruction drops are not modeled.
+- Redstone is partial: wire, lever, button, repeater, comparator, observer,
+  torch, pressure plate, tripwire, and piston/sticky-piston are ported;
+  rails, doors, lamps, targets, hooks, and other components are not. Fluids
+  flow on scheduled ticks but lava fire/quenching and block-destruction drops
+  are not modeled.
 - Entity AI, goals, pathfinding, combat, and general damage are not ported.
   Players now take void damage, die, and respawn at world spawn; fall, fire,
   hunger, and projectile damage are still missing. The new `LivingEntity`

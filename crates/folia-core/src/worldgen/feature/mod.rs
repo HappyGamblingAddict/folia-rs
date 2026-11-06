@@ -871,11 +871,11 @@ impl FeatureData {
         let mut features: Vec<String> = Vec::new();
         let mut graph: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
 
-        // `FeatureSorter.buildFeaturesPerStep` iterates the biome registry, not
-        // the multi-noise parameter list. `biome_ids.txt` preserves that
-        // registry order and therefore the feature-index part of
+        // `FeatureSorter.buildFeaturesPerStep` iterates
+        // `MultiNoiseBiomeSource.possibleBiomes()`, i.e. the biome parameter
+        // list order, and that order seeds the feature-index part of
         // `WorldgenRandom.setFeatureSeed`.
-        for biome in self.biome_registry_order() {
+        for biome in self.biome_parameter_order() {
             let Some(steps) = self.biome_features(biome) else {
                 continue;
             };
@@ -918,12 +918,19 @@ impl FeatureData {
         by_step
     }
 
-    fn biome_registry_order(&self) -> Vec<&str> {
-        const BIOME_IDS: &str = include_str!("../../../assets/biome_ids.txt");
-        BIOME_IDS
+    fn biome_parameter_order(&self) -> Vec<&str> {
+        const BIOME_PARAMS: &str = include_str!("../../../assets/biome_params.txt");
+        let mut seen = std::collections::HashSet::new();
+        BIOME_PARAMS
             .lines()
-            .filter_map(|line| line.split_once('\t').map(|(_, name)| name))
+            .filter_map(|line| {
+                let mut fields = line.split('\t');
+                (fields.next() == Some("param"))
+                    .then(|| fields.next())
+                    .flatten()
+            })
             .filter(|name| self.biome_features.contains_key(*name))
+            .filter(|name| seen.insert(*name))
             .collect()
     }
 

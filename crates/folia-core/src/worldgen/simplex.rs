@@ -200,8 +200,8 @@ mod tests {
         let mut random = LegacyRandomSource::new(2345);
         let noise = SimplexNoise::new(&mut random);
         let first = noise.get_value(12.5, -7.25);
+        assert!((first - -0.436_292_480_959_983_6).abs() < 1e-12);
         assert_eq!(first, noise.get_value(12.5, -7.25));
-        assert!(first.abs() < 2.0);
 
         let mut other = LegacyRandomSource::new(2345);
         let noise2 = SimplexNoise::new(&mut other);
@@ -211,7 +211,6 @@ mod tests {
     #[test]
     fn biome_info_noise_matches_a_reference_value() {
         let value = biome_info_noise().get_value(0.5, -0.25, false);
-        assert!(value.is_finite());
-        assert!(value.abs() < 10.0);
+        assert!((value - -0.566_760_365_682_524_6).abs() < 1e-12);
     }
 }

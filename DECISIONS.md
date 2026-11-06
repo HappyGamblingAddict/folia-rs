@@ -1820,3 +1820,60 @@ Format:
   break/place/interact still bypass the event bus until a follow-up changes
   `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
   covered; the rest of P9.2 remains open.
+
+## 2026-11-06 - Dimension router/surface data lives in the dimension modules
+
+- Context: `assets/worldgen.json` carries only the Overworld `noise_settings`,
+  density-function graph, and noises. The Nether/End settings exist in the
+  decompiled data tree, but the slice's allowed files exclude new assets and
+  `assets/ASSETS.md`; the existing asset already contains every Nether normal
+  noise (`patch`, `netherrack`, `soul_sand_layer`, ...).
+- Decision: Encode the compact Nether router/surface sequence in
+  `worldgen/nether.rs` and the End island field/router in `worldgen/end.rs`.
+  Reuse `WorldgenData::overworld(seed)` for the normal-noise instances and
+  `generator::sample_grid` for interpolation, and add
+  `generate_dimension(dimension, x, z, seed)` in `generator.rs` rather than
+  changing the Overworld generator or `worldgen.json`.
+- Why: Keeps the Overworld parity fixture untouched, avoids a duplicate asset
+  manifest entry, and still evaluates the shipped density functions.
+- Consequences: A future dimension-data extraction can move these constants
+  into a compact asset without changing the generators. The Nether/End routers
+  are not loaded from `worldgen.json` today.
+
+## 2026-11-06 - Legacy dimension noise uses the positional seed path
+
+- Context: Both shipped dimension types set `legacy_random_source: true`.
+  Java then builds `BlendedNoise` from a sequential `LegacyRandomSource(seed)`
+  and the Nether temperature/vegetation noises from
+  `NormalNoise.createLegacyNetherBiome`. The public Rust noise API exposes the
+  positional Xoroshiro path (`BlendedNoise::create`,
+  `NormalNoise::create_legacy_seed`), and `noise.rs` is outside this slice's
+  allowed files.
+- Decision: Seed `BlendedNoise::create` from `XoroshiroRandomSource(seed)` and
+  build temperature/vegetation with `NormalNoise::create_legacy_seed(seed / seed
+  + 1, -7, [1, 1])`. Implement the End island field exactly, because its
+  `LegacyRandomSource` + `SimplexNoise` construction is available.
+- Why: This is deterministic, uses the world seed, and keeps the large-scale
+  Nether/End layout correct without adding an approximate sequential-noise port.
+- Consequences: Nether/End terrain is structurally correct but not claimed
+  block-identical to Java. Exact parity needs a public sequential
+  legacy-blended-noise constructor (or moving that construction into
+  `noise.rs`), then a Java dimension fixture.
+
+## 2026-11-06 - The Nether uses its own FeatureSorter biome order
+
+- Context: `FeatureData::step_feature_order` derives the biome iteration order
+  from `assets/biome_params.txt`, which contains only Overworld biomes. The
+  Nether's placed features therefore had no `featureIndex` entries and never
+  ran.
+- Decision: Build a Nether-specific feature order in `worldgen/nether.rs` from
+  the shipped `MultiNoiseBiomeSourceParameterList.Preset.NETHER` biome order
+  (wastes, soul sand valley, crimson forest, warped forest, basalt deltas) and
+  reuse the same `FeatureSorter` dependency algorithm.
+- Why: `WorldgenRandom.setFeatureSeed` consumes a global feature index derived
+  from that preset order; using the registry or Overworld order would produce
+  the wrong positions.
+- Consequences: Supported Nether decoration (quartz, magma, glowstone,
+  vegetation) now places in generated chunks. A shared dimension-aware
+  `step_feature_order` would remove the duplicate algorithm when dimensions are
+  wired into `world.rs`.

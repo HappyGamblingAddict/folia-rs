@@ -411,3 +411,28 @@ These are expected gaps, not reasons to stop:
 - Workaround: `LootProvider` is the intended hook for `crate::loot`; the
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
+
+## 2026-11-06 - P7.2/P7.3 Nether and End parity fixtures
+
+- Blocker: The Nether and End shipped settings use `legacy_random_source:
+  true`. Exact Java terrain needs `BlendedNoise` and the Nether
+  temperature/vegetation noises built from a sequential `LegacyRandomSource`;
+  the public `worldgen::noise` API only exposes the positional path, and
+  `noise.rs` was outside this slice's allowed files.
+- What was tried: The exact `EndIslandDensityFunction` construction is
+  available (`LegacyRandomSource(seed)` + `consumeCount(17292)` +
+  `SimplexNoise`) and is ported. Nether surface/noise parameters are available
+  in `worldgen.json`; the Nether router and surface sequence are evaluated from
+  the shipped JSON values in `nether.rs`. `TheEndBiomeSource` and the Nether
+  five-entry parameter preset are implemented from the decompiled code.
+- What is needed: a `BlendedNoise::create_legacy`/sequential
+  `NormalNoise::create_legacy_nether_biome` entry point in
+  `worldgen/noise.rs`, then a Java dimension oracle dump (bedrock, lava,
+  surface layers, biomes, and representative density samples) for both
+  dimensions.
+- Workaround / next task: Tests pin the structural contract only (bedrock
+  y=0/127, lava at y=31, netherrack, valid biomes, deterministic chunks; End
+  central island, headroom, platform, outer end stone, biomes). Do not claim
+  Nether/End block-for-block parity until the legacy noise path and Java
+  fixtures land. Carvers, fortresses/bastions, end cities/gateways, and the
+  dragon arena also remain unported.

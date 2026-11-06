@@ -10,7 +10,7 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Tests: **634 passing** on the final full workspace gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -20,13 +20,25 @@ Last updated: 2026-11-06
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an
-  expanded Bukkit bridge (world/player/item/events).
+  block breaking/tools/drops/durability, exact surface biome zoom, an
+  expanded Bukkit bridge (world/player/item/events), and Nether/End generation
+  through `generator::generate_dimension` (Overworld path unchanged).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
   and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
-  ownership.
+  redstone, P7 portals/time/multi-world wiring (generation slices landed),
+  P8 online mode, P9 plugin API depth, P10 region ownership.
+- Nether generation (2026-11-06): 128-block terrain column in a 256-block
+  dimension, bedrock floor/roof, lava below y=32, netherrack density, the
+  shipped five-biome multi-noise preset, soul-sand/basalt/nylium surface rules,
+  and quartz/magma/glowstone/vegetation features. `tests/nether_gen.rs` pins
+  bedrock y=0/127, lava at y=31, valid biomes, feature output, determinism, and
+  the dimension entry point.
+- End generation (2026-11-06): exact `EndIslandDensityFunction`, central and
+  outer islands, `TheEndBiomeSource`, and the `(100, 49, 0)` obsidian platform
+  across chunk borders. `tests/end_gen.rs` pins the central island, headroom,
+  platform, biomes, outer end stone, determinism, and the dimension entry point.
+  End cities/gateways/dragon arena remain open.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -245,6 +257,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P7.1–P7.3 now have `generator::Dimension` and deterministic Nether/End chunk
+  generation. Next: Java block-for-block dimension fixtures, Nether carvers and
+  fortresses/bastions, End cities/gateways/dragon arena, then wire
+  `generate_dimension` into `WorldStorage` and portals without changing the
+  Overworld path.
 1. P1.5 block shapes and collision metadata, then use it in physics, lighting,
    and breaking.
 2. P2.8 structure processor lists, template pools, jigsaw expansion, biome
@@ -341,8 +358,28 @@ Last updated: 2026-11-06
   entities, overlay packets, Unbreaking/Fortune/Silk Touch, adventure
   `can_destroy`, and a Java fixture remain)
 
+- [~] P7.1 Dimension abstraction (`generator::Dimension` + `generate_dimension`
+  dispatch done; fixed time, game rules, and plugin `World` dimension API remain)
+- [~] P7.2 Nether generation (router, surface, lava/bedrock, five-biome preset,
+  quartz/magma/glowstone features done; carvers, structures, and a Java fixture
+  remain)
+- [~] P7.3 End generation (exact island field, central/outer islands,
+  `TheEndBiomeSource`, obsidian platform done; cities, gateways, dragon arena,
+  and a Java fixture remain)
+
 ## Recently completed
-- 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
+- 2026-11-06: P7 dimension generation slice - `generator::Dimension` models
+  the shipped Overworld/Nether/End type fields and
+  `generate_dimension(dimension, x, z, seed)` dispatches without touching the
+  Overworld generator. `worldgen/nether.rs` adds the Nether density router,
+  bedrock y=0/127, lava below y=32, netherrack, the five-biome preset,
+  soul-sand/basalt/nylium surfaces, and a Nether `FeatureSorter` order that
+  places quartz/magma/glowstone. `worldgen/end.rs` ports
+  `EndIslandDensityFunction`, central/outer islands, `TheEndBiomeSource`, and
+  the cross-chunk `(100, 49, 0)` obsidian platform. Focused: 3 Nether lib +
+  9 `tests/nether_gen.rs` + 3 End lib + 8 `tests/end_gen.rs`; full workspace
+  634 passing; parity unchanged at 98.75% block-class / 95.80% exact-name.
+- 2026-11-06: P5.1 entity metadata/health/equipment core - `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/
   optional component/item stack/boolean/pose), `ClientboundSetEntityData`

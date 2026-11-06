@@ -1,3 +1,4 @@
+use crate::block_entity::BlockEntityMap;
 use crate::light::{DataLayer, SectionLight};
 use crate::nbt::Tag;
 use std::collections::HashMap;
@@ -281,6 +282,27 @@ pub fn encode_chunk(chunk: &Chunk) -> io::Result<Tag> {
         ("zPos".into(), Tag::Int(chunk.z)),
         ("sections".into(), Tag::List(sections)),
     ]))
+}
+
+/// Decode a chunk root and its `block_entities` list together.
+///
+/// [`decode_chunk`] deliberately only models block states and biomes; this
+/// helper keeps the position-keyed block-entity map that the world storage
+/// carries alongside a cached chunk.
+pub fn decode_chunk_with_block_entities(root: &Tag) -> io::Result<(Chunk, BlockEntityMap)> {
+    let entities = crate::block_entity::decode_block_entities(root)?;
+    let chunk = decode_chunk(root)?;
+    Ok((chunk, entities))
+}
+
+/// Encode a chunk and install its `block_entities` list.
+pub fn encode_chunk_with_block_entities(
+    chunk: &Chunk,
+    entities: &BlockEntityMap,
+) -> io::Result<Tag> {
+    let mut root = encode_chunk(chunk)?;
+    crate::block_entity::store_block_entities(&mut root, entities)?;
+    Ok(root)
 }
 
 fn encode_section(section: &ChunkSection) -> io::Result<Tag> {

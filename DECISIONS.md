@@ -2309,3 +2309,49 @@ Format:
   `ServerboundHelloPacket`'s `readUtf(16)`; legitimate offline clients are
   unaffected. The server binary still needs `accept_logins` and
   `configure_online_mode` wiring (see `BLOCKERS.md`).
+
+## 2026-11-06 - Block entities live beside chunks, with modern NBT as canonical
+
+- Context: `Chunk` is constructed with struct literals throughout worldgen,
+  tests, the server, and the JNI bridge. Adding a `block_entities` field would
+  have forced edits outside the P4.7 slice and made every future constructor
+  carry a field that only persistence needs. The 1.21.11 chunk format also
+  writes the list under `block_entities`, while stored worlds and the existing
+  `world.rs` test used the older `BlockEntities` spelling.
+- Decision: `block_entity.rs` owns `BlockEntityMap = BTreeMap<BlockEntityPos,
+  BlockEntity>` and the chunk-level `decode_block_entities`/
+  `store_block_entities` functions. `WorldStorage` caches the map beside its
+  decoded chunk cache, keyed by chunk coordinates, and exposes
+  `block_entities`/`load_block_entities`/`block_entity`/`get_block_entity`/
+  `insert_block_entity`/`remove_block_entity`. `chunk.rs` provides
+  `decode_chunk_with_block_entities` and
+  `encode_chunk_with_block_entities` for callers that want both in one step.
+- Decision: Decode both `block_entities` and legacy `BlockEntities`; a modern
+  entry wins on a duplicate position. Every rewrite removes the legacy key and
+  writes modern `block_entities`, including an empty list.
+- Decision: Unknown block-entity types are stored as
+  `UnknownBlockEntity { pos, id, data }` with the complete original compound and
+  re-emitted unchanged. Known types keep every original field in a private
+  `extras` vector and overwrite only the fields they model, so plugin data,
+  custom names, Paper loot data, and future fields survive a save.
+- Decision: `save_chunk` remains the generated-terrain overwrite path and
+  writes an empty list; `update_chunk` carries and filters the live map on
+  edits; `save_chunk_with_block_entities` persists explicit inserts/removals.
+  An edit removes the entity at exactly the edited position, including an air
+  replacement, and leaves entities elsewhere in the chunk untouched.
+- Decision: Malformed block-entity NBT (missing `id`/position, wrong `Items`
+  type, a sign without exactly four lines, ...) returns `InvalidData` instead
+  of being skipped. A damaged chunk therefore fails its load rather than
+  silently deleting data.
+- Decision: The furnace timers use vanilla's short-shaped NBT fields and
+  `RecipesUsed`; `cooking::FurnaceState` is copied in and out as a behaviour
+  model, but its runtime `experience` accumulator is not persisted. Spawner
+  `SpawnData`/`SpawnPotentials` and sign line components stay raw NBT.
+- Why: This keeps `Chunk` construction unchanged, makes persistence lossless
+  for unmodeled data, and matches the 1.21.11 chunk keys while still loading
+  older stored worlds.
+- Consequences: `save_chunk` intentionally drops block entities, so callers
+  that inserted one must use `update_chunk` or
+  `save_chunk_with_block_entities`. The ticker is explicit and is not called by
+  `tick.rs` yet; chest/furnace menus, placement, spawner spawning, sign editing,
+  and the remaining block-entity types are still open (see `BLOCKERS.md`).

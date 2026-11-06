@@ -121,6 +121,29 @@ Key files:
 - `crates/folia-core/src/block_breaking.rs`
 - `crates/folia-core/src/inventory.rs`
 
+### Block entities
+
+- `block_entity.rs` models chest/trapped chest (27 slots + loot table/seed),
+  furnace/blast furnace/smoker (3 slots, burn/cook timers, `RecipesUsed`, Paper
+  cook-speed multiplier), sign/hanging sign (front/back four-line component
+  text), and spawner (delay/count/range fields plus verbatim
+  `SpawnData`/`SpawnPotentials`).
+- Chunk NBT uses the 1.21.11 `block_entities` key; legacy `BlockEntities` is
+  read and migrated. Unknown block-entity types are kept as raw compounds and
+  typed entities retain every field they do not decode, so saves do not drop
+  plugin/newer-version data.
+- `WorldStorage` caches the position-keyed map beside each chunk and exposes
+  get/insert/remove. `update_chunk` removes entities at edited positions and
+  keeps unrelated ones; generated `save_chunk` writes an empty list and
+  `save_chunk_with_block_entities` persists explicit edits.
+- Furnace smelting is driven through `crafting::FurnaceState` by an explicit
+  `SimpleBlockEntityTicker`; the server tick loop does not call it yet.
+- Tests: 3 lib + 9 `tests/block_entity.rs` tests (chest/item components, furnace
+  timers/output, sign text, spawner fields, unknown byte preservation, legacy
+  key migration, air removal, malformed NBT).
+- Still open: placement, container menus/packets, actual spawner spawning, sign
+  editing, other block-entity types, live ticker wiring, and a Java NBT fixture.
+
 ### Crafting and smelting
 
 - `crafting.rs` matches the shipped recipe catalog with 1x1–3x3 shaped
@@ -580,15 +603,14 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   Metadata covers indices 0-9 only, initial non-default spawn metadata is not
   sent, and there is no Java-captured metadata/equipment packet fixture.
 - Entity tracking range/culling and player physics corrections are not ported.
-- Crafting/smelting exist as a tested state model, but there are no crafting or
-  furnace menus, click handling, recipe book/advancement unlocks, brewing, or
-  block-entity persistence. Special/decorated/trim recipes are explicit
-  unsupported errors.
-- No block entity behavior, containers beyond the player inventory, or other
-  smelting-adjacent menus.
+- Crafting/smelting exist as a tested state model, and furnace state now
+  persists through chunk NBT, but there are no crafting or furnace menus, click
+  handling, recipe book/advancement unlocks, or brewing. Special/decorated/trim
+  recipes are explicit unsupported errors.
+- Block entities are persistence-only: placing one does not create its entity,
+  `tick.rs` does not call the ticker, and container menus/updates are missing.
+- No containers beyond the player inventory and block-entity slots.
 - No lighting updates after block changes beyond full chunk light payloads.
-- No block entity behavior, containers beyond the player inventory, crafting,
-  furnaces, etc.
 - Block edits run incremental light decrease/increase (sky column updates and
   cross-chunk propagation) and send section-scoped light payloads; there is no
   Java light-array/packet fixture yet and occlusion is still full-cube.

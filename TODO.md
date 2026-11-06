@@ -3,7 +3,8 @@
 > Last updated: 2026-11-06
 > Current commit: see `git log` (all work is committed, not pushed)
 > Working tree: clean
-> Test status: **804 passing** on the full merged gate (0 failed)
+> Test status: **804 passing** on the last merged gate; the block-entity slice
+> adds 3 lib + 9 integration tests (focused green on this branch)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~25%** (range 18-30% depending on metric)
 
@@ -32,7 +33,7 @@ where possible, a differential test against the Java oracle.
 | Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and shape occlusion missing |
 | Player simulation | ~35% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
 | Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
-| Blocks/redstone/fluids | ~30% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks missing |
+| Blocks/redstone/fluids | ~35% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire, typed chest/furnace/sign/spawner block entities with chunk NBT persistence; other block-entity types, menus/placement wiring, pistons, lamps/targets/hooks missing |
 | Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
@@ -43,6 +44,23 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-06: P4.7 block-entity persistence slice — `block_entity.rs` adds typed
+  chest/trapped chest (27 slots, loot table + seed), furnace/blast furnace/smoker
+  (3 slots, burn/cook short timers, `RecipesUsed`, Paper cook-speed multiplier),
+  sign/hanging sign (front/back four-line component text, color, glowing,
+  waxed), and spawner (delay/min/max/count/nearby/range fields, verbatim
+  `SpawnData` and `SpawnPotentials`). Modern chunk NBT is the `block_entities`
+  list; the legacy `BlockEntities` key is still read and migrated. Unknown
+  types are preserved as raw compounds, and typed entities retain fields the
+  port does not decode. `WorldStorage` caches the position-keyed map with the
+  chunk and exposes get/insert/remove; `update_chunk` removes entities at
+  edited positions while keeping unrelated ones, generated `save_chunk` writes
+  an empty map, and `save_chunk_with_block_entities` persists explicit edits.
+  `FurnaceBlockEntity` drives `crafting::FurnaceState` for smelting; the
+  `BlockEntityTicker` is explicit and not wired into `tick.rs`. Focused: 3 lib +
+  9 `tests/block_entity.rs` tests; `world_round_trip` and `bulk_validation`
+  stay green; fmt/clippy clean. Remaining: other block-entity types, container
+  menus/packets, placement/ticker wiring, and a Java NBT fixture.
 - 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
   non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
   `item_prototypes.rs` loads it once, validates the counts and every field, and
@@ -1470,7 +1488,7 @@ instantly on start-destroy and places on use-item-on.
 - **Done when:** Inventory click sequences match Java and items persist with
   components.
 
-### P4.7 Block entities `[ ]` `XL`
+### P4.7 Block entities `[~]` `XL`
 
 - **What:** Implement block-entity types and NBT: chest, trapped chest, barrel,
   furnace/blast furnace/smoker, crafting table, hopper, dispenser/dropper,
@@ -1480,6 +1498,15 @@ instantly on start-destroy and places on use-item-on.
 - **Reference:** `net/minecraft/world/level/block/entity/*`.
 - **Done when:** Placing/opening/reloading each implemented block entity
   preserves contents and ticks correctly.
+- **Progress (2026-11-06):** chest/trapped chest, furnace/blast furnace/smoker,
+  sign/hanging sign, and spawner are typed with chunk NBT round-tripping.
+  `block_entities`/legacy `BlockEntities` are read into a position-keyed map;
+  unknown types and unknown fields are preserved; world storage exposes
+  get/insert/remove and drops an entity when its block position is edited.
+  Furnace smelting reuses `crafting::FurnaceState`, and an explicit
+  `BlockEntityTicker` exists. Still open: container menus/packets, placement,
+  spawning, sign editing, other block-entity types, live ticker/`tick.rs`
+  wiring, and a Java differential NBT fixture.
 
 ### P4.8 Crafting and recipe system `[~]` `L`
 
@@ -1767,8 +1794,10 @@ block-specific behavior.
 **Current state:** The P3.10 tick slice provides update flags, neighbour and
 scheduled/random tick queues, falling blocks, plant support, grass spread,
 water/lava flow, and wire/lever/button/repeater/comparator/observer/redstone
-torch/pressure-plate/tripwire redstone. Pistons, explosions, block entities,
-redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
+torch/pressure-plate/tripwire redstone. Typed chest/furnace/sign/spawner
+block entities and chunk NBT persistence now exist. Pistons, explosions,
+remaining block-entity types/menus, redstone lamps/target blocks/tripwire
+hooks, and full P1.5 metadata are open.
 
 ### P6.1 Block behavior framework `[~]` `L`
 
@@ -1865,12 +1894,16 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 - **Why:** 1.19+ mechanics and a dependency for deep dark content.
 - **Done when:** Sensor activation fixtures match Java.
 
-### P6.9 Automation/block-entity interactions `[ ]` `M`
+### P6.9 Automation/block-entity interactions `[~]` `M`
 
 - **What:** Hopper transfer, furnace smelting, dispenser use, dropper, brewing,
   enchanting, beacon effects, and comparator outputs.
 - **Why:** These connect containers, items, and redstone.
 - **Done when:** Item transfer/smelting sequences match Java.
+- **Progress (2026-11-06):** furnace/blast-furnace/smoker state now persists
+  through chunk NBT and can be advanced through `crafting::FurnaceState` via an
+  explicit ticker. Hopper transfer, menus, dispenser/dropper, brewing,
+  enchanting, beacons, and live tick integration remain open.
 
 ### P6.10 Redstone/block parity harness `[ ]` `M`
 

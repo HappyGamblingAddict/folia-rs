@@ -626,3 +626,40 @@ These are expected gaps, not reasons to stop:
 - Additional limitation: there is no TLS stack in the workspace, so the real
   session lookup shells out to `curl`. Replace it with an in-process TLS client
   when a dependency is allowed (P11 hardening).
+
+## 2026-11-06 - P4.7/P6 block entities are persistence-only, not gameplay parity
+
+- Status: `block_entity.rs` implements typed chest/trapped chest,
+  furnace/blast furnace/smoker, sign/hanging sign, and spawner state, modern and
+  legacy chunk-list parsing, unknown-type preservation, and world-store
+  get/insert/remove. 3 lib + 9 integration tests pass; `world_round_trip` and
+  `bulk_validation` remain green.
+- Not wired: placing a chest/furnace/sign/spawner does not create a block
+  entity, `tick.rs` does not call `BlockEntityTicker`, join does not send
+  block-entity update packets, and there are no container menus, click
+  handling, hopper transfers, or loot-table unpacking.
+- Not modelled: barrel, shulker box, hopper, dispenser/dropper, brewing stand,
+  enchanting table, beacon, beehive, campfire (its NBT is different), and every
+  other block-entity type are preserved opaquely rather than typed.
+- Spawner `SpawnData`/`SpawnPotentials` are preserved verbatim and `delay`
+  ticks down, but no entity is selected, no spawn rules are checked, no player
+  range/nearby-count check runs, and no entity is spawned.
+- Sign text components are preserved, but editing, filtering, click events,
+  commands, and the `ClientboundBlockEntityData` packet are not implemented.
+- Furnace `RecipesUsed` is persisted and smelting is driven through
+  `crafting::FurnaceState`; XP is computed only in the runtime model and is not
+  awarded to a player. Fuel remainders other than lava buckets remain open.
+- `block_entities` item stacks use the modern `{id, count, components}` codec.
+  Legacy `Count` is accepted, but pre-1.20.5 nested `tag` payloads are not
+  migrated; an old chunk that still has them will keep the item id/count and
+  preserve the unknown `tag` key through item-component opaque handling where
+  possible.
+- Malformed block-entity NBT fails the chunk load by design. A real stored
+  chunk with a damaged entry will therefore not join until the entry is
+  repaired; this is recorded as the chosen conservative behavior rather than a
+  silent delete.
+- No Java-captured block-entity NBT fixture exists, so this is behavior-tested,
+  not a byte-for-byte Java parity claim.
+- Workaround / next task: wire placement and ticker calls, container menus and
+  packets, then add a Java fixture that round-trips chest/furnace/sign/spawner
+  NBT and an unknown entry.

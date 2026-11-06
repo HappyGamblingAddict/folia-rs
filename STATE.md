@@ -9,7 +9,8 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit: see `git log`; the tree is committed and not pushed.
-- Tests: **804 passing** on the full merged gate (0 failed).
+- Tests: **804 passing** on the last merged gate (0 failed); the block-entity
+  slice adds **3 lib + 9 integration tests** (focused green on this branch).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -22,17 +23,19 @@ Last updated: 2026-11-06
   comparators, observers, torches, pressure plates, and tripwire; lava/water
   quenching, fire, and bubble columns; Nether and End generation; entity goals,
   pathfinding, and natural spawning; online-mode RSA/AES auth and encryption.
-- Major gaps: recursive jigsaw and structure generator/biome wiring; typed
-  block-entity storage and tickers; pistons; live join entity spawning and AI
-  tick integration; shape-aware light occlusion; loot-table gameplay wiring;
-  dimension storage/portals; chat signing; bridge live-session sync; Folia
-  region ownership.
+- Major gaps: recursive jigsaw and structure generator/biome wiring; remaining
+  block-entity types, container menus/placement wiring, and live ticker
+  integration; pistons; live join entity spawning and AI tick integration;
+  shape-aware light occlusion; loot-table gameplay wiring; dimension
+  storage/portals; chat signing; bridge live-session sync; Folia region
+  ownership.
 - Folia region threading is still task queues only.
 
 ## Current focus
 
 1. P2.8 recursive jigsaw connection and structure generator/chunk-status wiring.
-2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
+2. P4.7/P6 remaining block-entity menus, placement wiring, and ticker
+   integration; pistons.
 3. P5 join-session entity spawning/tracking and AI tick integration.
 4. P1.5 shape-aware light occlusion and remaining support/waterlogging rules.
 5. P9.3 bridge live-session state and gameplay event dispatch.
@@ -50,6 +53,8 @@ Last updated: 2026-11-06
 - [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
 - [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
+- [~] P4.7 block entities (typed chest/furnace/sign/spawner + chunk NBT/world
+  persistence done; other types, menus, placement, and live ticks remain).
 - [~] P4.8 crafting (menus, packets, recipe book, brewing).
 - [~] P5.1/P5.2 metadata/AI (join wiring, armor, more goals/sensors).
 - [~] P7.1-P7.3 Nether/End (storage, portals, structures, Java fixtures).
@@ -58,6 +63,23 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P4.7 block-entity persistence — `block_entity.rs` adds typed
+  chest (27 slots, `LootTable`/`LootTableSeed`), furnace/blast furnace/smoker
+  (3 slots, the four vanilla short timers, `RecipesUsed`, Paper cook-speed
+  multiplier), sign (front/back four-line components, color, glowing, waxed),
+  and spawner (delay/count/range fields plus raw `SpawnData`/`SpawnPotentials`).
+  `decode_block_entities`/`store_block_entities` read the modern
+  `block_entities` key and migrate the legacy `BlockEntities` key;
+  unknown types are kept as raw compounds and typed entities retain their
+  unknown top-level fields. `world.rs` caches the position-keyed map beside
+  each chunk and exposes get/insert/remove; `update_chunk` drops entities at
+  edited positions and keeps unrelated ones, while generated `save_chunk`
+  writes an empty map and `save_chunk_with_block_entities` persists explicit
+  edits. `FurnaceBlockEntity` copies through `crafting::FurnaceState` for
+  smelting, and `SimpleBlockEntityTicker` is opt-in (not wired into `tick.rs`).
+  Focused: 3 lib + 9 `tests/block_entity.rs` tests; `world_round_trip`,
+  `bulk_validation`, fmt, and clippy clean. No menu/packet, placement, live
+  ticker, or Java-fixture parity yet.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's

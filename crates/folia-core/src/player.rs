@@ -1,4 +1,5 @@
 use crate::inventory::{HOTBAR_SLOTS, INVENTORY_SLOTS, ItemStack, default_inventory};
+use crate::item_components::{item_stack_from_nbt, item_stack_to_nbt};
 use crate::nbt::{self, Tag};
 use crate::player_physics::{
     ClientMove, MovementCorrection, PhysicsWorld, PlayerPhysics, Reconciliation,
@@ -225,10 +226,7 @@ impl PlayerSession {
         if stack.is_empty() {
             return false;
         }
-        stack.count -= 1;
-        if stack.count <= 0 {
-            *stack = ItemStack::empty();
-        }
+        stack.shrink(1);
         true
     }
 
@@ -311,21 +309,14 @@ impl PlayerSession {
             .enumerate()
             .filter(|(_, stack)| !stack.is_empty())
             .map(|(slot, stack)| {
-                Tag::Compound(vec![
-                    ("Slot".into(), Tag::Int(slot as i32)),
-                    ("id".into(), Tag::String(stack.item.clone())),
-                    ("Count".into(), Tag::Int(stack.count)),
-                ])
+                let mut fields = vec![("Slot".into(), Tag::Int(slot as i32))];
+                if let Tag::Compound(inner) = item_stack_to_nbt(stack) {
+                    fields.extend(inner);
+                }
+                Tag::Compound(fields)
             })
             .collect();
-        let cursor = if self.cursor.is_empty() {
-            Tag::Compound(Vec::new())
-        } else {
-            Tag::Compound(vec![
-                ("id".into(), Tag::String(self.cursor.item.clone())),
-                ("Count".into(), Tag::Int(self.cursor.count)),
-            ])
-        };
+        let cursor = item_stack_to_nbt(&self.cursor);
 
         let mut entries = vec![
             ("DataVersion".into(), Tag::Int(crate::level::DATA_VERSION)),
@@ -432,20 +423,16 @@ impl PlayerSession {
                 if !(0..INVENTORY_SLOTS as i32).contains(&slot) {
                     continue;
                 }
-                let Some(item) = entry.get("id").and_then(Tag::as_str) else {
-                    continue;
-                };
-                let count = entry.get("Count").and_then(Tag::as_int).unwrap_or(0);
-                inventory[slot as usize] = ItemStack::new(item, count);
+                let stack = item_stack_from_nbt(entry)?;
+                if !stack.is_empty() {
+                    inventory[slot as usize] = stack;
+                }
             }
         }
         let cursor = root
             .get("Cursor")
-            .and_then(|tag| {
-                let item = tag.get("id").and_then(Tag::as_str)?;
-                let count = tag.get("Count").and_then(Tag::as_int).unwrap_or(0);
-                Some(ItemStack::new(item, count))
-            })
+            .map(item_stack_from_nbt)
+            .transpose()?
             .unwrap_or_else(ItemStack::empty);
 
         let health = root.get("Health").and_then(Tag::as_float).unwrap_or(20.0);

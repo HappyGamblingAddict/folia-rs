@@ -75,6 +75,14 @@ These are expected gaps, not reasons to stop:
   block-for-block template fixture yet. Random multi-palette selection,
   entity spawning, waterlogging, shape updates, and per-block state
   derivatives (`shape`, `hinge`, `type`, …) are also open.
+- Item components are a first slice: per-item prototype defaults
+  (`max_stack_size`, `max_damage`, food/tool/enchantment defaults) are not
+  dumped, so a plain damageable item without a damage/max_damage component
+  still reports stack size 64. `attribute_modifiers`,
+  `potion_contents`, and `tool` are NBT-only; their network codecs are omitted
+  and reported by `NetworkEncodingReport`. `HashedStack` component hashes are
+  parsed but not matched against a reconstructed stack, and there is no
+  Java-captured component NBT/packet fixture yet.
 
 - Some Java oracle data requires starting `java-worldgen`; if the server cannot
   start, use the existing dumps in `crates/folia-core/assets`.

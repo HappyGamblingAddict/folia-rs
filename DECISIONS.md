@@ -1089,3 +1089,39 @@ Format:
   entity spawning, waterlogging, shape updates, and a Java block-for-block
   placement fixture remain open. The focused test embeds four shipped gzip
   files so it does not depend on the out-of-tree decompiled data.
+
+## 2026-11-06 — Item component patch representation and network omissions
+
+- Context: `ItemStack` only carried `{item, count}`. Vanilla 1.21.11 stores a
+  stack as an item, a count, and a `DataComponentPatch` over the item
+  prototype. The client and saved data expect the vanilla network/NBT codecs,
+  but only part of the component registry's stream codecs is ported.
+- Decision: Model the patch as one insertion-ordered list of
+  `(ComponentType, Option<ComponentValue>)` entries. `None` is the vanilla
+  `!component` removal marker. This preserves NBT/network byte order while
+  allowing component equality to be order-insensitive, like Java's map
+  equality. Decode unknown component names and malformed known payloads as
+  opaque NBT tags, so an inventory save never silently loses them.
+- Decision: Derive component registry ids from the field registration order in
+  `net.minecraft.core.component.DataComponents` and pin the ones in use in
+  `KNOWN_COMPONENT_TYPES` with a test. Enchantment stream ids come from the
+  existing `assets/registries/enchantment.tsv` dump.
+- Decision: Network encoding is all-or-nothing per component. Components with
+  a ported stream codec are written normally; `attribute_modifiers`,
+  `potion_contents`, `tool`, and unknown components are omitted and returned
+  in `NetworkEncodingReport` (never written with partial payload bytes). The
+  legacy `write_item_stack` wrapper keeps the existing call sites simple.
+- Decision: Accept legacy capital `Count` when reading item NBT but always
+  write lowercase `count`, matching the 1.21.11 `ItemStack.MAP_CODEC` and
+  `ItemStackWithSlot.CODEC`.
+- Decision: `max_stack_size` is taken from the component when present, then 1
+  for stacks carrying `max_damage` or `damage`, otherwise 64. Per-item
+  prototype defaults are not dumped yet, so a plain damageable item without a
+  damage component still falls back to 64 until that table exists.
+- Why: This keeps saved inventory data lossless and keeps the wire format
+  honest while the remaining component codecs and item prototype data are
+  ported.
+- Consequences: The P1.4 done-when (Java-captured full patch byte parity) is
+  still open. `HashedStack` component hashes are parsed but not reconstructed;
+  serverbound click carried-item components remain hints, with the session
+  cursor authoritative.

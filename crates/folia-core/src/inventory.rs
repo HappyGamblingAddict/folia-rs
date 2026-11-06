@@ -1,6 +1,12 @@
 use crate::chunk::BlockState;
 use crate::protocol::{PacketReader, PacketWriter};
 
+pub use crate::item_components::{
+    ComponentMap, ComponentType, ComponentValue, ItemStack, component_id, component_name,
+    item_stack_from_nbt, item_stack_to_nbt, read_item_stack, write_item_stack,
+    write_item_stack_report,
+};
+
 pub const CLIENTBOUND_CONTAINER_SET_CONTENT: i32 = 18;
 pub const CLIENTBOUND_CONTAINER_SET_SLOT: i32 = 20;
 pub const CLIENTBOUND_SET_HELD_SLOT: i32 = 103;
@@ -14,34 +20,24 @@ pub const HOTBAR_SLOTS: usize = 9;
 pub const CONTAINER_SLOTS: usize = 46;
 pub const MAX_STACK: i32 = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ItemStack {
-    pub item: String,
-    pub count: i32,
+fn same_stack(a: &ItemStack, b: &ItemStack) -> bool {
+    a.same_item_and_components(b)
 }
 
-impl ItemStack {
-    pub fn new(item: impl Into<String>, count: i32) -> Self {
-        Self {
-            item: item.into(),
-            count,
-        }
+/// Merge `source` into `target` when the item and full component patch match,
+/// respecting the target's max stack size. Returns the number moved.
+pub fn merge_stacks(target: &mut ItemStack, source: &mut ItemStack) -> i32 {
+    if !same_stack(target, source) {
+        return 0;
     }
-
-    pub fn empty() -> Self {
-        Self {
-            item: String::new(),
-            count: 0,
-        }
+    let space = target.max_stack_size() - target.count;
+    if space <= 0 {
+        return 0;
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.count <= 0 || self.item.is_empty()
-    }
-
-    fn same_item(&self, other: &Self) -> bool {
-        !self.is_empty() && !other.is_empty() && self.item == other.item
-    }
+    let moved = space.min(source.count);
+    target.count += moved;
+    source.shrink(moved);
+    moved
 }
 
 pub fn item_id(item: &str) -> Option<i32> {
@@ -141,45 +137,15 @@ pub fn menu_slot(inventory_index: usize) -> Option<i32> {
     }
 }
 
-pub fn write_item_stack(writer: &mut PacketWriter, stack: &ItemStack) {
-    if stack.is_empty() {
-        writer.write_varint(0).unwrap();
-        return;
-    }
-    let Some(id) = item_id(&stack.item) else {
-        writer.write_varint(0).unwrap();
-        return;
-    };
-    writer.write_varint(stack.count).unwrap();
-    writer.write_varint(id).unwrap();
-    writer.write_varint(0).unwrap(); // added components
-    writer.write_varint(0).unwrap(); // removed components
-}
-
-pub fn read_item_stack(reader: &mut PacketReader<'_>) -> Option<ItemStack> {
-    let count = reader.read_varint().ok()?;
-    if count <= 0 {
-        return Some(ItemStack::empty());
-    }
-    let id = reader.read_varint().ok()?;
-    // We only support stacks without component patches in this model.
-    let added = reader.read_varint().ok()?;
-    if added != 0 {
-        return None;
-    }
-    let removed = reader.read_varint().ok()?;
-    if removed != 0 {
-        return None;
-    }
-    Some(ItemStack::new(item_name(id)?, count))
-}
-
 pub fn read_hashed_stack(reader: &mut PacketReader<'_>) -> Option<ItemStack> {
     if !reader.read_bool().ok()? {
         return Some(ItemStack::empty());
     }
     let id = reader.read_varint().ok()?;
     let count = reader.read_varint().ok()?;
+    // The hashed form only carries component ids and hashes, not payloads, so
+    // the component values cannot be reconstructed. The click's carried stack
+    // is a consistency hint; the session cursor remains authoritative.
     let added = reader.read_varint().ok()?;
     for _ in 0..added {
         let _component = reader.read_varint().ok()?;
@@ -192,7 +158,7 @@ pub fn read_hashed_stack(reader: &mut PacketReader<'_>) -> Option<ItemStack> {
     Some(ItemStack::new(item_name(id)?, count))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContainerClick {
     pub container_id: i32,
     pub state_id: i32,
@@ -228,7 +194,7 @@ pub fn parse_container_click(packet: &[u8]) -> Option<ContainerClick> {
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CreativeSlot {
     pub slot: i32,
     pub stack: ItemStack,
@@ -267,23 +233,16 @@ pub fn apply_click(
                     if half <= 0 {
                         return false;
                     }
-                    *cursor = ItemStack::new(inventory[index].item.clone(), half);
-                    inventory[index].count -= half;
-                    if inventory[index].count <= 0 {
-                        inventory[index] = ItemStack::empty();
-                    }
-                } else if inventory[index].is_empty() || inventory[index].same_item(cursor) {
+                    *cursor = inventory[index].split(half);
+                } else if inventory[index].is_empty() || same_stack(&inventory[index], cursor) {
                     if inventory[index].is_empty() {
-                        inventory[index] = ItemStack::new(cursor.item.clone(), 1);
-                    } else if inventory[index].count < MAX_STACK {
+                        inventory[index] = cursor.copy_with_count(1);
+                    } else if inventory[index].count < inventory[index].max_stack_size() {
                         inventory[index].count += 1;
                     } else {
                         return false;
                     }
-                    cursor.count -= 1;
-                    if cursor.count <= 0 {
-                        *cursor = ItemStack::empty();
-                    }
+                    cursor.shrink(1);
                 }
             } else if cursor.is_empty() {
                 *cursor = inventory[index].clone();
@@ -291,14 +250,8 @@ pub fn apply_click(
             } else if inventory[index].is_empty() {
                 inventory[index] = cursor.clone();
                 *cursor = ItemStack::empty();
-            } else if inventory[index].same_item(cursor) {
-                let space = MAX_STACK - inventory[index].count;
-                let moved = space.min(cursor.count);
-                inventory[index].count += moved;
-                cursor.count -= moved;
-                if cursor.count <= 0 {
-                    *cursor = ItemStack::empty();
-                }
+            } else if same_stack(&inventory[index], cursor) {
+                merge_stacks(&mut inventory[index], cursor);
             } else {
                 std::mem::swap(&mut inventory[index], cursor);
             }
@@ -320,16 +273,13 @@ pub fn apply_click(
                     inventory[index] = ItemStack::empty();
                     return true;
                 }
-                if inventory[target].same_item(&inventory[index])
-                    && inventory[target].count < MAX_STACK
+                if same_stack(&inventory[target], &inventory[index])
+                    && inventory[target].count < inventory[target].max_stack_size()
                 {
-                    let space = MAX_STACK - inventory[target].count;
+                    let space = inventory[target].max_stack_size() - inventory[target].count;
                     let moved = space.min(inventory[index].count);
                     inventory[target].count += moved;
-                    inventory[index].count -= moved;
-                    if inventory[index].count <= 0 {
-                        inventory[index] = ItemStack::empty();
-                    }
+                    inventory[index].shrink(moved);
                     return true;
                 }
             }
@@ -355,15 +305,9 @@ pub fn apply_click(
         4 => {
             // THROW
             if !cursor.is_empty() {
-                cursor.count -= 1;
-                if cursor.count <= 0 {
-                    *cursor = ItemStack::empty();
-                }
+                cursor.shrink(1);
             } else if !inventory[index].is_empty() {
-                inventory[index].count -= 1;
-                if inventory[index].count <= 0 {
-                    inventory[index] = ItemStack::empty();
-                }
+                inventory[index].shrink(1);
             }
             true
         }

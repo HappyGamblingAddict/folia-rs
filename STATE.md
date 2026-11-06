@@ -11,6 +11,8 @@ Last updated: 2026-11-06
 - Current commit (informational only): `6e0e5fe`
 - Working tree: clean; work is committed in coherent slices.
 - Tests: **426 passing, 0 failed** on the merged workspace gate.
+- P1.4 focused gate: 25 item-component tests passing (8 unit + 17 integration),
+  plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -195,6 +197,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P1.4 has a working component-aware stack model. Next: dump per-item prototype
+  component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
+  defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
+  network codecs, implement `HashedStack` component hashing, and add a
+  Java-captured component NBT/packet fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
   powder snow, sprint/sneak input packets, real block shapes) and eventually
@@ -229,7 +236,7 @@ Last updated: 2026-11-06
 - [x] P0.6 Decide commit/backup policy
 - [ ] P1.1 Complete remaining registry dumps
 - [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
-- [ ] P1.4 Full item component model
+- [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
 - [ ] P1.5 Block behavior metadata
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
@@ -248,6 +255,24 @@ Last updated: 2026-11-06
 
 ## Recently completed
 
+- 2026-11-06: Core item data components — `item_components.rs` replaces the
+  `{item, count}` stack with an insertion-ordered component patch
+  (`ComponentMap`), typed values for custom name/item name/lore, damage,
+  max damage, max stack size, enchantments, stored enchantments, attribute
+  modifiers, unbreakable, custom data, container contents, potion contents,
+  food, tool, repair cost, and rarity, plus opaque NBT for unknown components.
+  `item_stack_to_nbt`/`item_stack_from_nbt` round-trip the vanilla
+  `{id,count,components}` shape, including `!removed` markers and the
+  heterogeneous-list wrapper vanilla uses for lore. Inventory/playerdata save
+  and load preserve the exact component tags (legacy `Count` accepted on
+  read). Network encoding writes added/removed component ids and payloads for
+  custom/item name, lore, damage/max damage/max stack size/repair cost,
+  enchantments, unbreakable, custom data, container, food, and rarity;
+  unported network codecs are reported by `NetworkEncodingReport` instead of
+  writing malformed bytes. Inventory clicks/splits/merges use component
+  equality and per-stack max size, and selected-item consumption keeps the
+  patch. 8 unit + 17 integration tests; stone/dirt packet bodies and the
+  captured Java join fixture are unchanged.
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a

@@ -541,7 +541,9 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Entity tracking range/culling and player physics corrections are not ported.
 - No block entity behavior, containers beyond the player inventory, crafting,
   furnaces, etc.
-- No lighting updates after block changes beyond full chunk light payloads.
+- Block edits run incremental light decrease/increase (sky column updates and
+  cross-chunk propagation) and send section-scoped light payloads; there is no
+  Java light-array/packet fixture yet and occlusion is still full-cube.
 - No online-mode encryption or Mojang authentication.
 - No NMS/CraftBukkit compatibility beyond the minimal bridge.
 
@@ -580,8 +582,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
    modifiers. Ore wiring and `OreVeinifier` (P2.3) are done; the next ore work
    is vein-noise interpolation and disks/`underwater_magma`. `feature_data.json`
    already has every definition.
-3. **Real lighting (P3.5–P3.8).** Persisted sky/block light nibble arrays, the
-   sky-light and block-light engines, then incremental light packets.
+3. **Real lighting (P3.5–P3.9).** Nibble storage, incremental
+   decrease/increase queues, sky column updates, cross-chunk propagation, and
+   section-scoped payloads are in. Capture Java light-array/packet fixtures and
+   add P1.5 shape occlusion, then initialize light during chunk generation.
 4. **Surface fidelity (P2.12 code landed).** Capture a Java frozen-ocean /
    iceberg fixture and thread `WorldGenerator.seed()` directly into
    `build_surface` so direct harnesses do not need the configured-generator

@@ -1,6 +1,7 @@
 use crate::anvil::Compression;
 use crate::chunk::BlockState;
-use crate::chunk_packet::{block_state_id, heightmap_bytes, light_bytes};
+use crate::chunk_packet::{block_state_id, heightmap_bytes};
+use crate::light::{DirtySections, LightScene, light_update_for_sections};
 use crate::math::BlockPos;
 use crate::protocol::{PacketReader, PacketWriter};
 use crate::tick::UpdateFlags;
@@ -41,6 +42,13 @@ pub struct UseItemOn {
 }
 
 #[derive(Debug, Clone)]
+pub struct ChunkLightUpdate {
+    pub chunk_x: i32,
+    pub chunk_z: i32,
+    pub light: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct BlockChange {
     pub chunk_x: i32,
     pub chunk_z: i32,
@@ -52,7 +60,13 @@ pub struct BlockChange {
     pub state_id: i32,
     pub packet: Vec<u8>,
     pub heightmaps: Vec<u8>,
+    /// Section-scoped `ClientboundLightUpdatePacketData` body for
+    /// `chunk_x`/`chunk_z`. Empty when no section in that chunk changed.
     pub light: Vec<u8>,
+    /// Sections whose light nibbles changed, including loaded neighbours.
+    pub dirty_sections: DirtySections,
+    /// Light payloads for neighbouring chunks that received border light.
+    pub neighbour_light: Vec<ChunkLightUpdate>,
 }
 
 /// Mutate a block in the world, persist the chunk, queue the six neighbour
@@ -106,13 +120,14 @@ pub(crate) fn perform_block_change(
         return Ok(None);
     };
     let old_state = chunk.block_state(local_x, y, local_z).cloned();
-    if !chunk.set_block_state(local_x, y, local_z, state.clone()) {
+    if old_state.as_ref() == Some(&state) {
         return Ok(None);
     }
 
     // The edit may change opacity or emission, and light can reach across the
     // chunk border. Load whatever neighbours already exist (never generate)
-    // and relight the edited chunk plus the one-block border deterministically.
+    // and let the incremental scene update the edited chunk plus the affected
+    // border of each neighbour.
     let mut neighbours = Vec::new();
     for dx in -1..=1 {
         for dz in -1..=1 {
@@ -124,10 +139,43 @@ pub(crate) fn perform_block_change(
             }
         }
     }
-    chunk.recompute_light_with_neighbours(&neighbours);
 
-    storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
-    storage.flush()?;
+    let dirty = {
+        let mut scene = LightScene::new(&mut chunk, &mut neighbours);
+        if !scene.set_block_state(x, y, z, state.clone()) {
+            return Ok(None);
+        }
+        scene.dirty().clone()
+    };
+
+    // Persist neighbour light before the centre chunk, and build one
+    // section-scoped light payload per neighbour chunk that changed.
+    let mut neighbour_coords: Vec<(i32, i32)> = dirty
+        .iter()
+        .filter(|pos| pos.chunk_x != chunk_x || pos.chunk_z != chunk_z)
+        .map(|pos| (pos.chunk_x, pos.chunk_z))
+        .collect();
+    neighbour_coords.sort_unstable();
+    neighbour_coords.dedup();
+    let mut neighbour_light = Vec::new();
+    for (neighbour_x, neighbour_z) in neighbour_coords {
+        let Some(index) = neighbours
+            .iter()
+            .position(|chunk| chunk.x == neighbour_x && chunk.z == neighbour_z)
+        else {
+            continue;
+        };
+        let payload = light_update_for_sections(&neighbours[index], &dirty);
+        storage.update_chunk(&neighbours[index], Compression::Zlib, &[])?;
+        if let Some(payload) = payload {
+            neighbour_light.push(ChunkLightUpdate {
+                chunk_x: neighbour_x,
+                chunk_z: neighbour_z,
+                light: payload,
+            });
+        }
+    }
+
     let state_id = block_state_id(&state);
     let mut change = BlockChange {
         chunk_x,
@@ -140,8 +188,13 @@ pub(crate) fn perform_block_change(
         state_id,
         packet: block_update_packet(x, y, z, state_id),
         heightmaps: heightmap_bytes(&chunk),
-        light: light_bytes(&chunk),
+        light: light_update_for_sections(&chunk, &dirty).unwrap_or_default(),
+        dirty_sections: dirty,
+        neighbour_light,
     };
+
+    storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
+    storage.flush()?;
 
     if broadcast {
         broadcast_change(&change);
@@ -158,10 +211,11 @@ pub(crate) fn perform_block_change(
         // Neighbour shape updates may have changed the same chunk again (for
         // example, removing a plant above the edited block). The caller
         // broadcasts this primary change after the neighbour packets, so
-        // refresh its whole-chunk payloads to the final chunk state.
+        // refresh the dirty-section payload from the final chunk state.
         if let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? {
             change.heightmaps = heightmap_bytes(&chunk);
-            change.light = light_bytes(&chunk);
+            change.light =
+                light_update_for_sections(&chunk, &change.dirty_sections).unwrap_or_default();
         }
     }
     Ok(Some(change))
@@ -298,11 +352,20 @@ pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> 
 
 pub fn broadcast_change(change: &BlockChange) {
     broadcast(&change.packet);
-    broadcast(&light_update_packet(
-        change.chunk_x,
-        change.chunk_z,
-        &change.light,
-    ));
+    if !change.light.is_empty() {
+        broadcast(&light_update_packet(
+            change.chunk_x,
+            change.chunk_z,
+            &change.light,
+        ));
+    }
+    for update in &change.neighbour_light {
+        broadcast(&light_update_packet(
+            update.chunk_x,
+            update.chunk_z,
+            &update.light,
+        ));
+    }
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -338,6 +401,7 @@ pub fn broadcast_block_update(x: i32, y: i32, z: i32, state_id: i32) {
 mod tests {
     use super::*;
     use crate::chunk_packet::flat_chunk;
+    use crate::chunk_packet::light_bytes;
     use crate::protocol::PacketReader;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

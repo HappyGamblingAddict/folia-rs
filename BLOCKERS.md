@@ -45,8 +45,8 @@ Format:
   the predicate tags) reachable from Rust.
 - Workaround / next task: Ported `biome` instead, which only needs the biome
   sampler. Heightmap/predicate modifiers stay explicit unsupported variants.
-  P2.3's ore features are now ported; generator wiring waits on feature-RNG
-  parity (see the 2026-11-06 ore blocker below).
+  P2.3's ore features and generator wiring are now done; see the 2026-11-06
+  ore section below for the remaining vein/biome-region gaps.
 
 ## 2026-11-06 — P3.10 tick slice is partial by design
 
@@ -77,6 +77,12 @@ Format:
   so this is a behavior-tested slice, not a parity claim.
 
 ## Known limitations (not hard blockers)
+
+- `tests/assets.rs` is red on this branch before the ore work: commit `2ca3a1c`
+  regenerated `crates/folia-core/assets/block_states.tsv` (now 2,625,357 bytes)
+  without updating the manifest (still 2,595,686). The asset file and test are
+  outside the ore slice's file scope; regenerate the manifest/hash in the same
+  change that owns the per-state block-behaviour data.
 
 These are expected gaps, not reasons to stop:
 
@@ -188,20 +194,33 @@ These are expected gaps, not reasons to stop:
 - Workaround: keep `minecraft:pale_moss` as an explicit unsupported decorator;
   pale-oak configs remain unsupported instead of generating partial decoration.
 
-## 2026-11-06 — P2.3 Ore generator wiring deferred on feature-RNG parity
+## 2026-11-06 — P2.3 Ore generator wiring (resolved) and remaining parity gaps
 
-- Blocker: Wiring the newly ported `minecraft:ore` and
-  `minecraft:scattered_ore` features into `underground_ores` lowers the
-  established exact-name parity fixture from 92.09% to 89.06%. The ore
-  algorithms are ported, but feature positions still use the project's
-  approximate per-chunk RNG rather than Java's `WorldgenRandom` sequence.
-- What was tried: Ran both ore features directly and through the generator;
-  all 30 ore + 2 scattered-ore configs parse and place. The generator run
-  produced 344 ore blocks in a forest chunk, while the parity fixture regressed.
-- What is needed: Feature-RNG parity (`WorldgenRandom` sequencing) before ore
-  placement can be compared block-for-block; `OreVeinifier` also remains open.
-- Workaround: Keep ore features executable but do not add `underground_ores` to
-  generation yet. Preserve the 92.09% fixture rather than weakening it.
+- Resolved: `underground_ores` is wired. The earlier 89.06% regression had two
+  causes, not approximate `WorldgenRandom`: the generator collected every
+  placement position before running the feature, while vanilla's
+  `placeWithContext` is a lazy stream that consumes feature RNG between
+  positions; and `FeatureSorter` feature indices were built from the biome
+  registry order instead of `MultiNoiseBiomeSource.possibleBiomes()` (the
+  `assets/biome_params.txt` parameter order), which mis-seeded `ore_clay`.
+  Fixing both plus `OreVeinifier` raises exact-name parity from 92.01% to
+  95.80% (5886/6144) and block-class from 98.71% to 98.75% (6067/6144).
+- Still open (not a hard blocker):
+  - `NoiseChunk` wraps `vein_toggle` and `vein_ridged` in `interpolated`, so
+    Java evaluates them on the 4x8x4 interpolation grid. `OreVeinifier` here
+    computes them exactly per block; a few vein edge blocks differ. Wiring
+    interpolation belongs in `density.rs` (outside this slice).
+  - Vanilla builds the active biome set from a 3x3 chunk region and features
+    may write into that whole region. This generator reads the center chunk's
+    biomes and rejects out-of-chunk writes, so border placements and air
+    exposure checks can differ.
+  - 26 of the fixture's 33 Java ore blocks match exactly. Remaining deltas are
+    small ellipsoid-edge/vein-edge differences and out-of-chunk writes.
+  - The `underground_ores` step also contains `disk_*` and
+    `underwater_magma`; the generator deliberately runs only ore/scattered-ore
+    types until those are wired with their own surface/cave rules.
+- Workaround: The default is enabled and pinned by `tests/ore_wiring.rs`; do
+  not claim block-for-block ore parity until the three gaps above are closed.
 
 ## 2026-11-06 — P4.1/P4.2 special movement and block shapes remain unported
 

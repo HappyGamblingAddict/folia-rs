@@ -3,9 +3,9 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
-> exact-name parity.
+> Test status: **426 tests** on the last full gate; the ore/vein wiring slice
+> adds 4 integration + 2 lib focused tests and holds 98.75% block-class /
+> 95.80% exact-name parity.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -51,7 +51,7 @@ more expensive than designing for it now.
 |---|---:|---|
 | Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
-| Full worldgen | ~45-50% | Aquatic/vine/mushroom feature batch landed; ore/scattered features translated but unwired; veinifier, scheduled ticks, remaining placement modifiers, structures, and Nether/End content missing |
+| Full worldgen | ~50-55% | Aquatic/vine/mushroom batch and ore/scattered-ore plus `OreVeinifier` wiring landed; scheduled ticks, remaining placement modifiers, disks/underwater magma in the ore step, structures, and Nether/End content missing |
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
@@ -78,6 +78,7 @@ more expensive than designing for it now.
   Parity: 98.71% block-class / 92.02% exact-name (5654/6144), a one-block exact
   delta from 92.04% caused by a tall-seagrass pair on a column whose Rust
   terrain already differs from Java (water at `y=47` vs Java gravel).
+  Superseded by ore/vein wiring on 2026-11-06: 98.75% / 95.80%.
 - 2026-11-06: Server-side player physics — `player_physics.rs` ports the vanilla
   walking/falling formulas (AABB 0.6x1.8 standing, 0.6x1.5 sneaking, gravity
   0.08, drag 0.98, ground friction, jump 0.42, step 0.6, fall distance/damage),
@@ -91,7 +92,8 @@ more expensive than designing for it now.
   shipped state provider types. 134 of 224 configured features execute.
   Generation now runs `underground_decoration`, `vegetal_decoration`, and
   `top_layer_modification` (ores stay off). 8 unit + 15 integration tests;
-  parity unchanged at 98.71% block-class / 92.04% exact-name.
+  parity unchanged at 98.71% block-class / 92.04% exact-name. (Ores are on and
+  the current fixture is 98.75%/95.80% as of the ore/vein wiring slice.)
 - 2026-11-06: Structure-template foundation — `worldgen/structure/template.rs`
   parses gzip 1.21.11 structure NBT (DataVersion, size, palettes, blocks with
   optional block-entity NBT, entities), ports `StructureTemplate.transform`
@@ -107,10 +109,18 @@ more expensive than designing for it now.
   `src/tags.rs` provides namespaced membership lookups with nested references
   resolved at extraction time. Focused tests cover block/item/fluid/entity
   membership, flattening, exact counts, and unknown keys. 426 tests passing.
+- 2026-11-06: Ore generator wiring — `Decoration::UndergroundOres` now runs
+  the 32 shipped `minecraft:ore`/`minecraft:scattered_ore` placed features and
+  `OreVeinifier` executes in the density fill pass. The decoration pipeline now
+  follows vanilla's lazy placement stream (feature RNG consumed between
+  positions) and uses the `MultiNoiseBiomeSource` parameter order for
+  `FeatureSorter` indices, which fixes mis-seeded multi-position features.
+  Exact-name parity is 95.80% (5886/6144) and block-class 98.75% (6067/6144),
+  up from 92.01%/98.71%; 26 of 33 Java ore blocks in the fixture match.
+  Focused `tests/ore_wiring.rs` plus generator/ore-vein unit tests.
 - 2026-11-06: Ore slice — `minecraft:ore` and `minecraft:scattered_ore`
   parse and place with the shipped target tags and states; all 30 ore + 2
-  scattered-ore configs are supported. Generator wiring is held back until
-  feature-RNG parity because it regresses the exact-name fixture. 341 tests.
+  scattered-ore configs are supported. 341 tests.
 - 2026-11-06: Creaking-heart decorator — parses `creaking_heart`, shuffles
   logs, requires six surrounding logs, and writes a dormant natural heart;
   focused test covers success and rejection. Pale moss stays unsupported at
@@ -190,9 +200,9 @@ These are the checkpoints that should be preserved while building forward.
 - [x] Differential armor-stand physics trace.
 - [x] Overworld noise/density/aquifer/biome/surface/carver generation.
 - [x] Exact 1225/1225 density grid, 1536/1536 biome cells, exact bedrock.
-- [x] 98.71% block-class / 92.04% exact-name agreement on the 16-column fixture.
+- [x] 98.75% block-class / 95.80% exact-name agreement on the 16-column fixture.
 - [x] Full block/item/entity/biome registry tables (Nov 3, uncommitted).
-- [x] Feature metadata extracted to `assets/feature_data.json` (not wired yet).
+- [x] Feature metadata extracted to `assets/feature_data.json` (supported types wired).
 
 ---
 
@@ -444,10 +454,11 @@ remaining worldgen gap is almost entirely **what is placed on top of the
 terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
-**Current state:** 98.71% block-class and 92.02% exact-name agreement on a
-16-column fixture. 162 of 224 configured features execute, including the
-aquatic/vine/mushroom batch; remaining errors are concentrated in unported
-lush-cave, special, and structure features. `feature_data.json` is consumed by
+**Current state:** 98.75% block-class and 95.80% exact-name agreement on a
+16-column fixture. 162 of 224 configured features execute, including ores,
+scattered ore, the vein filler, and the aquatic/vine/mushroom batch; remaining
+errors are concentrated in unported lush-cave, special, and structure features.
+`feature_data.json` is consumed by
 `worldgen/feature/mod.rs` and drives the decoration steps.
 
 ### P2.1 Feature framework core `[~]` `L`
@@ -540,10 +551,23 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   elimination, `discard_chance_on_air_exposure`, exact target states, and the
   `block_match` plus four shipped `tag_match` predicates. All 30 `minecraft:ore`
   and 2 `minecraft:scattered_ore` configs parse and have placement tests.
-  Generator wiring is deliberately deferred: applying `underground_ores`
-  lowered the exact-name parity fixture from 92.09% to 89.06% because the
-  project's feature RNG is still approximate. `OreVeinifier`, generator wiring,
-  and the block-for-block Java fixture remain open.
+  `worldgen/ore_vein.rs` ports `OreVeinifier`, and the generator now runs it as
+  a block-state filler for solid density positions before surface rules and
+  carvers. `Decoration::UndergroundOres` is enabled and dispatches the ore types;
+  the same step's disks and `underwater_magma` stay filtered out (they need
+  their own surface/cave wiring). Two correctness fixes were required:
+  `PlacedFeature::placeWithContext` is a lazy stream, so the configured feature
+  must run (and consume RNG) before the next placement position is sampled; and
+  `FeatureSorter` indices must use the biome parameter order from
+  `assets/biome_params.txt`, not the biome registry order. With lazy placement,
+  parameter-order indices, ore features, and the vein filler, exact-name parity
+  is 95.80% (5886/6144) and block-class 98.75% (6067/6144), up from
+  92.01%/98.71%; the no-ore-step baseline with veins is 92.37% (5675/6144).
+  26 of the fixture's 33 Java ore blocks match exactly. Remaining: vein noise
+  interpolation (`NoiseChunk` wraps `vein_toggle`/`vein_ridged` in
+  `interpolated`, while the port evaluates them exactly), the 3x3-chunk biome
+  union and out-of-chunk feature writes, a few ore ellipsoid/shape edge
+  differences, and the block-for-block Java fixture.
 
 ### P2.4 Tree features and tree placers `[~]` `L`
 
@@ -637,10 +661,12 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   make `underwater_magma`'s face-occlusion test exact instead of the current
   full-cube approximation.
 - **Parity note:** Enabling the decoration steps after the ground-cover batch
-  left the fixture at 98.71% block-class / 92.04% exact-name. The new aquatic
-  slice moves it to 98.71% / 92.02% (5654/6144): one tall-seagrass pair lands
+  left the fixture at 98.71% block-class / 92.04% exact-name. The aquatic
+  slice moved it to 98.71% / 92.02% (5654/6144): one tall-seagrass pair lands
   on a column where Rust terrain already differs from Java, so the feature is
   faithful to the world this port generated but cannot match the Java block.
+  The later ore/vein wiring raises the current fixture to 98.75% / 95.80%
+  (6067/5886 of 6144); keep this paragraph as slice history, not current state.
 
 ### P2.6 Cave, dripstone, sculk, and special features `[ ]` `L`
 

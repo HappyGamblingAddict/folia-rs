@@ -39,8 +39,9 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   at 16 sample points within `1e-12`; all 1225 final-density grid values for
   chunk `(0,-1)` match Java within `1e-9`.
 - Chunk differential: at 16 sampled Java chunk columns, bedrock layers match
-  exactly, block-class agreement (solid/air/water/lava) is 98.71%, exact block
-  names are 92.04%, and surface heights differ by 0.62 blocks on average.
+  exactly, block-class agreement (solid/air/water/lava) is 98.75%, exact block
+  names are 95.80%, and surface heights differ by 0.62 blocks on average. Exact
+  names were 92.04% before ore/vein wiring.
 - Multi-noise biome sampling: the real overworld parameter list and all 1536
   biome cells of chunk `(0,-1)` match the Java server exactly.
 - Cave and canyon carvers: exact legacy seeding, the 17x17 neighbouring-start
@@ -184,8 +185,9 @@ This is an initial join path, not full gameplay yet:
   sky/block light; when no region directory exists, chunks come from the Rust
   overworld noise generator with aquifers, surface rules, caves/canyons and
   exact biomes. Block break/place updates and basic tracked-entity gravity are
-  implemented, but ore generation is not wired yet, and structures, light
-  propagation, redstone and AI are not.
+  implemented; ore/scattered-ore generation, the vein filler, and supported
+  vegetation are wired, while structures, full light propagation, redstone and
+  AI are not.
 - Player movement is parsed and persisted, but player physics and movement
   corrections are not simulated; only tracked entities are server-ticked.
 - Void damage, death, and respawn are implemented; other damage sources,
@@ -303,12 +305,13 @@ JVM; the Rust core is still the owner of the server.
 
 - Live world simulation: the Rust noise generator produces overworld base
   terrain with aquifers, surface rules, cave/canyon carvers and exact
-  multi-noise biomes, but ore generation is not wired yet, most vegetation,
-  structures and full light propagation are not ported; supported tree features
-  run after carvers, other feature types fail loudly, and some world-dependent
-  placement modifiers are stubs. Entities are spawned/moved/removed, visible to
-  clients and ticked with gravity/AABB collision, but there is no AI, damage or
-  entity-tracking range logic. Redstone is not ported.
+  multi-noise biomes. Ore/scattered ore, the copper/iron vein filler, and
+  supported tree/vegetation features run; most other vegetation, structures and
+  full light propagation are not ported; other feature types fail loudly, and
+  some world-dependent placement modifiers are stubs. Entities are
+  spawned/moved/removed, visible to clients and ticked with gravity/AABB
+  collision, but there is no AI, damage or entity-tracking range logic.
+  Redstone is not ported.
 - Online-mode encryption and Mojang session authentication.
 - Full player/world/entity API objects; only the minimal `PlayerJoinEvent`
   player proxy exists.

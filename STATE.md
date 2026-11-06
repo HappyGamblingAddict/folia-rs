@@ -9,19 +9,20 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Working tree: ore/scattered-ore and `OreVeinifier` wiring; docs updated.
+- Tests: **272 lib tests** plus `worldgen_parity`, `worldgen_join`,
+  `aquatic`, and the new `ore_wiring` target pass. `tests/assets.rs` fails on a
+  pre-existing `block_states.tsv` manifest mismatch (see `BLOCKERS.md`).
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- Notable delta: the aquatic slice moves exact-name parity from 92.04% to
-  92.02% (5654/6144) while block-class stays 98.71% (6065/6144). The one block
-  is a tall-seagrass pair on a column whose Rust terrain already differs from
-  Java (Rust water at `y=47`, Java gravel); the feature is faithful to the
-  generated world, not a Java block-position match yet.
+- Notable delta: ore/scattered-ore features and `OreVeinifier` are now wired.
+  Exact-name parity is 95.80% (5886/6144) and block-class 98.75% (6067/6144),
+  up from 92.01%/98.71%. The gain comes from the `underground_ores` step, the
+  vein filler, vanilla's lazy placement stream, and the biome-parameter-order
+  feature indices. The no-ore-step baseline with veins is 92.37% (5675/6144).
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -68,8 +69,8 @@ Last updated: 2026-11-06
   variants. Generation wiring is now complete for the supported subset.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
-- Worldgen parity: 98.71% block-class / 92.02% exact-name on the 16-column
-  fixture after the aquatic slice (was 92.04%).
+- Worldgen parity: 98.75% block-class / 95.80% exact-name on the 16-column
+  fixture after ore/vein wiring (was 92.01%).
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
   block-light BFS for an explicit emitter table. Chunk NBT round-trips
@@ -206,10 +207,17 @@ Last updated: 2026-11-06
   `noise_based_count`/`count_on_every_layer` placement before they appear in
   generated chunks. Structures and most special features remain missing. Ore
   and scattered-ore features are implemented and all 32 shipped configs are
-  covered, but generator wiring is still deferred because it lowers the
-  exact-name parity fixture until WorldgenRNG parity lands. Existing stored
-  chunks are not retroactively decorated, so features appear in newly generated
-  columns only.
+  covered. `Decoration::UndergroundOres` is now enabled by default and
+  dispatches the two ore feature types; `OreVeinifier` runs in the density fill
+  pass. The generator uses vanilla's lazy placement stream (feature RNG is
+  consumed between positions) and `FeatureSorter` indices from the biome
+  parameter order, which fixed multi-position ore placement. Remaining gaps:
+  vein noise interpolation (`NoiseChunk` wraps the vein functions in
+  `interpolated`), the 3x3-chunk biome union and out-of-chunk feature writes,
+  and a few ellipsoid edge differences; 26 of the fixture's 33 Java ore blocks
+  match exactly. Disks and `underwater_magma` share the ore step but stay
+  filtered out until their own wiring. Existing stored chunks are not
+  retroactively decorated, so ores appear in newly generated columns only.
 
 - P3.10 block simulation has a first vertical slice in `tick.rs`:
   vanilla `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
@@ -243,9 +251,10 @@ Last updated: 2026-11-06
   powder snow, sprint/sneak input packets, real block shapes) and eventually
   move player simulation onto its own 20 Hz tick instead of packet-driven
   reconciliation.
-- P1.3 tag data is available and the ore feature already resolves its four
-  target tags through `folia_core::tags`; add the remaining cosmetic
-  registries.
+- P1.3 tag data is available and the ore feature resolves its four target tags
+  through `folia_core::tags`; add the remaining cosmetic registries. Ore
+  generator wiring is done; next P2.3 work is `NoiseChunk`-style interpolation
+  for the vein noise functions and then disks/`underwater_magma`.
 - P3.10 now has flags/neighbour/scheduled/random tick queues and the server
   tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth,
   torch support, redstone, fluids, and piston behaviour; persist
@@ -275,7 +284,7 @@ Last updated: 2026-11-06
 - [ ] P1.5 Block behavior metadata
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
-- [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
+- [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore`, `OreVeinifier`, and generator wiring done; vein interpolation, disks/underwater magma in the same step, and the block-for-block Java fixture remain)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
 - [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
 - [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
@@ -292,6 +301,16 @@ Last updated: 2026-11-06
   and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
+- 2026-11-06: P2.3 ore wiring — `Decoration::UndergroundOres` now dispatches
+  the 32 shipped ore/scattered-ore placed features; `OreVeinifier` runs in the
+  density fill pass before surface rules and carvers. The generator now applies
+  vanilla's lazy placement stream (feature RNG consumed between positions) and
+  computes `FeatureSorter` indices from the biome parameter order instead of
+  the biome registry order; both fixes were required for multi-position ore
+  placement. Exact-name parity: 95.80% (5886/6144), block-class 98.75%
+  (6067/6144), up from 92.01%/98.71%. `tests/ore_wiring.rs` pins the default,
+  determinism, vein fillers, and a >95.5% exact-name floor; generator unit
+  tests pin the parameter-order indices and vein output.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

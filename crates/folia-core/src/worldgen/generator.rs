@@ -2,12 +2,12 @@
 //!
 //! This evaluates the real `minecraft:overworld` final-density router on the
 //! vanilla 4x8x4 interpolation grid and fills a Rust chunk. The density pass
-//! produces stone/air/water/lava, then the full vanilla surface-rule tree
-//! (bedrock floor, deepslate gradient, badlands, snow/ice, swamp water, ...)
-//! replaces the near-surface blocks, the cave and canyon carvers replay their
-//! starts from the 17x17 neighbourhood, and the supported underground,
-//! vegetation, and top-layer features decorate the chunk. Ores, other features
-//! and structures are not applied yet.
+//! produces stone/air/water/lava with the `OreVeinifier` filler, then the full
+//! vanilla surface-rule tree (bedrock floor, deepslate gradient, badlands,
+//! snow/ice, swamp water, ...) replaces the near-surface blocks, the cave and
+//! canyon carvers replay their starts from the 17x17 neighbourhood, and the
+//! supported underground-ore, underground, vegetation, and top-layer features
+//! finish the chunk. Other features and structures are not applied yet.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer, is_air_state};
 use crate::worldgen::aquifer::{Aquifer, AquiferSubstance};
@@ -15,11 +15,14 @@ use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
 use crate::worldgen::feature::{
-    Decoration, FeatureData, Heightmap, PlacementWorld, WorldGenRegion,
+    ConfiguredFeature, DECORATION_STEPS, Decoration, FeatureData, Heightmap, PlacedFeature,
+    PlacementWorld, WorldGenRegion,
 };
+use crate::worldgen::ore_vein::OreVeinifier;
 use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
 use folia_math::BlockPos;
 use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, OnceLock};
 
@@ -51,6 +54,7 @@ pub struct WorldGenerator {
     surface_rules: RuleSource,
     carvers: CarverSet,
     aquifer_factory: XoroshiroPositionalRandomFactory,
+    ore_veins: OreVeinifier,
     seed: i64,
     min_y: i32,
     height: i32,
@@ -81,6 +85,7 @@ impl WorldGenerator {
         let surface_rules =
             surface::parse_rules(&data.surface_rule()?, data.seed(), min_y, height)?;
         let router = data.router()?;
+        let ore_veins = OreVeinifier::new(&router, data.seed())?;
         Ok(Self {
             router,
             biomes,
@@ -88,6 +93,7 @@ impl WorldGenerator {
             surface_rules,
             carvers: CarverSet::overworld(min_y),
             aquifer_factory,
+            ore_veins,
             seed,
             min_y,
             height,
@@ -120,7 +126,27 @@ impl WorldGenerator {
         self.biomes.sample_block(x, y, z)
     }
 
+    /// Decoration steps run by `generate_chunk`. Keeping this explicit lets the
+    /// ore tests generate the same terrain with and without a step so the exact
+    /// fixture delta can be attributed.
+    pub const DEFAULT_DECORATION_STEPS: [Decoration; 4] = [
+        Decoration::UndergroundOres,
+        Decoration::UndergroundDecoration,
+        Decoration::VegetalDecoration,
+        Decoration::TopLayerModification,
+    ];
+
     pub fn generate_chunk(&self, chunk_x: i32, chunk_z: i32) -> io::Result<Chunk> {
+        self.generate_chunk_with_steps(chunk_x, chunk_z, &Self::DEFAULT_DECORATION_STEPS)
+    }
+
+    /// Generates one chunk with an explicit decoration-step list.
+    pub fn generate_chunk_with_steps(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        steps: &[Decoration],
+    ) -> io::Result<Chunk> {
         let cells_x = (16 / CELL_WIDTH + 1) as usize;
         let cells_z = cells_x;
         let cells_y = (self.height / CELL_HEIGHT + 1) as usize;
@@ -215,7 +241,20 @@ impl WorldGenerator {
                 for index in 0..self.height as usize {
                     let y = self.min_y + index as i32;
                     if solid[index] {
-                        chunk.set_block_state_ref(local_x as usize, y, local_z as usize, &stone);
+                        // Vanilla's block-state filler chain runs the ore-vein
+                        // pass for solid positions before surface rules and
+                        // carvers. It replaces granite/tuff/copper/iron vein
+                        // blocks; `None` keeps the base stone.
+                        if let Some(state) = self.ore_veins.block_at(world_x, y, world_z) {
+                            chunk.set_block_state(local_x as usize, y, local_z as usize, state);
+                        } else {
+                            chunk.set_block_state_ref(
+                                local_x as usize,
+                                y,
+                                local_z as usize,
+                                &stone,
+                            );
+                        }
                     } else if let Some(state) = fluids[index].take() {
                         chunk.set_block_state(local_x as usize, y, local_z as usize, state);
                     }
@@ -272,7 +311,7 @@ impl WorldGenerator {
 
         // Biomes are now stored in the chunk, which the biome placement filter
         // reads through `FeaturePlacementWorld`.
-        self.apply_decorations(&mut chunk, &biome_indices)?;
+        self.apply_decorations(&mut chunk, &biome_indices, steps)?;
 
         Ok(chunk)
     }
@@ -284,14 +323,19 @@ impl WorldGenerator {
     /// `WorldgenRandom.setFeatureSeed(decorationSeed, featureIndex, step)`.
     /// The feature index is the position in `FeatureSorter`'s global list for
     /// the step, not the order a biome happens to list it in.
-    fn apply_decorations(&self, chunk: &mut Chunk, biome_indices: &[usize]) -> io::Result<()> {
+    fn apply_decorations(
+        &self,
+        chunk: &mut Chunk,
+        biome_indices: &[usize],
+        steps: &[Decoration],
+    ) -> io::Result<()> {
         let data = FeatureData::vanilla();
         let mut chunk_biomes = std::collections::HashSet::new();
         for entry in biome_indices {
             chunk_biomes.insert(self.biomes.biome_name(*entry));
         }
 
-        let step_order = data.step_feature_order();
+        let step_order = java_step_feature_order();
         let mut worldgen_random = WorldgenRandom::new(0);
         let decoration_seed = worldgen_random.set_decoration_seed(
             self.seed,
@@ -303,11 +347,8 @@ impl WorldGenerator {
             self.min_y,
             chunk.z.wrapping_mul(16),
         );
-        for step in [
-            Decoration::UndergroundDecoration,
-            Decoration::VegetalDecoration,
-            Decoration::TopLayerModification,
-        ] {
+        for step in steps {
+            let step = *step;
             let mut active = std::collections::HashSet::new();
             for biome in &chunk_biomes {
                 let Some(steps) = data.biome_features(biome) else {
@@ -337,41 +378,79 @@ impl WorldGenerator {
                 if !configured.is_supported() {
                     continue;
                 }
-
+                // The `underground_ores` step also contains disks and
+                // `underwater_magma`; this slice only wires the ore features.
+                if step == Decoration::UndergroundOres
+                    && !matches!(
+                        configured.vanilla_type(),
+                        "minecraft:ore" | "minecraft:scattered_ore"
+                    )
+                {
+                    continue;
+                }
                 worldgen_random.set_feature_seed(
                     decoration_seed,
                     index as i32,
                     step.index() as i32,
                 );
-                let positions = {
-                    let world = FeaturePlacementWorld {
-                        chunk: &*chunk,
-                        data,
-                        min_y: self.min_y,
-                        height: self.height,
-                    };
-                    placed
-                        .placement_positions(
-                            origin,
-                            &mut worldgen_random,
-                            &world,
-                            self.min_y,
-                            self.height,
-                        )
-                        .map_err(|failure| {
-                            io::Error::new(io::ErrorKind::InvalidData, failure.to_string())
-                        })?
-                };
-
-                for pos in positions {
-                    let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
-                    configured
-                        .place(&mut region, &mut worldgen_random, pos)
-                        .map_err(|feature| {
-                            io::Error::new(io::ErrorKind::InvalidData, feature.to_string())
-                        })?;
-                }
+                self.place_placed_feature(placed, configured, chunk, &mut worldgen_random, origin)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Runs one placed feature with vanilla's lazy modifier stream.
+    ///
+    /// `PlacedFeature.placeWithContext` is a chained `Stream.flatMap`: after a
+    /// modifier yields a position, the configured feature runs and consumes
+    /// RNG *before* the next position is sampled. Collecting all positions
+    /// first (as `PlacedFeature::placement_positions` does for inspection)
+    /// desynchronises every attempt after the first for multi-placement
+    /// features such as ores.
+    fn place_placed_feature(
+        &self,
+        placed: &PlacedFeature,
+        configured: &ConfiguredFeature,
+        chunk: &mut Chunk,
+        random: &mut WorldgenRandom,
+        origin: BlockPos,
+    ) -> io::Result<()> {
+        self.place_modifier_step(placed, configured, chunk, random, origin, 0)
+    }
+
+    fn place_modifier_step(
+        &self,
+        placed: &PlacedFeature,
+        configured: &ConfiguredFeature,
+        chunk: &mut Chunk,
+        random: &mut WorldgenRandom,
+        pos: BlockPos,
+        index: usize,
+    ) -> io::Result<()> {
+        let Some(modifier) = placed.placement_modifiers().get(index) else {
+            let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
+            return configured
+                .place(&mut region, random, pos)
+                .map(|_| ())
+                .map_err(|feature| {
+                    io::Error::new(io::ErrorKind::InvalidData, feature.to_string())
+                });
+        };
+        let positions = {
+            let world = FeaturePlacementWorld {
+                chunk: &*chunk,
+                data: FeatureData::vanilla(),
+                min_y: self.min_y,
+                height: self.height,
+            };
+            modifier
+                .get_positions(pos, random, &world, placed.id(), self.min_y, self.height)
+                .map_err(|unsupported| {
+                    io::Error::new(io::ErrorKind::InvalidData, unsupported.to_string())
+                })?
+        };
+        for next in positions {
+            self.place_modifier_step(placed, configured, chunk, random, next, index + 1)?;
         }
         Ok(())
     }
@@ -397,6 +476,116 @@ impl WorldGenerator {
         }
         indices
     }
+}
+
+/// Vanilla `FeatureSorter.buildFeaturesPerStep` order for every decoration step.
+///
+/// `FeatureData::step_feature_order` sorts by the biome **registry** order. A
+/// `MultiNoiseBiomeSource` builds `possibleBiomes()` from the biome parameter
+/// list instead (`OverworldBiomeBuilder` order, preserved by
+/// `assets/biome_params.txt`), and that order decides the first-encounter
+/// feature index used by `WorldgenRandom.setFeatureSeed`. The two orders agree
+/// for most features but not all; for example `ore_clay` and `ore_gold_extra`
+/// swap places at the end of `underground_ores`, which gives every clay blob
+/// the wrong seed. This local copy keeps the generator honest until
+/// `FeatureData::step_feature_order` adopts the parameter order.
+fn java_step_feature_order() -> &'static [Vec<String>] {
+    static ORDER: OnceLock<Vec<Vec<String>>> = OnceLock::new();
+    ORDER.get_or_init(build_java_step_feature_order).as_slice()
+}
+
+fn build_java_step_feature_order() -> Vec<Vec<String>> {
+    let data = FeatureData::vanilla();
+    let mut feature_indices: HashMap<&str, usize> = HashMap::new();
+    let mut features: Vec<&str> = Vec::new();
+    let mut graph: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
+
+    for biome in biome_parameter_order() {
+        let Some(steps) = data.biome_features(biome) else {
+            continue;
+        };
+        // Java flattens all steps for a biome before adding dependency edges, so
+        // an edge also connects the last feature of one step to the first
+        // feature of the next.
+        let mut flat = Vec::new();
+        for (step, list) in steps.iter().enumerate() {
+            for id in list {
+                let index = match feature_indices.get(id.as_str()) {
+                    Some(index) => *index,
+                    None => {
+                        let index = features.len();
+                        features.push(id);
+                        feature_indices.insert(id, index);
+                        index
+                    }
+                };
+                flat.push((step, index));
+            }
+        }
+        for pair in flat.windows(2) {
+            graph.entry(pair[0]).or_default().insert(pair[1]);
+        }
+    }
+
+    let mut visited = BTreeSet::new();
+    let mut in_progress = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for root in graph.keys().copied().collect::<Vec<_>>() {
+        if !visited.contains(&root) {
+            feature_order_dfs(&graph, root, &mut visited, &mut in_progress, &mut ordered);
+        }
+    }
+    ordered.reverse();
+
+    let mut by_step = vec![Vec::new(); DECORATION_STEPS];
+    for (step, index) in ordered {
+        if step < DECORATION_STEPS {
+            by_step[step].push(features[index].to_owned());
+        }
+    }
+    by_step
+}
+
+fn biome_parameter_order() -> Vec<&'static str> {
+    const BIOME_PARAMS: &str = include_str!("../../assets/biome_params.txt");
+    let mut seen = HashSet::new();
+    let mut order = Vec::new();
+    for line in BIOME_PARAMS.lines() {
+        let mut fields = line.split('\t');
+        if fields.next() != Some("param") {
+            continue;
+        }
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        if seen.insert(name) {
+            order.push(name);
+        }
+    }
+    order
+}
+
+fn feature_order_dfs(
+    graph: &BTreeMap<(usize, usize), BTreeSet<(usize, usize)>>,
+    node: (usize, usize),
+    visited: &mut BTreeSet<(usize, usize)>,
+    in_progress: &mut BTreeSet<(usize, usize)>,
+    ordered: &mut Vec<(usize, usize)>,
+) {
+    if visited.contains(&node) {
+        return;
+    }
+    if !in_progress.insert(node) {
+        panic!("feature order cycle found");
+    }
+    if let Some(neighbours) = graph.get(&node) {
+        for next in neighbours {
+            feature_order_dfs(graph, *next, visited, in_progress, ordered);
+        }
+    }
+    in_progress.remove(&node);
+    visited.insert(node);
+    ordered.push(node);
 }
 
 /// [`PlacementWorld`] backed by the chunk currently being generated.
@@ -847,5 +1036,49 @@ mod tests {
             average < 12.0,
             "average surface height difference too large: {average}"
         );
+    }
+
+    #[test]
+    fn feature_order_uses_the_biome_parameter_order() {
+        let order = java_step_feature_order();
+        let ores = &order[Decoration::UndergroundOres.index()];
+        assert_eq!(ores.len(), 34);
+        assert_eq!(ores[0], "minecraft:ore_dirt");
+        assert_eq!(ores[10], "minecraft:ore_coal_lower");
+        // The registry-order list puts `disk_grass` here instead, which gives
+        // `ore_clay` the wrong feature seed; the parameter order is vanilla's
+        // `MultiNoiseBiomeSource.possibleBiomes()` order.
+        assert_eq!(ores[27], "minecraft:ore_clay");
+        assert_eq!(ores[28], "minecraft:ore_gold_extra");
+        assert_eq!(ores[29], "minecraft:disk_grass");
+        assert_eq!(ores[33], "minecraft:ore_emerald");
+    }
+
+    #[test]
+    fn ore_veins_fill_the_density_pass() {
+        let generator = WorldGenerator::overworld(12345).unwrap();
+        let chunk = generator.generate_chunk(0, -1).unwrap();
+        let mut granite = 0;
+        let mut tuff = 0;
+        let mut copper = 0;
+        let mut iron = 0;
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in generator.min_y()..generator.min_y() + generator.height() {
+                    match chunk.block_state(x, y, z).unwrap().name.as_str() {
+                        "minecraft:granite" => granite += 1,
+                        "minecraft:tuff" => tuff += 1,
+                        "minecraft:copper_ore" | "minecraft:raw_copper_block" => copper += 1,
+                        "minecraft:deepslate_iron_ore" | "minecraft:raw_iron_block" => iron += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        println!("vein blocks: granite={granite} tuff={tuff} copper={copper} iron={iron}");
+        assert!(granite > 0, "copper veins should write granite filler");
+        assert!(tuff > 0, "iron veins should write tuff filler");
+        assert!(copper > 0, "copper veins should write copper ore");
+        assert!(iron > 0, "iron veins should write deepslate iron ore");
     }
 }

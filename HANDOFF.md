@@ -49,8 +49,9 @@ ground-cover vegetation features, and the structure-template foundation.
 Verified state (2026-11-06, merged workspace):
 
 ```text
-426 tests (full workspace)
+426 tests (last full workspace gate)
 0 failed
++ 6 lib + 12 integration focused tests in the entity metadata slice
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
 cargo build --workspace: clean
@@ -227,11 +228,21 @@ Key files:
   ground detection, per-tick sync.
 - Differential armor-stand fall trace matches Java within `5e-4`;
   lands at `y=-60`.
+- `entity_metadata.rs` adds a typed synched-data store keyed by entity id
+  (dirty-only `ClientboundSetEntityData`), `LivingEntity` raw damage with the
+  vanilla 20-tick invulnerability window, death event `3` and poof event `60`,
+  `ClientboundSetHealth` for players, typed attributes, and the eight equipment
+  slots with `ClientboundSetEquipment` round-trip. `entity.rs` exposes
+  `spawn_living`/`hurt_entity`/`tick_living_entities`/`set_entity_equipment`
+  bridges. This is a core model/packet slice; join and player sessions still
+  use their own health fields and per-viewer tracking is not ported.
 
 Key files:
 
 - `crates/folia-core/src/entity.rs`
+- `crates/folia-core/src/entity_metadata.rs`
 - `crates/folia-core/tests/entity_physics.rs`
+- `crates/folia-core/tests/entity_metadata.rs`
 
 ### World generation
 
@@ -430,7 +441,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Redstone is not ported.
 - Entity AI, goals, pathfinding, combat, and general damage are not ported.
   Players now take void damage, die, and respawn at world spawn; fall, fire,
-  hunger, and projectile damage are still missing.
+  hunger, and projectile damage are still missing. The new `LivingEntity`
+  model handles raw health/death but is not wired into sessions, and it does
+  not yet apply armor, enchantments, absorption, knockback, or damage types.
+  Metadata covers indices 0-9 only, initial non-default spawn metadata is not
+  sent, and there is no Java-captured metadata/equipment packet fixture.
 - Entity tracking range/culling and player physics corrections are not ported.
 - No block entity behavior, containers beyond the player inventory, crafting,
   furnaces, etc.

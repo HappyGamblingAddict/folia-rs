@@ -3,9 +3,9 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
-> exact-name parity.
+> Test status: **426 tests** on the last full gate; the entity metadata slice
+> adds 6 lib + 12 integration focused tests and holds 98.71% block-class /
+> 92.02% exact-name parity.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -54,7 +54,7 @@ more expensive than designing for it now.
 | Full worldgen | ~45-50% | Aquatic/vine/mushroom feature batch landed; ore/scattered features translated but unwired; veinifier, scheduled ticks, remaining placement modifiers, structures, and Nether/End content missing |
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
-| Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
+| Entities | ~15% | Tracking, gravity/AABB, typed metadata packets, raw health/damage/death, attributes, and equipment; no AI, spawning, armor, or per-viewer metadata |
 | Blocks/redstone/fluids | ~10% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, and falling sand/gravel; fluids, redstone, pistons, block entities, and P1.5 metadata remain unported |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
@@ -65,6 +65,17 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
+  typed synched-data store keyed by entity id with dirty-only
+  `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
+  vanilla 20-tick invulnerability window, death event `3` plus poof event `60`
+  after 20 ticks, `ClientboundSetHealth` for players, typed attributes, and the
+  eight equipment slots with `ClientboundSetEquipment` round-trip. `entity.rs`
+  exposes `spawn_living`/`hurt_entity`/`tick_living_entities`/
+  `set_entity_equipment` bridges; join/player sessions are not wired. Focused:
+  6 lib + 12 integration tests. Remaining: other serializers, initial
+  non-default metadata at spawn, per-viewer tracking, armor calculation, and a
+  Java packet fixture.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
   ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
   `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
@@ -1183,6 +1194,11 @@ instantly on start-destroy and places on use-item-on.
 - **Reference:** `LivingEntity.java`, `Player.java`,
   `net/minecraft/world/effect/*`, `AttributeMap`.
 - **Done when:** Damage traces and effect durations match Java.
+- **Progress (2026-11-06):** The P5.1 core supplies raw health subtraction,
+  the 20-tick invulnerability window, death events, a typed attribute map, and
+  `ClientboundSetHealth` for players. Armor/enchantment reduction, damage
+  types, knockback, absorption, totems, hunger/regeneration, and effects remain
+  unported; player sessions still own their own health/food fields.
 
 ### P4.10 Death, drops, respawn, and game modes `[~]` `M`
 
@@ -1268,10 +1284,12 @@ sync and armor-stand gravity. Minecraft’s world is defined by mobs, item
 entities, projectiles, and combat.
 
 **Current state:** Global `HashMap<i32, Entity>`, basic type/UUID/position,
-gravity/AABB, add/remove/sync packets. No metadata, per-chunk storage, AI,
-damage, spawning, or equipment.
+gravity/AABB, add/remove/sync packets. A separate typed metadata/living-entity
+store now covers health, flags, pose, custom names, attributes, and equipment
+packets, but it is not yet wired into sessions or per-viewer tracking. No
+per-chunk storage, AI, spawning, or armor calculation.
 
-### P5.1 Entity registry and metadata `[ ]` `L`
+### P5.1 Entity registry and metadata `[~]` `L`
 
 - **What:** Add entity dimensions, data watchers, metadata serializers, flags,
   attributes, equipment, effects, and type-specific spawn data.
@@ -1280,6 +1298,22 @@ damage, spawning, or equipment.
 - **Reference:** `net/minecraft/world/entity/Entity.java`,
   `SynchedEntityData.java`, `EntityType.java`.
 - **Done when:** Metadata packets match Java for representative entities.
+- **Progress (2026-11-06):** `entity_metadata.rs` implements a typed
+  `MetadataValue`/`DataValue` store keyed by entity id with vanilla dirty
+  semantics and `ClientboundSetEntityData` encode/decode. Living-entity indices
+  0-9 are modeled (shared flags, air supply, custom name/visibility, silent, no
+  gravity, pose, ticks frozen, living flags, health). `LivingEntity` adds raw
+  damage with the 20-tick invulnerability window, death event `3`, poof event
+  `60` after 20 death ticks, and `ClientboundSetHealth` for players. Typed
+  attributes cover max health, armor, armor toughness, attack damage/speed,
+  movement speed, knockback resistance, and follow range. The eight equipment
+  slots encode/decode through `ClientboundSetEquipment` (ordinal + continuation
+  bits) and are readable from the store. `entity.rs` adds
+  `spawn_living`/`hurt_entity`/`tick_living_entities`/`set_entity_equipment`
+  bridges; join/player sessions are not wired. Still open: effect particles,
+  arrow/stinger counts, sleeping pos, remaining serializers, initial
+  non-default metadata at spawn, per-viewer dirty tracking, armor points from
+  equipment, effects/absorption/damage types, and a Java packet fixture.
 
 ### P5.2 Entity lifecycle and per-chunk storage `[ ]` `L`
 

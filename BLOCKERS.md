@@ -76,6 +76,39 @@ Format:
 - No Java differential neighbor-update or scheduled-tick fixture exists yet,
   so this is a behavior-tested slice, not a parity claim.
 
+## 2026-11-06 — P5.1 entity metadata/health/equipment is a core slice
+
+- Scope: `entity_metadata.rs` implements typed synched data, dirty-only
+  `ClientboundSetEntityData`, `LivingEntity` raw damage/death, attributes, and
+  eight equipment slots. `entity.rs` exposes bridge helpers only.
+- Not wired: join/player sessions still own player health and food; server
+  entities are not automatically given a living record by `spawn` (call
+  `spawn_living`), and `tick_living_entities` is not called by the server loop.
+  `spawn_living` sends only the add-entity packet; the initial non-default
+  metadata snapshot is not emitted yet.
+- Metadata coverage: indices 0-9 only. Effect particles, arrow count, stinger
+  count, sleeping position, and the many type-specific accessors are absent.
+  Supported serializers are byte, int, long, float, string, component,
+  optional component, item stack, boolean, and pose; other serializer ids
+  return an explicit error instead of guessing a payload length.
+- Damage coverage: raw health subtraction plus the 20-tick invulnerability
+  window. Armor/enchantment reduction, damage types/tags, knockback,
+  absorption, totems, hunger/regeneration, and effects are not modeled.
+  ClientboundSetHealth uses the model's food/saturation fields rather than a
+  live player's vitals.
+- Equipment coverage: full-slot updates and subset encoding exist, but there is
+  no per-viewer dirty equipment tracking and armor points are not derived from
+  equipped items (that needs item prototype/armor data).
+- Death: event `3` is sent at death and event `60` after 20 ticks; `removed` is
+  set for non-players, but no `ClientboundRemoveEntities` is emitted by the
+  model. The caller must remove the entity.
+- Parity: packet bodies are tested against the Java source layout and
+  round-trip decoders, but no Java-captured metadata/equipment/death packet
+  fixture exists yet. Do not claim entity parity from this slice.
+- Workaround / next task: keep join/session wiring out of this slice; the next
+  P5.1 task is initial metadata on spawn, per-viewer dirty tracking, remaining
+  serializers, armor calculation, and a captured Java fixture.
+
 ## Known limitations (not hard blockers)
 
 These are expected gaps, not reasons to stop:

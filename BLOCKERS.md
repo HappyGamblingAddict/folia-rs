@@ -235,3 +235,37 @@ These are expected gaps, not reasons to stop:
 - Workaround: Call `StructureTemplate::placement_blocks`/`place_into` directly
   from focused code and tests. Do not claim structure generation parity until
   starts/references/pieces and a Java placement fixture exist.
+
+## 2026-11-06 — P2.5 aquatic/vine/mushroom remaining placement and shape gaps
+
+- Scope: All requested aquatic/vine/mushroom feature algorithms are ported and
+  covered by focused tests. 162/224 configured features execute. This is not a
+  hard blocker, but these gaps prevent a "complete" claim:
+  - `kelp`, `warped_fungi`, `crimson_fungi`, `warped_forest_vegetation`,
+    `crimson_forest_vegetation`, and `nether_sprouts` still parse but do not
+    run in live chunks because their outer placement uses
+    `noise_based_count` or `count_on_every_layer`, which `placement.rs` still
+    reports as explicit unsupported variants (10 noise counts + 8 layer counts).
+  - `simple_block.schedule_tick` and `simple_random_selector` remain explicit
+    unsupported, so pale-forest flowers and the dripleaf pools stay inactive.
+  - `underwater_magma`, seagrass, kelp, sea pickles, bamboo, and the nether
+    plants use the full-cube `face_sturdy` approximation until P1.5 produces
+    real collision/support/occlusion shapes. Non-cube neighbours may accept or
+    reject a position differently from Java.
+  - `FeatureLevel` reads only the chunk being generated; vanilla's
+    `WorldGenRegion` spans a neighbour radius. Features whose spread crosses a
+    chunk edge (seagrass ±8, vine/glowstone scans, huge mushroom/fungus caps)
+    skip positions outside this chunk instead of reading the neighbour. This is
+    the existing chunk-status-pipeline limitation, not new to this slice.
+- What was tried: Implemented every requested algorithm in Java RNG order,
+  reused the project's existing state providers and tag tables, and measured
+  the decoration steps against the parity fixture.
+- What is needed: `noise_based_count` and `count_on_every_layer` placement,
+  scheduled ticks, `simple_random_selector`, P1.5 block behaviour metadata, and
+  a multi-chunk feature region.
+- Workaround / next task: Keep the features executable and tested directly;
+  generated worlds show seagrass, sea pickles, vines, glowstone, forest rocks,
+  underwater magma, huge mushrooms/fungi (where placement is supported), and
+  bamboo. Parity is 98.71% block-class / 92.02% exact-name (5654/6144); the
+  one-block exact delta is a tall-seagrass pair on a column whose Rust terrain
+  already differs from Java.

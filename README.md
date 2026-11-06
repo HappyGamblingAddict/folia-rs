@@ -69,7 +69,7 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   generation steps. `assets/feature_data.json` (224 configured features, 258
   placed features, 65 biome feature lists) is loaded and reference-validated;
   unported feature types fail loudly instead of no-oping. Placement modifiers
-  are typed; 875 of 888 execute in vanilla RNG order and the rest report an
+  are typed; all 888 execute in vanilla RNG order and none report an
   explicit failure. Supported vegetation runs after carvers; supported trees
   include oak, birch, jungle, swamp oak, spruce, pine, dark oak, fancy oak,
   cherry, acacia, mega spruce/pine, mega jungle, jungle bush, azalea,

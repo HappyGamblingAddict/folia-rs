@@ -153,7 +153,7 @@ Key files:
   first. `BiomePlacementWorld` implements the `PlacementWorld` trait
   (`biome_at`, `biome_has_placed_feature`) over `BiomeSampler` and the loaded
   biome feature lists.
-- Coverage from the shipped data: 888 modifiers, 875 execute, 13 unsupported (2 environment-scan predicates, 10 noise counts, 1 clamped-normal offset)
+- Coverage from the shipped data: all 888 placement modifiers execute; the remaining P2.2 gap is a Java position fixture
   (`heightmap` 83, `block_predicate_filter` 12, environment scan 9,
   count-on-every-layer 8, noise counts 10, surface
   relative 3, one `clamped_normal` offset).

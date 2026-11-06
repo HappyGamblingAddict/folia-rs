@@ -500,12 +500,11 @@ consumes it.
   so P2.3 is unblocked.
 - **Progress (2026-11-05):** Tree generation added `OCEAN_FLOOR` heightmaps
   (25), `surface_water_depth_filter` (25), and 45 sapling `would_survive`
-  predicates, so **875 of 888** modifiers now execute. The 13 remaining are
-  `heightmap` 83 (MOTION_BLOCKING / WG variants), `block_predicate_filter` 12
-  (non-sapling predicates), `environment_scan` 9, `count_on_every_layer` 8,
-  noise counts 10, `surface_relative_threshold` 3, and one `clamped_normal`
-  offset. Tree placement also proves the world-dependent pipeline runs end to
-  end; a Java position fixture is still required for the P2.2 done-when.
+  predicates, so **all 888** shipped modifiers now execute: every heightmap,
+  block predicate, environment scan, layer count, noise count,
+  surface-relative filter, and the Gaussian `clamped_normal` offset. Tree
+  placement also proves the world-dependent pipeline runs end to end; a Java
+  position fixture is still required for the P2.2 done-when.
 
 ### P2.3 Ore features and ore veins `[~]` `M`
 

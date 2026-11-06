@@ -41,14 +41,16 @@ Last updated: 2026-11-06
   `place_on_ground` leaf litter,
   `beehive`, `leave_vine`, `trunk_vine`, `cocoa`, `attached_to_leaves`,
   `attached_to_logs`, and `creaking_heart` decorators execute; unsupported
-  decorator types make the whole tree config unsupported. 875 of 888 shipped
-  placement modifiers execute; 126 remain explicit unsupported variants.
+  decorator types make the whole tree config unsupported. All 888 shipped
+  placement modifiers execute; the remaining P2.2 gap is the Java position
+  fixture.
   Beehive occupants and the chunk-status pipeline are still open; pale moss
   is blocked on the unported `pale_moss_patch` vegetation feature.
 - P2.1/P2.2 core is in `worldgen/feature/{mod,placement}.rs`: framework,
-  typed loading, and a placement pipeline that executes 875 of 888 shipped
-  modifiers (world-free transforms, `biome`, `OCEAN_FLOOR`/`WORLD_SURFACE`
-  heightmaps, surface-water depth, and sapling `would_survive`). `biome` reads
+  typed loading, and a placement pipeline that executes all 888 shipped
+  modifiers (world-free transforms, `biome`, every heightmap, block
+  predicates, environment scans, layer/noise counts, surface-relative
+  filters, water depth, sapling survival, and Gaussian offsets). `biome` reads
   world state through `PlacementWorld`; `BiomePlacementWorld` handles
   pre-generation queries and `FeaturePlacementWorld` handles the chunk being
   generated. The remaining 126 modifiers parse as explicit unsupported

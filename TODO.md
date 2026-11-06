@@ -65,6 +65,14 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: P2.4/P2.5 feature-gap slice — `PaleMossDecorator` now embeds the
+  parsed `minecraft:pale_moss_patch` and runs its ground/trunk/leaf passes in
+  vanilla RNG order; `simple_random_selector` picks one inline branch with
+  `nextInt(size)`; `simple_block.schedule_tick` queues through
+  `crate::tick::ScheduledTickQueue`; beehives store two or three `bees`
+  occupants with `nextInt(599)`/`min_ticks_in_hive: 600`. 171 of 224 configured
+  features dispatch as supported (was 162). `tests/vegetation.rs` adds 3 shipped
+  pale-forest/flower/dripleaf determinism tests.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
   ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
   `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
@@ -445,10 +453,11 @@ terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
 **Current state:** 98.71% block-class and 92.02% exact-name agreement on a
-16-column fixture. 162 of 224 configured features execute, including the
-aquatic/vine/mushroom batch; remaining errors are concentrated in unported
-lush-cave, special, and structure features. `feature_data.json` is consumed by
-`worldgen/feature/mod.rs` and drives the decoration steps.
+16-column fixture. 171 of 224 configured features execute, including the
+aquatic/vine/mushroom and pale-forest/dripleaf batch; remaining errors are
+concentrated in unported lush-cave, special, and structure features.
+`feature_data.json` is consumed by `worldgen/feature/mod.rs` and drives the
+decoration steps.
 
 ### P2.1 Feature framework core `[~]` `L`
 
@@ -596,10 +605,14 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   direction/probability/exclusion/empty-block rules, and samples randomized
   integer states (6 propagules on the synthetic oak fixture at seed 7).
   Creaking hearts now shuffle logs, require six surrounding logs, and place a
-  dormant natural heart. An unsupported decorator type makes the whole tree
-  config unsupported. Still open: beehive block-entity bee payload, the
-  `pale_moss` tree decorator (its `pale_moss_patch` dependency now exists), and
-  block-for-block Java fixtures.
+  dormant natural heart. Pale moss now embeds the parsed `pale_moss_patch` and
+  runs the shuffled-ground/trunk/leaf passes in vanilla order; `pale_oak` and
+  `pale_oak_creaking` load. Beehives now record 2–3 bee occupants as block-entity
+  NBT (`ticks_in_hive` from `nextInt(599)`, `min_ticks_in_hive` 600) in the
+  feature region. An unsupported decorator type makes the whole tree config
+  unsupported. Still open: the generator does not yet drain
+  `WorldGenRegion::take_block_entities`, and there is no block-for-block Java
+  tree fixture.
 
 ### P2.5 Vegetation and ground cover `[~]` `L`
 
@@ -625,16 +638,19 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   `vines.rs` (`vines`, `twisting_vines`, `weeping_vines`), and `mushroom.rs`
   (huge brown/red mushrooms, huge crimson/warped fungus, `glowstone_blob`,
   `forest_rock`, `fill_layer`, `nether_forest_vegetation`, and the boolean
-  selector that drives mushroom islands). 162/224 configured features now
-  execute; 62 remain explicit `Unsupported`. Cactus and sugar cane already run
-  through `block_column`, and lily pads through `simple_block`.
-- **Still open:** `simple_block.schedule_tick` (pale forest flowers), the
-  `simple_random_selector` used by the dripleaf pools, most structure features,
-  and kelp/huge-fungus/nether-vegetation in-world wiring where their outer
+  selector that drives mushroom islands). `simple_random_selector` picks one
+  inline placed branch, and `simple_block.schedule_tick` queues a one-tick block
+  tick through `crate::tick::ScheduledTickQueue`. 171/224 configured features
+  now execute; 53 remain explicit `Unsupported`. Cactus and sugar cane already
+  run through `block_column`, and lily pads through `simple_block`.
+- **Still open:** `random_selector`/`simple_random_selector` branches that
+  reference *placed* features (`pale_garden_vegetation`, `warm_ocean_vegetation`)
+  need a two-registry resolver; the generator does not yet drain scheduled
+  ticks or block entities out of `WorldGenRegion`; most structure features; and
+  kelp/huge-fungus/nether-vegetation in-world wiring where their outer
   placement needs `noise_based_count`/`count_on_every_layer` (the features
-  themselves are ported). The tree `pale_moss` decorator still needs to be
-  wired to the now-supported `pale_moss_patch`, and block-shape metadata would
-  make `underwater_magma`'s face-occlusion test exact instead of the current
+  themselves are ported). Block-shape metadata would make
+  `underwater_magma`'s face-occlusion test exact instead of the current
   full-cube approximation.
 - **Parity note:** Enabling the decoration steps after the ground-cover batch
   left the fixture at 98.71% block-class / 92.04% exact-name. The new aquatic

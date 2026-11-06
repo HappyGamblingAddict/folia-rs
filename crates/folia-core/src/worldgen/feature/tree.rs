@@ -4,15 +4,16 @@
 //! cherry foliage placers. Mangrove roots use the mangrove root placer.
 //!
 //! Tree decorators execute after the trunk and foliage: leaf litter, beehives,
-//! hanging vines, trunk vines, cocoa, alter-ground, attached leaves/logs, and
-//! creaking hearts. Pale moss is not ported yet: its ground pass delegates to
-//! the unported `minecraft:pale_moss_patch` vegetation feature. Configurations
+//! hanging vines, trunk vines, cocoa, alter-ground, attached leaves/logs,
+//! creaking hearts, and pale moss. The pale-moss ground pass delegates to the
+//! embedded `minecraft:pale_moss_patch` vegetation feature. Configurations
 //! that use any other trunk, foliage, or root placer or decorator load as
 //! unsupported instead of being approximated.
 
 use super::placement::{IntProvider, parse_block_state, parse_int_provider};
-use super::{FeatureLevel, is_air_name};
+use super::{ConfiguredFeature, FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
+use crate::nbt::Tag;
 use crate::worldgen::carver::{mth_cos, mth_sin};
 use folia_math::BlockPos;
 use folia_random::RandomSource;
@@ -208,6 +209,15 @@ enum TreeDecorator {
     AttachedToLeaves(AttachedToLeavesDecorator),
     AttachedToLogs(AttachedToLogsDecorator),
     CreakingHeart(CreakingHeartDecorator),
+    PaleMoss(PaleMossDecorator),
+}
+
+#[derive(Debug, Clone)]
+struct PaleMossDecorator {
+    leaves_probability: f32,
+    trunk_probability: f32,
+    ground_probability: f32,
+    patch: Box<ConfiguredFeature>,
 }
 
 #[derive(Debug, Clone)]
@@ -322,7 +332,18 @@ impl BlockStateProvider {
 
 /// Parses a `TreeConfiguration`. `Ok(None)` means a known vanilla component is
 /// not ported yet; malformed JSON is an error.
+#[cfg(test)]
 pub fn parse_tree_config(config: &Value) -> io::Result<Option<TreeFeature>> {
+    parse_tree_config_with_pale_moss(config, None)
+}
+
+/// Parses a tree with the configured `minecraft:pale_moss_patch` available to
+/// the `minecraft:pale_moss` decorator. The patch is embedded so placement
+/// needs no registry lookup at generation time.
+pub(crate) fn parse_tree_config_with_pale_moss(
+    config: &Value,
+    pale_moss_patch: Option<&ConfiguredFeature>,
+) -> io::Result<Option<TreeFeature>> {
     let object = config
         .as_object()
         .ok_or_else(|| invalid("tree config must be an object"))?;
@@ -597,7 +618,7 @@ pub fn parse_tree_config(config: &Value) -> io::Result<Option<TreeFeature>> {
         _ => return Ok(None),
     };
 
-    let Some(decorators) = parse_decorators(object)? else {
+    let Some(decorators) = parse_decorators(object, pale_moss_patch)? else {
         return Ok(None);
     };
     let decorator_count = decorators.len();
@@ -2379,6 +2400,9 @@ impl TreeDecorator {
             TreeDecorator::AttachedToLeaves(decorator) => decorator.place(level, random, leaves),
             TreeDecorator::AttachedToLogs(decorator) => decorator.place(level, random, logs),
             TreeDecorator::CreakingHeart(decorator) => decorator.place(level, random, logs),
+            TreeDecorator::PaleMoss(decorator) => {
+                decorator.place(level, random, logs, leaves);
+            }
         }
     }
 }
@@ -2609,6 +2633,67 @@ impl CreakingHeartDecorator {
     }
 }
 
+impl PaleMossDecorator {
+    /// `PaleMossDecorator.place`: shuffle the logs, optionally run the ground
+    /// patch at the shuffled minimum-Y log, then hang moss below trunk logs and
+    /// leaves. Random draws stay in vanilla order.
+    fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        logs: &[BlockPos],
+        leaves: &[BlockPos],
+    ) {
+        let mut shuffled = logs.to_vec();
+        shuffle(&mut shuffled, random);
+        if shuffled.is_empty() {
+            return;
+        }
+        let ground = *shuffled
+            .iter()
+            .min_by_key(|pos| pos.y())
+            .expect("shuffled logs are non-empty");
+
+        if random.next_float() < self.ground_probability {
+            self.patch
+                .place(level, random, ground.above())
+                .expect("pale moss patch was validated when the tree was parsed");
+        }
+        for log in logs {
+            if random.next_float() < self.trunk_probability {
+                let below = log.below();
+                if is_air(level, below) {
+                    add_moss_hanger(level, below, random);
+                }
+            }
+        }
+        for leaf in leaves {
+            if random.next_float() < self.leaves_probability {
+                let below = leaf.below();
+                if is_air(level, below) {
+                    add_moss_hanger(level, below, random);
+                }
+            }
+        }
+    }
+}
+
+/// `PaleMossDecorator.addMossHanger`.
+fn add_moss_hanger(level: &mut dyn FeatureLevel, mut pos: BlockPos, random: &mut dyn RandomSource) {
+    while is_air(level, pos.below()) && random.next_float() >= 0.5 {
+        level.set_block(pos, pale_hanging_moss(false));
+        pos = pos.below();
+    }
+    level.set_block(pos, pale_hanging_moss(true));
+}
+
+fn pale_hanging_moss(tip: bool) -> BlockState {
+    BlockState {
+        name: "minecraft:pale_hanging_moss".into(),
+        properties: vec![("tip".into(), if tip { "true" } else { "false" }.into())],
+    }
+}
+
 impl PlaceOnGroundDecorator {
     /// `PlaceOnGroundDecorator.place`.
     fn place(
@@ -2803,8 +2888,9 @@ impl AttachedToLeavesDecorator {
 }
 
 impl BeehiveDecorator {
-    /// `BeehiveDecorator.place`. The nest's stored bee occupants are not
-    /// modeled yet; the block state itself is placed at the vanilla position.
+    /// `BeehiveDecorator.place`. The nest's occupancy is stored as block-entity
+    /// NBT: two or three bees, each with `ticks_in_hive` drawn from
+    /// `nextInt(599)` and `min_ticks_in_hive` 600.
     fn place(
         &self,
         level: &mut dyn FeatureLevel,
@@ -2840,7 +2926,7 @@ impl BeehiveDecorator {
         else {
             return;
         };
-        level.set_block(
+        let placed = level.set_block(
             pos,
             BlockState {
                 name: "minecraft:bee_nest".into(),
@@ -2850,7 +2936,42 @@ impl BeehiveDecorator {
                 ],
             },
         );
+        if placed {
+            let count = 2 + random.next_int_bound(2);
+            let mut ticks_in_hive = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                // `BeehiveBlockEntity.Occupant.create(random.nextInt(599))`.
+                ticks_in_hive.push(random.next_int_bound(599));
+            }
+            level.set_block_entity(pos, beehive_block_entity_nbt(pos, &ticks_in_hive));
+        }
     }
+}
+
+/// `BeehiveBlockEntity.saveAdditional`: the `bees` list plus the block entity
+/// id and position fields a chunk's `BlockEntities` entry carries.
+fn beehive_block_entity_nbt(pos: BlockPos, ticks_in_hive: &[i32]) -> Tag {
+    let bees = ticks_in_hive
+        .iter()
+        .map(|ticks| {
+            Tag::Compound(vec![
+                (
+                    "entity_data".into(),
+                    Tag::Compound(vec![("id".into(), Tag::String("minecraft:bee".into()))]),
+                ),
+                ("ticks_in_hive".into(), Tag::Int(*ticks)),
+                ("min_ticks_in_hive".into(), Tag::Int(600)),
+            ])
+        })
+        .collect();
+    Tag::Compound(vec![
+        ("id".into(), Tag::String("minecraft:beehive".into())),
+        ("x".into(), Tag::Int(pos.x())),
+        ("y".into(), Tag::Int(pos.y())),
+        ("z".into(), Tag::Int(pos.z())),
+        ("bees".into(), Tag::List(bees)),
+        ("Bukkit.MaxEntities".into(), Tag::Int(3)),
+    ])
 }
 
 impl LeaveVineDecorator {
@@ -3157,14 +3278,20 @@ fn simple_state(object: &Map<String, Value>, key: &str) -> io::Result<Option<Blo
 /// Parses the supported tree decorators. A known vanilla decorator that is not
 /// ported makes the whole tree configuration unsupported, so a decorated tree
 /// is never generated without its decoration.
-fn parse_decorators(object: &Map<String, Value>) -> io::Result<Option<Vec<TreeDecorator>>> {
+fn parse_decorators(
+    object: &Map<String, Value>,
+    pale_moss_patch: Option<&ConfiguredFeature>,
+) -> io::Result<Option<Vec<TreeDecorator>>> {
     let Some(list) = object.get("decorators") else {
         return Ok(Some(Vec::new()));
     };
-    parse_decorator_list(list)
+    parse_decorator_list(list, pale_moss_patch)
 }
 
-fn parse_decorator_list(list: &Value) -> io::Result<Option<Vec<TreeDecorator>>> {
+fn parse_decorator_list(
+    list: &Value,
+    pale_moss_patch: Option<&ConfiguredFeature>,
+) -> io::Result<Option<Vec<TreeDecorator>>> {
     let list = list
         .as_array()
         .ok_or_else(|| invalid("tree `decorators` must be a list"))?;
@@ -3306,6 +3433,20 @@ fn parse_decorator_list(list: &Value) -> io::Result<Option<Vec<TreeDecorator>>> 
                     probability,
                 }));
             }
+            "minecraft:pale_moss" => {
+                let Some(patch) = pale_moss_patch else {
+                    return Ok(None);
+                };
+                if !patch.is_supported() {
+                    return Ok(None);
+                }
+                decorators.push(TreeDecorator::PaleMoss(PaleMossDecorator {
+                    leaves_probability: parse_chance(decorator, "leaves_probability", "pale_moss")?,
+                    trunk_probability: parse_chance(decorator, "trunk_probability", "pale_moss")?,
+                    ground_probability: parse_chance(decorator, "ground_probability", "pale_moss")?,
+                    patch: Box::new(patch.clone()),
+                }));
+            }
             _ => return Ok(None),
         }
     }
@@ -3338,6 +3479,7 @@ pub fn parse_fallen_tree_config(config: &Value) -> io::Result<Option<FallenTreeF
         object
             .get("stump_decorators")
             .ok_or_else(|| invalid("fallen tree is missing `stump_decorators`"))?,
+        None,
     )?
     else {
         return Ok(None);
@@ -3346,6 +3488,7 @@ pub fn parse_fallen_tree_config(config: &Value) -> io::Result<Option<FallenTreeF
         object
             .get("log_decorators")
             .ok_or_else(|| invalid("fallen tree is missing `log_decorators`"))?,
+        None,
     )?
     else {
         return Ok(None);
@@ -3890,11 +4033,12 @@ mod tests {
             .expect("beehive is supported");
 
         let mut chunk = flat_chunk();
-        {
+        let entities = {
             let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
             let mut random = LegacyRandomSource::new(7);
             assert!(tree.place(&mut level, &mut random, BlockPos::new(8, 64, 8)));
-        }
+            level.block_entities().to_vec()
+        };
 
         let mut nests = 0;
         for x in 0..16 {
@@ -3914,6 +4058,39 @@ mod tests {
             }
         }
         assert_eq!(nests, 1, "beehive decorator should place one nest");
+        assert_eq!(entities.len(), 1, "the nest carries one block entity");
+        let entity = &entities[0];
+        assert_eq!(
+            entity.nbt.get("id").and_then(Tag::as_str),
+            Some("minecraft:beehive")
+        );
+        let bees = entity
+            .nbt
+            .get("bees")
+            .and_then(Tag::as_list)
+            .expect("the nest stores a `bees` list");
+        assert!(
+            (2..=3).contains(&bees.len()),
+            "vanilla stores two or three bees"
+        );
+        for bee in bees {
+            let bee = bee.as_compound().expect("each bee is a compound");
+            let get_int = |name: &str| {
+                bee.iter()
+                    .find(|(key, _)| key == name)
+                    .and_then(|(_, value)| value.as_int())
+            };
+            assert_eq!(get_int("min_ticks_in_hive"), Some(600));
+            let ticks = get_int("ticks_in_hive").expect("ticks_in_hive");
+            assert!((0..599).contains(&ticks));
+            assert_eq!(
+                bee.iter()
+                    .find(|(key, _)| key == "entity_data")
+                    .and_then(|(_, value)| value.get("id"))
+                    .and_then(Tag::as_str),
+                Some("minecraft:bee")
+            );
+        }
     }
 
     #[test]
@@ -4611,7 +4788,7 @@ mod tests {
     #[test]
     fn unsupported_tree_decorator_makes_the_tree_unsupported() {
         let mut value = oak_value();
-        value["config"]["decorators"] = json!([{"type": "minecraft:pale_moss"}]);
+        value["config"]["decorators"] = json!([{"type": "minecraft:test_unsupported_decorator"}]);
         assert!(parse_tree_config(&value["config"]).unwrap().is_none());
     }
 

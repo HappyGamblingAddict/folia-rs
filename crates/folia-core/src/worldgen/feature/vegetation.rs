@@ -437,6 +437,7 @@ fn parse_state_list(object: &Map<String, Value>, key: &str) -> io::Result<Vec<Bl
 #[derive(Debug, Clone)]
 pub struct SimpleBlockFeature {
     to_place: VegetationStateProvider,
+    schedule_tick: bool,
 }
 
 impl SimpleBlockFeature {
@@ -452,23 +453,29 @@ impl SimpleBlockFeature {
         if !can_survive(&state, level, origin) {
             return false;
         }
-        if let Some(upper) = double_plant_upper(&state) {
+        let placed = if let Some(upper) = double_plant_upper(&state) {
             if !level
                 .get_block(origin.relative(Direction::Up))
                 .is_none_or(|above| is_air_name(&above.name))
             {
                 return false;
             }
-            if !level.set_block(origin, state) {
+            if !level.set_block(origin, state.clone()) {
                 return false;
             }
-            return level.set_block(origin.relative(Direction::Up), upper);
-        }
-        if state.name == "minecraft:pale_moss_carpet" {
+            level.set_block(origin.relative(Direction::Up), upper)
+        } else if state.name == "minecraft:pale_moss_carpet" {
             place_mossy_carpet(level, origin, random);
-            return true;
+            true
+        } else {
+            level.set_block(origin, state.clone())
+        };
+        if placed && self.schedule_tick {
+            // `SimpleBlockFeature` schedules `getBlockState(pos).getBlock()`
+            // one tick from now. The placed state names the same block.
+            level.schedule_tick(origin, &state.name, 1);
         }
-        level.set_block(origin, state)
+        placed
     }
 }
 
@@ -1430,6 +1437,52 @@ fn parse_direction(name: &str) -> io::Result<Direction> {
     }
 }
 
+/// `minecraft:simple_random_selector`.
+///
+/// Draws one `nextInt(features.len())` and places exactly that branch,
+/// including its inline placement modifiers.
+#[derive(Debug, Clone)]
+pub struct SimpleRandomSelectorFeature {
+    features: Vec<NestedPlacedFeature>,
+}
+
+impl SimpleRandomSelectorFeature {
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> Result<bool, UnsupportedFeature> {
+        let index = random.next_int_bound(self.features.len() as i32) as usize;
+        self.features[index].place_all(level, random, origin)
+    }
+}
+
+pub(crate) fn parse_simple_random_selector_config(
+    config: &Value,
+    configured: &HashMap<String, ConfiguredFeature>,
+    id: &str,
+) -> io::Result<Option<SimpleRandomSelectorFeature>> {
+    let object = config
+        .as_object()
+        .ok_or_else(|| invalid("simple random selector config must be an object"))?;
+    let features = object
+        .get("features")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("simple random selector is missing `features`"))?;
+    if features.is_empty() {
+        return Err(invalid("simple random selector has no features"));
+    }
+    let mut parsed = Vec::with_capacity(features.len());
+    for feature in features {
+        let Some(feature) = parse_nested_placed_feature(feature, configured, id)? else {
+            return Ok(None);
+        };
+        parsed.push(feature);
+    }
+    Ok(Some(SimpleRandomSelectorFeature { features: parsed }))
+}
+
 /// `minecraft:random_patch` and `minecraft:flower`.
 #[derive(Debug, Clone)]
 pub struct RandomPatchFeature {
@@ -1471,15 +1524,10 @@ pub(crate) fn parse_simple_block_config(config: &Value) -> io::Result<Option<Sim
     let object = config
         .as_object()
         .ok_or_else(|| invalid("simple block config must be an object"))?;
-    if object
+    let schedule_tick = object
         .get("schedule_tick")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        // Scheduling a tick on a freshly generated block needs the chunk tick
-        // queue, which this port does not expose at the generation boundary.
-        return Ok(None);
-    }
+        .unwrap_or(false);
     let Some(to_place) = VegetationStateProvider::parse(
         object
             .get("to_place")
@@ -1491,7 +1539,10 @@ pub(crate) fn parse_simple_block_config(config: &Value) -> io::Result<Option<Sim
     if !to_place.is_supported() {
         return Ok(None);
     }
-    Ok(Some(SimpleBlockFeature { to_place }))
+    Ok(Some(SimpleBlockFeature {
+        to_place,
+        schedule_tick,
+    }))
 }
 
 pub(crate) fn parse_block_pile_config(config: &Value) -> io::Result<Option<BlockPileFeature>> {

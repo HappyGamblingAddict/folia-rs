@@ -175,13 +175,13 @@ Key files:
   foliage, azalea pairs a bending trunk with random-spread weighted foliage,
   mangrove uses an upwards-branching trunk and waterlogged/muddy roots, fallen
   trees place a stump plus sideways logs, and leaf litter, beehives, vines,
-  cocoa, alter-ground podzol, attached-to-leaves, attached-to-logs, and
-  creaking hearts decorate the supported shapes. The tree `pale_moss` decorator
-  still needs wiring to the now-supported `pale_moss_patch`; beehive occupants
-  and block-for-block Java fixtures remain open. Most remaining aquatic
-  plants, vines,
-  mushrooms/huge fungi, structures, the dripleaf `simple_random_selector`, and
-  `schedule_tick` simple blocks are still unported.
+  cocoa, alter-ground podzol, attached-to-leaves, attached-to-logs, creaking
+  hearts, and pale moss decorate the supported shapes. Beehive occupants carry
+  vanilla `bees` NBT, pale oak embeds `pale_moss_patch`, and
+  `simple_random_selector`/`schedule_tick` execute; block-for-block Java tree
+  fixtures and generator draining of the new region sinks remain open. Most
+  remaining aquatic plants, vines, mushrooms/huge fungi, and structures are
+  still unported.
 
 
 Key files:
@@ -268,8 +268,9 @@ Implemented:
   acacia, fancy oak trunk/foliage, cherry trunk/foliage, mega spruce/pine,
   mega jungle, jungle bush, azalea, mangrove, fallen trees, and the supported
   decorators (including alter-ground, attached-to-leaves, attached-to-logs,
-  and creaking hearts) execute; pale moss remains blocked on
-  `pale_moss_patch`, and beehives contain no stored bees yet.
+  creaking hearts, pale moss, and beehive occupants) execute. Beehive occupants
+  and scheduled ticks are produced in `WorldGenRegion`; `generator.rs` does not
+  drain those sinks yet.
 
 Key files:
 
@@ -393,11 +394,13 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   `OreVeinifier` is not ported.
 - The P2.5 ground-cover types are ported, but most aquatic plants (seagrass,
   kelp, sea pickle, coral), vines, mushrooms/huge fungi, bamboo, structures, and
-  special features are not. The tree `pale_moss` decorator still needs wiring
-  to the now-supported patch.
-- `simple_block.schedule_tick: true` and `simple_random_selector` remain
-  explicit unsupported paths, so pale forest flowers and the dripleaf pools do
-  not execute. Vegetation noise providers use Xoroshiro-backed `NormalNoise`
+  special features are not. Selector branches that reference *placed* features
+  (`pale_garden_vegetation`, `warm_ocean_vegetation`) still need a two-registry
+  resolver.
+- `simple_block.schedule_tick: true` and `simple_random_selector` now execute;
+  the generator does not yet persist the ticks/block entities produced in
+  `WorldGenRegion`, so pale forest flowers tick only once the caller drains the
+  region. Vegetation noise providers use Xoroshiro-backed `NormalNoise`
   instead of Java's Legacy-seeded stream (see `DECISIONS.md`).
 - Surface rules are ported, but the frozen-ocean temperature modifier
   (`Biome.FROZEN_TEMPERATURE_NOISE`/`BIOME_INFO_NOISE`, a
@@ -457,11 +460,12 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 1. **Guard the baseline (P0.3–P0.5).** Track/validate the generated assets,
    add CI, and make the Java oracle dumps reproducible.
-2. **Finish vegetation (P2.4/P2.5).** Wire the tree `pale_moss` decorator to
-   `minecraft:pale_moss_patch`, then port remaining aquatic plants, vines,
-   mushrooms/huge fungi, `simple_random_selector`, and the remaining placement
-   modifiers. Ore wiring/`OreVeinifier` (P2.3) still waits on feature-RNG
-   parity. `feature_data.json` already has every definition.
+2. **Finish vegetation (P2.4/P2.5).** Add a two-registry selector resolver
+   for placed-feature branches, port remaining aquatic plants, vines,
+   mushrooms/huge fungi, and the remaining placement modifiers, then drain the
+   new `WorldGenRegion` tick/block-entity sinks from the generator. Ore
+   wiring/`OreVeinifier` (P2.3) still waits on feature-RNG parity.
+   `feature_data.json` already has every definition.
 3. **Real lighting (P3.5–P3.8).** Persisted sky/block light nibble arrays, the
    sky-light and block-light engines, then incremental light packets.
 4. **Finish surface fidelity.** Port `PerlinSimplexNoise` and the frozen-ocean

@@ -2,6 +2,7 @@
 
 use folia_core::chunk::{BlockState, Chunk};
 use folia_core::random::LegacyRandomSource;
+use folia_core::tick::ScheduledTick;
 use folia_core::worldgen::feature::{Decoration, FeatureData, WorldGenRegion};
 use folia_math::BlockPos;
 use serde_json::{Value, json};
@@ -73,6 +74,28 @@ fn place(data: &FeatureData, id: &str, chunk: &mut Chunk, seed: i64, origin: Blo
     feature
         .place(&mut level, &mut random, origin)
         .expect("feature should be executable")
+}
+
+/// Places a feature and drains the ticks it queued.
+fn place_tracked(
+    data: &FeatureData,
+    id: &str,
+    top: i32,
+    top_block: &str,
+    seed: i64,
+    origin: BlockPos,
+) -> (Chunk, Vec<ScheduledTick>) {
+    let feature = data.configured(id).expect("configured feature exists");
+    let mut chunk = flat_chunk(top, top_block);
+    let ticks = {
+        let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+        let mut random = LegacyRandomSource::new(seed);
+        feature
+            .place(&mut level, &mut random, origin)
+            .expect("feature should be executable");
+        level.scheduled_ticks_mut().tick(1)
+    };
+    (chunk, ticks)
 }
 
 fn simple_block_provider(name: &str) -> Value {
@@ -530,29 +553,232 @@ fn decoration_steps_include_ground_cover_passes() {
 #[test]
 fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 162);
+    assert_eq!(data.supported_feature_count(), 171);
     let unsupported = data.unsupported_type_counts();
-    assert_eq!(unsupported["minecraft:random_patch"], 1);
-    assert_eq!(unsupported["minecraft:flower"], 1);
-    assert_eq!(unsupported["minecraft:vegetation_patch"], 1);
-    assert_eq!(unsupported["minecraft:waterlogged_vegetation_patch"], 1);
-    // One of the two boolean selectors nests the unported dripleaf pools; the
-    // mushroom-island selector executes both huge-mushroom branches.
-    assert_eq!(unsupported["minecraft:random_boolean_selector"], 1);
-    // The remaining random patch/flower configs use `schedule_tick`, which is
-    // not modeled at the generation boundary; the two dripleaf pools nest the
-    // unported `simple_random_selector`.
+    for kind in [
+        "minecraft:random_patch",
+        "minecraft:flower",
+        "minecraft:vegetation_patch",
+        "minecraft:waterlogged_vegetation_patch",
+        "minecraft:random_boolean_selector",
+        "minecraft:tree",
+    ] {
+        assert!(
+            !unsupported.contains_key(kind),
+            "{kind} should have no unsupported shipped configs"
+        );
+    }
+    // `warm_ocean_vegetation` and `pointed_dripstone` need placed-feature
+    // branch references and inline environment-scan modifiers.
+    assert_eq!(unsupported["minecraft:simple_random_selector"], 2);
+    // Selector branches that reference placed features (`oak_checked`,
+    // `pale_oak_checked`, ...) still need a two-registry resolver.
+    assert_eq!(unsupported["minecraft:random_selector"], 10);
+    for id in [
+        "minecraft:pale_oak",
+        "minecraft:pale_oak_creaking",
+        "minecraft:pale_forest_flowers",
+        "minecraft:flower_pale_garden",
+        "minecraft:dripleaf",
+        "minecraft:clay_with_dripleaves",
+        "minecraft:clay_pool_with_dripleaves",
+        "minecraft:lush_caves_clay",
+    ] {
+        assert!(
+            data.configured(id)
+                .unwrap_or_else(|| panic!("{id} is in the dump"))
+                .is_supported(),
+            "{id} should be executable"
+        );
+    }
     assert!(
         !data
-            .configured("minecraft:pale_forest_flowers")
-            .expect("pale_forest_flowers")
-            .is_supported()
+            .configured("minecraft:pale_garden_vegetation")
+            .expect("pale_garden_vegetation")
+            .is_supported(),
+        "the pale garden selector still references the placed `pale_oak_checked`"
+    );
+}
+
+#[test]
+fn shipped_pale_forest_trees_place_pale_moss() {
+    let data = FeatureData::vanilla();
+    let mut found = None;
+    for seed in 0..64 {
+        let mut chunk = flat_chunk(63, "minecraft:grass_block");
+        if !place(
+            data,
+            "minecraft:pale_oak",
+            &mut chunk,
+            seed,
+            BlockPos::new(8, 64, 8),
+        ) {
+            continue;
+        }
+        if count_blocks(&chunk, "minecraft:pale_moss_block") > 0
+            || count_blocks(&chunk, "minecraft:pale_moss_carpet") > 0
+        {
+            found = Some(seed);
+            break;
+        }
+    }
+    let seed = found.expect("a pale oak seed places pale moss");
+
+    let mut first = flat_chunk(63, "minecraft:grass_block");
+    let mut second = flat_chunk(63, "minecraft:grass_block");
+    assert!(place(
+        data,
+        "minecraft:pale_oak",
+        &mut first,
+        seed,
+        BlockPos::new(8, 64, 8)
+    ));
+    assert!(place(
+        data,
+        "minecraft:pale_oak",
+        &mut second,
+        seed,
+        BlockPos::new(8, 64, 8)
+    ));
+    assert_eq!(first, second, "pale oak placement is deterministic");
+    assert!(
+        count_blocks(&first, "minecraft:pale_oak_log") > 0,
+        "the trunk is placed"
+    );
+}
+
+#[test]
+fn shipped_pale_forest_flowers_place_and_schedule_ticks() {
+    let data = FeatureData::vanilla();
+    let mut found = None;
+    for seed in 0..64 {
+        let (chunk, ticks) = place_tracked(
+            data,
+            "minecraft:pale_forest_flowers",
+            63,
+            "minecraft:grass_block",
+            seed,
+            BlockPos::new(8, 64, 8),
+        );
+        let flowers = count_blocks(&chunk, "minecraft:closed_eyeblossom");
+        if flowers > 0 {
+            found = Some((seed, chunk, ticks));
+            break;
+        }
+    }
+    let (seed, chunk, ticks) = found.expect("a pale forest seed places closed eyeblossoms");
+    let flowers = count_blocks(&chunk, "minecraft:closed_eyeblossom");
+    assert_eq!(
+        ticks.len(),
+        flowers,
+        "every placed closed eyeblossom schedules one tick"
     );
     assert!(
-        !data
-            .configured("minecraft:clay_pool_with_dripleaves")
-            .expect("clay_pool_with_dripleaves")
-            .is_supported()
+        ticks
+            .iter()
+            .all(|tick| tick.block == "minecraft:closed_eyeblossom")
+    );
+    let (repeat, repeat_ticks) = place_tracked(
+        data,
+        "minecraft:pale_forest_flowers",
+        63,
+        "minecraft:grass_block",
+        seed,
+        BlockPos::new(8, 64, 8),
+    );
+    assert_eq!(chunk, repeat, "pale forest flowers are deterministic");
+    assert_eq!(ticks, repeat_ticks);
+
+    // The single-try garden flower uses the same scheduled-tick path.
+    let mut scheduled = false;
+    for seed in 0..64 {
+        let (chunk, ticks) = place_tracked(
+            data,
+            "minecraft:flower_pale_garden",
+            63,
+            "minecraft:grass_block",
+            seed,
+            BlockPos::new(8, 64, 8),
+        );
+        if count_blocks(&chunk, "minecraft:closed_eyeblossom") > 0 {
+            assert_eq!(ticks.len(), 1);
+            assert_eq!(ticks[0].block, "minecraft:closed_eyeblossom");
+            scheduled = true;
+            break;
+        }
+    }
+    assert!(scheduled, "a flower_pale_garden seed places a flower");
+}
+
+#[test]
+fn shipped_dripleaf_selector_places_one_branch_deterministically() {
+    let data = FeatureData::vanilla();
+    assert_eq!(
+        data.configured("minecraft:dripleaf")
+            .expect("dripleaf")
+            .vanilla_type(),
+        "minecraft:simple_random_selector"
+    );
+    let mut found = None;
+    for seed in 0..64 {
+        let mut chunk = flat_chunk(63, "minecraft:grass_block");
+        if place(
+            data,
+            "minecraft:dripleaf",
+            &mut chunk,
+            seed,
+            BlockPos::new(8, 64, 8),
+        ) {
+            let drip = chunk
+                .sections
+                .iter()
+                .flat_map(|section| {
+                    section
+                        .block_states
+                        .indices
+                        .iter()
+                        .map(move |index| &section.block_states.palette[*index as usize])
+                })
+                .filter(|state| state.name.contains("dripleaf"))
+                .count();
+            if drip > 0 {
+                found = Some(seed);
+                break;
+            }
+        }
+    }
+    let seed = found.expect("a dripleaf seed places a branch");
+
+    let mut first = flat_chunk(63, "minecraft:grass_block");
+    let mut second = flat_chunk(63, "minecraft:grass_block");
+    assert!(place(
+        data,
+        "minecraft:dripleaf",
+        &mut first,
+        seed,
+        BlockPos::new(8, 64, 8)
+    ));
+    assert!(place(
+        data,
+        "minecraft:dripleaf",
+        &mut second,
+        seed,
+        BlockPos::new(8, 64, 8)
+    ));
+    assert_eq!(first, second, "the selector branch is deterministic");
+    assert!(
+        first
+            .sections
+            .iter()
+            .flat_map(|section| {
+                section
+                    .block_states
+                    .palette
+                    .iter()
+                    .filter(|state| state.name.contains("dripleaf"))
+            })
+            .count()
+            > 0
     );
 }
 

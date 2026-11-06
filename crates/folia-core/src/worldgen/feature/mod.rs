@@ -16,6 +16,8 @@
 //! [`UnsupportedModifier`].
 
 use crate::chunk::{BlockState, Chunk};
+use crate::nbt::Tag;
+use crate::tick::{ScheduledTickQueue, TickPriority};
 use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::biome_zoom::BiomeZoomer;
 use folia_math::BlockPos;
@@ -44,7 +46,7 @@ use mushroom::{
 };
 use vegetation::{
     BlockColumnFeature, BlockPileFeature, MultifaceGrowthFeature, RandomPatchFeature,
-    SimpleBlockFeature, VegetationPatchFeature,
+    SimpleBlockFeature, SimpleRandomSelectorFeature, VegetationPatchFeature,
 };
 use vines::{TwistingVinesFeature, VinesFeature, WeepingVinesFeature};
 
@@ -145,6 +147,22 @@ pub trait FeatureLevel {
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState>;
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool;
 
+    /// `WorldGenLevel.scheduleTick(pos, block, delay)`.
+    ///
+    /// Levels without a tick queue keep the default `false`; [`WorldGenRegion`]
+    /// queues through [`crate::tick::ScheduledTickQueue`].
+    fn schedule_tick(&mut self, _pos: BlockPos, _block: &str, _delay: u64) -> bool {
+        false
+    }
+
+    /// Attaches block-entity NBT at `pos`, like `Level.setBlockEntity`.
+    ///
+    /// Levels without block-entity storage keep the default `false`;
+    /// [`WorldGenRegion`] records the payload for its caller.
+    fn set_block_entity(&mut self, _pos: BlockPos, _nbt: Tag) -> bool {
+        false
+    }
+
     /// `LevelReader.getHeight(Heightmap.Types, x, z)`.
     ///
     /// Scans the column with the same predicate approximation the placement
@@ -204,12 +222,26 @@ fn heightmap_blocks_motion(state: &BlockState) -> bool {
     true
 }
 
+/// Block-entity NBT produced by a feature or tree decorator.
+///
+/// `nbt` is the full payload vanilla writes into a chunk's `BlockEntities`
+/// list (`id`, `x`, `y`, `z`, and the block-entity fields). The caller creates
+/// the actual block entity; this matches [`crate::worldgen::structure::template`]
+/// placement output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeatureBlockEntity {
+    pub pos: BlockPos,
+    pub nbt: Tag,
+}
+
 /// Chunk-bounded `WorldGenLevel` passed to features.
 #[derive(Debug)]
 pub struct WorldGenRegion<'a> {
     chunk: &'a mut Chunk,
     min_y: i32,
     height: i32,
+    scheduled_ticks: ScheduledTickQueue,
+    block_entities: Vec<FeatureBlockEntity>,
 }
 
 impl<'a> WorldGenRegion<'a> {
@@ -218,7 +250,31 @@ impl<'a> WorldGenRegion<'a> {
             chunk,
             min_y,
             height,
+            scheduled_ticks: ScheduledTickQueue::new(),
+            block_entities: Vec::new(),
         }
+    }
+
+    /// Scheduled ticks queued by this region. Vanilla schedules at the current
+    /// game tick, which a generation-only region does not have, so ticks are
+    /// queued from tick zero.
+    pub fn scheduled_ticks(&self) -> &ScheduledTickQueue {
+        &self.scheduled_ticks
+    }
+
+    /// Mutable access for draining due ticks in a test or future caller.
+    pub fn scheduled_ticks_mut(&mut self) -> &mut ScheduledTickQueue {
+        &mut self.scheduled_ticks
+    }
+
+    /// Block entities placed through [`FeatureLevel::set_block_entity`].
+    pub fn block_entities(&self) -> &[FeatureBlockEntity] {
+        &self.block_entities
+    }
+
+    /// Takes the pending block entities so the caller can persist them.
+    pub fn take_block_entities(&mut self) -> Vec<FeatureBlockEntity> {
+        std::mem::take(&mut self.block_entities)
     }
 
     /// Maps absolute coordinates to chunk-local coordinates, returning `None`
@@ -261,6 +317,24 @@ impl FeatureLevel for WorldGenRegion<'_> {
             return false;
         };
         self.chunk.set_block_state(x, y, z, state);
+        true
+    }
+
+    fn schedule_tick(&mut self, pos: BlockPos, block: &str, delay: u64) -> bool {
+        self.scheduled_ticks
+            .schedule_after(0, pos, block, delay, TickPriority::Normal)
+    }
+
+    fn set_block_entity(&mut self, pos: BlockPos, nbt: Tag) -> bool {
+        if let Some(existing) = self
+            .block_entities
+            .iter_mut()
+            .find(|entity| entity.pos == pos)
+        {
+            existing.nbt = nbt;
+        } else {
+            self.block_entities.push(FeatureBlockEntity { pos, nbt });
+        }
         true
     }
 }
@@ -404,6 +478,8 @@ pub enum ConfiguredFeatureKind {
     Bamboo(BambooFeature),
     /// `minecraft:random_boolean_selector`.
     RandomBooleanSelector(RandomBooleanSelectorFeature),
+    /// `minecraft:simple_random_selector`.
+    SimpleRandomSelector(SimpleRandomSelectorFeature),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
@@ -478,6 +554,7 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::UnderwaterMagma(_) => "minecraft:underwater_magma",
             ConfiguredFeatureKind::Bamboo(_) => "minecraft:bamboo",
             ConfiguredFeatureKind::RandomBooleanSelector(_) => "minecraft:random_boolean_selector",
+            ConfiguredFeatureKind::SimpleRandomSelector(_) => "minecraft:simple_random_selector",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -514,6 +591,7 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::UnderwaterMagma(_)
                 | ConfiguredFeatureKind::Bamboo(_)
                 | ConfiguredFeatureKind::RandomBooleanSelector(_)
+                | ConfiguredFeatureKind::SimpleRandomSelector(_)
         )
     }
 
@@ -579,6 +657,9 @@ impl ConfiguredFeature {
             }
             ConfiguredFeatureKind::Bamboo(feature) => Ok(feature.place(level, random, origin)),
             ConfiguredFeatureKind::RandomBooleanSelector(feature) => {
+                feature.place(level, random, origin)
+            }
+            ConfiguredFeatureKind::SimpleRandomSelector(feature) => {
                 feature.place(level, random, origin)
             }
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
@@ -922,7 +1003,9 @@ fn parse_configured(
 ) -> io::Result<HashMap<String, ConfiguredFeature>> {
     let mut configured = HashMap::with_capacity(entries.len());
     let mut patches = Vec::new();
+    let mut simple_selectors = Vec::new();
     let mut vegetation_patches = Vec::new();
+    let mut trees = Vec::new();
     let mut selectors = Vec::new();
     for (name, entry) in entries {
         let entry = entry
@@ -939,15 +1022,21 @@ fn parse_configured(
                 patches.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
+            "minecraft:simple_random_selector" => {
+                simple_selectors.push((id, vanilla_type.to_owned(), entry.clone()));
+                continue;
+            }
             "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => {
                 vegetation_patches.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
-            "minecraft:random_selector" => {
-                selectors.push((id, vanilla_type.to_owned(), entry.clone()));
+            "minecraft:tree" | "minecraft:fallen_tree" => {
+                // Pale oak trees embed `pale_moss_patch`, which is itself a
+                // vegetation patch, so trees resolve after patches.
+                trees.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
-            "minecraft:random_boolean_selector" => {
+            "minecraft:random_selector" | "minecraft:random_boolean_selector" => {
                 selectors.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
@@ -964,7 +1053,16 @@ fn parse_configured(
         let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
+    // The dripleaf pools nest this selector inside a vegetation patch.
+    for (id, vanilla_type, entry) in simple_selectors {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        configured.insert(id.clone(), ConfiguredFeature { id, kind });
+    }
     for (id, vanilla_type, entry) in vegetation_patches {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        configured.insert(id.clone(), ConfiguredFeature { id, kind });
+    }
+    for (id, vanilla_type, entry) in trees {
         let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
@@ -992,10 +1090,15 @@ fn parse_configured_kind(
         vanilla_type: vanilla_type.to_owned(),
     };
     match vanilla_type {
-        "minecraft:tree" => Ok(match tree::parse_tree_config(config)? {
-            Some(feature) => ConfiguredFeatureKind::Tree(Box::new(feature)),
-            None => unsupported(),
-        }),
+        "minecraft:tree" => Ok(
+            match tree::parse_tree_config_with_pale_moss(
+                config,
+                configured.get("minecraft:pale_moss_patch"),
+            )? {
+                Some(feature) => ConfiguredFeatureKind::Tree(Box::new(feature)),
+                None => unsupported(),
+            },
+        ),
         "minecraft:fallen_tree" => Ok(match tree::parse_fallen_tree_config(config)? {
             Some(feature) => ConfiguredFeatureKind::FallenTree(Box::new(feature)),
             None => unsupported(),
@@ -1007,6 +1110,12 @@ fn parse_configured_kind(
         "minecraft:random_boolean_selector" => Ok(
             match mushroom::parse_random_boolean_selector_config(config, configured)? {
                 Some(selector) => ConfiguredFeatureKind::RandomBooleanSelector(selector),
+                None => unsupported(),
+            },
+        ),
+        "minecraft:simple_random_selector" => Ok(
+            match vegetation::parse_simple_random_selector_config(config, configured, id)? {
+                Some(selector) => ConfiguredFeatureKind::SimpleRandomSelector(selector),
                 None => unsupported(),
             },
         ),

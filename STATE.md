@@ -8,12 +8,10 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
-- P1.4 focused gate: 25 item-component tests passing (8 unit + 17
-  integration), plus inventory, player, and the captured-world join test.
+- Current commit (informational only): `e585413` plus the P2.4/P2.5 gap slice
+- Working tree: pale-moss/selector/tick/beehive gaps closed; docs updated.
+- Tests: focused gate **74 feature lib + 18 vegetation integration** passing;
+  this slice adds 3 integration tests and extends the beehive unit test.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -46,17 +44,22 @@ Last updated: 2026-11-06
   `jungle_tree`/`swamp_oak` parse and place their vine/cocoa decoration.
   `place_on_ground` leaf litter,
   `beehive`, `leave_vine`, `trunk_vine`, `cocoa`, `attached_to_leaves`,
-  `attached_to_logs`, and `creaking_heart` decorators execute; unsupported
-  decorator types make the whole tree config unsupported. All 888 shipped
+  `attached_to_logs`, `creaking_heart`, and `pale_moss` decorators execute;
+  unsupported decorator types make the whole tree config unsupported. Beehives
+  store their two-or-three `bees` occupants as block-entity NBT. Pale moss
+  embeds the parsed `pale_moss_patch` and runs its shuffled-ground, trunk, and
+  leaf passes in vanilla order. All 888 shipped
   placement modifiers execute; the remaining P2.2 gap is the Java position
   fixture. The P2.5 aquatic/vine/mushroom batch now places seagrass (short
   and tall), kelp, sea pickles, all three coral shapes, bamboo, vines,
   twisting and weeping vines, huge brown/red mushrooms, huge crimson/warped
   fungus with shroomlight and hanging vines, glowstone blobs, forest rocks,
-  fill layers, nether forest vegetation, and underwater magma. 162 of 224
-  configured features dispatch as supported. Beehive occupants and the
-  chunk-status pipeline are still open; pale moss is blocked on wiring its
-  now-supported `pale_moss_patch`.
+  fill layers, nether forest vegetation, and underwater magma. 171 of 224
+  configured features dispatch as supported. `simple_random_selector` and
+  `simple_block.schedule_tick` now execute. The chunk-status pipeline and
+  generator draining of the new region tick/block-entity sinks are still open;
+  placed-feature selector branches (`pale_garden_vegetation`,
+  `warm_ocean_vegetation`) remain explicit gaps.
 - P2.1/P2.2 core is in `worldgen/feature/{mod,placement}.rs`: framework,
   typed loading, and a placement pipeline that executes all 888 shipped
   modifiers (world-free transforms, `biome`, every heightmap, block
@@ -191,18 +194,21 @@ Last updated: 2026-11-06
 
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
-  beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
-  with mushrooms. Beehive block entities have no stored bees yet. The P2.5
-  ground-cover batch parses and places `random_patch`/`flower`, `simple_block`,
-  `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, and
+  beehives with stored bee occupants, hanging/trunk vines, cocoa, altered
+  podzol ground, pale moss, and fallen logs with mushrooms. The P2.5
+  ground-cover batch parses and places `random_patch`/`flower`, `simple_block`
+  (including `schedule_tick`), `simple_random_selector`, `block_pile`,
+  `block_column`, `multiface_growth`, `vegetation_patch`, and
   `waterlogged_vegetation_patch`; the aquatic/vine/mushroom batch adds
   `seagrass`, `kelp`, `sea_pickle`, coral tree/claw/mushroom, `bamboo`,
   `underwater_magma`, `vines`, `twisting_vines`, `weeping_vines`, huge
   brown/red mushrooms, huge crimson/warped fungus, `glowstone_blob`,
   `forest_rock`, `fill_layer`, `nether_forest_vegetation`, and
-  `random_boolean_selector`. 162 of 224 configured features execute. The tree
-  `pale_moss` decorator is still unsupported even though its `pale_moss_patch`
-  dependency now exists, and kelp/nether vegetation/huge fungus still wait on
+  `random_boolean_selector`. 171 of 224 configured features execute. Selector
+  branches that reference placed features (`pale_garden_vegetation`,
+  `warm_ocean_vegetation`) still need a two-registry resolver, and the
+  generator does not yet drain the region's scheduled ticks or block entities.
+  Kelp/nether vegetation/huge fungus still wait on
   `noise_based_count`/`count_on_every_layer` placement before they appear in
   generated chunks. Structures and most special features remain missing. Ore
   and scattered-ore features are implemented and all 32 shipped configs are
@@ -255,9 +261,10 @@ Last updated: 2026-11-06
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
   powder snow, sprint/sneak input packets, real block shapes) and move
   player simulation onto its own 20 Hz tick.
-- The P2.5 aquatic/vine/mushroom features are in place. Next: wire the tree
-  `pale_moss` decorator, port `simple_random_selector` for the dripleaf
-  pools, add `simple_block.schedule_tick`, and add beehive occupants.
+- The P2.5 aquatic/vine/mushroom features are in place. The pale moss
+  decorator, `simple_random_selector`, `simple_block.schedule_tick`, and beehive
+  occupants are now implemented; next, drain their region sinks from the
+  generator and add a two-registry selector resolver.
 - P2.8 structure starts/pieces are in progress; template loading and
   placement are already tested.
 
@@ -276,8 +283,8 @@ Last updated: 2026-11-06
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
-- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
-- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
+- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive occupants/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart/pale-moss done; a Java tree fixture and generator draining of block entities remain)
+- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block` with `schedule_tick`, `simple_random_selector`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; placed-feature selector branches, kelp/nether placement modifiers, generator tick draining, and structures remain)
 - [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
@@ -306,7 +313,16 @@ Last updated: 2026-11-06
   execute. `tick::tick_world` is wired into the server loop. 11 unit + 10
   integration tests.
 
-- 2026-11-06: P2.5 aquatic/vine/mushroom batch — three new feature modules.
+- 2026-11-06: P2.4/P2.5 feature-gap slice — `worldgen/feature/mod.rs`
+  reorders configured-feature parsing (patches → simple selectors → vegetation
+  patches → trees → selectors), adds `SimpleRandomSelectorFeature`, and gives
+  `FeatureLevel` scheduled-tick/block-entity sinks backed by
+  `WorldGenRegion`. `tree.rs` adds the pale-moss decorator (shuffled ground pass
+  through the embedded `pale_moss_patch`, trunk/leaf hangers) and beehive
+  occupant NBT. `vegetation.rs` accepts `schedule_tick` and ports
+  `simple_random_selector`. Focused: 74 feature lib tests + 18 vegetation
+  integration tests; 171/224 configured features supported.
+- 2026-11-06: P2.5 aquatic/vine/mushroom batch - three new feature modules.
   `aquatic.rs` ports `SeagrassFeature` (short/tall, half pairing),
   `KelpFeature` (head age and body fallback), `SeaPickleFeature`,
   `CoralFeature` plus tree/claw/mushroom shapes (tag-ordered coral picks,
@@ -320,7 +336,7 @@ Last updated: 2026-11-06
   planted branch, weeping vines), `GlowstoneFeature`, `BlockBlobFeature`
   (`forest_rock`), `FillLayerFeature`, `NetherForestVegetationFeature`, and
   `RandomBooleanSelectorFeature` (mushroom islands). `FeatureLevel` gains a
-  default `heightmap()` and absent sections read as air. 162/224 configured
+  default `heightmap()` and absent sections read as air. 171/224 configured
   features execute. Focused: 73 lib feature tests, 16 `tests/aquatic.rs`
   integration tests. Parity: 98.71% block-class / 92.02% exact-name
   (5654/6144); the one-block exact delta is a tall-seagrass pair on a column

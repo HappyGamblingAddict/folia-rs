@@ -434,16 +434,28 @@ These are expected gaps, not reasons to stop:
 
 - Scope: `block_breaking.rs` ports the dig state machine, hardness/tool-tier
   break-time formula, efficiency/haste/fatigue and water/air penalties,
-  harvest gating, durability/item break, and a deterministic common-block drop
-  table; `join.rs` validates elapsed ticks and continues delayed destroys.
-  13 lib + 9 integration tests pass.
+  harvest gating, durability/item break, and shipped loot-table drops;
+  `join.rs` validates elapsed ticks and continues delayed destroys. 13
+  `tests/loot_drops.rs` + 13 lib + 9 integration tests pass.
+- Resolved (2026-11-06): block drops now roll
+  `minecraft:blocks/<block>` through `LootCatalog::roll_block` with a
+  caller-supplied `RandomSource`. `BlockLootContext` carries the tool, explicit
+  `ToolContext { silk_touch, fortune }`, the correct-tool flag, and an optional
+  explosion radius. `survives_explosion`, `match_tool`, `random_chance`,
+  `table_bonus`, `set_count`, `set_damage`, `set_name`, `enchant_randomly`,
+  `explosion_decay`, and `limit_count` execute. The old collapsed table is a
+  fallback only for blocks without a shipped table or a known table whose roll
+  is empty because of an unsupported condition/entry; the report and table id
+  are preserved. `DigState::stop_with_loot` rolls on a destroyed stop.
 - Not ported (needs data or a larger model):
-  - Real block loot tables. Vanilla ranges are collapsed to representative
-    counts (redstone always 4, lapis always 6, copper ore always 3, ...);
-    Fortune, Silk Touch, grass-seed/flint/sapling secondary drops, and
-    experience orbs are not applied.
   - `ItemEntity` drops. Items that fit are inserted into the player inventory;
     overflow is logged and lost. There is no ground-drop or pickup path.
+  - Experience orbs. `BlockDrops::experience` still comes from the old
+    per-block table and is returned but not granted.
+  - Java `Level.random` draw ordering in the legacy `block_drops` signature:
+    `join.rs` is outside this slice, so the fallback path seeds a deterministic
+    `LegacyRandomSource` from the block state + held stack. Use
+    `block_drops_with_context` for an explicit world/session RNG.
   - `ClientboundBlockDestructionPacket` (block-damage overlay) and block-break
     sounds/particles. The wire path uses only the existing block-update and
     light-update packets, as required by the slice.
@@ -457,10 +469,10 @@ These are expected gaps, not reasons to stop:
     slice; it still uses its built-in `ToolMaterial` table unless a stack
     carries an explicit component.
   - No Java break-time or drop fixture yet; the tests encode the Java formulas
-    directly rather than a captured oracle trace.
-- Workaround: `LootProvider` is the intended hook for `crate::loot`; the
-  fallback table covers common survival blocks. Do not claim loot-table,
-  Fortune/Silk Touch, or item-entity parity until those land.
+    and table behavior directly rather than a captured oracle trace.
+- Workaround: use `CatalogLootProvider`/`block_drops_with_context` for the
+  table path. Do not claim item-entity, XP, or Java-RNG parity until `join.rs`
+  passes the world RNG and the item-entity pipeline lands.
 
 ## 2026-11-06 - P4.8 crafting is a behaviour model, not menu/packet parity
 

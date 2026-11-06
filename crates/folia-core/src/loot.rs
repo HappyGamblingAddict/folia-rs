@@ -846,10 +846,7 @@ impl LootCondition {
                 enchantment,
                 chances,
             } => {
-                let level = context
-                    .tool
-                    .map(|tool| tool_enchantment_level(tool, enchantment))
-                    .unwrap_or(0);
+                let level = context.effective_enchantment_level(enchantment);
                 let chance = chances
                     .get(usize::try_from(level).unwrap_or(usize::MAX))
                     .or_else(|| chances.last())
@@ -858,12 +855,21 @@ impl LootCondition {
                 random.next_float() < chance
             }
             LootCondition::MatchTool { predicate } => {
-                let Some(tool) = context.tool else {
-                    return false;
-                };
-                predicate
-                    .as_ref()
-                    .is_none_or(|predicate| predicate.matches(tool))
+                let matches_stack = context.tool.is_some_and(|tool| {
+                    predicate
+                        .as_ref()
+                        .is_none_or(|predicate| predicate.matches(tool))
+                });
+                if matches_stack {
+                    true
+                } else {
+                    match context.tool_context {
+                        Some(tool_context) => predicate
+                            .as_ref()
+                            .is_none_or(|predicate| predicate.matches_tool_context(tool_context)),
+                        None => false,
+                    }
+                }
             }
             LootCondition::BlockStateProperty { block, properties } => {
                 let Some(state) = context.block_state else {
@@ -1024,6 +1030,28 @@ impl ItemPredicate {
             level >= predicate.min && level <= predicate.max
         })
     }
+
+    /// Matches an explicit [`ToolContext`] when no `ItemStack` is available.
+    /// Item/count predicates cannot be answered from enchantments alone and
+    /// fail closed; enchantment predicates are evaluated against the supplied
+    /// Silk Touch/Fortune levels.
+    pub fn matches_tool_context(&self, context: ToolContext) -> bool {
+        if !self.opaque_components.is_empty()
+            || self.items.is_some()
+            || self.count_min.is_some()
+            || self.count_max.is_some()
+        {
+            return false;
+        }
+        self.enchantments.iter().all(|predicate| {
+            if let Some(tag) = predicate.enchantment.strip_prefix('#') {
+                return tags::members(TagRegistryKind::Enchantment, tag)
+                    .iter()
+                    .any(|enchantment| predicate.accepts(context.enchantment_level(enchantment)));
+            }
+            predicate.accepts(context.enchantment_level(&predicate.enchantment))
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1061,6 +1089,10 @@ impl EnchantmentPredicate {
             max,
         })
     }
+
+    fn accepts(&self, level: i32) -> bool {
+        level >= self.min && level <= self.max
+    }
 }
 
 fn item_selector_matches(selector: &str, item: &str) -> bool {
@@ -1083,6 +1115,59 @@ fn tool_enchantment_level(tool: &ItemStack, enchantment: &str) -> i32 {
         .and_then(|map| map.get(&normalized(enchantment)))
         .copied()
         .unwrap_or(0)
+}
+
+/// Enchantment inputs for a loot roll.
+///
+/// Vanilla reads Silk Touch and Fortune from the held stack's
+/// `minecraft:enchantments` component. Callers that model enchantments outside
+/// `item_components` (a future enchantment/attribute registry, or a plugin
+/// supplied tool) can pass the two levels explicitly. Explicit values take
+/// precedence over the stack component.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolContext {
+    pub silk_touch: bool,
+    pub fortune: i32,
+}
+
+impl ToolContext {
+    pub fn new(silk_touch: bool, fortune: i32) -> Self {
+        Self {
+            silk_touch,
+            fortune: fortune.max(0),
+        }
+    }
+
+    /// Reads the two loot-relevant enchantments from a held stack.
+    pub fn from_stack(tool: Option<&ItemStack>) -> Self {
+        let Some(tool) = tool else {
+            return Self::default();
+        };
+        Self {
+            silk_touch: tool_enchantment_level(tool, "minecraft:silk_touch") > 0,
+            fortune: tool_enchantment_level(tool, "minecraft:fortune").max(0),
+        }
+    }
+
+    pub fn with_silk_touch(mut self, silk_touch: bool) -> Self {
+        self.silk_touch = silk_touch;
+        self
+    }
+
+    pub fn with_fortune(mut self, fortune: i32) -> Self {
+        self.fortune = fortune.max(0);
+        self
+    }
+
+    /// Level of a loot-relevant enchantment. Only Silk Touch and Fortune have
+    /// gameplay meaning for block tables, so unknown enchantments are level 0.
+    pub fn enchantment_level(&self, enchantment: &str) -> i32 {
+        match normalized(enchantment).as_str() {
+            "minecraft:silk_touch" => i32::from(self.silk_touch),
+            "minecraft:fortune" => self.fortune,
+            _ => 0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1446,8 +1531,11 @@ impl LootFunctionKind {
                 enchantment,
                 formula,
             } => {
-                if let Some(tool) = context.tool {
-                    let level = tool_enchantment_level(tool, enchantment);
+                // Java applies the formula whenever a tool parameter exists,
+                // even at enchantment level 0; `uniform_bonus_count` still
+                // consumes its `nextInt(1)` draw.
+                if context.tool.is_some() || context.tool_context.is_some() {
+                    let level = context.effective_enchantment_level(enchantment);
                     stack.count = formula.calculate(random, stack.count, level);
                 }
             }
@@ -1598,6 +1686,9 @@ pub struct LootContext<'a> {
     pub luck: f32,
     pub explosion_radius: Option<f32>,
     pub tool: Option<&'a ItemStack>,
+    /// Explicit Silk Touch/Fortune levels. When `None`, they are read from
+    /// `tool`'s `minecraft:enchantments` component.
+    pub tool_context: Option<ToolContext>,
     pub block_state: Option<LootBlockState<'a>>,
     pub killed_by_player: bool,
     /// Enchantment level of the attacking entity (`looting`).
@@ -1624,6 +1715,25 @@ impl<'a> LootContext<'a> {
     pub fn with_tool(mut self, tool: &'a ItemStack) -> Self {
         self.tool = Some(tool);
         self
+    }
+
+    /// Supplies Silk Touch/Fortune explicitly instead of reading them from the
+    /// held stack's component patch.
+    pub fn with_tool_context(mut self, tool_context: ToolContext) -> Self {
+        self.tool_context = Some(tool_context);
+        self
+    }
+
+    /// Effective enchantment level: explicit [`ToolContext`] first, then the
+    /// held stack's component patch.
+    pub fn effective_enchantment_level(&self, enchantment: &str) -> i32 {
+        match self.tool_context {
+            Some(tool_context) => tool_context.enchantment_level(enchantment),
+            None => self
+                .tool
+                .map(|tool| tool_enchantment_level(tool, enchantment))
+                .unwrap_or(0),
+        }
     }
 
     pub fn with_block_state(
@@ -2038,6 +2148,38 @@ impl LootCatalog {
     ) -> Option<LootRoll> {
         self.table(id)
             .map(|table| roll_table(self, table, random, context))
+    }
+
+    /// Resolves a block id to its shipped block loot table.
+    ///
+    /// Vanilla stores block tables under `minecraft:blocks/<block path>`, so
+    /// `minecraft:stone` resolves to `minecraft:blocks/stone`. The exact table
+    /// id is also accepted (`minecraft:blocks/stone`), which lets callers pass
+    /// a table id they already resolved. Returns `None` when no table ships.
+    pub fn block_table_id(&self, block: &str) -> Option<&str> {
+        let block_id = normalized(block);
+        if let Some(path) = block_id.strip_prefix("minecraft:") {
+            let candidate = format!("minecraft:blocks/{path}");
+            if let Some((id, _)) = self.tables.get_key_value(&candidate) {
+                return Some(id);
+            }
+        }
+        if let Some((id, _)) = self.tables.get_key_value(&block_id) {
+            return Some(id);
+        }
+        None
+    }
+
+    /// Rolls the shipped block table for a block id. Returns `None` when the
+    /// block has no shipped table.
+    pub fn roll_block(
+        &self,
+        block: &str,
+        random: &mut dyn RandomSource,
+        context: &LootContext<'_>,
+    ) -> Option<LootRoll> {
+        let id = self.block_table_id(block)?;
+        self.roll(id, random, context)
     }
 }
 

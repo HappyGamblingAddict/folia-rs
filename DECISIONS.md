@@ -2350,3 +2350,45 @@ Format:
   or changing packet ids.
 - Consequences: Idle sessions wake 20 times per second. Entity packets are
   written only when a position or metadata value changes.
+## 2026-11-06 - Block drops use the shipped catalog, with an explicit tool context
+
+- Context: The merged loot slice parses 1,324 tables (1,083 `minecraft:block`)
+  and exposes `LootCatalog::roll`, but `block_breaking.rs` still had a
+  deterministic fallback table that collapsed ranges (redstone always 4,
+  lapis always 6) and could not apply Silk Touch/Fortune/explosion rules. The
+  legacy `LootProvider::block_drops(state, tool)` signature also cannot carry
+  an RNG stream or an explosion radius.
+- Decision: `LootCatalog::block_table_id` resolves a block id to
+  `minecraft:blocks/<path>` (and also accepts an exact table id).
+  `CatalogLootProvider` rolls that table with a caller-supplied
+  `folia_random::RandomSource` and returns `ProvidedDrops` with the table id
+  and `LootReport`. `BlockLootContext` carries the tool `ItemStack`, an explicit
+  `ToolContext { silk_touch, fortune }`, an optional pre-computed correct-tool
+  flag, and an optional explosion radius. `ToolContext` values are derived from
+  `ItemStack` enchantment components by default but can be supplied directly;
+  `LootContext::tool_context` makes them authoritative for `match_tool`,
+  `table_bonus`, and `apply_bonus`.
+- Decision: `block_drops` keeps its old signature so `join.rs` is untouched,
+  but it now rolls the shipped catalog with a deterministic
+  `LegacyRandomSource` seeded from the block state and held stack. New callers
+  that have a world/session RNG must use `block_drops_with_context`; a
+  provider supplied to either function is tried before the global catalog.
+  `DigState::stop_with_loot` bundles the context/provider/RNG and rolls only on
+  `DigStop::Destroyed`; durability remains the caller's separate step.
+- Decision: the built-in `DROP_TABLE` is only a fallback when the block has no
+  shipped table or a known table rolls empty *and* the report names an
+  unsupported condition/entry/number provider. Unknown functions never
+  suppress a produced item; they are applied as no-ops and named in
+  `BlockDrops::report`. A known empty table (for example leaves missing every
+  secondary chance) stays a table result with `loot_table` set, so it is not
+  silently replaced by the old collapsed values.
+- Why: This keeps the vanilla data authoritative and makes the
+  fallback/report boundaries observable. The explicit `ToolContext` also gives
+  tests and future plugin/enchantment code a path when a stack does not carry
+  the component patch.
+- Consequences: `block_drops` is reproducible per block/tool but is **not**
+  yet Java's `Level.random` sequence; `join.rs` must pass its session RNG to
+  `block_drops_with_context` before claiming RNG parity. `item_entities`,
+  experience orbs, Unbreaking, adventure `can_destroy`, and a Java break-time
+  fixture remain open. Wall-sign family mapping now strips the `minecraft:`
+  namespace (previously the namespaced suffix could never match).

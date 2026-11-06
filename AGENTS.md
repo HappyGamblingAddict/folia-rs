@@ -193,13 +193,14 @@ A task is done only when:
 
 The current active queue is:
 
-1. `P0.1` — formatting and warnings.
-2. `P0.2` — refresh `HANDOFF.md` / `PORT_MAP.md` / `README.md`.
-3. `P0.3` — validate generated assets.
-4. `P2.3` — ores, once `P2.1`/`P2.2` feature framework exists.
-5. `P3.5`–`P3.8` — real light storage and engines.
+1. `P2.8` - recursive jigsaw connection and structure generator wiring.
+2. `P6` - typed block entities (chest/furnace/sign/spawner) and pistons.
+3. `P5` - join-session entity spawning/tracking and AI tick integration.
+4. `P1.5` - shape-aware light occlusion and remaining support/waterlogging.
+5. `P9.3` - bridge live-session state and gameplay event dispatch.
 
-`TODO.md` is authoritative if this list is stale.
+Item entities/XP orbs for the now table-driven block drops are the next P4
+follow-up. `TODO.md` is authoritative if this list is stale.
 
 ## Architecture reminders
 

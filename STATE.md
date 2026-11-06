@@ -11,6 +11,8 @@ Last updated: 2026-11-06
 - Current commit: see `git log`; the tree is committed and not pushed.
 - Tests: focused join/entity suites pass (6 new `tests/join_entities.rs`
   checks); the full merged gate was not rerun in this worktree.
+- Tests: **804 passing** on the full merged gate before this slice; the loot
+  drop slice adds 13 `tests/loot_drops.rs` tests (focused runs green).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -31,9 +33,9 @@ Last updated: 2026-11-06
   ids the session tracks.
 - Major gaps: recursive jigsaw and structure generator/biome wiring; typed
   block-entity storage and tickers; pistons; live join entity spawning and AI
-  tick integration; shape-aware light occlusion; loot-table gameplay wiring;
-  dimension storage/portals; chat signing; bridge live-session sync; Folia
-  region ownership.
+  tick integration; shape-aware light occlusion; item entities/XP orbs from
+  loot drops; dimension storage/portals; chat signing; bridge live-session sync;
+  Folia region ownership.
 - Folia region threading is still task queues only.
 
 ## Current focus
@@ -57,7 +59,8 @@ Last updated: 2026-11-06
 - [~] P2.8 templates/starts/processors/pools; recursive jigsaw + wiring remain.
 - [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
-- [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
+- [~] P4.1-P4.3 physics/breaking (special movement, item entities/XP, Java
+  fixture; shipped loot-table drops are wired).
 - [~] P4.8 crafting (menus, packets, recipe book, brewing).
 - [~] P5.1/P5.2 metadata/AI (join mobs, initial metadata/equipment, damage/death,
   and player damage are wired; persistence, armor, more goals/sensors remain).
@@ -83,6 +86,22 @@ Last updated: 2026-11-06
   `tests/join_entities.rs`, plus `join`, `entity_metadata`, and
   `entity_physics` stay green; fmt/clippy clean.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
+- 2026-11-06: P4.3 shipped block-drop tables - `block_breaking.rs` now rolls the
+  real `minecraft:blocks/<block>` table for every break through
+  `LootCatalog::roll_block`; the fallback `DROP_TABLE` is only reached when no
+  shipped table exists or a known table hits an unsupported context (the report
+  is preserved). `BlockLootContext` carries the tool, explicit
+  `ToolContext { silk_touch, fortune }`, the correct-tool override, and an
+  optional explosion radius; `set_count`, `set_damage`, `set_name`,
+  `enchant_randomly`, `explosion_decay`, and `limit_count` execute through
+  `item_components`. `DigState::stop_with_loot` rolls the table on a destroyed
+  stop without changing durability, and `CatalogLootProvider` exposes the same
+  path to callers. Focused: 13 `tests/loot_drops.rs`, 9 `tests/block_breaking.rs`,
+  9 `tests/loot.rs`, and 13 lib `block_breaking` tests. The legacy `block_drops`
+  signature still seeds a deterministic per-block RNG because `join.rs` has no
+  `Level.random` stream yet; item entities, XP orbs, Unbreaking, and a Java
+  fixture remain open.
+- 2026-11-06: P4.8 crafting/furnace model - `crafting.rs` implements 1x1-3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's
   last-sorted-recipe-id priority; shapeless multiset matching with duplicate

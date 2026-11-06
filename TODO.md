@@ -10,6 +10,7 @@
 > tests, with `tests/fluids.rs` and `tests/ticks.rs` remaining green.
 > Test status: **634 passing** on the full merged gate (0 failed)
 > Test status: **630 passing** on the full merged gate (0 failed)
+> Test status: **631 passing** on the full merged gate (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
@@ -44,6 +45,8 @@ where possible, a differential test against the Java oracle.
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
 | Blocks/redstone/fluids | ~30% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks, full components missing |
 | Blocks/redstone/fluids | ~27% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching, lava fire, bubble columns, wire/lever/button; pistons, block entities, full components missing |
+| Entities | ~23% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; P5.1 metadata + P5.5/P5.6/P5.12 AI/spawn foundations; AI sensors/brains, full pathing, persistence, armor, per-viewer metadata missing |
+| Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
@@ -123,6 +126,19 @@ where possible, a differential test against the Java oracle.
   idempotence, storage persistence, and bulk-vs-incremental equality are
   covered by 8 `tests/light_incremental.rs` tests. Remaining: Java light
   fixtures and shape-accurate occlusion (P1.5).
+- 2026-11-06: P5 AI/pathing/spawning foundation - `entity_ai.rs` adds a
+  vanilla-shaped `Goal`/`GoalSelector` with priorities and flag locks,
+  `FloatGoal`/`RandomStrollGoal`/`LookAtPlayerGoal`/`MeleeAttackGoal`/
+  `HurtByTargetGoal`, a deterministic bounded A* (`find_path`) with one-block
+  step-up, liquid/lava rejection, and a max fall distance, a `Navigation`
+  follower, `LookControl`, and an `AiDriver` over an injected `WorldView`.
+  `spawn.rs` adds `MobCategory` caps, biome spawn lists embedded from the
+  1.21.11 data pack, real entity-type ids, spawnable-block/light/height checks,
+  player-distance gates, deterministic 3x3x3 pack placement, `SpawnState`, and
+  `NaturalSpawner` per-chunk cycles. New focused tests: 10 `tests/entity_ai.rs`,
+  6 `tests/spawn.rs`, 2 entity_ai lib, 2 spawn lib. Still open: full node
+  evaluators, doors/gates, sensors/brains, persistence/despawn, spawn eggs,
+  monster spawners, and Java spawn-rate fixtures.
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -1656,7 +1672,7 @@ per-chunk storage, AI, spawning, or armor calculation.
 - **Why:** These connect combat, mining, farming, and redstone.
 - **Done when:** Projectile trajectories and item pickup match Java traces.
 
-### P5.5 Pathfinding and navigation `[ ]` `XL`
+### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,
   path following, stuck detection, and door/gate interaction.
@@ -1664,8 +1680,15 @@ per-chunk storage, AI, spawning, or armor calculation.
 - **Reference:** `net/minecraft/world/level/pathfinder/*`,
   `net/minecraft/world/entity/ai/navigation/*`.
 - **Done when:** A zombie can path around obstacles and through doors like Java.
+- **Progress (2026-11-06):** `entity_ai.rs` has a deterministic bounded A* over
+  an injected `WorldView` using `block_behaviour::has_collision`/`fluid`:
+  four-way walking, one-block step-up, max fall distance, liquid/lava rejection,
+  `PathFailure::{InvalidStart,InvalidTarget,Unreachable,TooLarge}`, and a
+  `Navigation` follower with failures tracked. Still open: vanilla node
+  evaluators (swim/fly/amphibious), doors/gates, diagonal movement, path
+  malus/light costs, stuck detection, and Java trace fixtures.
 
-### P5.6 AI goals, sensors, and brains `[ ]` `XL`
+### P5.6 AI goals, sensors, and brains `[~]` `XL`
 
 - **What:** Implement goal selectors, priorities, sensors, memories, and brain
   activities for the mobs that need them.
@@ -1675,6 +1698,13 @@ per-chunk storage, AI, spawning, or armor calculation.
   `.../ai/sensing/*`, `.../ai/brain/*`.
 - **Done when:** Representative passive/hostile mobs behave comparably in
   scripted scenarios.
+- **Progress (2026-11-06):** `entity_ai.rs` ports `Goal` lifecycle, `Goal.Flag`
+  bitsets, `GoalSelector` insertion ordering/priority replacement/flag locks,
+  `LookControl`, and the `FloatGoal`, `RandomStrollGoal`, `LookAtPlayerGoal`,
+  `MeleeAttackGoal`, and `HurtByTargetGoal` slice. `AiDriver` ticks goal then
+  target selectors over an injected world and emits melee attack events.
+  Determinism comes from an injected `LegacyRandomSource`. Sensors, memories,
+  brain activities, and the remaining goal set are open.
 
 ### P5.7 Passive mobs `[ ]` `L`
 
@@ -1711,13 +1741,19 @@ per-chunk storage, AI, spawning, or armor calculation.
 - **Why:** Combat ties together items, entities, attributes, and effects.
 - **Done when:** Damage traces match Java for melee/ranged/enchanted cases.
 
-### P5.12 Natural spawning and spawners `[ ]` `L`
+### P5.12 Natural spawning and spawners `[~]` `L`
 
 - **What:** Spawn cycles, light/biome/height checks, mob caps, persistence,
   despawn, spawn eggs, monster spawners, breeding, and village spawning.
 - **Why:** Without spawning the world is empty.
 - **Done when:** Spawn rates/caps roughly match Java and configured spawners
   work.
+- **Progress (2026-11-06):** `spawn.rs` ports `MobCategory` caps, global
+  `SpawnState` caps, vanilla light/grass/water/lava placement rules, player
+  distance gates, weighted biome spawn lists, real entity-type ids, 3x3x3 pack
+  placement, and a per-chunk `NaturalSpawner` cycle. Still open: persistence,
+  despawn, spawn eggs, monster spawners, breeding, village spawning, structure
+  spawn overrides, and a Java spawn-count fixture.
 
 ### P5.13 Entity tracking and packets `[ ]` `M`
 

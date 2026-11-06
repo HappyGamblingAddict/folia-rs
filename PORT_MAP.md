@@ -58,7 +58,9 @@ Rust tree: `crates/folia-core`.
 | `VinesFeature`, `TwistingVinesFeature`, `WeepingVinesFeature` | `folia-core/src/worldgen/feature/vines.rs` | Ported: face attachment in `Direction.values()` order, twisting/weeping spread scans, head/body columns and ages; the weeping column helper is reused by huge fungus |
 | `HugeBrownMushroomFeature`, `HugeRedMushroomFeature`, `HugeFungusFeature`, `GlowstoneFeature`, `BlockBlobFeature`, `FillLayerFeature`, `NetherForestVegetationFeature`, `RandomBooleanSelectorFeature` | `folia-core/src/worldgen/feature/mushroom.rs` | Ported: huge mushroom caps/trunks with connection properties, huge crimson/warped fungus stem/hat/decor plus weeping vines, glowstone blob, `forest_rock`, fill layer, nether vegetation, mushroom-island boolean selector (empty nested placement only) |
 | `TreeFeature`, trunk/foliage/root placers, tree decorators | `folia-core/src/worldgen/feature/tree.rs` | Ported straight/dark-oak/forking/fancy/bending/giant/mega-jungle/cherry/mangrove trunks and all shipped foliage; decorators include leaf litter, beehive occupants, vines, cocoa, alter-ground, attached leaves/logs, creaking hearts, and pale moss with the embedded `pale_moss_patch` |
-| `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror`; `StructureStart`/`StructurePiece`/`StructureSet` | `folia-core/src/worldgen/structure/*` | Template loading/placement plus all 20 shipped structure sets, random-spread placement, frequency reducers, exclusion zones, starts, pieces, bounds, references, and igloo generation. Processor lists, template pools, jigsaw expansion, biome/dimension filtering, and generator wiring remain |
+| `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror`; `StructureStart`/`StructurePiece`/`StructureSet` | `folia-core/src/worldgen/structure/*` | Template loading/placement plus all 20 shipped structure sets, random-spread placement, frequency reducers, exclusion zones, starts, pieces, bounds, references, and igloo generation |
+| `templatesystem/StructureProcessor`, `StructureProcessorList`, all processor types, `RuleProcessor`/`ProcessorRule`, rule tests, position tests, block-entity modifiers | `folia-core/src/worldgen/structure/processor.rs` + `assets/structure_processors.json` | 40 shipped lists / 52 processors typed and applied: block_ignore, block_rot, gravity, jigsaw_replacement, rule (ordered, six rule tests, three position predicates, four block-entity modifiers), nop, block_age, blackstone_replace, lava_submerged_block, protected_blocks, capped; unknown types fail explicitly |
+| `structure/pools/StructureTemplatePool`, `StructurePoolElement`, `SinglePoolElement`, `LegacySinglePoolElement`, `FeaturePoolElement`, `EmptyPoolElement`, `ListPoolElement`, `Projection` | `folia-core/src/worldgen/structure/pool.rs` + `assets/template_pools.json` | 188 pools / 1,198 entries / 1,204 element nodes / 4,880 expanded slots, fallbacks, projection, Java-weighted `nextInt(size)` selection, and one-element start-pool expansion through `TemplateStructurePiece`; feature-pool placement and recursive `JigsawPlacement` remain |
 | `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border, and per-state emission/attenuation from `block_behaviour`; decrease queues, incremental updates, and Java light fixtures still open |
 | `OreVeinifier` | `folia-core/src/worldgen/ore_vein.rs` | Ported copper/iron vein pass over the noise router (toggle/ridged/gap, granite/tuff filler, raw-ore chance) and wired into the generator's solid-position density fill before surface rules/carvers; vein noise interpolation through `NoiseChunk` is still open |
 | `OreFeature`, `ScatteredOreFeature`, `OreConfiguration`, ore placement pipeline | `folia-core/src/worldgen/feature/ore.rs`, `folia-core/src/worldgen/generator.rs` | Ported all 30 ore + 2 scattered-ore configs, ellipsoid/branch elimination, air-exposure discard, four target tags. `Decoration::UndergroundOres` is enabled with vanilla's lazy placement stream and biome-parameter-order `FeatureSorter` indices; disks/`underwater_magma` in the same step and cross-chunk writes remain open |
@@ -129,6 +131,22 @@ Rust tree: `crates/folia-core`.
   and non-square extent swaps, verify pivot/origin translation and
   facing/axis/jigsaw-orientation state transforms, place into a mock
   `FeatureLevel`, and reject malformed NBT.
+- Structure processors and pools (`tests/structure_processors.rs`): 19 focused
+  tests pin the 40-list/52-processor and 188-pool/1,198-entry/1,204-node/4,880-
+  slot indices, canonical compact asset bytes (sorted keys, LF, trailing
+  newline), every processor family on synthetic templates (block ignore/rot,
+  gravity, jigsaw replacement including structure_void, protected blocks,
+  block age draw order, blackstone property copying, lava submersion, ordered
+  rules with append_static/append_loot/clear, linear and axis-aligned position
+  predicates, capped finalization), unknown processor/rule-test/modifier/
+  element-type failures, a fixed-seed ten-pick weighted sequence matching Java,
+  rigid vs terrain-matching expansion placement, and explicit missing
+  pool/template/processor-list/feature-element errors. The extractor was run
+  twice and produced byte-identical SHA-256
+  `962ba2a399320ed5a3f8a817b598fb0382e1a1668aa588df1fbc5f0ca12009db`
+  (processors) and
+  `e577ad6b881d658bf5be342cc9ddaff0cf1495281269d91722254595ea124579`
+  (pools).
 - Status server responds to status/ping, legacy ping, and login.
 - End-to-end login probe: `cargo run -p folia-core --example join_probe -- 127.0.0.1:25565`
   prints `login accepted`, `configuration complete`, `Join Game received`,

@@ -37,6 +37,7 @@ function Run-Step {
 
 Write-Header "Required assets"
 $assets = @(
+    "crates/folia-core/assets/biome_climate.tsv",
     "crates/folia-core/assets/biome_ids.txt",
     "crates/folia-core/assets/biome_params.txt",
     "crates/folia-core/assets/block_defaults.tsv",

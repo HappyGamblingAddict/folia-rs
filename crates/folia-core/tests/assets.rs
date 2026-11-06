@@ -32,8 +32,9 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 16] = [
+    let expected: [(&str, usize, u64); 17] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
+        ("biome_climate.tsv", 2_161, 0x70a2_dbb7_6140_8aaa),
         ("block_defaults.tsv", 37_605, 0x7c29_fe7e_3a74_07a8),
         ("item_ids.tsv", 45_873, 0xb3fc_5940_89ab_5bf7),
         ("entity_type_ids.tsv", 3_772, 0x4d7c_78e0_dac3_9e50),
@@ -125,6 +126,7 @@ fn registry_tables_have_the_expected_line_counts() {
         ("item_ids.tsv", 1_505),
         ("entity_type_ids.tsv", 157),
         ("biome_ids.txt", 65),
+        ("biome_climate.tsv", 65),
         ("tags/block.tsv", 3_655),
         ("tags/item.tsv", 1_897),
         ("tags/entity_type.tsv", 368),

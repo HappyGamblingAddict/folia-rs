@@ -2,6 +2,7 @@
 
 pub mod aquifer;
 pub mod biome;
+pub mod biome_climate;
 pub mod biome_zoom;
 pub mod carver;
 pub mod density;

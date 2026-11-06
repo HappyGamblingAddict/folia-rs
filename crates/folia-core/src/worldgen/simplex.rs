@@ -182,11 +182,30 @@ impl PerlinSimplexNoise {
 }
 
 static BIOME_INFO_NOISE: OnceLock<PerlinSimplexNoise> = OnceLock::new();
+static FROZEN_TEMPERATURE_NOISE: OnceLock<PerlinSimplexNoise> = OnceLock::new();
+static TEMPERATURE_NOISE: OnceLock<PerlinSimplexNoise> = OnceLock::new();
 
 /// `Biome.BIOME_INFO_NOISE` (`LegacyRandomSource(2345)`, octave 0).
 pub fn biome_info_noise() -> &'static PerlinSimplexNoise {
     BIOME_INFO_NOISE.get_or_init(|| {
         let mut random = LegacyRandomSource::new(2345);
+        PerlinSimplexNoise::new(&mut random, &[0])
+    })
+}
+
+/// `Biome.FROZEN_TEMPERATURE_NOISE` (`LegacyRandomSource(3456)`, octaves
+/// `[-2, -1, 0]`).
+pub fn frozen_temperature_noise() -> &'static PerlinSimplexNoise {
+    FROZEN_TEMPERATURE_NOISE.get_or_init(|| {
+        let mut random = LegacyRandomSource::new(3456);
+        PerlinSimplexNoise::new(&mut random, &[-2, -1, 0])
+    })
+}
+
+/// `Biome.TEMPERATURE_NOISE` (`LegacyRandomSource(1234)`, octave 0).
+pub fn temperature_noise() -> &'static PerlinSimplexNoise {
+    TEMPERATURE_NOISE.get_or_init(|| {
+        let mut random = LegacyRandomSource::new(1234);
         PerlinSimplexNoise::new(&mut random, &[0])
     })
 }

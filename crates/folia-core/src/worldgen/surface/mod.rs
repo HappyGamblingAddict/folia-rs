@@ -597,7 +597,8 @@ pub fn build_surface(
                 surface_y,
                 world_z,
             );
-            let melts_slightly = frozen_ocean_melt(surface_biome);
+            let melts_slightly =
+                frozen_ocean_melt(surface_biome, world_x, world_z, system.sea_level());
 
             if surface_biome == "minecraft:eroded_badlands" {
                 system.eroded_badlands_extension(chunk, world_x, world_z, first_air + 1);
@@ -799,12 +800,15 @@ fn cold_enough_to_snow(biome: &str, y: i32, sea_level: i32) -> bool {
 
 /// Approximation of `Biome.shouldMeltFrozenOceanIcebergSlightly`: only the
 /// deep frozen ocean is unconditionally above the 0.1 threshold.
-fn frozen_ocean_melt(biome: &str) -> Option<bool> {
-    match biome {
-        "minecraft:frozen_ocean" => Some(false),
-        "minecraft:deep_frozen_ocean" => Some(true),
-        _ => None,
+fn frozen_ocean_melt(biome: &str, x: i32, z: i32, sea_level: i32) -> Option<bool> {
+    if !matches!(
+        biome,
+        "minecraft:frozen_ocean" | "minecraft:deep_frozen_ocean"
+    ) {
+        return None;
     }
+    let temperature = crate::worldgen::biome_climate::temperature_at(biome, x, sea_level, z)?;
+    Some(temperature > 0.1)
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {

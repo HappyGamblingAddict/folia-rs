@@ -1,6 +1,7 @@
 pub mod anvil;
 pub mod block_behaviour;
 pub mod block_breaking;
+pub mod block_entity;
 pub mod block_shapes;
 pub mod block_update;
 pub mod chunk;
@@ -21,6 +22,7 @@ pub mod level;
 pub mod light;
 pub mod loot;
 pub mod nbt;
+pub mod piston;
 pub mod player;
 pub mod player_physics;
 pub mod protocol;

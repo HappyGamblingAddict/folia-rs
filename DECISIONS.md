@@ -1820,3 +1820,41 @@ Format:
   break/place/interact still bypass the event bus until a follow-up changes
   `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
   covered; the rest of P9.2 remains open.
+
+## 2026-11-06 - Online-mode crypto is dependency-free, with curl as the session client
+
+- Context: The workspace has no crypto or HTTP/TLS crate, and this slice was not
+  allowed to edit `Cargo.toml`. The login path needs RSA-1024, PKCS#1 v1.5,
+  AES-128/CFB8, SHA-1, Java-style signed big-int hex, and Mojang
+  `hasJoinedServer`.
+- Decision: Implement AES-128, CFB8, SHA-1, DER SubjectPublicKeyInfo,
+  PKCS#1 v1.5, a small `u32`-limb big integer, Montgomery modular exponentiation,
+  Miller-Rabin prime generation, and binary modular inverses in
+  `crates/folia-core/src/crypto.rs`. Every primitive is pinned to Java/JCE
+  fixtures generated with the same algorithms vanilla uses. The server key pair
+  is 1024-bit RSA with `e = 65537`, generated once per process from
+  `BCryptGenRandom` on Windows (or `/dev/urandom` on Unix), like
+  `Crypt.generateKeyPair`.
+- Decision: `SessionAuthenticator` is a trait. Production uses
+  `MojangSessionAuthenticator`, which invokes the system `curl` binary for the
+  HTTPS `sessionserver.mojang.com/session/minecraft/hasJoined` request because
+  no TLS stack is available. Arguments go straight to the process (no shell)
+  and the username/hash/IP are percent-encoded. Tests inject a mock
+  authenticator and never touch the network.
+- Decision: Encryption is installed at the frame boundary in
+  `protocol::Connection`; the cipher covers the VarInt length prefix and body,
+  matching Netty's `prepender -> encrypt` ordering. Vanilla turns compression on
+  only after the key exchange; this server still does not negotiate
+  compression, so enabling encryption before `Login Success` is sufficient.
+- Why: Correctness first and no new dependency in a slice that cannot touch
+  `Cargo.toml`; Java/JCE remains the differential oracle.
+- Consequences: PKCS#1 v1.5 decryption is not a constant-time bignum
+  implementation. Protocol-level padding oracles are avoided by closing on any
+  malformed response and by the random 4-byte challenge (Bleichenbacher cannot
+  be driven without it), but timing side channels remain a known gap. The
+  session lookup depends on `curl` being installed; without it online logins
+  fail with the classic "authentication servers are down" disconnect. Login
+  names longer than 16 characters are rejected at parse time, matching
+  `ServerboundHelloPacket`'s `readUtf(16)`; legitimate offline clients are
+  unaffected. The server binary still needs `accept_logins` and
+  `configure_online_mode` wiring (see `BLOCKERS.md`).

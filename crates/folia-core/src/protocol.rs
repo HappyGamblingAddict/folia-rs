@@ -1,5 +1,8 @@
+use crate::crypto::{AES_KEY_SIZE, Cfb8};
 use crate::varint::{read_varint, read_varint_slice, write_varint};
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 
 /// Vanilla clients refuse packets larger than 2 MiB. Keeping the same limit in
 /// the Rust core prevents malicious length prefixes from allocating unbounded
@@ -56,6 +59,123 @@ pub fn write_packet<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> 
     }
     write_varint(writer, payload.len() as i32)?;
     writer.write_all(payload)
+}
+
+/// A framed connection that can transparently enable Minecraft's AES-128/CFB8
+/// encryption.
+///
+/// Vanilla installs the cipher into the Netty pipeline once the encryption
+/// response has been read, so everything after that point (including the login
+/// success packet and any compression switch) is encrypted. The wrapper keeps
+/// the same ordering: callers keep using the ordinary packet framing and
+/// [`Connection::enable_encryption`] only changes how later frames are read
+/// and written.
+pub struct Connection<S = TcpStream> {
+    stream: S,
+    encryption: Option<Cfb8>,
+    decryption: Option<Cfb8>,
+}
+
+impl<S> Connection<S> {
+    pub fn new(stream: S) -> Self {
+        Self {
+            stream,
+            encryption: None,
+            decryption: None,
+        }
+    }
+
+    pub fn get_ref(&self) -> &S {
+        &self.stream
+    }
+
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.stream
+    }
+
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+}
+
+impl<S: Read + Write> Connection<S> {
+    /// Enable encryption in both directions with the shared secret. Refuses to
+    /// replace an already installed cipher, mirroring `Connection.setEncryptionKey`
+    /// which only acts while `encrypted` is false.
+    pub fn enable_encryption(&mut self, secret: &[u8; AES_KEY_SIZE]) -> io::Result<()> {
+        if self.encryption.is_some() || self.decryption.is_some() {
+            return Err(invalid("connection encryption is already enabled"));
+        }
+        self.encryption = Some(Cfb8::encryptor(secret));
+        self.decryption = Some(Cfb8::decryptor(secret));
+        Ok(())
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.encryption.is_some()
+    }
+
+    pub fn read_packet(&mut self) -> io::Result<Vec<u8>> {
+        let length = self.read_frame_length()?;
+        let mut payload = vec![0u8; length];
+        self.stream.read_exact(&mut payload)?;
+        if let Some(cipher) = &mut self.decryption {
+            cipher.process(&mut payload);
+        }
+        Ok(payload)
+    }
+
+    pub fn write_packet(&mut self, payload: &[u8]) -> io::Result<()> {
+        if payload.len() > MAX_PACKET_SIZE {
+            return Err(invalid("packet exceeds 2 MiB"));
+        }
+        let mut frame = Vec::with_capacity(payload.len() + 5);
+        write_varint(&mut frame, payload.len() as i32)?;
+        frame.extend_from_slice(payload);
+        if let Some(cipher) = &mut self.encryption {
+            cipher.process(&mut frame);
+        }
+        self.stream.write_all(&frame)
+    }
+
+    fn read_frame_length(&mut self) -> io::Result<usize> {
+        let mut value = 0u32;
+        for index in 0..5 {
+            let byte = self.read_encrypted_byte()?;
+            value |= u32::from(byte & 0x7f) << (7 * index);
+            if byte & 0x80 == 0 {
+                let length = value as i32;
+                if length < 0 || length as usize > MAX_PACKET_SIZE {
+                    return Err(invalid(format!("invalid packet length {length}")));
+                }
+                return Ok(length as usize);
+            }
+        }
+        Err(invalid("VarInt exceeds five bytes"))
+    }
+
+    fn read_encrypted_byte(&mut self) -> io::Result<u8> {
+        let mut byte = [0u8; 1];
+        self.stream.read_exact(&mut byte)?;
+        if let Some(cipher) = &mut self.decryption {
+            byte[0] = cipher.process_byte(byte[0]);
+        }
+        Ok(byte[0])
+    }
+}
+
+impl Connection<TcpStream> {
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.stream.set_read_timeout(timeout)
+    }
+
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.stream.set_write_timeout(timeout)
+    }
+
+    pub fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.stream.peer_addr()
+    }
 }
 
 pub fn parse_handshake(payload: &[u8]) -> io::Result<Handshake> {
@@ -158,6 +278,10 @@ pub fn parse_login_start(payload: &[u8]) -> io::Result<LoginStart> {
         )));
     }
     let name = reader.read_string()?;
+    // `ServerboundHelloPacket` reads the name with `readUtf(16)`.
+    if name.chars().count() > 16 {
+        return Err(invalid("player name is longer than 16 characters"));
+    }
     let uuid = if reader.remaining() >= 16 {
         let bytes = reader.read_bytes(16)?;
         let mut uuid = [0u8; 16];
@@ -187,6 +311,196 @@ pub fn build_login_disconnect(reason_json: &str) -> io::Result<Vec<u8>> {
     writer.write_varint(0)?;
     writer.write_string(reason_json)?;
     Ok(writer.into_inner())
+}
+
+/// Login protocol packet ids (`LoginProtocols` in 1.21.11).
+pub const LOGIN_CLIENTBOUND_DISCONNECT: i32 = 0;
+pub const LOGIN_CLIENTBOUND_HELLO: i32 = 1;
+pub const LOGIN_CLIENTBOUND_SUCCESS: i32 = 2;
+pub const LOGIN_CLIENTBOUND_COMPRESSION: i32 = 3;
+pub const LOGIN_SERVERBOUND_KEY: i32 = 1;
+
+/// `ClientboundHelloPacket`, the encryption request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptionRequest {
+    pub server_id: String,
+    /// DER-encoded X.509 SubjectPublicKeyInfo (`PublicKey.getEncoded()`).
+    pub public_key: Vec<u8>,
+    pub verify_token: Vec<u8>,
+    pub should_authenticate: bool,
+}
+
+pub fn build_encryption_request(request: &EncryptionRequest) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(LOGIN_CLIENTBOUND_HELLO)?;
+    writer.write_string(&request.server_id)?;
+    writer.write_byte_array(&request.public_key)?;
+    writer.write_byte_array(&request.verify_token)?;
+    writer.write_u8(u8::from(request.should_authenticate))?;
+    Ok(writer.into_inner())
+}
+
+pub fn parse_encryption_request(payload: &[u8]) -> io::Result<EncryptionRequest> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != LOGIN_CLIENTBOUND_HELLO {
+        return Err(invalid(format!(
+            "expected encryption request id {LOGIN_CLIENTBOUND_HELLO}, got {id}"
+        )));
+    }
+    let server_id = reader.read_string()?;
+    let public_key = reader.read_byte_array(4096)?;
+    let verify_token = reader.read_byte_array(4096)?;
+    let should_authenticate = reader.read_bool()?;
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after encryption request"));
+    }
+    Ok(EncryptionRequest {
+        server_id,
+        public_key,
+        verify_token,
+        should_authenticate,
+    })
+}
+
+/// `ServerboundKeyPacket`, the encryption response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptionResponse {
+    pub shared_secret: Vec<u8>,
+    pub verify_token: Vec<u8>,
+}
+
+pub fn build_encryption_response(response: &EncryptionResponse) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(LOGIN_SERVERBOUND_KEY)?;
+    writer.write_byte_array(&response.shared_secret)?;
+    writer.write_byte_array(&response.verify_token)?;
+    Ok(writer.into_inner())
+}
+
+pub fn parse_encryption_response(payload: &[u8]) -> io::Result<EncryptionResponse> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != LOGIN_SERVERBOUND_KEY {
+        return Err(invalid(format!(
+            "expected encryption response id {LOGIN_SERVERBOUND_KEY}, got {id}"
+        )));
+    }
+    let shared_secret = reader.read_byte_array(4096)?;
+    let verify_token = reader.read_byte_array(4096)?;
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after encryption response"));
+    }
+    Ok(EncryptionResponse {
+        shared_secret,
+        verify_token,
+    })
+}
+
+/// One entry of `GameProfile.properties` (skin/cape data).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileProperty {
+    pub name: String,
+    pub value: String,
+    pub signature: Option<String>,
+}
+
+impl ProfileProperty {
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            signature: None,
+        }
+    }
+}
+
+/// The GameProfile carried by `ClientboundLoginFinishedPacket` and returned by
+/// Mojang's `hasJoinedServer`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameProfile {
+    pub uuid: [u8; 16],
+    pub name: String,
+    pub properties: Vec<ProfileProperty>,
+}
+
+impl GameProfile {
+    pub fn new(uuid: [u8; 16], name: impl Into<String>) -> Self {
+        Self {
+            uuid,
+            name: name.into(),
+            properties: Vec::new(),
+        }
+    }
+}
+
+/// `ClientboundLoginFinishedPacket` (Login Success).
+///
+/// Layout is the `GAME_PROFILE` codec: UUID, name (max 16 UTF-8 bytes), then a
+/// counted list of `(name, value, nullable signature)` properties. Offline
+/// logins send zero properties, which is byte-identical to the previous
+/// implementation.
+pub fn build_login_success(profile: &GameProfile) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(LOGIN_CLIENTBOUND_SUCCESS)?;
+    writer.write_bytes(&profile.uuid);
+    writer.write_string(&profile.name)?;
+    let property_count = i32::try_from(profile.properties.len())
+        .map_err(|_| invalid("too many profile properties"))?;
+    writer.write_varint(property_count)?;
+    for property in &profile.properties {
+        writer.write_string(&property.name)?;
+        writer.write_string(&property.value)?;
+        match &property.signature {
+            Some(signature) => {
+                writer.write_u8(1)?;
+                writer.write_string(signature)?;
+            }
+            None => writer.write_u8(0)?,
+        }
+    }
+    Ok(writer.into_inner())
+}
+
+pub fn parse_login_success(payload: &[u8]) -> io::Result<GameProfile> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != LOGIN_CLIENTBOUND_SUCCESS {
+        return Err(invalid(format!(
+            "expected login success id {LOGIN_CLIENTBOUND_SUCCESS}, got {id}"
+        )));
+    }
+    let uuid = reader.read_bytes(16)?;
+    let mut uuid_bytes = [0u8; 16];
+    uuid_bytes.copy_from_slice(uuid);
+    let name = reader.read_string()?;
+    let count = reader.read_varint()?;
+    if count < 0 || count as usize > 16 {
+        return Err(invalid(format!("invalid profile property count {count}")));
+    }
+    let mut properties = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let name = reader.read_string()?;
+        let value = reader.read_string()?;
+        let signature = if reader.read_bool()? {
+            Some(reader.read_string()?)
+        } else {
+            None
+        };
+        properties.push(ProfileProperty {
+            name,
+            value,
+            signature,
+        });
+    }
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after login success"));
+    }
+    Ok(GameProfile {
+        uuid: uuid_bytes,
+        name,
+        properties,
+    })
 }
 
 /// Packets at or above `threshold` are zlib-compressed after the login
@@ -351,6 +665,15 @@ impl<'a> PacketReader<'a> {
         self.position += length;
         Ok(&self.data[start..self.position])
     }
+
+    /// `FriendlyByteBuf.readByteArray(max)`.
+    pub fn read_byte_array(&mut self, maximum: usize) -> io::Result<Vec<u8>> {
+        let length = self.read_varint()?;
+        if length < 0 || length as usize > maximum || length as usize > self.remaining() {
+            return Err(invalid(format!("invalid byte array length {length}")));
+        }
+        Ok(self.read_bytes(length as usize)?.to_vec())
+    }
 }
 
 pub struct PacketWriter {
@@ -424,6 +747,13 @@ impl PacketWriter {
 
     pub fn write_bytes(&mut self, value: &[u8]) {
         self.data.extend_from_slice(value);
+    }
+
+    /// `FriendlyByteBuf.writeByteArray`: VarInt length followed by the bytes.
+    pub fn write_byte_array(&mut self, value: &[u8]) -> io::Result<()> {
+        self.write_varint(value.len() as i32)?;
+        self.write_bytes(value);
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -574,5 +904,13 @@ mod tests {
                 uuid: None,
             }
         );
+    }
+
+    #[test]
+    fn rejects_login_names_longer_than_vanilla_allows() {
+        let payload = build_login_start("ABCDEFGHIJKLMNOPQ", None).unwrap();
+        assert!(parse_login_start(&payload).is_err());
+        let payload = build_login_start("ABCDEFGHIJKLMNOP", None).unwrap();
+        assert!(parse_login_start(&payload).is_ok());
     }
 }

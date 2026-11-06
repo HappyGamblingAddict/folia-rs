@@ -411,3 +411,30 @@ These are expected gaps, not reasons to stop:
 - Workaround: `LootProvider` is the intended hook for `crate::loot`; the
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
+
+## 2026-11-06 - P8.1 server binary still gates online mode off
+
+- Status: Core complete. `crypto.rs` implements RSA-1024 key generation,
+  PKCS#1 v1.5, DER SubjectPublicKeyInfo, AES-128/CFB8, SHA-1, the Java signed
+  `BigInteger` hash, and constant-time token comparison. `join.rs` performs the
+  encryption exchange, `protocol.rs` owns the encrypted `Connection`, and
+  `config.rs` exposes `online-mode`/`prevent-proxy-connections`. 22 focused
+  tests pass and `online-mode=false` frames are unchanged.
+- Blocker: `crates/folia-server/src/main.rs` builds `StatusConfig` with
+  `accept_logins: !properties.online_mode`, so the login path is never called
+  when `online-mode=true`; `status.rs` also documents the old restriction. Both
+  files are outside this slice's allowed file set.
+- Required integration (two small edits):
+  - `main.rs`: set `accept_logins: true` for both modes and call
+    `folia_core::join::configure_online_mode(properties.online_mode)` before
+    starting the status server. (If the call is omitted, `join::online_mode`
+    falls back to reading `server.properties` and `FOLIA_ONLINE_MODE`.)
+  - `status.rs`: update the `accept_logins` doc comment, which still says online
+    mode encryption is not ported.
+- Workaround / next task: apply those two edits, then `online-mode=true` accepts
+  a real client provided the host has `curl` and reaches
+  `sessionserver.mojang.com`. `FOLIA_ONLINE_MODE` can pin the mode for a probe
+  run. Tests cannot perform a real Mojang lookup (no network by design).
+- Additional limitation: there is no TLS stack in the workspace, so the real
+  session lookup shells out to `curl`. Replace it with an in-process TLS client
+  when a dependency is allowed (P11 hardening).

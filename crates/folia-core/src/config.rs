@@ -16,6 +16,7 @@ pub struct ServerProperties {
     pub motd: String,
     pub max_players: i32,
     pub online_mode: bool,
+    pub prevent_proxy_connections: bool,
     pub level_name: String,
     pub view_distance: i32,
     pub simulation_distance: i32,
@@ -42,6 +43,7 @@ impl Default for ServerProperties {
             motd: "A Minecraft Server".into(),
             max_players: 20,
             online_mode: true,
+            prevent_proxy_connections: false,
             level_name: "world".into(),
             view_distance: 10,
             simulation_distance: 10,
@@ -88,6 +90,9 @@ impl ServerProperties {
             "motd" => self.motd = value,
             "max-players" => self.max_players = parse_i32(&value, 20),
             "online-mode" => self.online_mode = parse_bool(&value),
+            "prevent-proxy-connections" => {
+                self.prevent_proxy_connections = parse_bool(&value);
+            }
             "level-name" => self.level_name = value,
             "view-distance" => self.view_distance = parse_i32(&value, 10),
             "simulation-distance" => self.simulation_distance = parse_i32(&value, 10),
@@ -118,13 +123,39 @@ pub fn generate_flat_bedrock() -> bool {
         if let Ok(value) = std::env::var("FOLIA_GENERATE_FLAT_BEDROCK") {
             return parse_bool(&value);
         }
-        for path in server_properties_candidates() {
-            if let Ok(text) = fs::read_to_string(path) {
-                return ServerProperties::parse(&text).generate_flat_bedrock;
-            }
-        }
-        false
+        read_server_properties().is_some_and(|properties| properties.generate_flat_bedrock)
     })
+}
+
+/// `online-mode` for the login path. `FOLIA_ONLINE_MODE` overrides the file so
+/// tests and dedicated captures can pin the mode; absent configuration follows
+/// vanilla's default of `true`.
+pub fn online_mode() -> bool {
+    static SETTING: OnceLock<bool> = OnceLock::new();
+    *SETTING.get_or_init(|| {
+        if let Ok(value) = std::env::var("FOLIA_ONLINE_MODE") {
+            return parse_bool(&value);
+        }
+        read_server_properties().is_none_or(|properties| properties.online_mode)
+    })
+}
+
+/// `prevent-proxy-connections`: when enabled, Mojang's session check receives
+/// the client's IP and rejects sessions that were authenticated elsewhere.
+pub fn prevent_proxy_connections() -> bool {
+    static SETTING: OnceLock<bool> = OnceLock::new();
+    *SETTING.get_or_init(|| {
+        read_server_properties().is_some_and(|properties| properties.prevent_proxy_connections)
+    })
+}
+
+fn read_server_properties() -> Option<ServerProperties> {
+    for path in server_properties_candidates() {
+        if let Ok(text) = fs::read_to_string(path) {
+            return Some(ServerProperties::parse(&text));
+        }
+    }
+    None
 }
 
 fn server_properties_candidates() -> Vec<PathBuf> {
@@ -356,6 +387,15 @@ unknown-key=kept
         assert!(properties.generate_flat_bedrock);
         let properties = ServerProperties::parse("generate-flat-bedrock=false\n");
         assert!(!properties.generate_flat_bedrock);
+    }
+
+    #[test]
+    fn parses_proxy_and_secure_profile_settings() {
+        assert!(!ServerProperties::default().prevent_proxy_connections);
+        let properties = ServerProperties::parse("prevent-proxy-connections=true\n");
+        assert!(properties.prevent_proxy_connections);
+        let properties = ServerProperties::parse("prevent-proxy-connections=false\n");
+        assert!(!properties.prevent_proxy_connections);
     }
 
     #[test]

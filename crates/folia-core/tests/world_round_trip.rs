@@ -26,6 +26,7 @@ fn sample_chunk(x: i32, z: i32) -> Chunk {
                     palette: vec!["minecraft:plains".into()],
                     indices: vec![0; 64],
                 }),
+                light: folia_core::light::SectionLight::default(),
             },
             ChunkSection {
                 y: 1,
@@ -34,6 +35,7 @@ fn sample_chunk(x: i32, z: i32) -> Chunk {
                     indices: vec![0; 4096],
                 },
                 biomes: None,
+                light: folia_core::light::SectionLight::default(),
             },
         ],
     }

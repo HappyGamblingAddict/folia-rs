@@ -1,3 +1,4 @@
+use crate::light::{DataLayer, SectionLight};
 use crate::nbt::Tag;
 use std::collections::HashMap;
 use std::io;
@@ -34,6 +35,9 @@ pub struct ChunkSection {
     pub y: i8,
     pub block_states: PalettedContainer<BlockState>,
     pub biomes: Option<PalettedContainer<String>>,
+    /// Optional vanilla `SkyLight`/`BlockLight` nibble arrays. `None` means the
+    /// layer was not stored (or was invalidated by an edit), not "all zero".
+    pub light: SectionLight,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +91,7 @@ impl Chunk {
                     palette: vec!["minecraft:plains".into()],
                     indices: vec![0; 64],
                 }),
+                light: SectionLight::default(),
             });
             self.sections.sort_by_key(|section| section.y);
         }
@@ -117,7 +122,63 @@ impl Chunk {
             }
         };
         section.block_states.indices[index] = palette_index as u16;
+        // A block edit can change opacity or emission anywhere the resulting
+        // light reaches, so the whole chunk's cached layers are stale. Clearing
+        // them forces the caller (or light_bytes' height fallback) to recompute
+        // instead of persisting a stale layer.
+        self.clear_light();
         true
+    }
+
+    /// Drop every stored light layer. Vanilla recomputes the affected region
+    /// after a block change; our single-chunk engine recomputes the whole chunk.
+    pub fn clear_light(&mut self) {
+        for section in &mut self.sections {
+            section.light = SectionLight::default();
+        }
+    }
+
+    pub fn has_light(&self) -> bool {
+        self.sections
+            .iter()
+            .any(|section| !section.light.is_empty())
+    }
+
+    /// Recompute sky and block light for this chunk without neighbour data.
+    pub fn recompute_light(&mut self) {
+        crate::light::recompute_chunk_light(self);
+    }
+
+    /// Recompute light using any loaded neighbouring chunks for border
+    /// propagation.
+    pub fn recompute_light_with_neighbours(&mut self, neighbours: &[Chunk]) {
+        crate::light::recompute_chunk_light_with_neighbours(self, neighbours);
+    }
+
+    pub fn sky_light(&self, x: usize, y: i32, z: usize) -> Option<u8> {
+        if x >= 16 || z >= 16 {
+            return None;
+        }
+        let section_y = y.div_euclid(16);
+        if !(i8::MIN as i32..=i8::MAX as i32).contains(&section_y) {
+            return None;
+        }
+        let local_y = y.rem_euclid(16) as usize;
+        self.section(section_y as i8)?.light.sky_get(x, local_y, z)
+    }
+
+    pub fn block_light(&self, x: usize, y: i32, z: usize) -> Option<u8> {
+        if x >= 16 || z >= 16 {
+            return None;
+        }
+        let section_y = y.div_euclid(16);
+        if !(i8::MIN as i32..=i8::MAX as i32).contains(&section_y) {
+            return None;
+        }
+        let local_y = y.rem_euclid(16) as usize;
+        self.section(section_y as i8)?
+            .light
+            .block_get(x, local_y, z)
     }
 
     /// Absolute world Y coordinate, x/z in 0..16.
@@ -273,6 +334,16 @@ fn encode_section(section: &ChunkSection) -> io::Result<Tag> {
         entries.push(("biomes".into(), Tag::Compound(biome_entries)));
     }
 
+    if let Some(block) = &section.light.block {
+        entries.push((
+            "BlockLight".into(),
+            Tag::ByteArray(block.as_bytes().to_vec()),
+        ));
+    }
+    if let Some(sky) = &section.light.sky {
+        entries.push(("SkyLight".into(), Tag::ByteArray(sky.as_bytes().to_vec())));
+    }
+
     Ok(Tag::Compound(entries))
 }
 
@@ -396,11 +467,30 @@ fn decode_section(tag: &Tag) -> io::Result<ChunkSection> {
     };
 
     let biomes = tag.get("biomes").map(decode_biomes).transpose()?;
+    let block = tag
+        .get("BlockLight")
+        .map(|layer| {
+            layer
+                .as_byte_array()
+                .ok_or_else(|| invalid("section BlockLight must be a byte array"))
+                .and_then(DataLayer::from_bytes)
+        })
+        .transpose()?;
+    let sky = tag
+        .get("SkyLight")
+        .map(|layer| {
+            layer
+                .as_byte_array()
+                .ok_or_else(|| invalid("section SkyLight must be a byte array"))
+                .and_then(DataLayer::from_bytes)
+        })
+        .transpose()?;
 
     Ok(ChunkSection {
         y,
         block_states,
         biomes,
+        light: SectionLight { sky, block },
     })
 }
 
@@ -664,6 +754,7 @@ mod tests {
                     indices: vec![0; 4096],
                 },
                 biomes: Some(biomes),
+                light: SectionLight::default(),
             }],
         };
 
@@ -759,6 +850,7 @@ mod tests {
                         indices: (0..4096).map(|index| (index % 2) as u16).collect(),
                     },
                     biomes: None,
+                    light: SectionLight::default(),
                 },
                 ChunkSection {
                     y: 1,
@@ -770,6 +862,7 @@ mod tests {
                         palette: vec!["minecraft:plains".into(), "minecraft:desert".into()],
                         indices: (0..64).map(|index| (index % 2) as u16).collect(),
                     }),
+                    light: SectionLight::default(),
                 },
             ],
         };
@@ -803,6 +896,7 @@ mod tests {
                 y: 0,
                 block_states: duplicated,
                 biomes: None,
+                light: SectionLight::default(),
             }],
         };
 

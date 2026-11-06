@@ -397,6 +397,7 @@ mod tests {
                     indices,
                 },
                 biomes: None,
+                light: crate::light::SectionLight::default(),
             }],
         }
     }

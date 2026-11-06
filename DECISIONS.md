@@ -894,3 +894,34 @@ Format:
   yet, and `worldgen/feature/ore.rs` still hard-codes its four target-tag sets
   until it is switched to `tags::has`.
 
+## 2026-11-06 - Lighting storage lives on each `ChunkSection`
+
+- Context: P3.5 needs optional vanilla `SkyLight`/`BlockLight` arrays that
+  survive `decode_chunk`/`encode_chunk`, packet building, block edits, and a
+  region save. A separate `Chunk.light` map would avoid adding a field but
+  would require a parallel lifetime/cache across every chunk clone; `Chunk` and
+  `ChunkSection` struct literals already exist throughout worldgen/tests.
+- Decision: Each `ChunkSection` owns
+  `light: SectionLight { sky: Option<DataLayer>, block: Option<DataLayer> }`.
+  `DataLayer` boxes its 2048-byte array so absent layers cost one niche-sized
+  `Option`. `decode_section`/`encode_section` map those options to the vanilla
+  section `SkyLight`/`BlockLight` byte arrays. `light::LightStorage` remains
+  the engine's section-keyed intermediate result.
+- Decision: Every block edit clears the chunk's cached layers. The engine then
+  recomputes the whole chunk (and a one-block neighbour margin when neighbours
+  are loaded). This is less incremental than vanilla's decrease/increase
+  queues, but it cannot leave a stale light value and is deterministic.
+- Decision: `magma_block` emits 3, following `Blocks.MAGMA_BLOCK` and the
+  decompiled `lightLevel(blockState -> 3)`, not the task brief's example of 15.
+- Decision: Opacity/emission are an explicit hand-written table until P1.5
+  generates block behaviour: air/colored glass 0, water/leaves 1, tinted glass
+  and unknown blocks 15. Unknown emitters return 0. This fails safe (dark rather
+  than inventing light) and is documented in `BLOCKERS.md`.
+- Why: This is the smallest correct vertical slice: vanilla NBT bytes round-trip,
+  packet masks are driven by real arrays, and edits cannot persist stale light.
+- Consequences: `worldgen/generator.rs` and two test fixtures needed a
+  mechanical `light: SectionLight::default()` constructor line; no worldgen or
+  feature logic changed. Full incremental light packets, queued cross-chunk
+  relighting, generation-time initialization, and Java light fixtures remain
+  P3.6-P3.9 work.
+

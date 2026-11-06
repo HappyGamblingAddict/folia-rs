@@ -55,7 +55,15 @@ Last updated: 2026-11-06
   exist.
 - Worldgen parity: 98.76% block-class / 92.09% exact-name on the 16-column
   fixture.
-- Lighting is still an approximation: sky-only, no real block light.
+- Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
+  `DataLayer` storage, per-column sky sources with a six-direction BFS, and
+  block-light BFS for an explicit emitter table. Chunk NBT round-trips
+  `SkyLight`/`BlockLight`; `light_bytes` prefers stored/computed layers and
+  keeps the height fallback only for chunks without light. Block edits reload
+  existing neighbours, recompute both layers, persist them, and broadcast real
+  block-light updates. The emitter/opacity table is still hand-written, there
+  is no Java light fixture, and light updates are whole-chunk rather than
+  incremental sections.
 - Joins stream a square chunk column sized by the negotiated view distance
   (the probe client asks for 6, so 13×13; the shipped server allows 10 and a
   default client asks for 12, so a normal join streams 441 columns) and
@@ -172,10 +180,10 @@ Last updated: 2026-11-06
    port `OreVeinifier`, and keep the 92.09% exact-name fixture.
 2. P2.4 — pale-moss patch dependency, beehive occupants, and a Java tree fixture.
 3. P2.5 — vegetation and ground cover.
-4. P3.5–P3.8 — real light storage and engines.
+4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
+   P3.6–P3.8 with generated opacity/emission data, incremental section packets,
+   and Java light-array/packet fixtures.
 5. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
-
-After P2.3, move to P3.5–P3.8 (real light storage and engines).
 
 ## Next queue
 
@@ -193,12 +201,26 @@ After P2.3, move to P3.5–P3.8 (real light storage and engines).
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss blocked on `pale_moss_patch`/tags)
-- [ ] P3.5 Real light storage
-- [ ] P3.6 Sky-light engine
-- [ ] P3.7 Block-light engine
-- [ ] P3.8 Incremental light updates
+- [x] P3.5 Real light storage
+- [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
+- [~] P3.7 Block-light engine (hand-written emitter/opacity table)
+- [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 
 ## Recently completed
+
+- 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
+  `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
+  `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
+  six-direction BFS under overhangs, block-light BFS over an explicit emitter
+  table, and one-block neighbour border propagation. `chunk_packet::light_bytes`
+  now prefers stored/computed layers (including real block-light updates) and
+  keeps the old height fallback only for chunks without light; the captured
+  `(0,-1)` packet fixture is still byte-identical. `block_update` reloads
+  existing neighbours, recomputes, persists, and broadcasts. `tests/lighting.rs`
+  adds 7 tests (nibble/NBT round-trip, overhang, torch radius, unsupported
+  emitter, packet masks, border torch, edit persistence). Emitter/opacity data
+  is still hand-written; incremental section-only light packets and Java light
+  fixtures remain open.
 
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` walks the
   decompiled tag tree, resolves nested `#tag` references with cycle detection

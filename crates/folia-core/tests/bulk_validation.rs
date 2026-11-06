@@ -1121,6 +1121,7 @@ fn chunk_round_trips_fifty_random_palettes_with_biomes() {
                     indices: indices.clone(),
                 },
                 biomes: biomes.clone(),
+                light: folia_core::light::SectionLight::default(),
             });
             expected_sections.push((y, palette, indices, biomes));
         }
@@ -1213,6 +1214,7 @@ fn chunk_encoder_rejects_invalid_sections() {
                 indices: vec![0; 4095],
             },
             biomes: None,
+            light: folia_core::light::SectionLight::default(),
         }],
     };
     assert!(encode_chunk(&chunk).is_err(), "4095 block states");
@@ -1285,6 +1287,7 @@ fn biome_lookup_maps_4x4x4_coordinates() {
                 palette: vec!["minecraft:plains".into(), "minecraft:desert".into()],
                 indices,
             }),
+            light: folia_core::light::SectionLight::default(),
         }],
     };
 

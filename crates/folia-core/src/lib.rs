@@ -8,6 +8,7 @@ pub mod entity;
 pub mod inventory;
 pub mod join;
 pub mod level;
+pub mod light;
 pub mod nbt;
 pub mod player;
 pub mod protocol;

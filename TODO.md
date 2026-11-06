@@ -50,7 +50,7 @@ more expensive than designing for it now.
 | Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
 | Full worldgen | ~35–40% | Ore/scattered features translated; generator wiring and veinifier pending; vegetation/trees partial; structures and Nether/End missing |
-| Lighting | ~5–10% | Current light payload is a height-based sky-light approximation; no block light |
+| Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~10–15% | Movement is parsed, not simulated; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
 | Blocks/redstone/fluids | ~5% | Only break/place; no neighbor updates, fluids, redstone, block entities |
@@ -688,9 +688,11 @@ The live radius is negotiated: the smaller of `server.properties`
 threads with send order preserved, and the level file records elapsed game
 time and `LastPlayed` on shutdown. There is still no ticket system, spawn
 chunks, in-flight dedupe across sessions, or cross-player sharing.
-`light_bytes` writes sky light only, based on `column_height`, and emits zero
-block-light updates. `block_update.rs` mutates + saves + broadcasts, but does
-not run neighbor or scheduled updates.
+`light_bytes` prefers stored/computed sky and block layers from the new
+`light` module and keeps the old `column_height` sky approximation only for
+chunks with no light data yet. `block_update.rs` mutates + recomputes light
+with existing neighbours + saves + broadcasts, but does not run neighbor or
+scheduled updates; incremental section-only light packets are still open.
 
 ### P3.1 Chunk ticket and load/unload manager `[~]` `L`
 
@@ -795,7 +797,7 @@ not run neighbor or scheduled updates.
   `WORLD_SURFACE`) computed from the same column heights as the chunk packet,
   and a block edit recomputes it instead of keeping the old array.
 
-### P3.5 Light storage and NBT format `[ ]` `M`
+### P3.5 Light storage and NBT format `[x]` `M`
 
 - **What:** Store sky-light and block-light nibble arrays per section, serialize
   them in the Anvil chunk format, and expose them through the chunk packet
@@ -805,8 +807,14 @@ not run neighbor or scheduled updates.
 - **Reference:** `net/minecraft/world/level/chunk/DataLayer.java`,
   `LevelChunkSection.java`, `SerializableLightMetadata`.
 - **Done when:** A chunk with known light data round-trips through save/load.
+- **Done (2026-11-06):** `light::DataLayer` is a 2048-byte nibble array with
+  vanilla `y << 8 | z << 4 | x` indexing. Each `ChunkSection` carries
+  `light: SectionLight { sky, block }`, `decode_section`/`encode_section`
+  read/write the vanilla `SkyLight`/`BlockLight` byte arrays (rejecting wrong
+  lengths), and `tests/lighting.rs` round-trips layers through
+  `encode_chunk` → `decode_chunk` plus a region save/load.
 
-### P3.6 Sky-light engine `[ ]` `L`
+### P3.6 Sky-light engine `[~]` `L`
 
 - **What:** Port sky-light sources/heightmaps, 15→0 propagation, opacity
   handling, and border propagation.
@@ -814,8 +822,16 @@ not run neighbor or scheduled updates.
 - **Reference:** `net/minecraft/world/level/lighting/SkyLightEngine.java`,
   `ChunkSkyLightSources.java`, `LayerLightSectionStorage.java`.
 - **Done when:** Sky-light arrays match Java for cave/overhang fixtures.
+- **Progress (2026-11-06):** `light.rs` computes the per-column lowest sky
+  source Y from `ChunkSkyLightSources` semantics, fills 15 downward, and runs
+  a six-direction BFS with opacity so light spreads under overhangs. A
+  one-block neighbour margin imports border sources when neighbour chunks are
+  supplied; missing neighbours are not seeded, so they cannot invent a bright
+  seam. Tests cover a roofed shaft (15/14/… falloff), border propagation, and
+  packet bytes. Full `LayerLightSectionStorage` decrease/increase bookkeeping
+  and a Java light-array fixture are still open.
 
-### P3.7 Block-light engine `[ ]` `L`
+### P3.7 Block-light engine `[~]` `L`
 
 - **What:** Port emission tables and block-light increase/decrease propagation,
   including transparent/opaque block rules.
@@ -825,8 +841,18 @@ not run neighbor or scheduled updates.
   `LightEngine.java`.
 - **Done when:** Block-light arrays match Java for lava/torch/glowstone
   fixtures.
+- **Progress (2026-11-06):** `light.rs` scans emitters and runs a BFS increase
+  pass. The explicit emission table covers torch 14, soul torch 10, lantern 15,
+  soul lantern 10, glowstone/sea lantern/shroomlight/lava 15, magma 3 (vanilla;
+  the task brief’s “magma 15” was wrong), campfire 15, fire 15, redstone lamp
+  and furnace lit states, respawn anchor charges, sea pickle, cave vines,
+  froglight, amethyst buds, and a few more. Opacity rules cover air/glass
+  (0), water/leaves (1), tinted glass and unknown blocks (15). The table is
+  still hand-written; `TODO(P1.5/P3.7)` tracks replacing it with generated
+  block behaviour. Tests cover torch radius, unsupported emitters, and border
+  light. No Java block-light fixture yet.
 
-### P3.8 Incremental light updates and packets `[ ]` `M`
+### P3.8 Incremental light updates and packets `[~]` `M`
 
 - **What:** On block changes, compute only affected light sections and emit
   `ClientboundLightUpdate` / section updates with correct masks.
@@ -834,14 +860,27 @@ not run neighbor or scheduled updates.
   still wrong for block light.
 - **Done when:** A torch placement produces the same light packet body as Java
   and does not resend unrelated chunks.
+- **Progress (2026-11-06):** `block_update::set_block` invalidates cached light,
+  reloads existing neighbours, recomputes the edited chunk, persists it through
+  `WorldStorage::update_chunk`, and broadcasts the block + light payloads.
+  `chunk_packet::light_bytes` now uses stored/computed layers (sky and block)
+  with correct masks and real block-light updates; chunks without any light
+  still use the old height-based fallback, preserving the byte-identical
+  `(0,-1)` Java packet fixture. Incremental section-only relighting, Java
+  packet-body comparison, and avoiding whole-chunk broadcasts are still open.
 
-### P3.9 Cross-chunk light propagation `[ ]` `M`
+### P3.9 Cross-chunk light propagation `[~]` `M`
 
 - **What:** Handle light crossing chunk borders, queue relighting, and
   generation-time light initialization.
 - **Why:** Light at chunk edges is a common source of seams and client
   lighting bugs.
 - **Done when:** Border fixtures have no seams and match Java.
+- **Progress (2026-11-06):** the edit path loads existing 8-neighbour chunks
+  and passes them to the light engine; a neighbour torch lights the border
+  (tested 13 at distance one). Generated chunks are still sent with the
+  height fallback until they are edited/recomputed, and there is no queued
+  cross-chunk relight or Java seam fixture yet.
 
 ### P3.10 Neighbor updates, scheduled ticks, random ticks `[ ]` `L`
 

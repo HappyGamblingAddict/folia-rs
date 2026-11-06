@@ -75,6 +75,22 @@ pub fn set_block(
         return Ok(None);
     }
 
+    // The edit may change opacity or emission, and light can reach across the
+    // chunk border. Load whatever neighbours already exist (never generate)
+    // and relight the edited chunk plus the one-block border deterministically.
+    let mut neighbours = Vec::new();
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            if dx == 0 && dz == 0 {
+                continue;
+            }
+            if let Some(neighbour) = storage.load_chunk(chunk_x + dx, chunk_z + dz)? {
+                neighbours.push(neighbour);
+            }
+        }
+    }
+    chunk.recompute_light_with_neighbours(&neighbours);
+
     storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
     storage.flush()?;
     let state_id = block_state_id(&state);

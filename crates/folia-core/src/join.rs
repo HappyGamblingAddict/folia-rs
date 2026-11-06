@@ -20,6 +20,7 @@ use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
+use crate::entity::{SessionEntityTracker, WorldCollider};
 use crate::inventory;
 use crate::math::BlockPos;
 use crate::nbt::Tag;
@@ -155,6 +156,10 @@ const TERRAIN_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How often a connected session writes its playerdata.
 const PLAYER_SAVE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The play loop wakes at this cadence so tracked entities can tick at 20 Hz
+/// while a blocking socket read waits for the next client packet.
+const SESSION_TICK_INTERVAL: Duration = Duration::from_millis(50);
 
 const SERVERBOUND_ACCEPT_TELEPORTATION: i32 = 0;
 const SERVERBOUND_CHUNK_BATCH_RECEIVED: i32 = 10;
@@ -1041,12 +1046,28 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         &inventory::held_slot_packet(session.selected_slot),
     )?;
     write_packet(&mut stream, &abilities_packet(session.game_mode))?;
+    let player_entity = player_entity_id();
+    register_player_entity(&session, player_entity);
     write_packet(&mut stream, &health_packet(&session))?;
     // The position has to arrive before the chunk batch. The client stays on
     // the loading screen until it has both; the old order generated every
     // column first, so a 441-column join sat on the loading screen for the
     // whole batch. The first column streamed below is this position's column.
     write_packet(&mut stream, &position_packet(&session, 1000))?;
+    // Session-owned mobs are announced between the position and the chunk
+    // batch. The client keeps them until their columns arrive, and the join
+    // test's captured chunk loop ignores non-chunk packets.
+    let mut tracked_entities = {
+        let mut storage = crate::world::lock(world.storage);
+        SessionEntityTracker::spawn_near_player(
+            &mut storage,
+            (session.x, session.y, session.z),
+            i64::from_le_bytes(session.uuid[0..8].try_into().expect("eight uuid bytes")),
+        )
+    };
+    for packet in tracked_entities.join_packets() {
+        write_packet(&mut stream, &packet)?;
+    }
     let updates = crate::block_update::register_session();
     let mut center_x = (session.x.floor() as i32).div_euclid(16);
     let mut center_z = (session.z.floor() as i32).div_euclid(16);
@@ -1062,6 +1083,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     )?;
     let chunk_count = streamed.streamed;
     let counts = streamed.counts;
+    for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
+        write_packet(&mut stream, &packet)?;
+    }
 
     for packet in crate::entity::spawn_packets() {
         write_packet(&mut stream, &packet)?;
@@ -1079,11 +1103,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     );
     println!("[join] chunk source: {}", counts.describe());
 
-    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    stream.set_read_timeout(Some(SESSION_TICK_INTERVAL))?;
     let mut teleport_id = 1001i32;
     let mut last_keepalive = Instant::now();
     let mut last_save = Instant::now();
     let mut last_flush = Instant::now();
+    let mut last_entity_tick = Instant::now();
     let mut keepalive_nonce = 1i64;
     let respawn_position = (spawn_x, spawn_y, spawn_z);
     let mut last_void_damage = Instant::now();
@@ -1096,6 +1121,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
 
     loop {
         if shutdown_requested() {
+            tracked_entities.clear();
             if let Err(error) = session.save(playerdata_dir()) {
                 eprintln!("[join] could not save playerdata: {error}");
             }
@@ -1104,6 +1130,24 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             }
             println!("[join] {} disconnected for shutdown", start.name);
             return Ok(());
+        }
+        if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
+            let tick = {
+                let mut storage = crate::world::lock(world.storage);
+                let mut collider = WorldCollider::new(&mut storage);
+                tracked_entities.tick((session.x, session.y, session.z), &mut collider)
+            };
+            for packet in &tick.packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        finish_disconnected(&session, world.storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            last_entity_tick = Instant::now();
         }
         while let Ok(command) = console_commands.try_recv() {
             match command {
@@ -1130,6 +1174,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
                 awaiting_respawn = false;
                 death_at = None;
+                for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
+                    write_packet(&mut stream, &packet)?;
+                }
             }
         } else if apply_void_damage(&mut stream, &mut session, &mut last_void_damage)? {
             awaiting_respawn = true;
@@ -1140,8 +1187,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             println!("[join] {} died in the void", start.name);
         }
         while let Ok(update) = updates.try_recv() {
+            if !entity_packet_visible(&update, &tracked_entities) {
+                continue;
+            }
             if let Err(error) = write_packet(&mut stream, &update) {
                 if is_disconnect(&error) {
+                    tracked_entities.clear();
                     finish_disconnected(&session, world.storage, &start.name, &error);
                     return Ok(());
                 }
@@ -1192,6 +1243,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             )?;
                             awaiting_respawn = false;
                             death_at = None;
+                            for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
+                                write_packet(&mut stream, &packet)?;
+                            }
                         }
                     }
                     SERVERBOUND_CHAT_COMMAND | SERVERBOUND_CHAT_COMMAND_SIGNED => {
@@ -1336,6 +1390,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     batch.unloaded,
                                     batch.counts.describe()
                                 );
+                            }
+                            for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
+                                write_packet(&mut stream, &packet)?;
                             }
                         }
                     }
@@ -1652,6 +1709,78 @@ fn health_packet(session: &PlayerSession) -> Vec<u8> {
     writer.into_inner()
 }
 
+/// Result of one player damage application. `packets` follows the
+/// living-entity order: synched-data health/pose, then `ClientboundSetHealth`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerDamage {
+    pub damaged: bool,
+    pub died: bool,
+    pub packets: Vec<Vec<u8>>,
+}
+
+/// Create or reset the metadata-store record that mirrors this player session.
+/// The process-wide store is used because the entity bridge and plugin layer
+/// already address players by network id.
+pub fn register_player_entity(session: &PlayerSession, entity_id: i32) {
+    let mut player = crate::entity_metadata::LivingEntity::new_player(entity_id);
+    player.food = session.food_level.clamp(0, 20);
+    player.saturation = session.food_saturation.max(0.0);
+    player.set_health(session.health.clamp(0.0, player.max_health()));
+    // Join sends the session's own health packet; the store's initial health
+    // must not be flushed as a second update on the first tick.
+    player.metadata.pack_dirty();
+    crate::entity_metadata::living_entities().insert(player);
+}
+
+/// Reset the metadata-store player after a respawn, matching the existing
+/// `session.health = 20.0` respawn behavior.
+pub fn reset_player_entity(session: &mut PlayerSession, entity_id: i32) {
+    let mut store = crate::entity_metadata::living_entities();
+    let player = store.entry_player(entity_id);
+    player.dead = false;
+    player.death_time = 0;
+    player.death_broadcasted = false;
+    player.removed = false;
+    player.invulnerable_time = 0;
+    player.hurt_time = 0;
+    player.last_hurt = 0.0;
+    player.food = session.food_level.clamp(0, 20);
+    player.saturation = session.food_saturation.max(0.0);
+    player.set_health(20.0);
+    player.metadata.pack_dirty();
+    session.health = player.health;
+}
+
+/// Apply damage through the living-entity model so the client receives the
+/// same metadata health update and `ClientboundSetHealth` body as vanilla.
+pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -> PlayerDamage {
+    let mut store = crate::entity_metadata::living_entities();
+    let player = store.entry_player(entity_id);
+    player.food = session.food_level.clamp(0, 20);
+    player.saturation = session.food_saturation.max(0.0);
+    if (player.health - session.health).abs() > f32::EPSILON {
+        player.set_health(session.health);
+        player.metadata.pack_dirty();
+    }
+    let result = player.hurt(amount);
+    session.health = player.health;
+    PlayerDamage {
+        damaged: result.damaged,
+        died: result.died,
+        packets: result.packets,
+    }
+}
+
+/// Void damage repeats every half second; the living model keeps a player's
+/// invulnerability timer at 20 ticks, so reset it before each void hit to keep
+/// the existing damage cadence.
+fn clear_player_invulnerability(entity_id: i32) {
+    if let Some(player) = crate::entity_metadata::living_entities().get_mut(entity_id) {
+        player.invulnerable_time = 0;
+        player.last_hurt = 0.0;
+    }
+}
+
 fn player_entity_id() -> i32 {
     for packet in play_packets() {
         if packet_id(packet).ok() != Some(PLAY_JOIN_GAME) {
@@ -1662,6 +1791,32 @@ fn player_entity_id() -> i32 {
         return reader.read_i32().unwrap_or(1);
     }
     1
+}
+
+/// Whether a broadcast packet belongs to this session's entity view: either one
+/// of its own tracked mobs or a process-wide entity the bridge spawned. Other
+/// entity packets are dropped instead of leaking across sessions.
+fn entity_packet_visible(packet: &[u8], tracked: &SessionEntityTracker) -> bool {
+    let mut reader = PacketReader::new(packet);
+    let Ok(packet_id) = reader.read_varint() else {
+        return true;
+    };
+    let entity_id = match packet_id {
+        crate::entity::CLIENTBOUND_ADD_ENTITY | crate::entity::CLIENTBOUND_ENTITY_POSITION_SYNC => {
+            reader.read_varint().ok()
+        }
+        crate::entity_metadata::CLIENTBOUND_SET_ENTITY_DATA
+        | crate::entity_metadata::CLIENTBOUND_SET_EQUIPMENT => reader.read_varint().ok(),
+        crate::entity_metadata::CLIENTBOUND_ENTITY_EVENT => reader.read_i32().ok(),
+        // Removals are always forwarded: the broadcast entity map has already
+        // forgotten the id, and removing an unknown id is harmless on the wire.
+        crate::entity::CLIENTBOUND_REMOVE_ENTITIES => return true,
+        _ => return true,
+    };
+    match entity_id {
+        Some(id) => tracked.tracks(id) || crate::entity::is_tracked(id),
+        None => true,
+    }
 }
 
 fn combat_kill_packet(message: &str) -> Vec<u8> {
@@ -1710,12 +1865,17 @@ fn apply_fall_damage(
     session: &mut PlayerSession,
     damage: f32,
 ) -> io::Result<bool> {
-    let Some(health) = fall_damage_health(session.health, damage, session.game_mode) else {
+    if fall_damage_health(session.health, damage, session.game_mode).is_none() {
         return Ok(false);
-    };
-    session.health = health;
-    write_packet(stream, &health_packet(session))?;
-    if session.health <= 0.0 {
+    }
+    let result = damage_player(session, player_entity_id(), damage);
+    if !result.damaged {
+        return Ok(false);
+    }
+    for packet in &result.packets {
+        write_packet(stream, packet)?;
+    }
+    if result.died {
         write_packet(
             stream,
             &combat_kill_packet("Player hit the ground too hard"),
@@ -1734,17 +1894,24 @@ fn apply_void_damage(
     session: &mut PlayerSession,
     last_damage: &mut Instant,
 ) -> io::Result<bool> {
-    let Some(health) = void_damage_health(session.health, session.y, session.game_mode) else {
+    if void_damage_health(session.health, session.y, session.game_mode).is_none() {
         return Ok(false);
-    };
+    }
     let now = Instant::now();
     if now.duration_since(*last_damage) < VOID_DAMAGE_INTERVAL {
         return Ok(false);
     }
     *last_damage = now;
-    session.health = health;
-    write_packet(stream, &health_packet(session))?;
-    if health <= 0.0 {
+    let entity_id = player_entity_id();
+    clear_player_invulnerability(entity_id);
+    let result = damage_player(session, entity_id, VOID_DAMAGE);
+    if !result.damaged {
+        return Ok(false);
+    }
+    for packet in &result.packets {
+        write_packet(stream, packet)?;
+    }
+    if result.died {
         write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
@@ -1770,6 +1937,7 @@ fn respawn_player(
 ) -> io::Result<()> {
     session.teleport(spawn.0, spawn.1, spawn.2, true);
     session.health = 20.0;
+    reset_player_entity(session, player_entity_id());
     write_packet(stream, &respawn_packet(session.game_mode)?)?;
     *teleport_id += 1;
     write_packet(stream, &position_packet(session, *teleport_id))?;

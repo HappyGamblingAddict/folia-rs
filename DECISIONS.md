@@ -2309,3 +2309,44 @@ Format:
   `ServerboundHelloPacket`'s `readUtf(16)`; legitimate offline clients are
   unaffected. The server binary still needs `accept_logins` and
   `configure_online_mode` wiring (see `BLOCKERS.md`).
+
+## 2026-11-06 - Session mobs are viewer-owned, not process-wide entities
+
+- Context: The existing `entity::ENTITIES` map plus `block_update::broadcast`
+  sends every entity packet to every session. The join test relies on that
+  legacy path for externally spawned armor stands, but a live population must
+  not leak between players or keep ticking after disconnect.
+- Decision: `SessionEntityTracker` owns the deterministic cow/pig/zombie set
+  and its `LivingEntity` records. It emits packets straight to its own
+  connection instead of broadcasting. Process-wide broadcasts are still
+  forwarded, but only for ids in the session tracker or in the global entity
+  map (`entity::is_tracked`); remove-entities packets are always forwarded
+  because the global map forgets the id before broadcasting.
+- Decision: Session mob ids come from a global atomic base (10,000 + 8 per
+  session) rather than the player id, so concurrent sessions never share an id
+  while the type/offset set remains deterministic.
+- Decision: Join announces the mobs after the position packet and before the
+  chunk batch. The client holds them until their columns arrive, and the
+  existing captured-world join test's chunk loop ignores non-chunk packets, so
+  its byte-level assertions stay unchanged.
+- Decision: Fall/void damage goes through `LivingEntity::hurt` for the player
+  id. Void damage clears the player invulnerability timer before each 500 ms
+  hit to preserve the previous damage cadence (vanilla never decrements a
+  server player's `invulnerableTime`, which would otherwise reject the repeat).
+- Why: Keeps legacy single-player entity tests working while giving each live
+  session a bounded, disconnect-safe entity view.
+- Consequences: Session mobs are not shared, saved, or visible to other
+  players; AI is limited to `AiMob::update_environment` because goal-driven
+  movement would make unrelated join assertions race. Full tracking is P5.13.
+
+## 2026-11-06 - Session tick cadence is the play-loop read timeout
+
+- Context: The session loop blocks on a socket read with a one-second timeout,
+  so entity gravity would otherwise tick at 1 Hz.
+- Decision: Set the play read timeout to 50 ms and tick tracked entities at that
+  cadence. Keepalive, autosave, delayed block breaking, and terrain flush keep
+  their existing interval checks.
+- Why: Gives tracked mobs a 20 Hz physics cadence without adding a timer thread
+  or changing packet ids.
+- Consequences: Idle sessions wake 20 times per second. Entity packets are
+  written only when a position or metadata value changes.

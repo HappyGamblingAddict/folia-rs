@@ -9,7 +9,8 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit: see `git log`; the tree is committed and not pushed.
-- Tests: **804 passing** on the full merged gate (0 failed).
+- Tests: focused join/entity suites pass (6 new `tests/join_entities.rs`
+  checks); the full merged gate was not rerun in this worktree.
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -22,6 +23,12 @@ Last updated: 2026-11-06
   comparators, observers, torches, pressure plates, and tripwire; lava/water
   quenching, fire, and bubble columns; Nether and End generation; entity goals,
   pathfinding, and natural spawning; online-mode RSA/AES auth and encryption.
+- Join sessions now own a deterministic three-mob set (cow/pig/zombie) with
+  Add Entity, full initial metadata, equipment, per-tick physics/AI environment,
+  health/death/remove packets, chunk-unload and out-of-range cleanup. Player
+  fall/void damage runs through the living metadata store so metadata health and
+  `ClientboundSetHealth` agree. Global broadcast entity packets are filtered to
+  ids the session tracks.
 - Major gaps: recursive jigsaw and structure generator/biome wiring; typed
   block-entity storage and tickers; pistons; live join entity spawning and AI
   tick integration; shape-aware light occlusion; loot-table gameplay wiring;
@@ -33,7 +40,8 @@ Last updated: 2026-11-06
 
 1. P2.8 recursive jigsaw connection and structure generator/chunk-status wiring.
 2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
-3. P5 join-session entity spawning/tracking and AI tick integration.
+3. P5 join-session entity tracking is wired for the pinned mob set; remaining
+   work is P5.13 per-viewer parity, AI goals/sensors, persistence, and armor.
 4. P1.5 shape-aware light occlusion and remaining support/waterlogging rules.
 5. P9.3 bridge live-session state and gameplay event dispatch.
 
@@ -51,13 +59,29 @@ Last updated: 2026-11-06
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
 - [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
 - [~] P4.8 crafting (menus, packets, recipe book, brewing).
-- [~] P5.1/P5.2 metadata/AI (join wiring, armor, more goals/sensors).
+- [~] P5.1/P5.2 metadata/AI (join mobs, initial metadata/equipment, damage/death,
+  and player damage are wired; persistence, armor, more goals/sensors remain).
+- [~] P5.13 entity tracking (session-owned mobs plus tracked-id filtering;
+  velocity/animation/passenger/global tracking parity remains).
 - [~] P7.1-P7.3 Nether/End (storage, portals, structures, Java fixtures).
 - [~] P8.1 online mode core (binary wired; TLS, chat signing).
 - [~] P9.2/P9.3 bridge proxies/events (live sessions, API depth).
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P5 join-session entity wiring — `entity.rs` adds a
+  `SessionEntityTracker` that owns three deterministic mobs (cow, pig, zombie)
+  per viewer, built from `spawn::entity_type` dimensions and real entity ids.
+  Join sends Add Entity id 1, full `ClientboundSetEntityData` id 97 (including
+  health), and `ClientboundSetEquipment` id 100 before the chunk batch. The
+  play loop ticks physics/gravity at 20 Hz, updates `entity_ai` environment
+  state, flushes dirty metadata, emits death/poof events and remove-entities id
+  75, and drops mobs on death, out-of-range, chunk unload, or disconnect.
+  `join.rs` routes fall/void damage through the living metadata store (metadata
+  health + `ClientboundSetHealth` id 102), resets it on respawn, and filters
+  global broadcast entity packets to tracked ids. Focused: 6
+  `tests/join_entities.rs`, plus `join`, `entity_metadata`, and
+  `entity_physics` stay green; fmt/clippy clean.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's

@@ -626,3 +626,29 @@ These are expected gaps, not reasons to stop:
 - Additional limitation: there is no TLS stack in the workspace, so the real
   session lookup shells out to `curl`. Replace it with an in-process TLS client
   when a dependency is allowed (P11 hardening).
+
+## 2026-11-06 - P5.13 join-session entity tracking is a behaviour slice
+
+- Scope: Live sessions spawn, tick, damage, and remove three deterministic mobs
+  (cow/pig/zombie) through `SessionEntityTracker`; join sends Add Entity, full
+  metadata, and equipment; fall/void player damage uses the living store; global
+  entity broadcasts are filtered to tracked ids.
+- Not ported (not hard blockers):
+  - Session mobs are viewer-owned and are not shared with other players, saved
+    with chunks, or persisted across restarts.
+  - AI is limited to `AiMob::update_environment` (water/lava/ground state).
+    Goal selectors and pathfinding are not ticked in the live loop, so mobs do
+    not wander or attack yet.
+  - Health uses the generic `LivingEntity` 20 HP default except for the pinned
+    cow/pig (10) and zombie (20) max-health values; drops, XP, knockback,
+    armor, damage types, effects, and absorption are absent.
+  - Tracking range is a fixed 80 blocks. Vanilla per-entity-type ranges, chunk
+    tickets, velocity/teleport packet variants, animation/effect/passenger/leash
+    packets, and per-viewer metadata dirtying are not modeled.
+  - Join mob packets are sent before the chunk batch so the captured-world join
+    test stays byte-compatible. A real client holds the entities until their
+    columns arrive; vanilla normally sends them after chunk tracking starts.
+  - There is no Java-captured join entity packet fixture; the six focused tests
+    pin packet ids and bodies against the decompiled layouts.
+- Workaround / next task: keep the explicit `SessionEntityTracker` boundary and
+  extend it for P5.13/P5.2 rather than reintroducing global broadcasts.

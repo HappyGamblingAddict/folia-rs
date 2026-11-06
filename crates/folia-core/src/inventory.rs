@@ -40,6 +40,42 @@ pub fn merge_stacks(target: &mut ItemStack, source: &mut ItemStack) -> i32 {
     moved
 }
 
+/// Insert `stack` into the inventory, merging with matching stacks first and
+/// then filling empty slots. Returns the part that did not fit (an empty stack
+/// when everything was accepted).
+pub fn add_stack(inventory: &mut [ItemStack], mut stack: ItemStack) -> ItemStack {
+    if stack.is_empty() {
+        return ItemStack::empty();
+    }
+    let max_stack = stack.max_stack_size();
+    for slot in inventory.iter_mut() {
+        if !same_stack(slot, &stack) {
+            continue;
+        }
+        let space = slot.max_stack_size() - slot.count;
+        if space > 0 {
+            let moved = space.min(stack.count);
+            slot.count += moved;
+            stack.shrink(moved);
+            if stack.is_empty() {
+                return ItemStack::empty();
+            }
+        }
+    }
+    for slot in inventory.iter_mut() {
+        if !slot.is_empty() {
+            continue;
+        }
+        let moved = max_stack.min(stack.count);
+        *slot = stack.copy_with_count(moved);
+        stack.shrink(moved);
+        if stack.is_empty() {
+            return ItemStack::empty();
+        }
+    }
+    stack
+}
+
 pub fn item_id(item: &str) -> Option<i32> {
     crate::registry::item_id(item)
 }
@@ -401,5 +437,23 @@ mod tests {
         assert_eq!(inventory[2].item, "minecraft:grass_block");
         assert!(inventory[3..].iter().all(ItemStack::is_empty));
         assert!(block_for_item("minecraft:stick").is_none());
+    }
+
+    #[test]
+    fn add_stack_merges_then_fills_and_returns_overflow() {
+        let mut inventory = vec![ItemStack::empty(); 2];
+        inventory[0] = ItemStack::new("minecraft:stone", 60);
+
+        let leftover = add_stack(&mut inventory, ItemStack::new("minecraft:stone", 10));
+        assert!(leftover.is_empty());
+        assert_eq!(inventory[0].count, 64);
+        assert_eq!(inventory[1].item, "minecraft:stone");
+        assert_eq!(inventory[1].count, 6);
+
+        let full = vec![ItemStack::new("minecraft:dirt", 64); 2];
+        let mut full = full;
+        let leftover = add_stack(&mut full, ItemStack::new("minecraft:dirt", 3));
+        assert_eq!(leftover.item, "minecraft:dirt");
+        assert_eq!(leftover.count, 3);
     }
 }

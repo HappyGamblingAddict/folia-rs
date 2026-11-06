@@ -10,8 +10,19 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `6e0e5fe`
 - Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
-- Tests: **426 passing** on the last full gate; this slice adds 16
-  integration and 3 lib focused tests.
+- Tests: **426 passing** on the last full gate; the block-breaking slice adds
+  13 lib + 9 `tests/block_breaking.rs` tests (full gate rerun by the
+  coordinator).
+- P4.3 block breaking is server-validated: `block_breaking.rs` ports the
+  start/stop/abort dig machine, the 0.7 stop threshold and delayed destroy,
+  `getDestroyProgress`/`getDestroySpeed`, tool tiers/harvest gating from the
+  block tags, sword/shears rules, efficiency/haste/fatigue and water/air
+  penalties, durability/item break, and a deterministic common-block drop
+  table with a `LootProvider` hook. `join.rs` tracks dig state per session,
+  breaks instantly in creative, applies drops to the inventory, and resyncs
+  mismatched targets with the existing block-update packet. Real loot tables,
+  item entities, block-damage overlay packets, Unbreaking/Fortune/Silk Touch,
+  adventure `can_destroy`, and a Java break-time fixture remain open.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -227,6 +238,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P4.3 now validates breaking. Next: port real block loot tables (ranges,
+  Fortune/Silk Touch), create `ItemEntity` drops instead of inventory capture,
+  send the block-damage overlay packet, model Unbreaking, parse adventure
+  `can_destroy`, add status-effect/haste sources, and capture a Java
+  break-time/drop fixture.
 - P1.4 has a working component-aware stack model. Next: dump per-item prototype
   component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
@@ -290,8 +306,25 @@ Last updated: 2026-11-06
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
   and burst validation done; teleport ack and special movement remain)
+- [~] P4.3 Block breaking progress (dig state, tool/tier checks, break times,
+  creative instant break, drops, durability done; real loot tables, item
+  entities, overlay packets, Unbreaking/Fortune/Silk Touch, adventure
+  `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-06: P4.3 block-breaking slice — `block_breaking.rs` ports the
+  start/stop/abort dig state machine, vanilla's 0.7 stop threshold and
+  `hasDelayedDestroy`, `Player.getDestroySpeed`,
+  `BlockBehaviour.getDestroyProgress`, tool material speeds/durabilities,
+  efficiency `level^2 + 1`, haste/mining fatigue, water/air penalties, the
+  sword/shears rules, and tier/harvest gates from the `mineable/*`,
+  `incorrect_for_*_tool`, and `needs_*_tool` block tags. `join.rs` keeps dig
+  state per session, destroys instantly in creative, wears/breaks tools,
+  captures a deterministic common-block drop table (with a `LootProvider` hook
+  for `crate::loot`), and continues delayed destroys on idle ticks. 13 lib + 9
+  integration tests. Real loot tables, item entities, block-damage overlay
+  packets, Unbreaking/Fortune/Silk Touch, adventure `can_destroy`, and a Java
+  fixture remain open.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/
@@ -377,6 +410,10 @@ Last updated: 2026-11-06
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
   and burst validation done; teleport ack and special movement remain)
+- [~] P4.3 Block breaking progress (dig state, tool/tier checks, break times,
+  creative instant break, drops, durability done; real loot tables, item
+  entities, overlay packets, Unbreaking/Fortune/Silk Touch, adventure
+  `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
 

@@ -70,6 +70,14 @@ foreach ($asset in $assets) {
     }
 }
 
+$registryAssets = @(Get-ChildItem "crates/folia-core/assets/registries/*.tsv" -ErrorAction SilentlyContinue)
+if ($registryAssets.Count -eq 23) {
+    Write-Host "OK: 23 dynamic registry assets"
+} else {
+    Write-Host "MISSING: expected 23 dynamic registry assets, found $($registryAssets.Count)" -ForegroundColor Red
+    $failures.Add("dynamic registry asset count")
+}
+
 Run-Step "cargo fmt --check" {
     cargo fmt --all -- --check
 }

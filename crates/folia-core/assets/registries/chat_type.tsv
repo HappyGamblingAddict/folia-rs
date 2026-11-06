@@ -1,0 +1,8 @@
+0	minecraft:chat
+1	minecraft:emote_command
+2	minecraft:msg_command_incoming
+3	minecraft:msg_command_outgoing
+4	paper:raw
+5	minecraft:say_command
+6	minecraft:team_msg_command_incoming
+7	minecraft:team_msg_command_outgoing

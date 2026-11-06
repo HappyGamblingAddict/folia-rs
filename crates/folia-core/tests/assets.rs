@@ -63,6 +63,61 @@ fn generated_assets_match_the_manifest() {
 }
 
 #[test]
+fn dynamic_registry_assets_match_the_manifest() {
+    let expected: [(&str, usize, u64); 23] = [
+        (
+            "registries/banner_pattern.tsv",
+            1_128,
+            0x4b33_0b3f_f4e5_08aa,
+        ),
+        ("registries/cat_variant.tsv", 232, 0x05cd_22d8_e030_50d4),
+        ("registries/chat_type.tsv", 229, 0xacb1_f362_d3ae_4a4b),
+        ("registries/chicken_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
+        ("registries/cow_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
+        ("registries/damage_type.tsv", 1_232, 0xde71_cad6_0a14_a36d),
+        ("registries/dialog.tsv", 81, 0xc91a_6533_5bb9_ab3f),
+        ("registries/dimension_type.tsv", 97, 0x858c_ec10_6a34_bab5),
+        ("registries/enchantment.tsv", 1_063, 0xcab6_64fa_6191_9ac0),
+        ("registries/frog_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
+        ("registries/instrument.tsv", 230, 0xbdf6_08bc_5edb_867a),
+        ("registries/jukebox_song.tsv", 426, 0x0816_3fe8_59c0_36b0),
+        (
+            "registries/painting_variant.tsv",
+            1_094,
+            0x4965_bd6b_c4d5_9df3,
+        ),
+        ("registries/pig_variant.tsv", 59, 0x4802_9f4a_d65a_3a4b),
+        ("registries/test_environment.tsv", 21, 0x0e4b_680a_9d03_6869),
+        ("registries/test_instance.tsv", 25, 0x389b_5dee_903c_0053),
+        ("registries/timeline.tsv", 90, 0x8184_152a_d74b_900a),
+        ("registries/trim_material.tsv", 224, 0x57e7_5985_9709_6a73),
+        ("registries/trim_pattern.tsv", 346, 0x9df9_47cc_5a98_ff0c),
+        (
+            "registries/wolf_sound_variant.tsv",
+            132,
+            0x5118_e273_9e78_63f0,
+        ),
+        ("registries/wolf_variant.tsv", 177, 0x54a3_a531_0b0c_95d7),
+        (
+            "registries/worldgen_biome.tsv",
+            1_746,
+            0x6e48_37e8_fc4a_38c0,
+        ),
+        (
+            "registries/zombie_nautilus_variant.tsv",
+            41,
+            0x6188_bf5d_0dc1_6fd8,
+        ),
+    ];
+
+    for (name, length, hash) in expected {
+        let bytes = asset(name);
+        assert_eq!(bytes.len(), length, "{name} byte length changed");
+        assert_eq!(fnv1a64(&bytes), hash, "{name} contents changed");
+    }
+}
+
+#[test]
 fn registry_tables_have_the_expected_line_counts() {
     let cases = [
         ("block_states.tsv", 29_671usize),

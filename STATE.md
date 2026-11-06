@@ -18,6 +18,9 @@ Last updated: 2026-11-06
   full gate.
 - Tests: **634 passing** on the final full workspace gate (0 failed).
 - Tests: **630 passing** on the final full workspace gate (0 failed).
+- Tests: **611 passing** on the last full workspace gate; the incremental-light
+  slice adds 9 focused tests (1 lib + 8 `tests/light_incremental.rs`) and those
+  targets pass. The coordinator owns the next full gate.
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -137,13 +140,17 @@ Last updated: 2026-11-06
   fixture after ore/veinifier wiring.
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
-  block-light BFS for an explicit emitter table. Chunk NBT round-trips
-  `SkyLight`/`BlockLight`; `light_bytes` prefers stored/computed layers and
-  keeps the height fallback only for chunks without light. Block edits reload
-  existing neighbours, recompute both layers, persist them, and broadcast real
-  block-light updates. The emitter/opacity table is still hand-written, there
-  is no Java light fixture, and light updates are whole-chunk rather than
-  incremental sections.
+  block-light BFS for the generated per-state emitter/opacity table. Chunk NBT
+  round-trips `SkyLight`/`BlockLight`; `light_bytes` prefers stored/computed
+  layers and keeps the height fallback only for chunks without light. Block
+  edits snapshot the old layers and run the vanilla two-phase decrease then
+  increase schedule in `LightScene`, including sky column source updates and
+  cross-chunk propagation into loaded neighbours. Changed sections are tracked
+  in `DirtySections`; edits persist and broadcast only those section payloads
+  (with separate payloads for touched neighbours). The first edit on a chunk
+  with no light data pays one whole-chunk initialization pass, then edits are
+  incremental. There is still no Java light fixture and light occlusion remains
+  full-cube because P1.5 shape metadata is missing.
 - Joins stream a square chunk column sized by the negotiated view distance
   (the probe client asks for 6, so 13×13; the shipped server allows 10 and a
   default client asks for 12, so a normal join streams 441 columns) and
@@ -315,8 +322,9 @@ Last updated: 2026-11-06
    breaking.
 2. P2.8 structure processor lists, template pools, jigsaw expansion, biome
    filtering, and generator wiring.
-3. P3.6–P3.9 decrease queues, incremental section light packets, cross-chunk
-   relighting, and Java light fixtures.
+3. P3.6–P3.9 remaining light gaps: Java light fixtures and P1.5 shape
+   occlusion (nibble storage, decrease/increase queues, section-scoped
+   payloads, and cross-chunk propagation are done).
 4. P5 entity AI/goals, spawning, armor calculation, and join-session wiring.
 5. P6 pistons, block entities, redstone lamps/target blocks/tripwire hooks, and
    the remaining fluid quenching/fire behavior.
@@ -403,9 +411,12 @@ Last updated: 2026-11-06
   done; recursive jigsaw, biome/dimension filtering, structure NBT, and
   entity/block-entity creation remain)
 - [x] P3.5 Real light storage
-- [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
-- [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
-- [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.6 Sky-light engine (single-chunk, border margin, incremental source
+  updates; Java fixture remains)
+- [~] P3.7 Block-light engine (generated emission/opacity, decrease/increase
+  queues; Java fixture remains)
+- [~] P3.8 Incremental light updates (`DirtySections`, section-scoped
+  payloads, neighbour payloads; Java packet-body comparison remains)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook, water/lava flow,
   wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;
@@ -511,6 +522,18 @@ Last updated: 2026-11-06
   `BlockCollider::collision_boxes` default. The player steps onto/off a bottom
   slab and an armor stand lands at 0.5. 4 lib + 15 `tests/block_shapes.rs`
   tests.
+- 2026-11-06: P3.8/P3.9 incremental light — `light.rs` adds `LightScene`,
+  `DirtySections`/`LightSectionPos`, deterministic deduplicated decrease and
+  increase queues, sky column source updates, cross-chunk propagation into
+  loaded neighbours, and `light_update_for_sections` for section-scoped
+  `ClientboundLightUpdate` bodies. `block_update::set_block` now snapshots and
+  restores the pre-edit layers around `Chunk::set_block_state`, runs the
+  incremental scene, persists only changed neighbour chunks, and exposes
+  `BlockChange.dirty_sections`/`neighbour_light`; `broadcast_change` sends the
+  centre and neighbour payloads. 8 focused `tests/light_incremental.rs` tests
+  cover torch removal, sky columns, borders, exact dirty
+  sections, idempotence, storage persistence, and bulk-vs-incremental equality.
+  Remaining: Java light fixture and P1.5 shape occlusion.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
 - [~] P7.1 Dimension abstraction (`generator::Dimension` + `generate_dimension`
   dispatch done; fixed time, game rules, and plugin `World` dimension API remain)
@@ -720,9 +743,12 @@ Last updated: 2026-11-06
   template pools, jigsaw expansion, and random palette selection are still
   unported. 13 focused tests.
 - [x] P3.5 Real light storage
-- [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
-- [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
-- [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.6 Sky-light engine (single-chunk, border margin, incremental source
+  updates; Java fixture remains)
+- [~] P3.7 Block-light engine (generated emission/opacity, decrease/increase
+  queues; Java fixture remains)
+- [~] P3.8 Incremental light updates (`DirtySections`, section-scoped
+  payloads, neighbour payloads; Java packet-body comparison remains)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook, water/lava flow,
   wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;

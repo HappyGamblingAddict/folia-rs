@@ -2182,3 +2182,41 @@ Format:
   are not modeled; shapes are dumped with the empty context. Outline data for
   passable states, support/occlusion rules, and waterlogging remain open P1.5
   work.
+## 2026-11-06 - Incremental light uses Java's decrease-then-increase queues
+
+- Context: `Chunk::set_block_state` clears a chunk's cached light because the
+  chunk model cannot know which sections an edit affects. Recomputing the whole
+  chunk (and a one-block neighbour margin) on every edit was correct but far
+  from vanilla's `LightEngine` and made every block change send a full-chunk
+  light payload. P3.8/P3.9 need decrease propagation, sky column updates,
+  cross-chunk borders, and dirty-section reporting.
+- Decision: `light::LightScene` owns the edited chunk plus every loaded
+  neighbour and runs vanilla's two phases after an edit: first `decrease`
+  (zeroing every cell lit by the old source, re-seeding emitters, and pulling
+  from unaffected borders), then `increase` (BFS from the surviving border).
+  Block light ports `BlockLightEngine.checkNode`/`propagateDecrease`/
+  `propagateIncrease`; sky light recomputes only the edited column's
+  `ChunkSkyLightSources` entry and fills/removes the direct-sky run around it.
+  Queues are FIFO over `Direction.values()` order with a pending-set dedup, and
+  dirty sections are a `BTreeSet`, so ordering is reproducible.
+- Decision: keep `Chunk::set_block_state`'s clear behavior. `LightScene`
+  snapshots the pre-edit `SectionLight` layers, replays them after the block
+  mutation, and then applies the incremental delta. This keeps the change
+  inside `light.rs`/`block_update.rs` while preserving the existing chunk API.
+- Decision: `DirtySections` is per section, not per layer. A dirty section's
+  sky and block layers are both encoded, but sections that did not change are
+  omitted. `light_update_for_sections` emits the exact
+  `ClientboundLightUpdatePacketData` layout (four bitsets plus 2048-byte
+  arrays), so the wire format is unchanged and a section-scoped update is a
+  valid vanilla packet.
+- Decision: chunks with no light data pay one whole-chunk initialization pass
+  when first entering a scene; neighbouring chunks changed by border
+  propagation are persisted via `WorldStorage::update_chunk` and broadcast as
+  their own payloads. Generated chunks still start on the height fallback until
+  their first edit (generation-time lighting remains open).
+- Consequences: a single edit no longer recomputes an already-lit chunk, and
+  `BlockChange` exposes `dirty_sections` plus `neighbour_light`. Remaining
+  parity gaps are Java light-array/packet fixtures and shape-accurate occlusion
+  (full cubes until P1.5). `materialize_sky_layers` fills sections above the
+  highest stored sky layer with 15 on first use; this changes representation,
+  not effective light, and those sections are not marked dirty on their own.

@@ -173,16 +173,18 @@ Format:
 
 These are expected gaps, not reasons to stop:
 
-- Lighting is a first slice, not full vanilla light-engine parity. `light.rs`
-  recomputes a whole chunk (plus a one-block neighbour margin) from the
-  generated per-state `block_behaviour` light emission/attenuation table.
-  Unknown states stay opaque and non-emitting, which is conservative but can
-  still over-block light through datapack blocks. Incremental
-  decrease/increase section bookkeeping, queued cross-chunk relighting,
-  generation-time lighting, cached behaviour lookups, and a Java
-  light-array/packet fixture remain open. The table is exact where the old
-  hand-written list guessed: ice attenuates by 1 and blue ice uses friction
-  0.989, for example.
+- Lighting is now incremental for block edits but still not fully
+  vanilla-verified. `LightScene` runs Java's decrease-then-increase queues
+  across the edited chunk and loaded neighbours, updates the edited sky column
+  source, and reports dirty sections; `block_update` persists and broadcasts
+  only those section payloads. Remaining gaps: no Java light-array/packet
+  fixture, light occlusion is the per-state `light_block` value with full-cube
+  shapes (P1.5 metadata is not ported), unknown states stay opaque and
+  non-emitting, chunks with no light data pay a one-time whole-chunk
+  initialization on their first edit, generated chunks still use the height
+  fallback until edited, and generation-time lighting is not wired into the
+  chunk-status pipeline. Cached behaviour lookups and a Java seam fixture also
+  remain open.
 - `BiomeManager` has no Java fixture. Its seed obfuscation is pinned to NIST
   SHA-256 vectors and its quart selection to values derived from the Java
   source; a Java `getBiome` dump would lock it down.

@@ -38,6 +38,9 @@ where possible, a differential test against the Java oracle.
 | Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; Nether/End generation slices landed; structures are template/start-only |
 | Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
 | Player simulation | ~30% | Movement physics, multi-box collision, fall damage, break progress/tools/drops/durability; special movement missing |
+| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures are template/start-only; Nether/End missing |
+| Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, incremental decrease/increase queues, sky column updates, cross-chunk propagation, dirty-section payloads; Java fixtures and P1.5 shape occlusion missing |
+| Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
 | Blocks/redstone/fluids | ~30% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks, full components missing |
 | Blocks/redstone/fluids | ~27% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching, lava fire, bubble columns, wire/lever/button; pistons, block entities, full components missing |
@@ -108,6 +111,18 @@ where possible, a differential test against the Java oracle.
   tests cover slabs, stairs, fences, walls, panes, snow, carpets, doors,
   trapdoors, farmland/path/soul sand/honey, unknown fallback, a player
   stepping onto/off a slab, and an entity landing on a slab.
+- 2026-11-06: Incremental light engine — `light.rs` adds `LightScene`,
+  `LightSectionPos`/`DirtySections`, deterministic deduplicated decrease and
+  increase queues, sky column source updates, cross-chunk propagation into
+  loaded neighbours, and `light_update_for_sections` (section-scoped
+  `ClientboundLightUpdatePacketData` bodies). `block_update::set_block`
+  snapshots the pre-edit layers, restores them around `Chunk::set_block_state`,
+  runs the incremental scene, persists changed neighbour chunks, and exposes
+  `BlockChange.dirty_sections` plus per-neighbour light payloads. Torch
+  removal, sky/glass/opaque edits, border edits, exact dirty sections,
+  idempotence, storage persistence, and bulk-vs-incremental equality are
+  covered by 8 `tests/light_incremental.rs` tests. Remaining: Java light
+  fixtures and shape-accurate occlusion (P1.5).
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -1189,9 +1204,12 @@ section-only light packets are still open.
   a six-direction BFS with opacity so light spreads under overhangs. A
   one-block neighbour margin imports border sources when neighbour chunks are
   supplied; missing neighbours are not seeded, so they cannot invent a bright
-  seam. Tests cover a roofed shaft (15/14/… falloff), border propagation, and
-  packet bytes. Full `LayerLightSectionStorage` decrease/increase bookkeeping
-  and a Java light-array fixture are still open.
+  seam. `LightScene` now recomputes only the edited column's source and
+  propagates the resulting decrease/increase schedule across loaded chunk
+  borders instead of rebuilding the chunk. Tests cover a roofed shaft
+  (15/14/… falloff), border propagation, glass/opaque column edits, and packet
+  bytes. A Java light-array fixture is still open; an edit only rescans the
+  edited column, while every other column keeps its existing layers.
 
 ### P3.7 Block-light engine `[~]` `L`
 
@@ -1204,16 +1222,21 @@ section-only light packets are still open.
 - **Done when:** Block-light arrays match Java for lava/torch/glowstone
   fixtures.
 - **Progress (2026-11-06):** `light.rs` scans emitters and runs a BFS increase
-  pass. Emission and opacity now come from the generated per-state
-  `block_behaviour` table (29,671 rows), not a hand-written list. That covers
-  torch 14, soul torch 10, lantern 15, soul lantern 10,
+  pass plus the vanilla decrease queue. Emission and opacity come from the
+  generated per-state `block_behaviour` table (29,671 rows), not a hand-written
+  list. That covers torch 14, soul torch 10, lantern 15, soul lantern 10,
   glowstone/sea lantern/shroomlight/lava 15, magma 3 (vanilla; the task brief’s
   “magma 15” was wrong), campfire 15, fire 15, redstone lamp and furnace lit
   states, respawn anchor charges, sea pickle, cave vines, froglight, amethyst
   buds, and every other shipped emitter. Opacity comes from `light_block`:
-  air/glass 0, water/leaves/ice 1, tinted glass and unknown states 15. Tests
-  cover torch radius, glass/water sky attenuation, a glass-shaft overhang,
-  unsupported emitters, and border light. No Java block-light array fixture yet.
+  air/glass 0, water/leaves/ice 1, tinted glass and unknown states 15.
+  `LightScene::update_block_light` ports `BlockLightEngine.checkNode`,
+  `propagateDecrease` (including emitter re-seeding) and `propagateIncrease`
+  with a deterministic FIFO and position dedup, so removing a torch decrements
+  its former radius and pulls light back from unaffected borders. Tests cover
+  torch placement/removal, emitter replacement, glass/water attenuation, a
+  glass-shaft overhang, unsupported emitters, and border light. No Java
+  block-light array fixture yet.
 
 ### P3.8 Incremental light updates and packets `[~]` `M`
 
@@ -1223,14 +1246,19 @@ section-only light packets are still open.
   still wrong for block light.
 - **Done when:** A torch placement produces the same light packet body as Java
   and does not resend unrelated chunks.
-- **Progress (2026-11-06):** `block_update::set_block` invalidates cached light,
-  reloads existing neighbours, recomputes the edited chunk, persists it through
-  `WorldStorage::update_chunk`, and broadcasts the block + light payloads.
-  `chunk_packet::light_bytes` now uses stored/computed layers (sky and block)
-  with correct masks and real block-light updates; chunks without any light
-  still use the old height-based fallback, preserving the byte-identical
-  `(0,-1)` Java packet fixture. Incremental section-only relighting, Java
-  packet-body comparison, and avoiding whole-chunk broadcasts are still open.
+- **Progress (2026-11-06):** `block_update::set_block` snapshots the pre-edit
+  light layers, lets `Chunk::set_block_state` invalidate them, restores the
+  snapshot, and runs `LightScene`'s decrease-then-increase schedule. The scene
+  tracks changed sections in `DirtySections`; `BlockChange.light` now carries a
+  section-scoped `ClientboundLightUpdatePacketData` body built by
+  `light_update_for_sections` (2048-byte arrays, unchanged wire layout), and
+  `BlockChange.neighbour_light` carries the same for neighbouring chunks that
+  received border light. `broadcast_change` sends the centre and neighbour
+  payloads. Already-lit chunks are updated incrementally; a chunk with no light
+  data pays one whole-chunk initialization pass on its first edit. Chunks
+  without any light still use the old height fallback for initial chunk
+  packets, preserving the byte-identical `(0,-1)` Java fixture. A Java
+  packet-body comparison and P1.5 shape occlusion remain open.
 
 ### P3.9 Cross-chunk light propagation `[~]` `M`
 
@@ -1239,11 +1267,15 @@ section-only light packets are still open.
 - **Why:** Light at chunk edges is a common source of seams and client
   lighting bugs.
 - **Done when:** Border fixtures have no seams and match Java.
-- **Progress (2026-11-06):** the edit path loads existing 8-neighbour chunks
-  and passes them to the light engine; a neighbour torch lights the border
-  (tested 13 at distance one). Generated chunks are still sent with the
-  height fallback until they are edited/recomputed, and there is no queued
-  cross-chunk relight or Java seam fixture yet.
+- **Progress (2026-11-06):** `LightScene` owns the edited chunk plus every
+  loaded neighbour and runs one queue across them, so both sky and block
+  decreases/increases cross chunk borders in both directions. Changed neighbour
+  chunks are persisted through `WorldStorage::update_chunk` and broadcast as
+  their own section payloads. Tests place/remove a torch at the border and
+  assert the neighbour's local `x=0` light, then reload the neighbour from
+  storage to verify persistence. Still open: a Java seam fixture and generating
+  chunks with initialized light (newly generated columns still start on the
+  height fallback until edited/recomputed).
 
 ### P3.10 Neighbor updates, scheduled ticks, random ticks `[~]` `L`
 

@@ -14,7 +14,11 @@ Last updated: 2026-11-06
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
   Java fixture. Ore features and `OreVeinifier` are wired, all 888 placement
-  modifiers execute, and 171/224 configured feature types execute.
+  modifiers execute, and **207/224** configured feature types execute. The
+  2026-11-06 terrain/dripstone/selector batch adds all 21 random selectors and
+  all 4 simple selectors through a two-registry placed/configured resolver,
+  plus disks, springs, lava lake, icebergs/blue ice/ice spikes, Nether blobs,
+  basalt columns/pillar, delta, and pointed/cluster/large dripstone.
 - Second wave landed: per-state collision/outline shapes with swept physics;
   incremental light decrease/increase, sky columns, and dirty sections;
   crafting/furnace/stonecutting/smithing models; the 1,504-item prototype
@@ -58,7 +62,19 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
-- 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
+- 2026-11-06: P2.5/P2.6/P2.7 terrain, dripstone, and selector batch -
+  `feature/support.rs` adds shared rule-based/rotated providers, float
+  providers, and predicate reuse; `feature/terrain.rs` ports disks, springs,
+  lava lake, icebergs, blue ice, ice spikes, netherrack blobs, basalt
+  columns/pillar, and delta; `feature/caves.rs` ports pointed dripstone,
+  dripstone clusters, and large dripstone. Selector branches now resolve
+  through both the placed and configured registries with full placement
+  pipelines, so all 25 selector configs execute. **207/224** configured
+  features; 17 explicit unsupported. Focused: 9 `feature_gaps` + 18
+  `vegetation` + 74 `worldgen::feature` lib tests; parity unchanged. Remaining
+  blockers: root_system, sculk_patch, geode, freeze_top_layer, End/void and
+  block-entity features.
+- 2026-11-06: P4.8 crafting/furnace model - `crafting.rs` implements 1x1-3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's
   last-sorted-recipe-id priority; shapeless multiset matching with duplicate

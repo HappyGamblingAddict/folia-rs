@@ -28,7 +28,7 @@ where possible, a differential test against the Java oracle.
 |---|---:|---|
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~75% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators |
-| Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring |
+| Full worldgen | ~67% | All 888 placement modifiers, 207/224 feature types, trees/ground cover/aquatic/vines/fungi/terrain/dripstone/selector branches; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring |
 | Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and shape occlusion missing |
 | Player simulation | ~35% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
 | Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
@@ -42,6 +42,24 @@ where possible, a differential test against the Java oracle.
 ---
 
 # Baseline: what is already done
+
+- 2026-11-06: P2.5/P2.6/P2.7 terrain, dripstone, and selector batch -
+  `feature/support.rs` adds shared rule-based/rotated state providers, float
+  providers, and predicate reuse; `feature/terrain.rs` ports `disk`,
+  `spring_feature`, `lake` (lava), `iceberg`, `blue_ice`, `ice_spike`,
+  `netherrack_replace_blobs`, `basalt_columns`, `basalt_pillar`, and
+  `delta_feature`; `feature/caves.rs` ports `pointed_dripstone`,
+  `dripstone_cluster`, and `large_dripstone`. `mod.rs` now resolves selector
+  branches through both the placed and configured registries with their full
+  placement pipelines, so all 21 `random_selector` and 4
+  `simple_random_selector` configs execute, including `pale_garden_vegetation`,
+  `warm_ocean_vegetation`, and `pointed_dripstone`. **207/224** configured
+  features execute; 17 remain explicit `Unsupported`. Focused: 9
+  `tests/feature_gaps.rs`, 18 `tests/vegetation.rs`, 74 `worldgen::feature`
+  lib tests; parity stays 98.75% / 95.80%. Remaining: `root_system`
+  (bytecode/predicate mismatch, see `BLOCKERS.md`), `sculk_patch` (spreader),
+  `geode` (level seed), `freeze_top_layer` (biome), End/void/block-entity
+  features, and structure-template features.
 
 - 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
   non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
@@ -845,11 +863,13 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   selector that drives mushroom islands). `simple_random_selector` picks one
   inline placed branch, and `simple_block.schedule_tick` queues a one-tick block
   tick through `crate::tick::ScheduledTickQueue`. 171/224 configured features
-  now execute; 53 remain explicit `Unsupported`. Cactus and sugar cane already
+  executed after this batch; later selector/terrain slices raise that to
+  207/224. Cactus and sugar cane already
   run through `block_column`, and lily pads through `simple_block`.
-- **Still open:** `random_selector`/`simple_random_selector` branches that
-  reference *placed* features (`pale_garden_vegetation`, `warm_ocean_vegetation`)
-  need a two-registry resolver; the generator does not yet drain scheduled
+- **Still open:** `random_selector`/`simple_random_selector` branch resolution
+  through both registries landed in the 2026-11-06 terrain/selector batch, so
+  `pale_garden_vegetation`, `warm_ocean_vegetation`, and `pointed_dripstone`
+  now execute; the generator does not yet drain scheduled
   ticks or block entities out of `WorldGenRegion`; most structure features; and
   kelp/huge-fungus/nether-vegetation in-world wiring where their outer
   placement needs `noise_based_count`/`count_on_every_layer` (the features
@@ -864,7 +884,7 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   The later ore/vein wiring raises the current fixture to 98.75% / 95.80%
   (6067/5886 of 6144); keep this paragraph as slice history, not current state.
 
-### P2.6 Cave, dripstone, sculk, and special features `[ ]` `L`
+### P2.6 Cave, dripstone, sculk, and special features `[~]` `L`
 
 - **What:** Port lush-cave features (root system, cave vines, spore blossom,
   moss/clay patches), dripstone cluster/pointed dripstone/large dripstone,
@@ -877,8 +897,15 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   `MonsterRoomFeature.java`, `FossilFeature.java`, `IcebergFeature.java`.
 - **Done when:** Each feature has a fixture and contributes no unexplained
   parity differences.
+- **Progress (2026-11-06):** `terrain.rs` ports icebergs, blue ice, ice spikes,
+  and basalt/blackstone blobs; `caves.rs` ports pointed dripstone, dripstone
+  clusters, and large dripstone. Cave vines, glow lichen, spore blossoms, and
+  moss/clay patches were already covered by `multiface_growth` /
+  `vegetation_patch`. 12 of the 18 shipped cave/special configs now execute.
+  `root_system`, `sculk_patch`, and `geode` remain explicit unsupported paths;
+  see `BLOCKERS.md` for the exact missing primitives.
 
-### P2.7 Lakes, springs, disks, and freeze layer `[ ]` `M`
+### P2.7 Lakes, springs, disks, and freeze layer `[~]` `M`
 
 - **What:** Port `LakeFeature`, `SpringFeature`, `DiskFeature`, and
   `SnowAndFreezeFeature`, including water/lava lake placement and
@@ -889,6 +916,11 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   `DiskFeature.java`, `SnowAndFreezeFeature.java`.
 - **Done when:** Water/lava counts and frozen surfaces match Java on the
   fixture.
+- **Progress (2026-11-06):** `terrain.rs` ports all five disks, all six springs,
+  and the shipped `lake_lava` config (tick-queued cave-air ceiling and stone
+  barrier passes). `freeze_top_layer` remains unsupported because the feature
+  needs `Biome.shouldFreeze`/`shouldSnow`, which the current `FeatureLevel`
+  cannot observe; see `BLOCKERS.md`.
 
 ### P2.8 Structure framework and templates `[~]` `XL`
 

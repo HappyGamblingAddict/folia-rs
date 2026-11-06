@@ -553,27 +553,33 @@ fn decoration_steps_include_ground_cover_passes() {
 #[test]
 fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 171);
+    assert_eq!(
+        data.supported_feature_count(),
+        207,
+        "terrain/selector batch raises configured-feature support"
+    );
     let unsupported = data.unsupported_type_counts();
     for kind in [
         "minecraft:random_patch",
         "minecraft:flower",
+        "minecraft:no_bonemeal_flower",
         "minecraft:vegetation_patch",
         "minecraft:waterlogged_vegetation_patch",
         "minecraft:random_boolean_selector",
+        "minecraft:random_selector",
+        "minecraft:simple_random_selector",
         "minecraft:tree",
+        "minecraft:disk",
+        "minecraft:spring_feature",
+        "minecraft:dripstone_cluster",
+        "minecraft:large_dripstone",
+        "minecraft:pointed_dripstone",
     ] {
         assert!(
             !unsupported.contains_key(kind),
             "{kind} should have no unsupported shipped configs"
         );
     }
-    // `warm_ocean_vegetation` and `pointed_dripstone` need placed-feature
-    // branch references and inline environment-scan modifiers.
-    assert_eq!(unsupported["minecraft:simple_random_selector"], 2);
-    // Selector branches that reference placed features (`oak_checked`,
-    // `pale_oak_checked`, ...) still need a two-registry resolver.
-    assert_eq!(unsupported["minecraft:random_selector"], 10);
     for id in [
         "minecraft:pale_oak",
         "minecraft:pale_oak_creaking",
@@ -583,6 +589,9 @@ fn shipped_feature_support_snapshot() {
         "minecraft:clay_with_dripleaves",
         "minecraft:clay_pool_with_dripleaves",
         "minecraft:lush_caves_clay",
+        "minecraft:pale_garden_vegetation",
+        "minecraft:warm_ocean_vegetation",
+        "minecraft:pointed_dripstone",
     ] {
         assert!(
             data.configured(id)
@@ -591,13 +600,6 @@ fn shipped_feature_support_snapshot() {
             "{id} should be executable"
         );
     }
-    assert!(
-        !data
-            .configured("minecraft:pale_garden_vegetation")
-            .expect("pale_garden_vegetation")
-            .is_supported(),
-        "the pale garden selector still references the placed `pale_oak_checked`"
-    );
 }
 
 #[test]

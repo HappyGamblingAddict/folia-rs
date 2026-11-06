@@ -2309,3 +2309,37 @@ Format:
   `ServerboundHelloPacket`'s `readUtf(16)`; legitimate offline clients are
   unaffected. The server binary still needs `accept_logins` and
   `configure_online_mode` wiring (see `BLOCKERS.md`).
+- Decision: selector branches resolve through **both** registries. Vanilla
+  `random_selector` / `simple_random_selector` hold `Holder<PlacedFeature>`, so
+  a bare branch id is looked up in the placed registry first, then in the
+  configured registry for the dump's inline forms. A placed branch keeps its
+  full `PlacementModifier` list and runs it before the target feature; branch
+  modifiers that are unported or that are `minecraft:biome` (the branch world
+  adapter has no biome sampler) make the selector unsupported instead of
+  silently dropping the branch. This is what makes `pale_garden_vegetation`,
+  `warm_ocean_vegetation`, and `pointed_dripstone` execute.
+- Decision: `FeatureLevel::sea_level` defaults to 63. The region has no
+  `ChunkGenerator` handle, and every shipped config that reads the sea level
+  (icebergs, blue ice, basalt columns) is Overworld or Nether lava-level
+  compatible. A future dimension-aware region should override this method.
+- Decision: `LakeFeature` accepts the shipped lava configuration and rejects a
+  water configuration at runtime. Water lakes require
+  `Biome.shouldFreeze` for their surface pass, which the current
+  `FeatureLevel` cannot observe; failing is preferable to silently skipping
+  the freeze pass. `freeze_top_layer` remains unsupported for the same reason.
+- Decision: rule-based state providers are parsed at both the record form used
+  by `DiskConfiguration` (no `type` discriminant) and the normal dispatched
+  form. The parser reuses `BlockPredicate` from the placement module rather
+  than duplicating predicate semantics.
+- Decision: `root_system` is **not** marked supported yet. The 1.21.11
+  bytecode moves the working position up before testing
+  `allowed_tree_position`, while the shipped predicate requires the block below
+  that candidate to be `#minecraft:azalea_grows_on`; the initial air check
+  makes that unsatisfiable for a normal surface origin in this region. The
+  feature needs a Java placement oracle / behaviour clarification before we
+  claim parity. Details are in `BLOCKERS.md`.
+- Consequence: `sculk_patch` stays unsupported until `SculkSpreader`,
+  `SculkBehaviour`, and the multiface spreader are ported; `geode` stays
+  unsupported until a world seed reaches `FeatureLevel` (the geode noise is
+  seeded from `worldGenLevel.getSeed()`). Both failures are explicit
+  `UnsupportedFeature` errors, not silent no-ops.

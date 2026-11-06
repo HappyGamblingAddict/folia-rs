@@ -10,7 +10,8 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `513bb11`
 - Working tree: uncommitted by design; Git is not used for workflow.
-- Tests: **351 passing, 0 failing** as of the last full run.
+- Tests: **351 passing, 0 failing** as of the last full run; the P2.8
+  structure-template slice adds 13 focused tests (`tests/structure_template.rs`).
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -152,6 +153,17 @@ Last updated: 2026-11-06
   the client's respawn command (auto-respawn after 2 s as a fallback). General
   fall/fire/hunger damage and inventory drops are still missing.
 
+- Structure templates have a first P2.8 slice in
+  `worldgen/structure/template.rs`: gzip structure NBT parsing (DataVersion,
+  size, single or multi palettes, blocks, block-entity NBT, entities), Java
+  `StructureTemplate.transform`/`transform(Vec3)` coordinate math with mirror,
+  four rotations, rotation pivot and origin, and block placement through
+  `FeatureLevel`. `place_into` returns written/rejected counts, block-entity
+  NBT, and transformed entity descriptors; it does not spawn entities.
+  Structure starts, pieces, structure sets, references, processors, template
+  pools, jigsaw expansion, random palette selection, and exact per-block state
+  derivatives (stairs shape, door hinge, …) are still unported.
+
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
   beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
@@ -178,12 +190,14 @@ Last updated: 2026-11-06
 
 1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
    port `OreVeinifier`, and keep the 92.09% exact-name fixture.
-2. P2.4 — pale-moss patch dependency, beehive occupants, and a Java tree fixture.
-3. P2.5 — vegetation and ground cover.
-4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
+2. P2.8 — structure starts/pieces/references, processor lists, random palette
+   selection, entity spawning, and a template-based Java parity fixture.
+3. P2.4 — pale-moss patch dependency, beehive occupants, and a Java tree fixture.
+4. P2.5 — vegetation and ground cover.
+5. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
    P3.6–P3.8 with generated opacity/emission data, incremental section packets,
    and Java light-array/packet fixtures.
-5. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
+6. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
 
 ## Next queue
 
@@ -201,12 +215,24 @@ Last updated: 2026-11-06
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss blocked on `pale_moss_patch`/tags)
+- [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 
 ## Recently completed
+
+- 2026-11-06: First structure-template slice — `worldgen/structure/` loads
+  gzip structure NBT (`empty.nbt`, igloo middle, desert camel spawn, nether
+  fossil fixtures), validates size/palette indices/block bounds, ports
+  `StructureTemplate.transform` for `BlockPos` and `Vec3` with mirror, four
+  rotations, pivot and origin, and writes blocks through `FeatureLevel`.
+  `place_into` returns block-entity NBT and transformed entity descriptors
+  instead of spawning them. `tests/structure_template.rs` adds 13 tests
+  covering real templates, all rotations/mirrors, pivot/offset, state
+  properties, mock-level placement, and malformed NBT rejection. Focused test
+  only; the coordinator runs the full workspace gate.
 
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,

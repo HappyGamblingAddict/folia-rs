@@ -925,3 +925,53 @@ Format:
   relighting, generation-time initialization, and Java light fixtures remain
   P3.6-P3.9 work.
 
+## 2026-11-06 — Structure template foundation is loading/placement only
+
+- Context: P2.8 needs the vanilla structure NBT model and the
+  `StructureTemplate.placeInWorld` coordinate math before starts, pieces,
+  processors, pools, or jigsaw expansion can be built. The shipped templates
+  are gzip NBT under `data/minecraft/structure` (1,202 files), and the existing
+  `nbt::read_gzip_root` already covers the container format.
+- Decision: Load templates through `nbt::read_gzip_root`; parse `DataVersion`
+  (default 500 like `NbtUtils.getDataVersion`), `size`, one `palette` or a
+  `palettes` list, shared `blocks` entries, and `entities`. Reject malformed
+  roots, non-3/non-positive sizes, negative or out-of-range palette indices,
+  block positions outside `size`, and wrong tag types with
+  `io::ErrorKind::InvalidData`. This is stricter than Java's permissive
+  defaults (missing block `Name` becomes air, `SimplePalette.stateFor`
+  saturates to air) because a corrupt template should fail loudly rather than
+  silently lose blocks.
+- Decision: Parse and validate every palette in a `palettes` list, but place
+  with palette 0. Vanilla's `getRandomPalette` needs the structure piece's
+  position-seeded RNG; that belongs to the start/piece pipeline, not template
+  loading. `empty.nbt` and every template used by this slice have one palette.
+- Decision: Keep the Java observable block ordering split: NBT-bearing blocks
+  last, each group sorted y/x/z. Java also separates special-shape blocks from
+  normal full-cube blocks before NBT blocks, but that needs P1.5 block
+  behaviour; without it the port cannot classify ladders, torches, stairs, and
+  similar. The limitation is explicit in the module docs and `BLOCKERS.md`.
+- Decision: `StructurePlaceSettings` ports mirror, four rotations,
+  `rotationPivot`, and `ignoreEntities`, and adds `ignoreAir` (default false,
+  matching vanilla block placement). `place_into` takes the placement origin
+  separately, matching Java's `placeInWorld(level, offset, pos, ...)` `offset`;
+  `pos`/palette-seeded processors are not modeled yet.
+- Decision: Transform block state `facing`, `axis`, `rotation` (0..15), and
+  jigsaw `orientation` with mirror-then-rotation. Java's transforms are
+  per-block; `shape`, `hinge`, `type`, and other companions need the P1.5
+  block-behaviour table, so they are preserved unchanged for now rather than
+  guessed.
+- Decision: `place_into` writes only through `FeatureLevel::set_block`, counts
+  rejected writes instead of dropping them, and returns block-entity NBT for
+  successfully written blocks. Template entities are transformed (Vec3 with
+  Java's 1.0-based mirror math, blockPos with the integer transform, pivot,
+  then origin) and returned as descriptors; they are not spawned. No block
+  entity or entity NBT is invented.
+- Why: This is the smallest vertical slice that can load real vanilla
+  templates and prove Java-exact coordinate behavior, while keeping every
+  unported structure stage loud and documented.
+- Consequences: Structure starts, pieces, structure sets, references,
+  processor lists, template pools, jigsaw expansion, random palette selection,
+  entity spawning, waterlogging, shape updates, and a Java block-for-block
+  placement fixture remain open. The focused test embeds four shipped gzip
+  files so it does not depend on the out-of-tree decompiled data.
+

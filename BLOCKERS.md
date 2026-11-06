@@ -69,12 +69,20 @@ These are expected gaps, not reasons to stop:
   `BlockStateProvider::simple` still samples through the weighted path and
   consumes a random draw that Java's `SimpleStateProvider` does not; exact
   tree RNG alignment needs a separate provider-representation fix.
+- Structure templates load and place blocks, but structure starts, pieces,
+  structure sets, references, processor lists, template pools, and jigsaw
+  expansion are unported. There is no structure generation or Java
+  block-for-block template fixture yet. Random multi-palette selection,
+  entity spawning, waterlogging, shape updates, and per-block state
+  derivatives (`shape`, `hinge`, `type`, …) are also open.
 
 - Some Java oracle data requires starting `java-worldgen`; if the server cannot
   start, use the existing dumps in `crates/folia-core/assets`.
 - Plugin bridge work may require Java 21; native-only work does not.
-- Structure templates/loot tables may need extraction from the local Folia jar;
-  if an asset is missing, document it and continue with a different feature.
+- Structure NBT templates are available in the decompiled data tree; structure
+  loot tables and other structure data may still need extraction from the local
+  Folia jar. If an asset is missing, document it and continue with a different
+  feature.
 
 ## 2026-11-05 — P2.4 Tree decorators and non-blob placers (partial)
 
@@ -158,4 +166,22 @@ These are expected gaps, not reasons to stop:
   placement can be compared block-for-block; `OreVeinifier` also remains open.
 - Workaround: Keep ore features executable but do not add `underground_ores` to
   generation yet. Preserve the 92.09% fixture rather than weakening it.
+
+## 2026-11-06 — P2.8 structure template is loading/placement only
+
+- Scope: `worldgen/structure/template.rs` loads gzip structure NBT, validates
+  palettes/blocks/entities, transforms positions with mirror/rotation/pivot,
+  and writes blocks through `FeatureLevel`. `place_into` returns block-entity
+  NBT and entity descriptors rather than creating them.
+- Not ported: structure starts, pieces, structure sets, references, biome
+  checks, processor lists, template pools, jigsaw placement/junction expansion,
+  terrain adaptation, random multi-palette selection, entity spawning,
+  waterlogging, block-shape updates, and per-block state derivatives that need
+  P1.5 block behaviour (stairs `shape`, door `hinge`, rail `shape`, …).
+- Why it is not a blocker: This is a deliberately scoped foundation slice. The
+  next P2.8 task is the start/piece/reference pipeline; template loading can be
+  tested and used independently of it.
+- Workaround: Call `StructureTemplate::placement_blocks`/`place_into` directly
+  from focused code and tests. Do not claim structure generation parity until
+  starts/references/pieces and a Java placement fixture exist.
 

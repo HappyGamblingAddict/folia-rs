@@ -11,6 +11,7 @@ pub mod level;
 pub mod light;
 pub mod nbt;
 pub mod player;
+pub mod player_physics;
 pub mod protocol;
 pub mod region;
 pub mod registries;

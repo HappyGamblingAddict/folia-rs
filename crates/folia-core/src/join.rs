@@ -24,6 +24,7 @@ use crate::chunk_packet::ChunkPacketTemplate;
 use crate::inventory;
 use crate::nbt::Tag;
 use crate::player::{PlayerSession, uuid_string};
+use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
 use crate::protocol::{
     Handshake, PacketReader, PacketWriter, build_login_disconnect, parse_login_start, read_packet,
     write_packet,
@@ -532,6 +533,9 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
         session.game_mode = default_game_mode();
     }
     unstick_player(&mut session, world.storage, world.trust_stored);
+    // The simulation starts from the accepted login position, not from the
+    // playerdata position before settling.
+    session.reset_physics();
 
     send_login_success(&mut stream, &uuid, &start.name)?;
 
@@ -872,79 +876,100 @@ pub fn handle_login(mut stream: TcpStream, handshake: &Handshake) -> io::Result<
                         }
                     }
                     _ => {
-                        let previous = (session.x, session.y, session.z);
-                        if session.apply_movement(&packet)? {
-                            let dx = session.x - previous.0;
-                            let dy = session.y - previous.1;
-                            let dz = session.z - previous.2;
-                            let moved_squared = dx * dx + dy * dy + dz * dz;
-                            if moved_squared > MAX_MOVEMENT_DISTANCE_SQUARED {
-                                session.x = previous.0;
-                                session.y = previous.1;
-                                session.z = previous.2;
-                                teleport_id += 1;
-                                write_packet(&mut stream, &position_packet(&session, teleport_id))?;
-                                println!(
-                                    "[join] {} moved {:.1} blocks in one packet; sent back to                                      ({:.1}, {:.1}, {:.1})",
+                        let outcome = {
+                            let storage = &mut *crate::world::lock(world.storage);
+                            let mut collider = StoragePhysicsWorld::new(storage);
+                            session.apply_movement(&packet, &mut collider)?
+                        };
+                        if !outcome.was_movement {
+                            continue;
+                        }
+                        if let Some(correction) = outcome.correction {
+                            teleport_id += 1;
+                            write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                            match correction {
+                                MovementCorrection::TooFar { distance_squared } => println!(
+                                    "[join] {} moved {:.1} blocks in one packet; sent back to \
+                                     ({:.1}, {:.1}, {:.1})",
                                     start.name,
-                                    moved_squared.sqrt(),
+                                    distance_squared.sqrt(),
                                     session.x,
                                     session.y,
                                     session.z
-                                );
-                                continue;
+                                ),
+                                MovementCorrection::Blocked => println!(
+                                    "[join] {}'s move was blocked by terrain; corrected to \
+                                     ({:.1}, {:.1}, {:.1})",
+                                    start.name, session.x, session.y, session.z
+                                ),
+                                MovementCorrection::Adjusted => println!(
+                                    "[join] {}'s move landed inside terrain; lifted to \
+                                     ({:.1}, {:.1}, {:.1})",
+                                    start.name, session.x, session.y, session.z
+                                ),
                             }
-                            autosave_playerdata(&session, &mut last_save);
-                            let new_x = (session.x.floor() as i32).div_euclid(16);
-                            let new_z = (session.z.floor() as i32).div_euclid(16);
-                            if (new_x, new_z) != (center_x, center_z) {
-                                center_x = new_x;
-                                center_z = new_z;
-                                let batch = match stream_chunks_around(
-                                    &mut stream,
-                                    world.storage,
-                                    world.trust_stored,
-                                    radius,
-                                    center_x,
-                                    center_z,
-                                    &mut sent_chunks,
-                                ) {
-                                    Ok(batch) => batch,
-                                    // Clients close the connection mid-stream all the
-                                    // time; that ends the session, it is not a
-                                    // server failure.
-                                    Err(error) if is_disconnect(&error) => {
-                                        if let Err(save_error) = session.save(playerdata_dir()) {
-                                            eprintln!(
-                                                "[join] could not save playerdata: {save_error}"
-                                            );
-                                        }
-                                        if let Err(flush_error) =
-                                            crate::world::lock(world.storage).flush()
-                                        {
-                                            eprintln!(
-                                                "[join] could not flush terrain: {flush_error}"
-                                            );
-                                        }
-                                        println!(
-                                            "[join] {} disconnected while streaming chunks: \
-                                             {error}",
-                                            start.name
-                                        );
-                                        return Ok(());
-                                    }
-                                    Err(error) => return Err(error),
-                                };
-                                if batch.streamed > 0 || batch.unloaded > 0 {
-                                    println!(
-                                        "[join] streamed {} chunks around ({center_x}, \
-                                         {center_z}) for {}, unloaded {}: {}",
-                                        batch.streamed,
-                                        start.name,
-                                        batch.unloaded,
-                                        batch.counts.describe()
-                                    );
+                        }
+                        if outcome.fall_damage > 0.0 && !awaiting_respawn {
+                            let died =
+                                apply_fall_damage(&mut stream, &mut session, outcome.fall_damage)?;
+                            if died {
+                                awaiting_respawn = true;
+                                death_at = Some(Instant::now());
+                                if let Err(error) = session.save(playerdata_dir()) {
+                                    eprintln!("[join] could not save fall death: {error}");
                                 }
+                                println!(
+                                    "[join] {} died from falling ({:.0} damage)",
+                                    start.name, outcome.fall_damage
+                                );
+                            }
+                        }
+                        autosave_playerdata(&session, &mut last_save);
+                        let new_x = (session.x.floor() as i32).div_euclid(16);
+                        let new_z = (session.z.floor() as i32).div_euclid(16);
+                        if (new_x, new_z) != (center_x, center_z) {
+                            center_x = new_x;
+                            center_z = new_z;
+                            let batch = match stream_chunks_around(
+                                &mut stream,
+                                world.storage,
+                                world.trust_stored,
+                                radius,
+                                center_x,
+                                center_z,
+                                &mut sent_chunks,
+                            ) {
+                                Ok(batch) => batch,
+                                // Clients close the connection mid-stream all the
+                                // time; that ends the session, it is not a
+                                // server failure.
+                                Err(error) if is_disconnect(&error) => {
+                                    if let Err(save_error) = session.save(playerdata_dir()) {
+                                        eprintln!("[join] could not save playerdata: {save_error}");
+                                    }
+                                    if let Err(flush_error) =
+                                        crate::world::lock(world.storage).flush()
+                                    {
+                                        eprintln!("[join] could not flush terrain: {flush_error}");
+                                    }
+                                    println!(
+                                        "[join] {} disconnected while streaming chunks: \
+                                         {error}",
+                                        start.name
+                                    );
+                                    return Ok(());
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            if batch.streamed > 0 || batch.unloaded > 0 {
+                                println!(
+                                    "[join] streamed {} chunks around ({center_x}, \
+                                     {center_z}) for {}, unloaded {}: {}",
+                                    batch.streamed,
+                                    start.name,
+                                    batch.unloaded,
+                                    batch.counts.describe()
+                                );
                             }
                         }
                     }
@@ -1264,11 +1289,8 @@ fn player_entity_id() -> i32 {
     1
 }
 
-fn combat_kill_packet() -> Vec<u8> {
-    let message = Tag::Compound(vec![(
-        "text".into(),
-        Tag::String("Player fell out of the world".into()),
-    )]);
+fn combat_kill_packet(message: &str) -> Vec<u8> {
+    let message = Tag::Compound(vec![("text".into(), Tag::String(message.to_owned()))]);
     let encoded = crate::nbt::write_root_to_vec(&message).expect("death message NBT encodes");
     let mut writer = PacketWriter::new();
     writer.write_varint(PLAY_PLAYER_COMBAT_KILL).unwrap();
@@ -1298,6 +1320,40 @@ fn void_damage_health(health: f32, y: f64, game_mode: i32) -> Option<f32> {
     (game_mode != 3 && y < VOID_DAMAGE_Y).then(|| (health - VOID_DAMAGE).max(0.0))
 }
 
+/// Apply vanilla fall damage. Creative and spectator players are immune
+/// (`Player.causeFallDamage` returns false when the abilities allow flying);
+/// survival and adventure players take damage and receive a health update.
+fn fall_damage_health(health: f32, damage: f32, game_mode: i32) -> Option<f32> {
+    if damage <= 0.0 || matches!(game_mode, 1 | 3) {
+        return None;
+    }
+    Some((health - damage).max(0.0))
+}
+
+fn apply_fall_damage(
+    stream: &mut TcpStream,
+    session: &mut PlayerSession,
+    damage: f32,
+) -> io::Result<bool> {
+    let Some(health) = fall_damage_health(session.health, damage, session.game_mode) else {
+        return Ok(false);
+    };
+    session.health = health;
+    write_packet(stream, &health_packet(session))?;
+    if session.health <= 0.0 {
+        write_packet(
+            stream,
+            &combat_kill_packet("Player hit the ground too hard"),
+        )?;
+        return Ok(true);
+    }
+    println!(
+        "[join] {} took {:.0} fall damage; health {:.0}",
+        session.name, damage, session.health
+    );
+    Ok(false)
+}
+
 fn apply_void_damage(
     stream: &mut TcpStream,
     session: &mut PlayerSession,
@@ -1314,7 +1370,7 @@ fn apply_void_damage(
     session.health = health;
     write_packet(stream, &health_packet(session))?;
     if health <= 0.0 {
-        write_packet(stream, &combat_kill_packet())?;
+        write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
     println!(
@@ -1337,11 +1393,8 @@ fn respawn_player(
     spawn: (f64, f64, f64),
     teleport_id: &mut i32,
 ) -> io::Result<()> {
-    session.x = spawn.0;
-    session.y = spawn.1;
-    session.z = spawn.2;
+    session.teleport(spawn.0, spawn.1, spawn.2, true);
     session.health = 20.0;
-    session.on_ground = true;
     write_packet(stream, &respawn_packet(session.game_mode)?)?;
     *teleport_id += 1;
     write_packet(stream, &position_packet(session, *teleport_id))?;
@@ -1448,10 +1501,6 @@ const MAX_GENERATION_WORKERS: usize = 8;
 /// error, makes them stop as soon as the client is gone instead of generating
 /// the rest of a batch nobody will receive.
 const GENERATION_QUEUE: usize = 16;
-
-/// Squared distance allowed in one movement packet. Vanilla's "moved too
-/// quickly" guard rejects anything beyond ten blocks per move.
-const MAX_MOVEMENT_DISTANCE_SQUARED: f64 = 100.0;
 
 /// How many columns a batch may generate at once.
 fn generation_workers(pending: usize) -> usize {
@@ -2370,6 +2419,16 @@ mod tests {
         assert_eq!(void_damage_health(2.0, -129.0, 0), Some(0.0));
         assert_eq!(void_damage_health(20.0, -127.9, 0), None);
         assert_eq!(void_damage_health(20.0, -129.0, 3), None);
+    }
+
+    #[test]
+    fn fall_damage_spares_creative_and_reports_survival_health() {
+        assert_eq!(fall_damage_health(20.0, 7.0, 0), Some(13.0));
+        assert_eq!(fall_damage_health(20.0, 7.0, 2), Some(13.0));
+        assert_eq!(fall_damage_health(4.0, 7.0, 0), Some(0.0));
+        assert_eq!(fall_damage_health(20.0, 7.0, 1), None);
+        assert_eq!(fall_damage_health(20.0, 7.0, 3), None);
+        assert_eq!(fall_damage_health(20.0, 0.0, 0), None);
     }
 
     #[test]

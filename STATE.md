@@ -10,7 +10,10 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `513bb11`
 - Working tree: uncommitted by design; Git is not used for workflow.
-- Tests: **351 passing, 0 failing** as of the last full run.
+- Tests: **351 passing** at the last full run; this slice adds 17 focused
+  player-physics tests (12 integration, 5 lib) and passes the focused runs,
+  `movement_validation`, and `join`. The full workspace gate is run by the
+  coordinator after merging.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -151,6 +154,17 @@ Last updated: 2026-11-06
   updates, shows the combat-kill death screen, and respawns at world spawn on
   the client's respawn command (auto-respawn after 2 s as a fallback). General
   fall/fire/hunger damage and inventory drops are still missing.
+- Server-side player physics is live: `player_physics.rs` models the
+  standing/sneaking/swimming hitboxes, vanilla gravity/drag/friction, jump,
+  sprint jump, step height, axis-separated collision against the shared world
+  storage, fall distance, and fall damage. Movement packets are reconciled
+  instead of accepted verbatim: deltas up to `0.75` blocks are replayed through
+  the collider, a reproducible claim is accepted exactly, and a blocked claim
+  sends a position correction. Longer packets are lag bursts that validate
+  their destination. Fall damage sends health updates and death; landing resets
+  fall distance. Non-full block shapes, ladders, cobwebs, slime, elytra, water/
+  lava currents, swimming, bubbles, powder snow, and sprint/sneak input packets
+  are not ported yet.
 
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
@@ -167,6 +181,11 @@ Last updated: 2026-11-06
 
 ## Current focus
 
+- P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
+  (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
+  powder snow, sprint/sneak input packets, real block shapes) and eventually
+  move player simulation onto its own 20 Hz tick instead of packet-driven
+  reconciliation.
 - P1.3 tag data is available; wire `stone_ore_replaceables` and the other ore
   target tags through `folia_core::tags` instead of the hard-coded sets in
   `worldgen/feature/ore.rs`, then add the remaining cosmetic registries.
@@ -205,10 +224,14 @@ Last updated: 2026-11-06
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
+  ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
+- [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
+  and burst validation done; teleport ack and special movement remain)
 
 ## Recently completed
 
-- 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
+- 2026-11-06: First real lighting slice – `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
   six-direction BFS under overhangs, block-light BFS over an explicit emitter
@@ -221,6 +244,13 @@ Last updated: 2026-11-06
   emitter, packet masks, border torch, edit persistence). Emitter/opacity data
   is still hand-written; incremental section-only light packets and Java light
   fixtures remain open.
+- 2026-11-06: Player physics and movement validation – `player_physics.rs`
+  implements the vanilla walking/falling formulas, AABB collision against
+  `WorldStorage`, step-up, fall distance/damage, and movement reconciliation.
+  The live session keeps the ten-block safety net, accepts legal walking
+  without corrections, sends position corrections for blocked claims, and
+  sends health updates on fall damage. 12 focused `player_physics` tests plus
+  updated playerdata/movement tests pass; clippy is clean.
 
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` walks the
   decompiled tag tree, resolves nested `#tag` references with cycle detection

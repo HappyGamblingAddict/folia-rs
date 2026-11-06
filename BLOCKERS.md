@@ -159,3 +159,18 @@ These are expected gaps, not reasons to stop:
 - Workaround: Keep ore features executable but do not add `underground_ores` to
   generation yet. Preserve the 92.09% fixture rather than weakening it.
 
+## 2026-11-06 — P4.1/P4.2 special movement and block shapes remain unported
+
+- Blocker: Full vanilla player movement needs block behavior metadata (shape,
+  friction, jump factor, climbable, liquid, powder snow) that P1.5 has not
+  produced, plus player-input packets and a standalone player tick scheduler.
+- What was tried: Implemented walking/falling/jumping/step-up/fall damage and
+  packet reconciliation against full-cube collision. Non-full shapes are
+  approximated as full cubes; replaceable/plant tags are passable.
+- What is needed: P1.5 block-shape/friction metadata, `ServerboundPlayerInput`/
+  `ServerboundPlayerCommand` parsing, water/lava fluid state and movement,
+  ladder/vine/scaffolding/cobweb/slime/elytra/powder-snow handling, and a
+  per-region player tick.
+- Workaround: Keep the unsupported paths explicit in `DECISIONS.md`; do not
+  claim ladder, swimming, or elytra parity. The ten-block teleport net plus
+  collider replay still rejects the common wall/teleport cases.

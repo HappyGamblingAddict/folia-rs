@@ -23,6 +23,7 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/network/protocol/login/*`, configuration/play initial packets | `folia-core/src/join.rs` + `assets/join_*.bin` | Login → configuration → Join Game; captured registries, live chunk stream |
 | `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light; stored/computed sky+block layers take precedence over the height fallback |
 | Player session / movement / playerdata | `folia-core/src/player.rs` | Movement packet parsing, gzip-NBT persistence, join session |
+| Player physics / movement validation | `folia-core/src/player_physics.rs` | AABB, gravity/drag, ground friction, jump, step-up, fall distance/damage, collision reconciliation; water/ladders/cobwebs/elytra and other special movement remain unported |
 | `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn |
 | `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Whole-chunk sky+block light data after a block edit; incremental section-only updates not ported |
 | Hotbar/full inventory and cursor | `folia-core/src/inventory.rs`, `player.rs` | 36 slots + cursor, container content/slot packets, clicks, creative slots, NBT persistence, placement consumption |
@@ -82,6 +83,12 @@ Rust tree: `crates/folia-core`.
 - End-to-end entity test: spawn armor stand 9001, receive add id 1, move it and
   receive `EntityPositionSync` id 35, then remove it and receive
   `RemoveEntities` id 75.
+- Player physics: focused tests cover the standing/sneaking/swimming hitboxes,
+  gravity/drag, terminal velocity, the 20-tick walk displacement
+  (`4.140388` blocks from rest within `1e-4`), wall collision, half-block step
+  up, jump apex `1.252203`, fall damage (`10` blocks -> `7`), legal no-correction
+  walking, wall correction, and burst destination settlement
+  (`tests/player_physics.rs`, 12 tests).
 - Differential entity physics: a real Folia armor-stand fall from `y=50` was
   captured (`java-tools/EntitySpawn`, `capture/play-051-*`). All 18 Java
   position samples (ticks 8..59) match Rust `tick_physics` within `5e-4`, and

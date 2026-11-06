@@ -1089,3 +1089,101 @@ Format:
   entity spawning, waterlogging, shape updates, and a Java block-for-block
   placement fixture remain open. The focused test embeds four shipped gzip
   files so it does not depend on the out-of-tree decompiled data.
+
+## 2026-11-06 - Aquatic, vine, and mushroom features use the shared block approximations
+
+- Context: The P2.5 aquatic/vine/mushroom batch needs `canSurvive`
+  (seagrass/kelp/sea pickle/bamboo/nether plants), vine face attachment, huge
+  mushroom grow blocks, and underwater-magma face occlusion. P1.5 block
+  behaviour metadata (collision/support/occlusion shapes) is still missing, and
+  the existing tree/vegetation modules already use a name/tag approximation.
+- Decision: Add `aquatic.rs` block helpers (`face_sturdy`, `can_be_replaced`,
+  nether-plant survival, seagrass/kelp/pickle survival) and share them with
+  `vines.rs` and `mushroom.rs`. `face_sturdy` treats non-air, non-fluid blocks
+  outside `replaceable`/`replaceable_by_trees`/leaves/saplings/flowers as full
+  cubes. Underwater magma therefore asks "is the neighbour a full cube" rather
+  than reading face-occlusion shapes. The same helpers make huge-fungus
+  `canBeReplaced` follow the vanilla `replaceable` block tag.
+- Why: One approximation shared by all three modules keeps existing tree and
+  vegetation behaviour stable and avoids inventing per-feature shape rules.
+  Every unsupported path stays explicit; no block is guessed as placeable when
+  the feature needs a shape the port cannot answer.
+- Consequences: A non-full-cube neighbour (slab, stair, fence, ...) is treated
+  as a full cube until P1.5 lands. `underwater_magma` can therefore accept or
+  reject a few positions Java would decide differently. The limitation is
+  recorded in `TODO.md` and `BLOCKERS.md`; the focused tests use full blocks.
+
+## 2026-11-06 - Coral picks keep the data-file tag order, not the sorted asset order
+
+- Context: `CoralFeature` picks a random block from `minecraft:coral_blocks`,
+  `minecraft:corals`, and `minecraft:wall_corals` with `nextInt(size)`. The
+  generated `assets/tags/block.tsv` is sorted for binary-search lookup, but
+  Java's `HolderSet.Named` keeps the resource-list order from the tag JSON, and
+  the two orders differ (`tube_*` first in the data, `brain_*` first when
+  sorted).
+- Decision: Keep the three 1.21.11 data-file orders as constants in
+  `aquatic.rs` and cross-check their membership against `crate::tags` in a unit
+  test. Do not change the shared tag store.
+- Why: Coral selection is an RNG-visible operation; using the sorted order
+  would silently change which coral every placement chooses. The asset
+  extractor and all other tag consumers stay unchanged.
+- Consequences: A future data-version bump must update these three constants
+  together with the extracted tag assets. The membership test fails loudly if
+  the extractor sees a different coral set.
+
+## 2026-11-06 - An absent chunk section reads as air inside the feature region
+
+- Context: `WorldGenRegion::get_block` returned `None` for a section that had
+  never been written. Generated chunks always materialize full sections, but
+  focused tests and sparse feature worlds do not, so `isEmptyBlock`-style
+  checks treated unset blocks as solid.
+- Decision: Return a shared static `minecraft:air` state for in-region blocks
+  whose section is absent; out-of-region and out-of-build-height positions still
+  return `None`. Add a default `FeatureLevel::heightmap` that scans the column
+  with the same motion-blocking approximation as the placement world.
+- Why: A missing palette section encodes as air in vanilla chunk format, so
+  reading it as air is the correct world view. The heightmap default lets the
+  new seagrass/kelp/bamboo features query `OCEAN_FLOOR`/`WORLD_SURFACE` without
+  widening the trait's implementors.
+- Consequences: Sparse test chunks now behave like empty vanilla chunks.
+  Heightmap queries outside the write region return the minimum Y (the scan
+  skips unreadable positions), which folds into the same behaviour as a feature
+  trying to write outside its region.
+
+## 2026-11-06 - `random_boolean_selector` is supported only for empty nested placement
+
+- Context: `mushroom_island_vegetation` (shipped) and `lush_caves_clay`
+  (shipped) both use `random_boolean_selector`. Their branches are nested
+  placed features; the mushroom branches have `placement: []`, while the
+  dripleaf branches still depend on the unported `simple_random_selector`.
+- Decision: Port the selector's single `nextBoolean` draw and both branch
+  features. Reject the whole selector as explicit `Unsupported` when a branch
+  has non-empty placement modifiers or its configured feature is unsupported.
+  `mushroom_island_vegetation` therefore executes; `lush_caves_clay` stays
+  unsupported with its unported dripleaf branches.
+- Why: The shipped mushroom selector needs no placement execution, and silently
+  dropping non-empty placement would change positions. Failing closed keeps
+  the selector honest for future datapacks.
+- Consequences: `supported_feature_count` rises by one for
+  `mushroom_island_vegetation`; `lush_caves_clay` remains in
+  `unsupported_type_counts`. A later `simple_random_selector` + placement
+  implementation should reuse this container path.
+
+## 2026-11-06 - Aquatic generator wiring costs one exact-name block on the fixture
+
+- Context: Wiring the new features into `vegetal_decoration` /
+  `underground_decoration` makes seagrass, sea pickles, forest rocks, vines,
+  and underwater magma execute in newly generated chunks. The exact-name
+  fixture moved from 92.04% (5655/6144) to 92.02% (5654/6144); block-class
+  stayed at 98.71% (6065/6144).
+- Decision: Keep the wiring. Keep ore/scattered-ore wiring deferred as before.
+  Document the one-block delta instead of disabling a faithful feature.
+- Why: The lost block is a tall-seagrass pair at `(4, 47..48, -12)`; Rust
+  terrain already has water at `y=47` where Java has gravel, so the feature
+  places on the port's own water and cannot match Java's block. The class
+  fixture gains one match at `y=47` and loses one at `y=48`, netting zero.
+  Feature positions remain approximate per the project's existing
+  `WorldgenRandom` caveat, so a single block is within the known gap.
+- Consequences: The exact-name number in `STATE.md`/`PORT_MAP.md` is 92.02%
+  until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
+  the delta and its cause are recorded here.

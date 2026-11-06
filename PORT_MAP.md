@@ -38,9 +38,12 @@ Rust tree: `crates/folia-core`.
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
 | `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
-| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features; 134/224 configured features dispatch as supported |
+| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features, default `FeatureLevel::heightmap`; 162/224 configured features dispatch as supported |
 | `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; all shipped heightmaps/layer counts, surface-relative filters, block predicates, environment scans and sapling survival predicates execute with vanilla draw order (875/888 shipped); the rest report `PlacementFailure` |
 | `RandomPatchFeature`, `SimpleBlockFeature`, `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`, `VegetationPatchFeature`, `WaterloggedVegetationPatchFeature`, `stateproviders/*` | `folia-core/src/worldgen/feature/vegetation.rs` | Ported: random patch/flower, simple block, pile, column, multiface, vegetation and waterlogged patches; simple/weighted/randomized-int/noise/noise-threshold/dual-noise/rotated providers; predicate-only nested placements; Java HashSet order for patch vegetation |
+| `SeagrassFeature`, `KelpFeature`, `SeaPickleFeature`, `CoralFeature`/`CoralTreeFeature`/`CoralClawFeature`/`CoralMushroomFeature`, `BambooFeature`, `UnderwaterMagmaFeature` | `folia-core/src/worldgen/feature/aquatic.rs` | Ported: short/tall seagrass, kelp head/body, pickles, three coral shapes with data-ordered tag picks/fans/wall fans, bamboo leaf stages, underwater magma column scan; block survival uses the shared full-cube approximation |
+| `VinesFeature`, `TwistingVinesFeature`, `WeepingVinesFeature` | `folia-core/src/worldgen/feature/vines.rs` | Ported: face attachment in `Direction.values()` order, twisting/weeping spread scans, head/body columns and ages; the weeping column helper is reused by huge fungus |
+| `HugeBrownMushroomFeature`, `HugeRedMushroomFeature`, `HugeFungusFeature`, `GlowstoneFeature`, `BlockBlobFeature`, `FillLayerFeature`, `NetherForestVegetationFeature`, `RandomBooleanSelectorFeature` | `folia-core/src/worldgen/feature/mushroom.rs` | Ported: huge mushroom caps/trunks with connection properties, huge crimson/warped fungus stem/hat/decor plus weeping vines, glowstone blob, `forest_rock`, fill layer, nether vegetation, mushroom-island boolean selector (empty nested placement only) |
 | `tree.rs` state-provider path | `folia-core/src/worldgen/feature/tree.rs` | Unchanged on purpose: vegetation providers are independent so tree placement RNG and the existing simple-provider draw caveat stay stable |
 | `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror` | `folia-core/src/worldgen/structure/template.rs` | Partial: gzip structure NBT (palettes, blocks, block-entity NBT, entities), mirror/rotation/pivot/origin transforms, `FeatureLevel` block writing; starts, pieces, structure sets/references, processors, template pools, jigsaw, random palette selection, and entity spawning are not ported |
 | `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border; decrease queues, generated opacity/emission tables, and Java light fixtures still open |
@@ -56,8 +59,18 @@ Rust tree: `crates/folia-core`.
   `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,
   random-patch success/failure, all provider draw orders, block pile/column,
   multiface attachment, vegetation and waterlogged patch behavior, Java
-  HashSet ordering, and deterministic generation. Parity is unchanged at
-  98.71% block-class / 92.04% exact-name (5655/6144).
+  HashSet ordering, and deterministic generation.
+- P2.5 aquatic/vine/mushroom evidence: `aquatic.rs` adds coral tag-order and
+  horizontal-rotation unit tests, `vines.rs` adds a twisting/weeping column
+  unit test, and `tests/aquatic.rs` adds 16 integration tests covering all
+  shipped config IDs, short/tall seagrass pairs, kelp heads/bodies, sea pickles,
+  coral tree/claw/mushroom, vine face attachment, twisting/weeping columns,
+  huge brown/red mushroom and crimson/warped fungus shapes, glowstone, forest
+  rocks, fill layers, nether vegetation, underwater magma, bamboo leaf stages,
+  and generator decoration determinism.
+- Parity after the aquatic slice: 98.71% block-class (6065/6144) / 92.02%
+  exact-name (5654/6144); the one-block exact delta from 92.04% is a
+  tall-seagrass pair on a column whose Rust terrain already differs from Java.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
   are clean (2026-11-06).
 - Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members
@@ -125,7 +138,7 @@ Rust tree: `crates/folia-core`.
 - All 1225 `final_density` values on the chunk `(0,-1)` 4x8x4 interpolation grid
   match Java within `1e-9` (`worldgen/generator.rs` test,
   `assets/java-density-grid.txt`).
-- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.71% (6065/6144 sampled positions), exact block names are 92.04% (5655/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
+- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.71% (6065/6144 sampled positions), exact block names are 92.02% (5654/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
 - `tests/worldgen_join.rs` logs in with no region directory, streams 49
   generated terrain chunks, and checks the palette contains bedrock.
 - Live server startup logs `[rust] noise world generator ready (seed=0)`.

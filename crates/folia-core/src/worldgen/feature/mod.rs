@@ -26,15 +26,27 @@ use std::fmt;
 use std::io;
 use std::sync::OnceLock;
 
+mod aquatic;
+mod mushroom;
 mod ore;
 mod placement;
 mod tree;
 mod vegetation;
+mod vines;
 
+use aquatic::{
+    BambooFeature, CoralFeature, KelpFeature, SeaPickleFeature, SeagrassFeature,
+    UnderwaterMagmaFeature,
+};
+use mushroom::{
+    BlockBlobFeature, FillLayerFeature, GlowstoneFeature, HugeFungusFeature, HugeMushroomFeature,
+    NetherForestVegetationFeature, RandomBooleanSelectorFeature,
+};
 use vegetation::{
     BlockColumnFeature, BlockPileFeature, MultifaceGrowthFeature, RandomPatchFeature,
     SimpleBlockFeature, VegetationPatchFeature,
 };
+use vines::{TwistingVinesFeature, VinesFeature, WeepingVinesFeature};
 
 pub use placement::{
     BlockPredicate, HeightProvider, Heightmap, IntProvider, PlacementFailure, PlacementModifier,
@@ -132,6 +144,64 @@ pub trait FeatureLevel {
     fn height(&self) -> i32;
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState>;
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool;
+
+    /// `LevelReader.getHeight(Heightmap.Types, x, z)`.
+    ///
+    /// Scans the column with the same predicate approximation the placement
+    /// pipeline uses (air, fluids, and tagged passable vegetation do not block
+    /// motion). Positions outside the write region cannot be read, so they are
+    /// skipped; a column with nothing readable reports the minimum Y.
+    fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        let max_y = self.min_y().checked_add(self.height())?;
+        for y in (self.min_y()..max_y).rev() {
+            let Some(state) = self.get_block(BlockPos::new(x, y, z)) else {
+                continue;
+            };
+            let fluid = heightmap_is_fluid(state);
+            let blocks_motion = match kind {
+                Heightmap::WorldSurface | Heightmap::WorldSurfaceWg => !is_air_name(&state.name),
+                Heightmap::OceanFloor | Heightmap::OceanFloorWg => heightmap_blocks_motion(state),
+                Heightmap::MotionBlocking => heightmap_blocks_motion(state) || fluid,
+                Heightmap::MotionBlockingNoLeaves => {
+                    (heightmap_blocks_motion(state) || fluid)
+                        && !crate::tags::block_has("minecraft:leaves", &state.name)
+                }
+            };
+            if blocks_motion {
+                return Some(y + 1);
+            }
+        }
+        Some(self.min_y())
+    }
+}
+
+fn heightmap_is_fluid(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:water" | "minecraft:lava" | "minecraft:flowing_water" | "minecraft:flowing_lava"
+    )
+}
+
+fn heightmap_blocks_motion(state: &BlockState) -> bool {
+    if is_air_name(&state.name) || heightmap_is_fluid(state) {
+        return false;
+    }
+    for tag in [
+        "minecraft:replaceable",
+        "minecraft:flowers",
+        "minecraft:saplings",
+        "minecraft:crops",
+        "minecraft:rails",
+        "minecraft:buttons",
+        "minecraft:pressure_plates",
+        "minecraft:all_signs",
+        "minecraft:fire",
+    ] {
+        if crate::tags::block_has(tag, &state.name) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Chunk-bounded `WorldGenLevel` passed to features.
@@ -178,7 +248,12 @@ impl FeatureLevel for WorldGenRegion<'_> {
 
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState> {
         let (x, y, z) = self.local(pos)?;
-        self.chunk.block_state(x, y, z)
+        // A section that has not been written yet encodes as air, like an
+        // empty vanilla chunk section.
+        match self.chunk.block_state(x, y, z) {
+            Some(state) => Some(state),
+            None => Some(chunk_air()),
+        }
     }
 
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
@@ -212,6 +287,15 @@ pub fn is_air_name(name: &str) -> bool {
         name,
         "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
     )
+}
+
+/// Shared air state for sections that have not been written yet.
+fn chunk_air() -> &'static BlockState {
+    static AIR: OnceLock<BlockState> = OnceLock::new();
+    AIR.get_or_init(|| BlockState {
+        name: "minecraft:air".to_owned(),
+        properties: Vec::new(),
+    })
 }
 
 /// `Feature`: a configured feature type that writes into a
@@ -287,6 +371,39 @@ pub enum ConfiguredFeatureKind {
     MultifaceGrowth(Box<MultifaceGrowthFeature>),
     /// `minecraft:vegetation_patch` and `minecraft:waterlogged_vegetation_patch`.
     VegetationPatch(Box<VegetationPatchFeature>),
+    /// `minecraft:seagrass`.
+    Seagrass(SeagrassFeature),
+    /// `minecraft:kelp`.
+    Kelp(KelpFeature),
+    /// `minecraft:sea_pickle`.
+    SeaPickle(SeaPickleFeature),
+    /// `minecraft:coral_tree`, `minecraft:coral_claw`, or
+    /// `minecraft:coral_mushroom`.
+    Coral(Box<CoralFeature>),
+    /// `minecraft:vines`.
+    Vines(VinesFeature),
+    /// `minecraft:twisting_vines`.
+    TwistingVines(TwistingVinesFeature),
+    /// `minecraft:weeping_vines`.
+    WeepingVines(WeepingVinesFeature),
+    /// `minecraft:huge_brown_mushroom` or `minecraft:huge_red_mushroom`.
+    HugeMushroom(Box<HugeMushroomFeature>),
+    /// `minecraft:huge_fungus`.
+    HugeFungus(Box<HugeFungusFeature>),
+    /// `minecraft:glowstone_blob`.
+    Glowstone(GlowstoneFeature),
+    /// `minecraft:forest_rock` (`BlockBlobFeature`).
+    BlockBlob(BlockBlobFeature),
+    /// `minecraft:fill_layer`.
+    FillLayer(FillLayerFeature),
+    /// `minecraft:nether_forest_vegetation`.
+    NetherForestVegetation(Box<NetherForestVegetationFeature>),
+    /// `minecraft:underwater_magma`.
+    UnderwaterMagma(UnderwaterMagmaFeature),
+    /// `minecraft:bamboo`.
+    Bamboo(BambooFeature),
+    /// `minecraft:random_boolean_selector`.
+    RandomBooleanSelector(RandomBooleanSelectorFeature),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
@@ -343,6 +460,24 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::BlockColumn(_) => "minecraft:block_column",
             ConfiguredFeatureKind::MultifaceGrowth(_) => "minecraft:multiface_growth",
             ConfiguredFeatureKind::VegetationPatch(feature) => feature.vanilla_type(),
+            ConfiguredFeatureKind::Seagrass(_) => "minecraft:seagrass",
+            ConfiguredFeatureKind::Kelp(_) => "minecraft:kelp",
+            ConfiguredFeatureKind::SeaPickle(_) => "minecraft:sea_pickle",
+            ConfiguredFeatureKind::Coral(feature) => feature.vanilla_type(),
+            ConfiguredFeatureKind::Vines(_) => "minecraft:vines",
+            ConfiguredFeatureKind::TwistingVines(_) => "minecraft:twisting_vines",
+            ConfiguredFeatureKind::WeepingVines(_) => "minecraft:weeping_vines",
+            ConfiguredFeatureKind::HugeMushroom(feature) => feature.vanilla_type(),
+            ConfiguredFeatureKind::HugeFungus(_) => "minecraft:huge_fungus",
+            ConfiguredFeatureKind::Glowstone(_) => "minecraft:glowstone_blob",
+            ConfiguredFeatureKind::BlockBlob(_) => "minecraft:forest_rock",
+            ConfiguredFeatureKind::FillLayer(_) => "minecraft:fill_layer",
+            ConfiguredFeatureKind::NetherForestVegetation(_) => {
+                "minecraft:nether_forest_vegetation"
+            }
+            ConfiguredFeatureKind::UnderwaterMagma(_) => "minecraft:underwater_magma",
+            ConfiguredFeatureKind::Bamboo(_) => "minecraft:bamboo",
+            ConfiguredFeatureKind::RandomBooleanSelector(_) => "minecraft:random_boolean_selector",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -363,6 +498,22 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::BlockColumn(_)
                 | ConfiguredFeatureKind::MultifaceGrowth(_)
                 | ConfiguredFeatureKind::VegetationPatch(_)
+                | ConfiguredFeatureKind::Seagrass(_)
+                | ConfiguredFeatureKind::Kelp(_)
+                | ConfiguredFeatureKind::SeaPickle(_)
+                | ConfiguredFeatureKind::Coral(_)
+                | ConfiguredFeatureKind::Vines(_)
+                | ConfiguredFeatureKind::TwistingVines(_)
+                | ConfiguredFeatureKind::WeepingVines(_)
+                | ConfiguredFeatureKind::HugeMushroom(_)
+                | ConfiguredFeatureKind::HugeFungus(_)
+                | ConfiguredFeatureKind::Glowstone(_)
+                | ConfiguredFeatureKind::BlockBlob(_)
+                | ConfiguredFeatureKind::FillLayer(_)
+                | ConfiguredFeatureKind::NetherForestVegetation(_)
+                | ConfiguredFeatureKind::UnderwaterMagma(_)
+                | ConfiguredFeatureKind::Bamboo(_)
+                | ConfiguredFeatureKind::RandomBooleanSelector(_)
         )
     }
 
@@ -402,6 +553,34 @@ impl ConfiguredFeature {
                 Ok(feature.place(level, random, origin))
             }
             ConfiguredFeatureKind::VegetationPatch(feature) => feature.place(level, random, origin),
+            ConfiguredFeatureKind::Seagrass(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Kelp(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::SeaPickle(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Coral(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Vines(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::TwistingVines(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::WeepingVines(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::HugeMushroom(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::HugeFungus(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Glowstone(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::BlockBlob(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::FillLayer(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::NetherForestVegetation(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::UnderwaterMagma(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::Bamboo(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::RandomBooleanSelector(feature) => {
+                feature.place(level, random, origin)
+            }
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
                 vanilla_type: vanilla_type.clone(),
@@ -755,6 +934,10 @@ fn parse_configured(
                 selectors.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
+            "minecraft:random_boolean_selector" => {
+                selectors.push((id, vanilla_type.to_owned(), entry.clone()));
+                continue;
+            }
             _ => {}
         }
 
@@ -808,6 +991,12 @@ fn parse_configured_kind(
             Some(selector) => ConfiguredFeatureKind::RandomSelector(selector),
             None => unsupported(),
         }),
+        "minecraft:random_boolean_selector" => Ok(
+            match mushroom::parse_random_boolean_selector_config(config, configured)? {
+                Some(selector) => ConfiguredFeatureKind::RandomBooleanSelector(selector),
+                None => unsupported(),
+            },
+        ),
         "minecraft:ore" => Ok(match ore::parse_ore_config(config)? {
             Some(feature) => ConfiguredFeatureKind::Ore(Box::new(feature)),
             None => unsupported(),
@@ -851,6 +1040,77 @@ fn parse_configured_kind(
                 None => unsupported(),
             },
         ),
+        "minecraft:seagrass" => Ok(match aquatic::parse_seagrass_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Seagrass(feature),
+            None => unsupported(),
+        }),
+        "minecraft:kelp" => Ok(match aquatic::parse_kelp_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Kelp(feature),
+            None => unsupported(),
+        }),
+        "minecraft:sea_pickle" => Ok(match aquatic::parse_sea_pickle_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::SeaPickle(feature),
+            None => unsupported(),
+        }),
+        "minecraft:coral_tree" | "minecraft:coral_claw" | "minecraft:coral_mushroom" => {
+            Ok(match aquatic::parse_coral_config(config, vanilla_type)? {
+                Some(feature) => ConfiguredFeatureKind::Coral(Box::new(feature)),
+                None => unsupported(),
+            })
+        }
+        "minecraft:vines" => Ok(match vines::parse_vines_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Vines(feature),
+            None => unsupported(),
+        }),
+        "minecraft:twisting_vines" => Ok(match vines::parse_twisting_vines_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::TwistingVines(feature),
+            None => unsupported(),
+        }),
+        "minecraft:weeping_vines" => Ok(match vines::parse_weeping_vines_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::WeepingVines(feature),
+            None => unsupported(),
+        }),
+        "minecraft:huge_brown_mushroom" | "minecraft:huge_red_mushroom" => {
+            let kind = if vanilla_type == "minecraft:huge_brown_mushroom" {
+                mushroom::HugeMushroomKind::Brown
+            } else {
+                mushroom::HugeMushroomKind::Red
+            };
+            Ok(match mushroom::parse_huge_mushroom_config(config, kind)? {
+                Some(feature) => ConfiguredFeatureKind::HugeMushroom(Box::new(feature)),
+                None => unsupported(),
+            })
+        }
+        "minecraft:huge_fungus" => Ok(match mushroom::parse_huge_fungus_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::HugeFungus(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:glowstone_blob" => Ok(match mushroom::parse_glowstone_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Glowstone(feature),
+            None => unsupported(),
+        }),
+        "minecraft:forest_rock" => Ok(match mushroom::parse_block_blob_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::BlockBlob(feature),
+            None => unsupported(),
+        }),
+        "minecraft:fill_layer" => Ok(match mushroom::parse_fill_layer_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::FillLayer(feature),
+            None => unsupported(),
+        }),
+        "minecraft:nether_forest_vegetation" => Ok(
+            match mushroom::parse_nether_forest_vegetation_config(config)? {
+                Some(feature) => ConfiguredFeatureKind::NetherForestVegetation(Box::new(feature)),
+                None => unsupported(),
+            },
+        ),
+        "minecraft:underwater_magma" => Ok(match aquatic::parse_underwater_magma_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::UnderwaterMagma(feature),
+            None => unsupported(),
+        }),
+        "minecraft:bamboo" => Ok(match aquatic::parse_bamboo_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Bamboo(feature),
+            None => unsupported(),
+        }),
         _ => Ok(unsupported()),
     }
 }
@@ -1500,8 +1760,8 @@ mod tests {
     fn unsupported_features_fail_loudly() {
         let data = FeatureData::vanilla();
         let feature = data
-            .configured("minecraft:huge_brown_mushroom")
-            .expect("huge_brown_mushroom is in the dump");
+            .configured("minecraft:lake_lava")
+            .expect("lake_lava is in the dump");
         assert!(!feature.is_supported());
         let mut chunk = chunk();
         let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
@@ -1509,8 +1769,8 @@ mod tests {
         let error = feature
             .place(&mut level, &mut random, BlockPos::new(0, 0, 0))
             .expect_err("unported feature must not pretend to place");
-        assert_eq!(error.feature, "minecraft:huge_brown_mushroom");
-        assert_eq!(error.vanilla_type, "minecraft:huge_brown_mushroom");
+        assert_eq!(error.feature, "minecraft:lake_lava");
+        assert_eq!(error.vanilla_type, "minecraft:lake");
         assert!(level.chunk.sections.is_empty());
     }
 

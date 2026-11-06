@@ -531,12 +531,15 @@ fn decoration_steps_include_ground_cover_passes() {
 #[test]
 fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 134);
+    assert_eq!(data.supported_feature_count(), 162);
     let unsupported = data.unsupported_type_counts();
     assert_eq!(unsupported["minecraft:random_patch"], 1);
     assert_eq!(unsupported["minecraft:flower"], 1);
     assert_eq!(unsupported["minecraft:vegetation_patch"], 1);
     assert_eq!(unsupported["minecraft:waterlogged_vegetation_patch"], 1);
+    // One of the two boolean selectors nests the unported dripleaf pools; the
+    // mushroom-island selector executes both huge-mushroom branches.
+    assert_eq!(unsupported["minecraft:random_boolean_selector"], 1);
     // The remaining random patch/flower configs use `schedule_tick`, which is
     // not modeled at the generation boundary; the two dripleaf pools nest the
     // unported `simple_random_selector`.

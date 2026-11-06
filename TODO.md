@@ -1,9 +1,12 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: `6e0e5fe`  
-> Working tree: clean; work is committed in coherent slices.  
-> Test status: **426 tests, 0 failed** on the merged workspace gate.
+> Current commit: `6e0e5fe` (aquatic/vine/mushroom slice committed on this
+> branch)  
+> Working tree: aquatic/vine/mushroom slice staged for commit.  
+> Test status: **426 tests, 0 failed** on the last full workspace gate; this
+> slice adds 19 focused tests (3 lib + 16 `tests/aquatic.rs`) and was verified
+> with the focused commands, not the full gate.  
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -49,7 +52,7 @@ more expensive than designing for it now.
 |---|---:|---|
 | Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
-| Full worldgen | ~40-45% | Ground-cover/vegetation feature batch landed; ore/scattered features translated but unwired; veinifier, remaining aquatic plants/vines/mushrooms, structures, and Nether/End missing |
+| Full worldgen | ~45-50% | Aquatic/vine/mushroom feature batch landed; ore/scattered features translated but unwired; veinifier, scheduled ticks, remaining placement modifiers, structures, and Nether/End content missing |
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
@@ -63,6 +66,19 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
+  ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
+  `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
+  `twisting_vines`, and `weeping_vines`; `mushroom.rs` ports huge brown/red
+  mushrooms, huge crimson/warped fungus (stem, hat, shroomlight decorator,
+  hanging weeping vines), `glowstone_blob`, `forest_rock`, `fill_layer`,
+  `nether_forest_vegetation`, and `random_boolean_selector`. 162 of 224
+  configured features now dispatch as supported (was 134). `FeatureLevel` gained
+  a vanilla-heightmap default and an absent section now reads as air.
+  Generator decoration determinism is covered by `tests/aquatic.rs` (16 tests).
+  Parity: 98.71% block-class / 92.02% exact-name (5654/6144), a one-block exact
+  delta from 92.04% caused by a tall-seagrass pair on a column whose Rust
+  terrain already differs from Java (water at `y=47` vs Java gravel).
 - 2026-11-06: Server-side player physics — `player_physics.rs` ports the vanilla
   walking/falling formulas (AABB 0.6x1.8 standing, 0.6x1.5 sneaking, gravity
   0.08, drag 0.98, ground friction, jump 0.42, step 0.6, fall distance/damage),
@@ -407,10 +423,11 @@ remaining worldgen gap is almost entirely **what is placed on top of the
 terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
-**Current state:** 98.71% block-class and 92.04% exact-name agreement on a
-16-column fixture, with remaining errors concentrated in unported lush-cave
-and ocean features. `feature_data.json` has the definitions but no Rust code
-consumes it.
+**Current state:** 98.71% block-class and 92.02% exact-name agreement on a
+16-column fixture. 162 of 224 configured features execute, including the
+aquatic/vine/mushroom batch; remaining errors are concentrated in unported
+lush-cave, special, and structure features. `feature_data.json` is consumed by
+`worldgen/feature/mod.rs` and drives the decoration steps.
 
 ### P2.1 Feature framework core `[~]` `L`
 
@@ -583,17 +600,27 @@ consumes it.
   `noise`, `noise_threshold`, `dual_noise`, and `rotated` state providers.
   Inline nested placed features are parsed for `random_patch`/`flower` and
   vegetation patches, including the `block_predicate_filter` predicates they
-  use. 134/224 configured features now execute; 90 remain explicit
-  `Unsupported`.
+  use. The aquatic/vine/mushroom batch adds `aquatic.rs` (`seagrass`, `kelp`,
+  `sea_pickle`, all three coral shapes, `bamboo`, `underwater_magma`),
+  `vines.rs` (`vines`, `twisting_vines`, `weeping_vines`), and `mushroom.rs`
+  (huge brown/red mushrooms, huge crimson/warped fungus, `glowstone_blob`,
+  `forest_rock`, `fill_layer`, `nether_forest_vegetation`, and the boolean
+  selector that drives mushroom islands). 162/224 configured features now
+  execute; 62 remain explicit `Unsupported`. Cactus and sugar cane already run
+  through `block_column`, and lily pads through `simple_block`.
 - **Still open:** `simple_block.schedule_tick` (pale forest flowers), the
-  `simple_random_selector` used by the dripleaf pools, remaining aquatic plants
-  (`seagrass`, `kelp`, `sea_pickle`, coral), vines, mushrooms/huge fungi,
-  bamboo, and structure features. The tree `pale_moss` decorator still needs
-  to be wired to the now-supported `pale_moss_patch`.
-- **Parity note:** Enabling the three decoration steps did not change the
-  fixture: 98.71% block-class / 92.04% exact-name. The new placed features
-  remain mostly gated by unported top-level placement modifiers, so they are
-  parsed but do not yet affect the fixture.
+  `simple_random_selector` used by the dripleaf pools, most structure features,
+  and kelp/huge-fungus/nether-vegetation in-world wiring where their outer
+  placement needs `noise_based_count`/`count_on_every_layer` (the features
+  themselves are ported). The tree `pale_moss` decorator still needs to be
+  wired to the now-supported `pale_moss_patch`, and block-shape metadata would
+  make `underwater_magma`'s face-occlusion test exact instead of the current
+  full-cube approximation.
+- **Parity note:** Enabling the decoration steps after the ground-cover batch
+  left the fixture at 98.71% block-class / 92.04% exact-name. The new aquatic
+  slice moves it to 98.71% / 92.02% (5654/6144): one tall-seagrass pair lands
+  on a column where Rust terrain already differs from Java, so the feature is
+  faithful to the world this port generated but cannot match the Java block.
 
 ### P2.6 Cave, dripstone, sculk, and special features `[ ]` `L`
 

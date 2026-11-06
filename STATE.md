@@ -9,11 +9,18 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit (informational only): `6e0e5fe`
-- Working tree: clean; work is committed in coherent slices.
-- Tests: **426 passing, 0 failed** on the merged workspace gate.
+- Working tree: aquatic/vine/mushroom slice staged for commit.
+- Tests: **426 passing, 0 failed** on the last full workspace gate; this slice
+  adds 19 focused tests (3 lib + 16 `tests/aquatic.rs`) and was verified with
+  the focused commands only.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- Notable delta: the aquatic slice moves exact-name parity from 92.04% to
+  92.02% (5654/6144) while block-class stays 98.71% (6065/6144). The one block
+  is a tall-seagrass pair on a column whose Rust terrain already differs from
+  Java (Rust water at `y=47`, Java gravel); the feature is faithful to the
+  generated world, not a Java block-position match yet.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -41,8 +48,15 @@ Last updated: 2026-11-06
   `attached_to_logs`, and `creaking_heart` decorators execute; unsupported
   decorator types make the whole tree config unsupported. 875 of 888 shipped
   placement modifiers execute; 126 remain explicit unsupported variants.
-  Beehive occupants and the chunk-status pipeline are still open; pale moss
-  is blocked on the unported `pale_moss_patch` vegetation feature.
+  The P2.5 aquatic/vine/mushroom slice now also places seagrass (short and
+  tall), kelp, sea pickles, all three coral shapes, bamboo, vines, twisting and
+  weeping vines, huge brown/red mushrooms, huge crimson/warped fungus with
+  shroomlight and hanging vines, glowstone blobs, forest rocks, fill layers,
+  nether forest vegetation, and underwater magma. 162 of 224 configured
+  features dispatch as supported. Kelp and the nether features still need
+  `noise_based_count`/`count_on_every_layer` placement before they appear in
+  live chunks; beehive occupants and the chunk-status pipeline are still open;
+  pale moss is blocked on wiring its now-supported `pale_moss_patch`.
 - P2.1/P2.2 core is in `worldgen/feature/{mod,placement}.rs`: framework,
   typed loading, and a placement pipeline that executes 875 of 888 shipped
   modifiers (world-free transforms, `biome`, `OCEAN_FLOOR`/`WORLD_SURFACE`
@@ -53,8 +67,8 @@ Last updated: 2026-11-06
   variants. Generation wiring is now complete for the supported subset.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
-- Worldgen parity: 98.71% block-class / 92.04% exact-name on the 16-column
-  fixture.
+- Worldgen parity: 98.71% block-class / 92.02% exact-name on the 16-column
+  fixture after the aquatic slice (was 92.04%).
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
   block-light BFS for an explicit emitter table. Chunk NBT round-trips
@@ -178,14 +192,19 @@ Last updated: 2026-11-06
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
   beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
   with mushrooms. Beehive block entities have no stored bees yet. The P2.5
-  ground-cover batch now parses and places `random_patch`/`flower`,
-  `simple_block`, `block_pile`, `block_column`, `multiface_growth`,
-  `vegetation_patch`, and `waterlogged_vegetation_patch`; 134 of 224 configured
-  features execute. The tree `pale_moss` decorator is still unsupported even
-  though its `pale_moss_patch` dependency now exists. Most remaining aquatic
-  plants, vines,
-  mushrooms/huge fungi, structures, and most special features remain missing.
-  Ore and scattered-ore features are implemented and all 32 shipped configs are
+  ground-cover batch parses and places `random_patch`/`flower`, `simple_block`,
+  `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, and
+  `waterlogged_vegetation_patch`; the aquatic/vine/mushroom batch adds
+  `seagrass`, `kelp`, `sea_pickle`, coral tree/claw/mushroom, `bamboo`,
+  `underwater_magma`, `vines`, `twisting_vines`, `weeping_vines`, huge
+  brown/red mushrooms, huge crimson/warped fungus, `glowstone_blob`,
+  `forest_rock`, `fill_layer`, `nether_forest_vegetation`, and
+  `random_boolean_selector`. 162 of 224 configured features execute. The tree
+  `pale_moss` decorator is still unsupported even though its `pale_moss_patch`
+  dependency now exists, and kelp/nether vegetation/huge fungus still wait on
+  `noise_based_count`/`count_on_every_layer` placement before they appear in
+  generated chunks. Structures and most special features remain missing. Ore
+  and scattered-ore features are implemented and all 32 shipped configs are
   covered, but generator wiring is still deferred because it lowers the
   exact-name parity fixture until WorldgenRNG parity lands. Existing stored
   chunks are not retroactively decorated, so features appear in newly generated
@@ -203,18 +222,20 @@ Last updated: 2026-11-06
 - P1.3 tag data is available; wire `stone_ore_replaceables` and the other ore
   target tags through `folia_core::tags` instead of the hard-coded sets in
   `worldgen/feature/ore.rs`, then add the remaining cosmetic registries.
-- The P2.5 base features are in place. Next: wire the tree `pale_moss`
-  decorator to the now-supported `pale_moss_patch`, then port remaining aquatic
-  plants (`seagrass`, `kelp`, `sea_pickle`), vines, mushrooms/huge fungi, and the
-  remaining patch containers (`simple_random_selector` for the dripleaf pools).
-  Beehive occupant NBT is still the remaining P2.4 tree gap.
+- The P2.5 aquatic/vine/mushroom features are in place. Next: wire the tree
+  `pale_moss` decorator to the now-supported `pale_moss_patch`, port
+  `simple_random_selector` for the dripleaf pools, add
+  `noise_based_count`/`count_on_every_layer` placement so kelp and the nether
+  features reach live chunks, and add `simple_block.schedule_tick`. Beehive
+  occupant NBT is still the remaining P2.4 tree gap.
 
 1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
-   port `OreVeinifier`, and keep the 92.04% exact-name fixture.
+   port `OreVeinifier`, and recover the 92.04% exact-name fixture.
 2. P2.8 - structure starts/pieces/references, processor lists, random palette
    selection, entity spawning, and a template-based Java parity fixture.
-3. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
-   plants, vines, mushrooms/huge fungi, and a Java tree fixture.
+3. P2.4/P2.5 - pale-moss tree decorator, beehive occupants,
+   `simple_random_selector`, scheduled ticks, remaining placement modifiers,
+   and a Java tree fixture.
 4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
    P3.6–P3.8 with generated opacity/emission data, incremental section packets,
    and Java light-array/packet fixtures.
@@ -235,7 +256,7 @@ Last updated: 2026-11-06
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
-- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch` done; `schedule_tick`, `simple_random_selector`, most remaining aquatic plants, vines, mushrooms/huge fungi, and structures remain)
+- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
 - [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
@@ -248,6 +269,27 @@ Last updated: 2026-11-06
 
 ## Recently completed
 
+- 2026-11-06: P2.5 aquatic/vine/mushroom batch — three new feature modules.
+  `aquatic.rs` ports `SeagrassFeature` (short/tall, half pairing),
+  `KelpFeature` (head age and body fallback), `SeaPickleFeature`,
+  `CoralFeature` plus tree/claw/mushroom shapes (tag-ordered coral picks,
+  fans/pickles, wall-fan facing), `BambooFeature` (podzol ring, leaf stages),
+  and `UnderwaterMagmaFeature` (column scan, per-position draw, enclosed
+  placement). `vines.rs` ports `VinesFeature` (face attachment in
+  `Direction.values()` order), `TwistingVinesFeature` and `WeepingVinesFeature`
+  (spread scans, head/body columns, ages 17–25 and 23–25). `mushroom.rs` ports
+  huge brown/red mushrooms (Java cap shapes, connection properties,
+  trunk-after-cap order), huge crimson/warped fungus (stem/hat/decoration,
+  planted branch, weeping vines), `GlowstoneFeature`, `BlockBlobFeature`
+  (`forest_rock`), `FillLayerFeature`, `NetherForestVegetationFeature`, and
+  `RandomBooleanSelectorFeature` (mushroom islands). `FeatureLevel` gains a
+  default `heightmap()` and absent sections read as air. 162/224 configured
+  features execute. Focused: 73 lib feature tests, 16 `tests/aquatic.rs`
+  integration tests. Parity: 98.71% block-class / 92.02% exact-name
+  (5654/6144); the one-block exact delta is a tall-seagrass pair on a column
+  whose Rust terrain already differs from Java. Remaining: kelp/nether outer
+  placement (`noise_based_count`/`count_on_every_layer`), scheduled ticks,
+  `simple_random_selector`, pale moss wiring, and structures.
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a

@@ -1,0 +1,17 @@
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.tsv text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=crlf
+*.bin binary
+*.gz binary
+*.mca binary
+*.dat binary
+*.jar binary
+*.exe binary

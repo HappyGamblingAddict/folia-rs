@@ -752,3 +752,36 @@ These are expected gaps, not reasons to stop:
   Do not claim piston parity from this slice.
 - Workaround / next task: keep the explicit `MovingPiston` payload when typed
   block entities land, then add payload NBT and a Java differential fixture.
+## 2026-11-06 - Remaining configured-feature blockers after the terrain batch
+
+- Status: 207/224 configured features execute. The 17 remaining configs are
+  `fossil` (2), `end_gateway` (2), `sculk_patch` (2), and one each of
+  `bonus_chest`, `chorus_plant`, `desert_well`, `end_island`, `end_platform`,
+  `end_spike`, `freeze_top_layer`, `geode`, `monster_room`, `root_system`, and
+  `void_start_platform`.
+- `root_system` / `rooted_azalea_tree`: the decompiled 1.21.11
+  `placeDirtAndTree` moves the mutable position up before testing
+  `allowed_tree_position`, but the shipped predicate requires
+  `#minecraft:azalea_grows_on` below that candidate and the feature's first
+  check requires the origin itself to be air. In the current single-chunk
+  region there is no origin that satisfies both; the two-registry and terrain
+  batch leaves this type explicitly unsupported rather than shipping a fake
+  no-op. Needs a Java oracle placement trace to resolve whether the predicate
+  data or bytecode ordering is authoritative.
+- `geode` / `amethyst_geode`: `GeodeFeature` seeds its `NormalNoise` from
+  `worldGenLevel.getSeed()`. `FeatureLevel` has no seed (the generator owns it)
+  and `generator.rs` is outside this slice's file set. Add a seed accessor and
+  wire the generator before porting the noise/crack/layer math.
+- `sculk_patch`: needs `SculkSpreader` cursor charges, `SculkBehaviour`
+  spread/decay, and `MultifaceSpreader` state transitions. The feature also
+  writes sculk sensors/shriekers; those are block states only, so the blocker
+  is the spreader algorithm, not block entities.
+- `freeze_top_layer`: needs `Biome.shouldFreeze` / `shouldSnow` through the
+  generator's biome sampler. `FeatureLevel` currently exposes no biome, and a
+  hard-coded snowy assumption would corrupt non-frozen biomes.
+- `fossil`, `desert_well`, `bonus_chest`, `monster_room`: require structure
+  templates or block-entity payloads (loot chest/spawner) outside the allowed
+  feature-only slice.
+- `end_gateway`, `end_island`, `end_platform`, `end_spike`, `chorus_plant`,
+  `void_start_platform`: End/void content, including block entities/entities and
+  End-specific generator state; defer with the P7 dimension work.

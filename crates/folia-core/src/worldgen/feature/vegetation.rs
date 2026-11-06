@@ -16,8 +16,8 @@
 
 use super::placement::{IntProvider, parse_block_state, parse_int_provider};
 use super::{
-    ConfiguredFeature, FeatureLevel, UnsupportedFeature, is_air_name,
-    parse_inline_configured_feature, resource_location,
+    ConfiguredFeature, FeatureLevel, PlacedFeature, ResolvedPlacedFeature, UnsupportedFeature,
+    is_air_name, parse_inline_configured_feature, resource_location,
 };
 use crate::chunk::BlockState;
 use crate::registry;
@@ -1443,7 +1443,7 @@ fn parse_direction(name: &str) -> io::Result<Direction> {
 /// including its inline placement modifiers.
 #[derive(Debug, Clone)]
 pub struct SimpleRandomSelectorFeature {
-    features: Vec<NestedPlacedFeature>,
+    features: Vec<ResolvedPlacedFeature>,
 }
 
 impl SimpleRandomSelectorFeature {
@@ -1454,13 +1454,14 @@ impl SimpleRandomSelectorFeature {
         origin: BlockPos,
     ) -> Result<bool, UnsupportedFeature> {
         let index = random.next_int_bound(self.features.len() as i32) as usize;
-        self.features[index].place_all(level, random, origin)
+        self.features[index].place(level, random, origin)
     }
 }
 
 pub(crate) fn parse_simple_random_selector_config(
     config: &Value,
     configured: &HashMap<String, ConfiguredFeature>,
+    placed: Option<&HashMap<String, PlacedFeature>>,
     id: &str,
 ) -> io::Result<Option<SimpleRandomSelectorFeature>> {
     let object = config
@@ -1475,7 +1476,7 @@ pub(crate) fn parse_simple_random_selector_config(
     }
     let mut parsed = Vec::with_capacity(features.len());
     for feature in features {
-        let Some(feature) = parse_nested_placed_feature(feature, configured, id)? else {
+        let Some(feature) = ResolvedPlacedFeature::parse(id, feature, configured, placed)? else {
             return Ok(None);
         };
         parsed.push(feature);

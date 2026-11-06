@@ -29,9 +29,12 @@ use std::io;
 use std::sync::OnceLock;
 
 mod aquatic;
+mod caves;
 mod mushroom;
 mod ore;
 mod placement;
+mod support;
+mod terrain;
 mod tree;
 mod vegetation;
 mod vines;
@@ -40,9 +43,14 @@ use aquatic::{
     BambooFeature, CoralFeature, KelpFeature, SeaPickleFeature, SeagrassFeature,
     UnderwaterMagmaFeature,
 };
+use caves::{DripstoneClusterFeature, LargeDripstoneFeature, PointedDripstoneFeature};
 use mushroom::{
     BlockBlobFeature, FillLayerFeature, GlowstoneFeature, HugeFungusFeature, HugeMushroomFeature,
     NetherForestVegetationFeature, RandomBooleanSelectorFeature,
+};
+use terrain::{
+    BasaltColumnsFeature, BasaltPillarFeature, BlueIceFeature, DeltaFeature, DiskFeature,
+    IceSpikeFeature, IcebergFeature, LakeFeature, ReplaceBlobsFeature, SpringFeature,
 };
 use vegetation::{
     BlockColumnFeature, BlockPileFeature, MultifaceGrowthFeature, RandomPatchFeature,
@@ -146,6 +154,15 @@ pub trait FeatureLevel {
     fn height(&self) -> i32;
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState>;
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool;
+
+    /// `ChunkGenerator.getSeaLevel()`.
+    ///
+    /// The region is dimension-agnostic here and has no generator handle, so
+    /// the Overworld default is used. Every shipped feature that reads this is
+    /// Overworld-only (icebergs, blue ice, basalt columns).
+    fn sea_level(&self) -> i32 {
+        63
+    }
 
     /// `WorldGenLevel.scheduleTick(pos, block, delay)`.
     ///
@@ -480,10 +497,168 @@ pub enum ConfiguredFeatureKind {
     RandomBooleanSelector(RandomBooleanSelectorFeature),
     /// `minecraft:simple_random_selector`.
     SimpleRandomSelector(SimpleRandomSelectorFeature),
+    /// `minecraft:disk`.
+    Disk(DiskFeature),
+    /// `minecraft:spring_feature`.
+    Spring(SpringFeature),
+    /// `minecraft:iceberg`.
+    Iceberg(Box<IcebergFeature>),
+    /// `minecraft:blue_ice`.
+    BlueIce(BlueIceFeature),
+    /// `minecraft:ice_spike`.
+    IceSpike(IceSpikeFeature),
+    /// `minecraft:lake`.
+    Lake(Box<LakeFeature>),
+    /// `minecraft:netherrack_replace_blobs`.
+    ReplaceBlobs(ReplaceBlobsFeature),
+    /// `minecraft:basalt_columns`.
+    BasaltColumns(BasaltColumnsFeature),
+    /// `minecraft:basalt_pillar`.
+    BasaltPillar(BasaltPillarFeature),
+    /// `minecraft:delta_feature`.
+    Delta(DeltaFeature),
+    /// `minecraft:dripstone_cluster`.
+    DripstoneCluster(Box<DripstoneClusterFeature>),
+    /// `minecraft:large_dripstone`.
+    LargeDripstone(Box<LargeDripstoneFeature>),
+    /// `minecraft:pointed_dripstone`.
+    PointedDripstone(PointedDripstoneFeature),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
     },
+}
+
+/// A selector branch: a configured feature plus the placement modifiers from
+/// the branch's `PlacedFeature` entry.
+///
+/// Vanilla selectors hold `Holder<PlacedFeature>`, so branch ids resolve
+/// through the *placed* registry first and fall back to a configured id (the
+/// dump also accepts inline configured branches). Keeping the modifiers here
+/// makes `random_selector` and `simple_random_selector` behave like vanilla
+/// instead of silently skipping placed-only branches.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedPlacedFeature {
+    id: String,
+    feature: Box<ConfiguredFeature>,
+    modifiers: Vec<PlacementModifier>,
+}
+
+impl ResolvedPlacedFeature {
+    pub(crate) fn parse(
+        id: &str,
+        value: &Value,
+        configured: &HashMap<String, ConfiguredFeature>,
+        placed: Option<&HashMap<String, PlacedFeature>>,
+    ) -> io::Result<Option<Self>> {
+        if let Some(reference) = value.as_str() {
+            let reference = resource_location(reference);
+            if let Some(placed_feature) = placed.and_then(|placed| placed.get(&reference)) {
+                if !placed_feature.placement_is_supported() {
+                    return Ok(None);
+                }
+                let Some(feature) = configured
+                    .get(placed_feature.feature())
+                    .filter(|feature| feature.is_supported())
+                else {
+                    return Ok(None);
+                };
+                return Ok(Some(Self {
+                    id: reference,
+                    feature: Box::new(feature.clone()),
+                    modifiers: placed_feature.modifiers.clone(),
+                }));
+            }
+            return Ok(configured
+                .get(&reference)
+                .filter(|feature| feature.is_supported())
+                .map(|feature| Self {
+                    id: reference,
+                    feature: Box::new(feature.clone()),
+                    modifiers: Vec::new(),
+                }));
+        }
+
+        let object = value
+            .as_object()
+            .ok_or_else(|| invalid("placed feature branch must be a string or an object"))?;
+        let feature_value = object
+            .get("feature")
+            .ok_or_else(|| invalid("placed feature branch is missing `feature`"))?;
+        let Some(feature) = parse_inline_configured_feature(id, feature_value, configured)? else {
+            return Ok(None);
+        };
+        let modifiers = match object.get("placement") {
+            Some(placement) => placement
+                .as_array()
+                .ok_or_else(|| invalid("placed feature branch `placement` must be a list"))?
+                .iter()
+                .map(placement::parse_modifier)
+                .collect::<io::Result<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        if modifiers.iter().any(|modifier| {
+            !modifier.is_supported() || matches!(modifier.kind(), PlacementModifierKind::Biome)
+        }) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            id: id.to_owned(),
+            feature,
+            modifiers,
+        }))
+    }
+
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> Result<bool, UnsupportedFeature> {
+        if self.modifiers.is_empty() {
+            return self.feature.place(level, random, origin);
+        }
+        let positions = {
+            let min_y = level.min_y();
+            let height = level.height();
+            let world = support::LevelPlacementWorld::new(&*level);
+            let mut positions = Vec::new();
+            self.apply_modifiers(0, origin, random, &world, min_y, height, &mut positions)
+                .map_err(|unsupported| UnsupportedFeature {
+                    feature: self.id.clone(),
+                    vanilla_type: unsupported.vanilla_type,
+                })?;
+            positions
+        };
+        let mut any = false;
+        for pos in positions {
+            if self.feature.place(level, random, pos)? {
+                any = true;
+            }
+        }
+        Ok(any)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_modifiers(
+        &self,
+        index: usize,
+        pos: BlockPos,
+        random: &mut dyn RandomSource,
+        world: &dyn PlacementWorld,
+        min_y: i32,
+        height: i32,
+        output: &mut Vec<BlockPos>,
+    ) -> Result<(), UnsupportedModifier> {
+        let Some(modifier) = self.modifiers.get(index) else {
+            output.push(pos);
+            return Ok(());
+        };
+        for next in modifier.get_positions(pos, random, world, &self.id, min_y, height)? {
+            self.apply_modifiers(index + 1, next, random, world, min_y, height, output)?;
+        }
+        Ok(())
+    }
 }
 
 /// `RandomSelectorFeature`: try each weighted branch, then the default.
@@ -492,8 +667,8 @@ pub enum ConfiguredFeatureKind {
 /// RNG draw order still matches vanilla; if one is chosen it places nothing.
 #[derive(Debug, Clone)]
 pub struct RandomSelectorFeature {
-    default: Box<ConfiguredFeature>,
-    features: Vec<(f32, Option<Box<ConfiguredFeature>>)>,
+    default: Box<ResolvedPlacedFeature>,
+    features: Vec<(f32, Option<Box<ResolvedPlacedFeature>>)>,
 }
 
 impl RandomSelectorFeature {
@@ -555,6 +730,19 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::Bamboo(_) => "minecraft:bamboo",
             ConfiguredFeatureKind::RandomBooleanSelector(_) => "minecraft:random_boolean_selector",
             ConfiguredFeatureKind::SimpleRandomSelector(_) => "minecraft:simple_random_selector",
+            ConfiguredFeatureKind::Disk(_) => "minecraft:disk",
+            ConfiguredFeatureKind::Spring(_) => "minecraft:spring_feature",
+            ConfiguredFeatureKind::Iceberg(_) => "minecraft:iceberg",
+            ConfiguredFeatureKind::BlueIce(_) => "minecraft:blue_ice",
+            ConfiguredFeatureKind::IceSpike(_) => "minecraft:ice_spike",
+            ConfiguredFeatureKind::Lake(_) => "minecraft:lake",
+            ConfiguredFeatureKind::ReplaceBlobs(_) => "minecraft:netherrack_replace_blobs",
+            ConfiguredFeatureKind::BasaltColumns(_) => "minecraft:basalt_columns",
+            ConfiguredFeatureKind::BasaltPillar(_) => "minecraft:basalt_pillar",
+            ConfiguredFeatureKind::Delta(_) => "minecraft:delta_feature",
+            ConfiguredFeatureKind::DripstoneCluster(_) => "minecraft:dripstone_cluster",
+            ConfiguredFeatureKind::LargeDripstone(_) => "minecraft:large_dripstone",
+            ConfiguredFeatureKind::PointedDripstone(_) => "minecraft:pointed_dripstone",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -592,6 +780,19 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::Bamboo(_)
                 | ConfiguredFeatureKind::RandomBooleanSelector(_)
                 | ConfiguredFeatureKind::SimpleRandomSelector(_)
+                | ConfiguredFeatureKind::Disk(_)
+                | ConfiguredFeatureKind::Spring(_)
+                | ConfiguredFeatureKind::Iceberg(_)
+                | ConfiguredFeatureKind::BlueIce(_)
+                | ConfiguredFeatureKind::IceSpike(_)
+                | ConfiguredFeatureKind::Lake(_)
+                | ConfiguredFeatureKind::ReplaceBlobs(_)
+                | ConfiguredFeatureKind::BasaltColumns(_)
+                | ConfiguredFeatureKind::BasaltPillar(_)
+                | ConfiguredFeatureKind::Delta(_)
+                | ConfiguredFeatureKind::DripstoneCluster(_)
+                | ConfiguredFeatureKind::LargeDripstone(_)
+                | ConfiguredFeatureKind::PointedDripstone(_)
         )
     }
 
@@ -661,6 +862,31 @@ impl ConfiguredFeature {
             }
             ConfiguredFeatureKind::SimpleRandomSelector(feature) => {
                 feature.place(level, random, origin)
+            }
+            ConfiguredFeatureKind::Disk(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Spring(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Iceberg(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::BlueIce(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::IceSpike(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Lake(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::ReplaceBlobs(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::BasaltColumns(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::BasaltPillar(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::Delta(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::DripstoneCluster(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::LargeDripstone(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::PointedDripstone(feature) => {
+                Ok(feature.place(level, random, origin))
             }
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
@@ -823,8 +1049,8 @@ impl FeatureData {
             .as_object()
             .ok_or_else(|| invalid("feature data must be a JSON object"))?;
 
-        let configured = parse_configured(section(object, "configured")?)?;
         let placed = parse_placed(section(object, "placed")?)?;
+        let configured = parse_configured(section(object, "configured")?, &placed)?;
 
         for (name, placement) in &placed {
             if !configured.contains_key(placement.feature()) {
@@ -1007,6 +1233,7 @@ fn section<'a>(object: &'a Map<String, Value>, key: &str) -> io::Result<&'a Map<
 
 fn parse_configured(
     entries: &Map<String, Value>,
+    placed: &HashMap<String, PlacedFeature>,
 ) -> io::Result<HashMap<String, ConfiguredFeature>> {
     let mut configured = HashMap::with_capacity(entries.len());
     let mut patches = Vec::new();
@@ -1025,7 +1252,7 @@ fn parse_configured(
         let id = resource_location(name);
 
         match vanilla_type {
-            "minecraft:random_patch" | "minecraft:flower" => {
+            "minecraft:random_patch" | "minecraft:flower" | "minecraft:no_bonemeal_flower" => {
                 patches.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
@@ -1039,7 +1266,8 @@ fn parse_configured(
             }
             "minecraft:tree" | "minecraft:fallen_tree" => {
                 // Pale oak trees embed `pale_moss_patch`, which is itself a
-                // vegetation patch, so trees resolve after patches.
+                // vegetation patch, so trees resolve after patches. Root
+                // systems embed a placed tree, so they resolve with trees too.
                 trees.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
@@ -1050,32 +1278,38 @@ fn parse_configured(
             _ => {}
         }
 
-        let kind = parse_configured_kind(&id, vanilla_type, entry, &configured)?;
+        let kind = parse_configured_kind(&id, vanilla_type, entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
 
     // Patches nest inline placed features; vegetation patches also reference
     // simple-block configured features. Resolve those after the direct types.
     for (id, vanilla_type, entry) in patches {
-        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     // The dripleaf pools nest this selector inside a vegetation patch.
     for (id, vanilla_type, entry) in simple_selectors {
-        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     for (id, vanilla_type, entry) in vegetation_patches {
-        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     for (id, vanilla_type, entry) in trees {
-        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     // Selectors reference other configured features, so they are resolved last.
     for (id, vanilla_type, entry) in selectors {
-        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     Ok(configured)
@@ -1086,6 +1320,7 @@ fn parse_configured_kind(
     vanilla_type: &str,
     entry: &Map<String, Value>,
     configured: &HashMap<String, ConfiguredFeature>,
+    placed: Option<&HashMap<String, PlacedFeature>>,
 ) -> io::Result<ConfiguredFeatureKind> {
     if vanilla_type == "minecraft:no_op" {
         return Ok(ConfiguredFeatureKind::NoOp(NoOpFeature));
@@ -1110,7 +1345,7 @@ fn parse_configured_kind(
             Some(feature) => ConfiguredFeatureKind::FallenTree(Box::new(feature)),
             None => unsupported(),
         }),
-        "minecraft:random_selector" => Ok(match parse_selector(config, configured)? {
+        "minecraft:random_selector" => Ok(match parse_selector(config, configured, placed)? {
             Some(selector) => ConfiguredFeatureKind::RandomSelector(selector),
             None => unsupported(),
         }),
@@ -1121,7 +1356,7 @@ fn parse_configured_kind(
             },
         ),
         "minecraft:simple_random_selector" => Ok(
-            match vegetation::parse_simple_random_selector_config(config, configured, id)? {
+            match vegetation::parse_simple_random_selector_config(config, configured, placed, id)? {
                 Some(selector) => ConfiguredFeatureKind::SimpleRandomSelector(selector),
                 None => unsupported(),
             },
@@ -1134,7 +1369,7 @@ fn parse_configured_kind(
             Some(feature) => ConfiguredFeatureKind::ScatteredOre(Box::new(feature)),
             None => unsupported(),
         }),
-        "minecraft:random_patch" | "minecraft:flower" => Ok(
+        "minecraft:random_patch" | "minecraft:flower" | "minecraft:no_bonemeal_flower" => Ok(
             match vegetation::parse_random_patch_config(config, configured, id, vanilla_type)? {
                 Some(feature) => ConfiguredFeatureKind::RandomPatch(Box::new(feature)),
                 None => unsupported(),
@@ -1240,6 +1475,60 @@ fn parse_configured_kind(
             Some(feature) => ConfiguredFeatureKind::Bamboo(feature),
             None => unsupported(),
         }),
+        "minecraft:disk" => Ok(match terrain::parse_disk_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Disk(feature),
+            None => unsupported(),
+        }),
+        "minecraft:spring_feature" => Ok(match terrain::parse_spring_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Spring(feature),
+            None => unsupported(),
+        }),
+        "minecraft:iceberg" => Ok(match terrain::parse_iceberg_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Iceberg(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:blue_ice" => Ok(match terrain::parse_blue_ice_config() {
+            Some(feature) => ConfiguredFeatureKind::BlueIce(feature),
+            None => unsupported(),
+        }),
+        "minecraft:ice_spike" => Ok(match terrain::parse_ice_spike_config(config) {
+            Some(feature) => ConfiguredFeatureKind::IceSpike(feature),
+            None => unsupported(),
+        }),
+        "minecraft:lake" => Ok(match terrain::parse_lake_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Lake(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:netherrack_replace_blobs" => {
+            Ok(match terrain::parse_replace_blobs_config(config)? {
+                Some(feature) => ConfiguredFeatureKind::ReplaceBlobs(feature),
+                None => unsupported(),
+            })
+        }
+        "minecraft:basalt_columns" => Ok(match terrain::parse_basalt_columns_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::BasaltColumns(feature),
+            None => unsupported(),
+        }),
+        "minecraft:basalt_pillar" => Ok(match terrain::parse_basalt_pillar_config(config) {
+            Some(feature) => ConfiguredFeatureKind::BasaltPillar(feature),
+            None => unsupported(),
+        }),
+        "minecraft:delta_feature" => Ok(match terrain::parse_delta_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Delta(feature),
+            None => unsupported(),
+        }),
+        "minecraft:dripstone_cluster" => Ok(match caves::parse_dripstone_cluster_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::DripstoneCluster(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:large_dripstone" => Ok(match caves::parse_large_dripstone_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::LargeDripstone(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:pointed_dripstone" => Ok(match caves::parse_pointed_dripstone_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::PointedDripstone(feature),
+            None => unsupported(),
+        }),
         _ => Ok(unsupported()),
     }
 }
@@ -1267,7 +1556,8 @@ pub(crate) fn parse_inline_configured_feature(
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid(format!("inline configured feature {id} is missing `type`")))?;
-    let kind = parse_configured_kind(id, vanilla_type, entry, configured)?;
+    let kind = parse_configured_kind(id, vanilla_type, entry, configured, None)
+        .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
     let feature = ConfiguredFeature {
         id: id.to_owned(),
         kind,
@@ -1278,18 +1568,19 @@ pub(crate) fn parse_inline_configured_feature(
 fn parse_selector(
     config: &Value,
     configured: &HashMap<String, ConfiguredFeature>,
+    placed: Option<&HashMap<String, PlacedFeature>>,
 ) -> io::Result<Option<RandomSelectorFeature>> {
     let object = config
         .as_object()
         .ok_or_else(|| invalid("random selector config must be an object"))?;
-    let default_reference = feature_reference(
+    let Some(default) = ResolvedPlacedFeature::parse(
+        "minecraft:random_selector",
         object
             .get("default")
             .ok_or_else(|| invalid("random selector is missing `default`"))?,
-    )?;
-    let Some(default) = configured
-        .get(&default_reference)
-        .filter(|feature| feature.is_supported())
+        configured,
+        placed,
+    )?
     else {
         return Ok(None);
     };
@@ -1308,39 +1599,23 @@ fn parse_selector(
                 .and_then(Value::as_f64)
                 .ok_or_else(|| invalid("random selector entry is missing `chance`"))?
                 as f32;
-            let reference = feature_reference(
+            let feature = ResolvedPlacedFeature::parse(
+                "minecraft:random_selector",
                 entry
                     .get("feature")
                     .ok_or_else(|| invalid("random selector entry is missing `feature`"))?,
-            )?;
-            let feature = configured
-                .get(&reference)
-                .filter(|feature| feature.is_supported())
-                .map(|feature| Box::new(feature.clone()));
+                configured,
+                placed,
+            )?
+            .map(Box::new);
             features.push((chance, feature));
         }
     }
 
     Ok(Some(RandomSelectorFeature {
-        default: Box::new(default.clone()),
+        default: Box::new(default),
         features,
     }))
-}
-
-/// A selector branch may be a bare configured-feature id or an inline
-/// `{ "feature": ..., "placement": ... }` pair.
-fn feature_reference(value: &Value) -> io::Result<String> {
-    if let Some(name) = value.as_str() {
-        return Ok(resource_location(name));
-    }
-    let object = value
-        .as_object()
-        .ok_or_else(|| invalid("feature reference must be a string or an object"))?;
-    let name = object
-        .get("feature")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid("feature reference object is missing `feature`"))?;
-    Ok(resource_location(name))
 }
 
 fn parse_placed(entries: &Map<String, Value>) -> io::Result<HashMap<String, PlacedFeature>> {
@@ -1884,8 +2159,8 @@ mod tests {
     fn unsupported_features_fail_loudly() {
         let data = FeatureData::vanilla();
         let feature = data
-            .configured("minecraft:lake_lava")
-            .expect("lake_lava is in the dump");
+            .configured("minecraft:freeze_top_layer")
+            .expect("freeze_top_layer is in the dump");
         assert!(!feature.is_supported());
         let mut chunk = chunk();
         let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
@@ -1893,8 +2168,8 @@ mod tests {
         let error = feature
             .place(&mut level, &mut random, BlockPos::new(0, 0, 0))
             .expect_err("unported feature must not pretend to place");
-        assert_eq!(error.feature, "minecraft:lake_lava");
-        assert_eq!(error.vanilla_type, "minecraft:lake");
+        assert_eq!(error.feature, "minecraft:freeze_top_layer");
+        assert_eq!(error.vanilla_type, "minecraft:freeze_top_layer");
         assert!(level.chunk.sections.is_empty());
     }
 

@@ -121,6 +121,19 @@ final class PluginHost {
         server.firePlayerJoin(name, uuid);
     }
 
+    boolean fireBlockBreak(String name, String uuid, int x, int y, int z) {
+        return server.fireBlockBreak(name, uuid, x, y, z);
+    }
+
+    boolean fireBlockPlace(String name, String uuid, int x, int y, int z, String material) {
+        return server.fireBlockPlace(name, uuid, x, y, z, material);
+    }
+
+    boolean firePlayerInteract(String name, String uuid, int x, int y, int z,
+                               String material, String action, String face) {
+        return server.firePlayerInteract(name, uuid, x, y, z, material, action, face);
+    }
+
     void disableAll() {
         List<LoadedPlugin> reversed = new ArrayList<>(loaded);
         Collections.reverse(reversed);

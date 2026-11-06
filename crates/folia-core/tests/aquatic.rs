@@ -198,11 +198,10 @@ fn shipped_aquatic_vine_and_mushroom_configs_parse() {
         assert!(feature.is_supported(), "{id} should be executable");
         assert_eq!(feature.vanilla_type(), vanilla_type);
     }
-    // The lush-caves selector still nests unsupported dripleaf patches, so it
-    // must stay explicitly unsupported rather than silently placing nothing.
+    // The vegetation-gap slice added `simple_random_selector` and scheduled
+    // simple blocks, so the lush-caves clay selector is now executable.
     assert!(
-        !data
-            .configured("minecraft:lush_caves_clay")
+        data.configured("minecraft:lush_caves_clay")
             .expect("lush_caves_clay")
             .is_supported()
     );

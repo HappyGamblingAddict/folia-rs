@@ -8,6 +8,9 @@ import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.event.server.PluginEnableEvent;
@@ -22,6 +25,7 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +53,8 @@ final class BridgeServer {
     private final UnsafeValues unsafe;
     private final ConsoleCommandSender console;
     private final Server server;
+    private final BridgeWorld world;
+    private final Map<UUID, BridgePlayer> players = new LinkedHashMap<>();
 
     BridgeServer(File pluginsDirectory, File dataDirectory) {
         this.pluginsDirectory = pluginsDirectory;
@@ -82,6 +88,10 @@ final class BridgeServer {
                 new Class<?>[]{Server.class},
                 this::handleServer
         );
+        File rootDirectory = pluginsDirectory.getParentFile() == null
+                ? dataDirectory : pluginsDirectory.getParentFile();
+        this.world = new BridgeWorld("world", new File(rootDirectory, "world"), server);
+        this.world.setPlayerSupplier(this::onlinePlayers);
         install();
     }
 
@@ -112,54 +122,73 @@ final class BridgeServer {
     }
 
     void firePlayerJoin(String name, String uuid) {
-        UUID id;
-        try {
-            id = UUID.fromString(uuid);
-        } catch (IllegalArgumentException exception) {
-            id = UUID.nameUUIDFromBytes(uuid.getBytes());
-        }
-        final UUID playerId = id;
-
-        Player player = (Player) Proxy.newProxyInstance(
-                BridgeServer.class.getClassLoader(),
-                new Class<?>[]{Player.class},
-                (proxy, method, args) -> handlePlayer(proxy, method, args, name, playerId)
-        );
+        BridgePlayer player = playerFor(name, parseUuid(uuid));
         events.call(new PlayerJoinEvent(
-                player,
+                player.proxy(),
                 net.kyori.adventure.text.Component.text(name + " joined the game")
         ));
         log.info("PlayerJoinEvent fired for " + name);
     }
 
-    private Object handlePlayer(Object proxyObject, Method method, Object[] args, String name, UUID uuid) {
-        if (method.getDeclaringClass() == Object.class) {
-            return objectMethod(proxyObject, method, args);
+    boolean fireBlockBreak(String name, String uuid, int x, int y, int z) {
+        BlockBreakEvent event = new BlockBreakEvent(
+                world.blockAt(x, y, z),
+                playerFor(name, parseUuid(uuid)).proxy()
+        );
+        events.call(event);
+        return event.isCancelled();
+    }
+
+    boolean fireBlockPlace(String name, String uuid, int x, int y, int z, String material) {
+        BlockPlaceEvent event = new BlockPlaceEvent(
+                world.blockAt(x, y, z),
+                world.blockStateAt(x, y, z),
+                world.blockAt(x, y, z - 1),
+                new BridgeItemStack(BridgeWorld.material(material), 1),
+                playerFor(name, parseUuid(uuid)).proxy(),
+                true
+        );
+        events.call(event);
+        return event.isCancelled();
+    }
+
+    boolean firePlayerInteract(String name, String uuid, int x, int y, int z,
+                               String material, String action, String face) {
+        Player player = playerFor(name, parseUuid(uuid)).proxy();
+        PlayerInteractEvent event = new PlayerInteractEvent(
+                player,
+                org.bukkit.event.block.Action.valueOf(action),
+                new BridgeItemStack(BridgeWorld.material(material), 1),
+                world.blockAt(x, y, z),
+                org.bukkit.block.BlockFace.valueOf(face)
+        );
+        events.call(event);
+        return event.isCancelled();
+    }
+
+    private BridgePlayer playerFor(String name, UUID uuid) {
+        BridgePlayer player = players.get(uuid);
+        if (player == null) {
+            player = new BridgePlayer(name, uuid, server, world);
+            players.put(uuid, player);
         }
-        return switch (method.getName()) {
-            case "getName", "getDisplayName", "getPlayerListName", "getPlayerListHeader",
-                 "getPlayerListFooter" -> name;
-            case "getUniqueId" -> uuid;
-            case "isOnline" -> true;
-            case "getServer" -> server;
-            case "sendMessage", "sendRawMessage" -> {
-                logConsoleMessage(args);
-                yield null;
-            }
-            case "hasPermission", "isPermissionSet", "isOp" -> true;
-            case "getPing" -> 0;
-            case "getLocale" -> "en_us";
-            case "getClientBrandName" -> "Folia-RS";
-            case "getEffectivePermissions" -> Set.of();
-            case "getHealth", "getMaxHealth" -> 20.0D;
-            case "getFoodLevel" -> 20;
-            case "getSaturation" -> 5.0F;
-            case "getRemainingAir", "getMaximumAir" -> 300;
-            case "getFallDistance" -> 0.0F;
-            case "isSneaking", "isSprinting", "isFlying", "getAllowFlight",
-                 "isConversing", "isSleeping" -> false;
-            default -> BridgeValues.defaultValue(method);
-        };
+        return player;
+    }
+
+    private List<Player> onlinePlayers() {
+        return players.values().stream().map(BridgePlayer::proxy).toList();
+    }
+
+    private static UUID parseUuid(String uuid) {
+        try {
+            return UUID.fromString(uuid);
+        } catch (IllegalArgumentException exception) {
+            return UUID.nameUUIDFromBytes(uuid.getBytes());
+        }
+    }
+
+    BridgeWorld world() {
+        return world;
     }
 
     void callPluginEnable(Plugin plugin) {
@@ -202,8 +231,8 @@ final class BridgeServer {
             case "getScheduler" -> scheduler.proxy();
             case "getUnsafe" -> unsafe;
             case "getConsoleSender" -> console;
-            case "getOnlinePlayers" -> List.of();
-            case "getWorlds" -> List.of();
+            case "getOnlinePlayers" -> onlinePlayers();
+            case "getWorlds" -> List.of(world.proxy());
             case "getMaxPlayers" -> 20;
             case "getPort" -> 25565;
             case "getIp" -> "0.0.0.0";
@@ -225,9 +254,24 @@ final class BridgeServer {
             case "getItemFactory" -> null;
             case "getCommandMap" -> commandMap;
             case "getPluginCommand" -> commands.get((String) args[0]);
-            case "getPlayer", "getPlayerExact", "getOfflinePlayer", "getOfflinePlayerIfCached",
-                 "getEntity", "getWorld", "getMap", "getBossBar", "getAdvancement",
-                 "getLootTable", "getStructureManager", "getRespawnWorld" -> null;
+            case "getWorld" -> world.proxy();
+            case "getPlayer", "getPlayerExact" -> {
+                if (args != null && args.length == 1 && args[0] instanceof String playerName) {
+                    yield players.values().stream()
+                            .filter(player -> player.name().equalsIgnoreCase(playerName))
+                            .map(BridgePlayer::proxy)
+                            .findFirst()
+                            .orElse(null);
+                }
+                if (args != null && args.length == 1 && args[0] instanceof UUID playerId) {
+                    BridgePlayer player = players.get(playerId);
+                    yield player == null ? null : player.proxy();
+                }
+                yield null;
+            }
+            case "getOfflinePlayer", "getOfflinePlayerIfCached", "getEntity", "getMap",
+                 "getBossBar", "getAdvancement", "getLootTable", "getStructureManager",
+                 "getRespawnWorld" -> null;
             case "matchPlayer" -> List.of();
             case "getOfflinePlayers" -> new org.bukkit.OfflinePlayer[0];
             case "getBannedPlayers", "getOperators", "getWhitelistedPlayers" -> Set.of();

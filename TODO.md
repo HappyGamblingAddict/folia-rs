@@ -6,6 +6,13 @@
 > Test status: focused suites are green; the merged full gate is run separately
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
+> Last updated: 2026-11-06  
+> Current commit: see the plugin-bridge slice commit on `task/plugin2`.
+> Working tree: plugin world/player/item/event slice being integrated.
+> Test status: **426 tests** on the last full gate; the plugin slice adds 6
+> `folia-server` unit tests, 18 Java checks, and a gated live bridge selftest.
+> Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
+> Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -35,6 +42,7 @@ where possible, a differential test against the Java oracle.
 | Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
+| Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
 | Overall rewrite | **~22%** | Foundation-heavy, content-light |
 
@@ -96,6 +104,17 @@ where possible, a differential test against the Java oracle.
   `folia_random::RandomSource`, and typed recipe/ingredient/result lookups.
   Unknown payloads are preserved as `Opaque` and named in `LootRoll::report`.
   9 `tests/loot.rs` tests; both catalogs are pinned by `tests/assets.rs`.
+- 2026-11-06: Plugin world/player/item/event bridge — `World`/`Block` read/
+  write against the shared overworld storage, `Player` identity/location/game
+  mode/vitals/teleport/messages backed by playerdata, `PlayerInventory` slots
+  0-35, and `ItemStack` type/count/damage/name/lore/unbreakable. Paper
+  `RegistryAccess`/`InternalAPIBridge` service shims make `new ItemStack(...)`
+  and `Biome` initialization work without CraftBukkit. `BlockBreakEvent`,
+  `BlockPlaceEvent`, and `PlayerInteractEvent` are cancellable and
+  host-callable. 6 `folia-server` unit tests, 18 Java `BridgeApiTest` checks,
+  and the gated `FOLIA_BRIDGE_SELFTEST=1` server run pass. Live `join.rs` event
+  wiring, live player state sync, armor/off-hand, and enchantment/PDC
+  persistence remain open.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
 - 2026-11-06: P2.12 surface fidelity - `surface::build_surface` resolves
   surface biomes through `biome_zoom::BiomeZoomer` (lazily per block Y) when a
@@ -1851,14 +1870,20 @@ chunk stream; limited play packets; no online-mode encryption or chat signing.
 # P9 — Plugin compatibility
 
 **Why this phase:** Keeping unmodified jars working is a core project goal. The
-current bridge only covers lifecycle, a host event bus, commands, a task table,
-and a minimal `PlayerJoinEvent` proxy.
+bridge now covers lifecycle, a host event bus, commands, a task table, basic
+world/block access, player identity/vitals/game mode, storage-slot inventories,
+and basic item meta.
 
 **Current state:** Lazy JVM, real class loading, events, commands, scheduler,
-JNI ping. No World/Entity/Inventory API, services, config, permissions, or NMS
-shims.
+JNI ping, `World`/`Block` read/write over stored/cached chunks, `Player`
+playerdata-backed state, `PlayerInventory` slots 0-35, and `ItemStack` type/
+count/damage/name/lore/unbreakable. Three block/interact events are
+host-callable with cancellation. Still missing: live-session sync for
+health/food/inventory/teleport/messages, live event dispatch from `join.rs`,
+armor/off-hand slots, enchantment/PDC persistence, entities, services, config,
+permissions, and NMS shims.
 
-### P9.1 Formalize the Rust↔Java ABI `[ ]` `M`
+### P9.1 Formalize the Rust↔Java ABI `[~]` `M`
 
 - **What:** Replace ad-hoc JNI methods with a typed command/event protocol:
   versioned calls, error codes, ownership/lifetime rules, and thread-affinity
@@ -1867,8 +1892,13 @@ shims.
   unmaintainable.
 - **Done when:** A documented ABI covers existing bridge calls and has a
   compatibility test.
+- **Progress (2026-11-06):** The native surface is now grouped into world,
+  player, inventory, and item calls with explicit signatures in `Bridge.java`
+  and a field-by-field encoded item/inventory payload. `BridgeApiTest` pins the
+  codec and registry shims; the Rust and Java tests do not yet version the
+  protocol or test every signature.
 
-### P9.2 Complete event coverage `[ ]` `L`
+### P9.2 Complete event coverage `[~]` `L`
 
 - **What:** Fire events for join/quit, block break/place, interact, inventory
   click/open/close, chat, command, death/respawn, entity spawn/death, world
@@ -1876,8 +1906,17 @@ shims.
 - **Why:** Plugins hook events for nearly all behavior.
 - **Done when:** A test plugin can observe each event with cancellable results
   respected by the server.
+- **Progress (2026-11-06):** `BlockBreakEvent`, `BlockPlaceEvent`, and
+  `PlayerInteractEvent` are constructed by the bridge, dispatched through the
+  Bukkit listener bus, and return cancellation to Rust through
+  `PluginRuntime::fire_block_break`/`fire_block_place`/`fire_player_interact`.
+  `FOLIA_BRIDGE_SELFTEST=1` verifies all three end to end. The vanilla
+  `join.rs` break/place/interact handlers still call `block_update` directly, so
+  real gameplay does not yet fire these events; join/quit beyond
+  `PlayerJoinEvent`, inventory, chat, death/respawn, entity, and world events
+  remain unimplemented.
 
-### P9.3 Core API objects `[ ]` `XL`
+### P9.3 Core API objects `[~]` `XL`
 
 - **What:** Implement `Server`, `World`, `Player`, `Entity`, `LivingEntity`,
   `Block`, `Location`, `Chunk`, `Inventory`, `ItemStack`, `ItemMeta`, and
@@ -1885,6 +1924,15 @@ shims.
 - **Why:** Public-API plugins cannot function without these.
 - **Done when:** A representative plugin can read/modify blocks, players, and
   entities through normal Bukkit APIs.
+- **Progress (2026-11-06):** `World`/`Block`/`BlockData`/`BlockState`/`Chunk`
+  proxies cover block type, location, highest-Y, biome, sky/block light, and
+  stored/cached block edits. `Player` covers world/location/inventory/game
+  mode/messages/teleport/health/food/saturation; `setGameMode` forwards to a
+  live session, while the rest persists through `PlayerSession` playerdata.
+  `PlayerInventory` covers slots 0-35; `ItemStack`/`ItemMeta` cover
+  type/count/damage/name/lore/unbreakable. Live-session sync, armor/off-hand,
+  entities, `LivingEntity`, full chunk snapshots, and persistent-data containers
+  remain open.
 
 ### P9.4 Scheduler parity `[ ]` `M`
 
@@ -1918,21 +1966,31 @@ shims.
 - **Done when:** A multi-plugin test set loads in the correct order and shares
   a service.
 
-### P9.8 Inventory, ItemStack, and PDC APIs `[ ]` `L`
+### P9.8 Inventory, ItemStack, and PDC APIs `[~]` `L`
 
 - **What:** Expose inventory contents, item metadata, enchantments,
   durability, and `PersistentDataContainer`.
 - **Why:** Common plugin operations and cross-plugin data sharing.
 - **Done when:** A plugin can create/modify items and have changes persist and
   appear on the client.
+- **Progress (2026-11-06):** Storage slots 0-35, item type/count, damage,
+  display name, lore, and unbreakable round-trip through the Rust component
+  model and playerdata. `new ItemStack(...)` works through the registry shim.
+  Enchantments, item flags, custom model data, PDC, armor/off-hand, and client
+  inventory updates remain open.
 
-### P9.9 World/entity APIs `[ ]` `L`
+### P9.9 World/entity APIs `[~]` `L`
 
 - **What:** Block get/set, biome, time/weather, spawn entity, teleport, sounds,
   particles, explosions, and entity queries.
 - **Why:** These are the most common plugin actions after events/commands.
 - **Done when:** A plugin can build a small structure and spawn a mob through
   the API.
+- **Progress (2026-11-06):** Block get/set, highest-Y, biome, and light read
+  from `WorldStorage`; block edits persist and broadcast. Time/weather are
+  static defaults, and entity spawn/query, sounds, particles, explosions,
+  weather, and on-demand chunk generation remain open. World reads/writes only
+  cover stored or currently cached columns.
 
 ### P9.10 NMS/CraftBukkit shims `[ ]` `XL` long tail
 

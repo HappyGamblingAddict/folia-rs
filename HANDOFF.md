@@ -385,15 +385,32 @@ stream from `WorldStorage` and are not retroactively decorated.
 - Lazy embedded JVM, only started when `.jar` plugins are present.
 - No Java required for the native server, worldgen, protocol, or tick loop.
 - Unmodified Bukkit/Paper plugin loading, events, commands, scheduler bridge.
-- Minimal player proxy and `PlayerJoinEvent`.
-- Example plugin logs the event and receives a scheduled task.
+- `World`/`Block` proxies: `getBlockAt`, `getType`/`setType`,
+  `getLocation`, `getHighestBlockYAt`, `getBiome`, sky/block light, chunks,
+  `BlockData`/`BlockState` subsets. Reads use the shared overworld storage and
+  do not generate missing terrain.
+- `Player` proxy: world, location, inventory, game mode, messages, teleport,
+  health/food/saturation. `setGameMode` reaches a live session; the rest is
+  persisted through `PlayerSession` playerdata (live-session sync is pending).
+- `PlayerInventory`/`ItemStack` proxies: slots 0-35, type/count/damage,
+  display name, lore, unbreakable. `new ItemStack(...)` works through a
+  `RegistryAccess`/`InternalAPIBridge` service shim; armor/off-hand and
+  enchantment persistence remain open.
+- Host-callable `BlockBreakEvent`, `BlockPlaceEvent`, and
+  `PlayerInteractEvent` with cancellation. Vanilla break/place handlers still
+  bypass the event bus until `join.rs` is wired.
+- Example plugin exercises the world, player, inventory, and event APIs.
+  `FOLIA_BRIDGE_SELFTEST=1` also fires the three events from Rust and checks
+  their cancellation results.
 - `FOLIA_DISABLE_PLUGINS=1` forces native-only startup even when jars exist.
 
 Key files:
 
 - `crates/folia-server/src/jvm.rs`
 - `java/bridge/src/rs/folia/bridge/*`
+- `java/bridge/test/rs/folia/bridge/BridgeApiTest.java`
 - `java/example-plugin/src/rs/folia/example/HelloPlugin.java`
+- `scripts/build-java.ps1`
 
 ---
 
@@ -494,6 +511,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Generated chunks are at 98.71% class / 92.02% exact-name agreement, not
 - Item stacks still carry only `item + count`; data components are not encoded
   (durability, enchants, container contents are not preserved).
+- Item stacks carry the component patch model, but prototype defaults and the
+  attribute/potion/tool network codecs are still missing. The plugin bridge
+  persists type/count/damage/name/lore/unbreakable; enchantments, PDC, and
+  container contents do not cross the bridge yet.
 - Block behavior metadata (hardness, light, solidity, tool rules) is not
   generated, so physics/lighting/breaking cannot be fully correct.
 - Generated chunks are at 98.75% class / 95.80% exact-name agreement, not
@@ -534,9 +555,13 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Captured configuration registries are replayed; they are not generated from
   Rust registries.
 - Login is offline-mode only.
-- Plugin API coverage is minimal: bootstrap, events, commands, scheduling,
-  minimal player proxy. No full `World`, `Entity`, `ItemStack`, `Inventory`,
-  scheduler, or service APIs.
+- Plugin API coverage now includes bootstrap, events, commands, scheduling,
+  world/block read/write, player identity/vitals/game mode/teleport,
+  player inventory, item meta (name/lore/damage/unbreakable), and the three
+  cancellable block/interact events. Still missing: live-session sync for
+  health/food/inventory/teleport/messages, live event dispatch from
+  `join.rs`, armor/off-hand slots, enchantment/PDC persistence, entities,
+  services, `PluginManager` queries, and NMS/CraftBukkit shims.
 - No 1:1 Folia region/threading behavior yet.
 - The native terminal console supports `help`, `list`, `ops`, `op`, `deop`,
   `gamemode`, and `stop`; operators persist in `run/ops.txt`. There is no
@@ -588,8 +613,17 @@ cargo test -p folia-core --test worldgen_join -- --nocapture
 # full per-block parity report
 cargo test -p folia-core --test worldgen_parity -- --nocapture
 
+# build the Bukkit bridge + example plugin and run the Java API test
+.\scripts\build-java.ps1 -LibrariesDirectory C:\Users\austr\Downloads\rustfol\libraries
+
 # start the Rust server (JVM only starts if plugins/*.jar exists)
+$env:FOLIA_LIBRARIES = "C:\Users\austr\Downloads\rustfol\libraries"
 cargo run
+
+# end-to-end bridge self-test (world write, player/inventory, three events)
+$env:FOLIA_BRIDGE_SELFTEST = "1"
+$env:FOLIA_MAX_TICKS = "20"
+cargo run -p folia-server
 
 # force the fully native path
 FOLIA_DISABLE_PLUGINS=1 cargo run

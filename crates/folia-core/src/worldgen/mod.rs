@@ -8,6 +8,7 @@ pub mod density;
 pub mod feature;
 pub mod generator;
 pub mod noise;
+pub mod ore_vein;
 pub mod simplex;
 pub mod structure;
 pub mod surface;

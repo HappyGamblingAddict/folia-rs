@@ -3,7 +3,7 @@
 > Last updated: 2026-11-06
 > Current commit: see `git log` (all work is committed)
 > Working tree: clean
-> Test status: focused suites are green; the merged full gate is run separately
+> Test status: **611 passing** on the full merged gate (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
@@ -525,17 +525,11 @@ remaining worldgen gap is almost entirely **what is placed on top of the
 terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
-**Current state:** 98.71% block-class and 92.02% exact-name agreement on a
-16-column fixture. 171 of 224 configured features execute, including the
-aquatic/vine/mushroom and pale-forest/dripleaf batch; remaining errors are
-concentrated in unported lush-cave, special, and structure features.
-`feature_data.json` is consumed by `worldgen/feature/mod.rs` and drives the
-decoration steps.
 **Current state:** 98.75% block-class and 95.80% exact-name agreement on a
-16-column fixture. 162 of 224 configured features execute, including ores,
-scattered ore, the vein filler, and the aquatic/vine/mushroom batch; remaining
-errors are concentrated in unported lush-cave, special, and structure features.
-`feature_data.json` is consumed by
+16-column fixture. 171 of 224 configured features execute, including ores,
+scattered ore, the vein filler, the aquatic/vine/mushroom batch, and the
+pale-forest/dripleaf batch; remaining errors are concentrated in unported
+lush-cave, special, and structure features. `feature_data.json` is consumed by
 `worldgen/feature/mod.rs` and drives the decoration steps.
 
 ### P2.1 Feature framework core `[~]` `L`

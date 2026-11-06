@@ -40,7 +40,7 @@ Do not branch, reset, or push unless the user asks.
 Verified state (2026-11-06, merged workspace):
 
 ```text
-focused suites green on the merged tree (full gate run separately)
+611 tests passing on the merged tree (full gate)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -494,7 +494,7 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Paper's `generate-flat-bedrock` is supported via `server.properties`
   (`generate-flat-bedrock=true`); default `false` keeps the captured oracle's
   random bedrock depths. The real Paper YAML is not read yet.
-- 134 of 224 configured feature types execute: `no_op`, trees, fallen trees,
+- 171 of 224 configured feature types execute: `no_op`, trees, fallen trees,
   ores/scattered ores, random selectors, random patches/flowers, simple blocks,
   block piles, block columns, multiface growth, and vegetation patches. The
   rest fail loudly. Some world-dependent placement modifiers (non-ocean
@@ -508,15 +508,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   covers hardness, light, solidity, motion, friction, and fluids. Breaking uses
   it, but loot tables, item entities, Unbreaking/Fortune/Silk Touch, and the
   block-damage overlay packet are still open.
-- Generated chunks are at 98.71% class / 92.02% exact-name agreement, not
-- Item stacks still carry only `item + count`; data components are not encoded
-  (durability, enchants, container contents are not preserved).
 - Item stacks carry the component patch model, but prototype defaults and the
   attribute/potion/tool network codecs are still missing. The plugin bridge
   persists type/count/damage/name/lore/unbreakable; enchantments, PDC, and
   container contents do not cross the bridge yet.
-- Block behavior metadata (hardness, light, solidity, tool rules) is not
-  generated, so physics/lighting/breaking cannot be fully correct.
 - Generated chunks are at 98.75% class / 95.80% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is

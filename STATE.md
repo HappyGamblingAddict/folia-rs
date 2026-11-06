@@ -10,12 +10,9 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: focused suites are green; the merged full workspace gate is run
-  separately. The latest focused gates cover feature, entity, lighting,
-  physics, structure, loot, fluid, redstone, breaking, and item suites.
-- Formatting: `cargo fmt --check` clean.
-- Build warnings: none.
-- Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
+  warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
   Java fixture. Ore features and `OreVeinifier` are wired, the placement pipeline
   executes all 888 modifiers, and 171/224 configured feature types execute.
@@ -23,22 +20,13 @@ Last updated: 2026-11-06
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an expanded Bukkit bridge (world/player/item/events).
+  block breaking/tools/drops/durability, exact surface biome zoom, and an
+  expanded Bukkit bridge (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
   and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
   redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
   ownership.
-- P1.4 focused gate: 25 item-component tests passing (8 unit + 17
-  integration), plus inventory, player, and the captured-world join test.
-- Formatting: `cargo fmt --check` clean.
-- Build warnings: none.
-- Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- Notable delta: the aquatic slice moves exact-name parity from 92.04% to
-  92.02% (5654/6144) while block-class stays 98.71% (6065/6144). The one block
-  is a tall-seagrass pair on a column whose Rust terrain already differs from
-  Java (Rust water at `y=47`, Java gravel); the feature is faithful to the
-  generated world, not a Java block-position match yet.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -98,8 +86,8 @@ Last updated: 2026-11-06
   slots, enchantment/PDC persistence, and live event dispatch remain open.
 - Native server: builds and runs; optional JVM only starts when plugin jars
   exist.
-- Worldgen parity: 98.71% block-class / 92.02% exact-name on the 16-column
-  fixture after the aquatic slice (was 92.04%).
+- Worldgen parity: 98.75% block-class / 95.80% exact-name on the 16-column
+  fixture after ore/veinifier wiring.
 - Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
   `DataLayer` storage, per-column sky sources with a six-direction BFS, and
   block-light BFS for an explicit emitter table. Chunk NBT round-trips

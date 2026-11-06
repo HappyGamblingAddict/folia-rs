@@ -52,9 +52,13 @@ first scheduled-tick/fluid/redstone simulation slice.
 Verified state (2026-11-06, merged workspace):
 
 ```text
+<<<<<<< HEAD
 426 tests (last full workspace gate); this slice adds 13 focused
 structure tests
 519 tests (full workspace, skipping two CRLF asset-hash guards; see BLOCKERS.md)
+=======
+511 tests (full workspace)
+>>>>>>> task/loot
 0 failed
 + 6 lib + 12 integration focused tests in the entity metadata slice
 cargo fmt --check: clean
@@ -228,9 +232,16 @@ Key files:
   last resort for a block name that is not in the registry at all.
 - `feature_data.json` contains 224 configured features, 258 placed features and
   65 biome feature lists extracted from the Java server. It is loaded and
-  validated by the feature framework; 134 configured features (trees,
-  ground-cover patches, ores, selectors, and the P2.5 batch) execute during
+  validated by the feature framework; 162 configured features (trees,
+  ground-cover patches, ores, selectors, and the P2.5 batches) execute during
   chunk generation where their placement modifiers are also supported.
+- `loot_tables.json` and `recipes.json` are the P1.7 catalogs: 1,324 loot
+  tables across 11 context types and 1,470 recipes across 22 serializers,
+  normalized and sorted by `scripts/extract_loot_recipes.ps1`. `src/loot.rs`
+  embeds typed pools/entries/functions/conditions, rolls through
+  `folia_random::RandomSource`, and exposes typed recipe/ingredient lookups.
+  Unknown loot payloads are preserved as `Opaque` and reported by
+  `LootRoll::report`; block-drop and crafting-menu wiring is still open.
 - `block_state_count()` exposes the loaded state count and is asserted by the
   registry test.
 - `assets/ASSETS.md` is the versioned manifest (version, DataVersion, line/byte
@@ -239,8 +250,10 @@ Key files:
 Key files:
 
 - `crates/folia-core/src/registry.rs`
+- `crates/folia-core/src/loot.rs`
 - `crates/folia-core/assets/*.tsv`, `assets/*.txt`, `assets/*.json`
 - `crates/folia-core/examples/dump_registries.rs`
+- `scripts/extract_loot_recipes.ps1`
 
 ### Entities and physics
 
@@ -595,9 +608,13 @@ alternate world directory; `FOLIA_BIND` overrides the bind address;
 - [ ] Run `cargo fmt --check` and
       `cargo clippy --workspace --all-targets -- -D warnings`; both must be
       clean.
+<<<<<<< HEAD
 - [ ] Run `cargo test --workspace`; expect 519 tests, 0 failed. In a checkout
       that materialized `assets/*.tsv` with CRLF, skip the two asset-hash guards
       (see `BLOCKERS.md`); the other 519 tests must pass.
+=======
+- [ ] Run `cargo test --workspace`; expect 511 tests, 0 failed.
+>>>>>>> task/loot
 - [ ] If `world/region` was modified by a manual run, restore the fixture from
       `snapshots/folia-rs-20261104-193508-p2-biome-filter.zip` before debugging
       `world_chunk_packet`, and probe scratch levels with `FOLIA_LEVEL_NAME`.

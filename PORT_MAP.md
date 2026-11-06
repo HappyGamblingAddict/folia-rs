@@ -44,6 +44,8 @@ Rust tree: `crates/folia-core`.
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
 | `BlockBehaviour`, `BlockStateBase` per-state metadata | `folia-core/src/block_behaviour.rs` + `assets/block_state_behaviour.tsv.gz` | 29,671 per-state rows (air/motion/solid/collision, light emission/block, random tick, occlusion, replaceable, hardness/blast, friction/speed/jump, fluid); consumed by lighting and player physics; ticking/breaking consumers still partial |
 | `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
+| `world/level/storage/loot/*` (`LootTable`, `LootPool`, entries, providers, functions, conditions) | `folia-core/src/loot.rs` + `assets/loot_tables.json` | Partial: 1,324 tables typed and rollable in Java order, including weighted pools, alternatives/sequence/group, nested tables, item/tag/empty/dynamic entries, 20 function kinds, and all shipped conditions; unknown payloads fail closed and are reported. Block/entity drop wiring remains |
+| `world/item/crafting/*` / `data/minecraft/recipe/**` | `folia-core/src/loot.rs` + `assets/recipes.json` | Partial: 1,470 recipes parsed (shaped, shapeless, four cooking types, stonecutting, smithing transform/trim, transmute, decorated pot, 13 special types), typed item/tag/alternatives ingredients and component-bearing results; grid/container matching and menus remain |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
 | `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features, default `FeatureLevel::heightmap`, scheduled-tick and block-entity region sinks; 171/224 configured features dispatch as supported |
 | `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; all 888 shipped modifiers execute with vanilla draw order, including every heightmap, block predicate, environment scan, layer/noise count, surface-relative filter, and Gaussian offset |
@@ -62,9 +64,13 @@ Rust tree: `crates/folia-core`.
 
 ## Verification evidence
 
+<<<<<<< HEAD
 - `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
   29 random tests (426 total), 0 failed (2026-11-06, last full gate before the
   block-behaviour slice). That slice adds 4 integration + 2 lib focused tests.
+=======
+- `cargo test --workspace` → 511 total, 0 failed (2026-11-06).
+>>>>>>> task/loot
 - P2.5 focused evidence: `worldgen::feature::vegetation` adds 8 unit tests and
   `tests/vegetation.rs` adds 15 integration tests covering shipped
   `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,
@@ -102,6 +108,12 @@ Rust tree: `crates/folia-core`.
 - Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members
   across 9 registries; `tests/tags.rs` checks membership, nested flattening,
   exact counts, and unknown keys.
+- Loot/recipe catalogs (`tests/loot.rs`): 9 focused tests cover the pinned
+  1,324/1,470 indexes, diamond-ore silk-touch alternatives, stone
+  `survives_explosion`, weighted simple-dungeon counts, seeded determinism,
+  opaque function/condition preservation, all shipped recipe serializers, and
+  component-bearing `set_damage`/`set_name`; `tests/assets.rs` pins both
+  catalogs' byte lengths and FNV hashes.
 - Structure templates (`tests/structure_template.rs`): 13 focused tests load
   four shipped gzip templates (`empty.nbt`, igloo middle, desert camel spawn,
   nether fossil 8), pin sizes/palettes/block counts/block-entity and entity

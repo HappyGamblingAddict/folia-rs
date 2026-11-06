@@ -112,6 +112,13 @@ more expensive than designing for it now.
   8 fluid + 7 redstone + 1 block-update unit tests and 7 `tests/fluids.rs`
   integration tests. Workspace: 519 tests when the two pre-existing CRLF
   asset-hash guards are skipped.
+- 2026-11-06: P1.7 loot/recipe catalogs — `scripts/extract_loot_recipes.ps1`
+  normalizes all 1,324 loot tables and 1,470 recipes into compact sorted JSON
+  with per-type counts. `src/loot.rs` adds typed tables/pools/entries/number
+  providers/functions/conditions, a Java-order roll engine over
+  `folia_random::RandomSource`, and typed recipe/ingredient/result lookups.
+  Unknown payloads are preserved as `Opaque` and named in `LootRoll::report`.
+  9 `tests/loot.rs` tests; both catalogs are pinned by `tests/assets.rs`.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
 - 2026-11-06: P2.12 surface fidelity - `surface::build_surface` resolves
   surface biomes through `biome_zoom::BiomeZoomer` (lazily per block Y) when a
@@ -484,7 +491,7 @@ stacks only carry `item + count`.
 - **Done when:** All 224 configured features, 258 placed features, and 65 biome
   feature lists deserialize with typed configs and zero unknown types.
 
-### P1.7 Extract remaining vanilla data assets `[ ]` `M`
+### P1.7 Extract remaining vanilla data assets `[~]` `M`
 
 - **What:** Extract from the server jar into a versioned asset directory:
   structure NBT templates, loot tables, recipes, advancements, tags,
@@ -492,6 +499,14 @@ stacks only carry `item + count`.
 - **Why:** Structures, loot, crafting, and enchanting cannot be ported without
   the actual data files.
 - **Done when:** Asset extraction is scripted and checksums are recorded.
+- **Progress (2026-11-06):** `scripts/extract_loot_recipes.ps1` reads
+  `data/minecraft/loot_table` and `data/minecraft/recipe`, namespaces every id,
+  sorts object keys, and writes `assets/loot_tables.json` (1,324 tables;
+  662,482 B) and `assets/recipes.json` (1,470 recipes; 356,848 B), each with a
+  total and per-type index. `src/loot.rs` embeds typed catalogs, and
+  `tests/loot.rs` plus `tests/assets.rs` pin their behavior and hashes. Still
+  open: structure NBT templates, advancements, trim/enchantment payloads, and
+  the remaining worldgen JSON.
 
 ### P1.8 Registry/asset version guard `[ ]` `S`
 
@@ -1233,6 +1248,10 @@ instantly on start-destroy and places on use-item-on.
 - **Why:** Current break was instantaneous for every block and item.
 - **Reference:** `ServerPlayerGameMode.java`, `Player.java`,
   `BlockBehaviour.getDestroySpeed`, loot tables.
+- **Progress (2026-11-06):** block loot tables are loaded and rollable through
+  `LootCatalog::roll`, including tool, silk-touch, fortune, and explosion
+  conditions. The break path is still instant and does not call the roll engine
+  yet.
 - **Done when:** Break times and drops match Java for representative blocks and
   tools.
 - **Progress (2026-11-06):** `block_breaking.rs` ports
@@ -1297,7 +1316,7 @@ instantly on start-destroy and places on use-item-on.
 - **Done when:** Placing/opening/reloading each implemented block entity
   preserves contents and ticks correctly.
 
-### P4.8 Crafting and recipe system `[ ]` `L`
+### P4.8 Crafting and recipe system `[~]` `L`
 
 - **What:** Load recipe JSON and implement shaped/shapeless crafting, smelting,
   blasting, smoking, campfire cooking, stonecutting, smithing, and brewing.
@@ -1306,6 +1325,13 @@ instantly on start-destroy and places on use-item-on.
   `RecipeManager.java`.
 - **Done when:** Recipe lookup and output match Java for the vanilla recipe
   set.
+- **Progress (2026-11-06):** `src/loot.rs` parses all 1,470 shipped recipes:
+  shaped (pattern/key), shapeless, smelting, blasting, smoking, campfire,
+  stonecutting, smithing transform/trim, transmute, decorated pot, and the
+  special crafting recipes. Ingredients are typed item/tag/alternatives and
+  match through `folia_core::tags`; results carry item components. Still open:
+  grid/container matching, recipe book/advancement unlocks, crafting menus,
+  brewing, and exact recipe-selection order.
 
 ### P4.9 Health, damage, hunger, XP, and effects `[~]` `L`
 

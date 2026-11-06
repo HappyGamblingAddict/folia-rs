@@ -3,11 +3,13 @@
 Target: **Minecraft/Folia 1.21.11, DataVersion 4788**. Do not mix assets from
 another version.
 
-`registry.rs` and `tags.rs` embed several of these files with
+`registry.rs`, `tags.rs`, and `loot.rs` embed several of these files with
 `include_str!`/`include_bytes!`, so a missing or truncated file is a build or
 ID-corruption problem, not a runtime fallback. `tests/assets.rs` pins the byte
 length, FNV-1a-64 checksum and line counts listed below; update that test and
-this file together when an asset is legitimately regenerated.
+this file together when an asset is legitimately regenerated. Text assets are
+hashed after folding CRLF to LF, so a Windows checkout with `core.autocrlf`
+does not fail the manifest.
 
 ## Registry tables
 
@@ -19,7 +21,7 @@ this file together when an asset is legitimately regenerated.
 | `item_ids.tsv` | item id, item name | 1,505 | 45,873 | `0xb3fc594089ab5bf7` |
 | `entity_type_ids.tsv` | entity type id, entity type name | 157 | 3,772 | `0x4d7c78e0dac39e50` |
 | `biome_ids.txt` | biome protocol ids, one per line | 65 | 1,681 | `0x377b853ef1311f77` |
-| `biome_climate.tsv` | biome, base temperature, `temperature_modifier` | 65 | 2,161 | `0x70a2dbb761408aaa` |
+| `biome_climate.tsv` | biome, base temperature, `temperature_modifier` | 65 | 2,096 | `0x41c1162ee67203b5` |
 
 ## Vanilla tag tables
 
@@ -51,29 +53,43 @@ entry count.
 
 | File | Entries | Bytes | FNV-1a-64 |
 |---|---:|---:|---|
-| `registries/banner_pattern.tsv` | 43 | 1,128 | `0x4b330b3ff4e508aa` |
-| `registries/cat_variant.tsv` | 11 | 232 | `0x05cd22d8e03050d4` |
-| `registries/chat_type.tsv` | 8 | 229 | `0xacb1f362d3ae4a4b` |
-| `registries/chicken_variant.tsv` | 3 | 59 | `0x48029f4ad65a3a4b` |
-| `registries/cow_variant.tsv` | 3 | 59 | `0x48029f4ad65a3a4b` |
-| `registries/damage_type.tsv` | 50 | 1,232 | `0xde71cad60a14a36d` |
-| `registries/dialog.tsv` | 3 | 81 | `0xc91a65335bb9ab3f` |
-| `registries/dimension_type.tsv` | 4 | 97 | `0x858cec106a34bab5` |
-| `registries/enchantment.tsv` | 43 | 1,063 | `0xcab664fa61919ac0` |
-| `registries/frog_variant.tsv` | 3 | 59 | `0x48029f4ad65a3a4b` |
-| `registries/instrument.tsv` | 8 | 230 | `0xbdf608bc5edb867a` |
-| `registries/jukebox_song.tsv` | 21 | 426 | `0x08163fe859c036b0` |
-| `registries/painting_variant.tsv` | 51 | 1,094 | `0x4965bd6bc4d59df3` |
-| `registries/pig_variant.tsv` | 3 | 59 | `0x48029f4ad65a3a4b` |
-| `registries/test_environment.tsv` | 1 | 21 | `0x0e4b680a9d036869` |
-| `registries/test_instance.tsv` | 1 | 25 | `0x389b5dee903c0053` |
-| `registries/timeline.tsv` | 4 | 90 | `0x8184152ad74b900a` |
-| `registries/trim_material.tsv` | 11 | 224 | `0x57e7598597096a73` |
-| `registries/trim_pattern.tsv` | 18 | 346 | `0x9df947cc5a98ff0c` |
-| `registries/wolf_sound_variant.tsv` | 7 | 132 | `0x5118e2739e7863f0` |
-| `registries/wolf_variant.tsv` | 9 | 177 | `0x54a3a5310b0c95d7` |
-| `registries/worldgen_biome.tsv` | 65 | 1,746 | `0x6e4837e8fc4a38c0` |
-| `registries/zombie_nautilus_variant.tsv` | 2 | 41 | `0x6188bf5d0dc16fd8` |
+| `registries/banner_pattern.tsv` | 43 | 1,085 | `0xb28b4869b8a93aeb` |
+| `registries/cat_variant.tsv` | 11 | 221 | `0x71d5f23602758e57` |
+| `registries/chat_type.tsv` | 8 | 221 | `0x889ed8e3176583eb` |
+| `registries/chicken_variant.tsv` | 3 | 56 | `0x91ed138a1da0880c` |
+| `registries/cow_variant.tsv` | 3 | 56 | `0x91ed138a1da0880c` |
+| `registries/damage_type.tsv` | 50 | 1,182 | `0x9ca3ed9996342bb1` |
+| `registries/dialog.tsv` | 3 | 78 | `0x8706bf1479ffc1bc` |
+| `registries/dimension_type.tsv` | 4 | 93 | `0xe19f26185e6afb71` |
+| `registries/enchantment.tsv` | 43 | 1,020 | `0x431703eda3656761` |
+| `registries/frog_variant.tsv` | 3 | 56 | `0x91ed138a1da0880c` |
+| `registries/instrument.tsv` | 8 | 222 | `0xeae62ed2cafea822` |
+| `registries/jukebox_song.tsv` | 21 | 405 | `0x3c92ea326c6200a7` |
+| `registries/painting_variant.tsv` | 51 | 1,043 | `0x962b525bd33f8528` |
+| `registries/pig_variant.tsv` | 3 | 56 | `0x91ed138a1da0880c` |
+| `registries/test_environment.tsv` | 1 | 20 | `0x15a0acd1884e492c` |
+| `registries/test_instance.tsv` | 1 | 24 | `0xb749aaa845c67f6a` |
+| `registries/timeline.tsv` | 4 | 86 | `0x1be81df8928d6914` |
+| `registries/trim_material.tsv` | 11 | 213 | `0x8101fd69b4ceda06` |
+| `registries/trim_pattern.tsv` | 18 | 328 | `0x495c71f224487526` |
+| `registries/wolf_sound_variant.tsv` | 7 | 125 | `0x4cd04d1716fb1647` |
+| `registries/wolf_variant.tsv` | 9 | 168 | `0x4117e7f609594e04` |
+| `registries/worldgen_biome.tsv` | 65 | 1,681 | `0x377b853ef1311f77` |
+| `registries/zombie_nautilus_variant.tsv` | 2 | 39 | `0x05e2f622b4977cf0` |
+
+## Loot tables and recipes
+
+`scripts/extract_loot_recipes.ps1` normalizes the decompiled
+`data/minecraft/loot_table` and `data/minecraft/recipe` trees into two compact,
+deterministic catalogs. Every identifier field is namespaced, object keys are
+sorted, insignificant whitespace is removed, and the top-level `counts` object
+records the total plus a per-type index. `src/loot.rs` embeds and parses both
+catalogs; unknown functions and conditions survive as typed `Opaque` variants.
+
+| File | Content | Entries | Bytes | FNV-1a-64 |
+|---|---|---:|---:|---|
+| `loot_tables.json` | 11 table types: block 1,083, entity 114, chest 65, shearing 22, gift 21, archaeology 6, fishing 4, block_interact 4, equipment 3, entity_interact 1, barter 1 | 1,324 | 662,482 | `0x8c3b7afac27e3096` |
+| `recipes.json` | 22 recipe types: shaped 706, shapeless 320, stonecutting 254, smelting 73, transmute 32, blasting 25, smithing_trim 18, smithing_transform 12, campfire 9, smoking 9, special/decorated 13 | 1,470 | 356,848 | `0x9b844794502a181f` |
 
 ## Worldgen and math
 
@@ -105,6 +121,9 @@ are regenerated by the `java-worldgen` / `java-tools` dumps.
   `assets/block_state_behaviour.tsv.gz`.
 - Vanilla tag tables: `.\scripts\extract_tags.ps1` from the repo root (reads
   `../decompiled/data/minecraft/tags`, writes `assets/tags/*.tsv`).
+- Loot tables and recipes: `.\scripts\extract_loot_recipes.ps1` from the repo
+  root (reads `../decompiled/data/minecraft/{loot_table,recipe}`, writes
+  `assets/loot_tables.json` and `assets/recipes.json`).
 - `biome_ids.txt`: `cargo run -q -p folia-core --example dump_biomes`.
 - `biome_climate.tsv`: `.\scripts\extract_biome_climate.ps1` from the repo root
   (reads `../decompiled/data/minecraft/worldgen/biome`).

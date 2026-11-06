@@ -20,8 +20,9 @@ Last updated: 2026-11-06
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an
-  expanded Bukkit bridge (world/player/item/events).
+  block breaking/tools/drops/durability, crafting/furnace/stonecutting/
+  smithing models, exact surface biome zoom, and an expanded Bukkit bridge
+  (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
   and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
@@ -306,7 +307,7 @@ Last updated: 2026-11-06
 - [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
 - [ ] P1.5 Block behavior metadata
 - [~] P1.7 Loot and recipe assets (1,324 tables + 1,470 recipes extracted,
-  typed loaders/roll engine; drop wiring and crafting matcher remain)
+  typed loaders/roll engine, crafting matcher; block-drop wiring remains)
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
@@ -341,7 +342,27 @@ Last updated: 2026-11-06
   entities, overlay packets, Unbreaking/Fortune/Silk Touch, adventure
   `can_destroy`, and a Java fixture remain)
 
+- [~] P4.8 Crafting and recipe system (shaped/shapeless/transmute matching,
+  consumable outputs, furnace/blast-furnace/smoker/campfire state, stonecutting,
+  and smithing transforms done; menu packets, recipe book, brewing, cached
+  last-recipe behavior, campfire multi-slot state, and Java fixtures remain)
+
 ## Recently completed
+- 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
+  shaped matching with CraftingInput-style bounding-box cropping, mirrored
+  patterns, ingredient item/tag/alternative matching, and vanilla's
+  last-sorted-recipe-id priority; shapeless multiset matching with duplicate
+  ingredients; transmute; one-item-per-slot consumption with component
+  preservation; `CraftOutput::deposit` through `inventory::add_stack`;
+  `FurnaceState` for furnace/blast furnace/smoker/campfire with the vanilla
+  fuel table, recipe cook times, XP accumulation, output stacking, and
+  extraction; and one-shot stonecutting/smithing transforms (base components
+  copied by smithing). Special, decorated-pot, trim, and opaque recipes fail
+  with `CraftingError::UnsupportedRecipe`; unknown ids and wrong-station use
+  are explicit errors. Focused: 19 `tests/crafting.rs` + 5 lib tests. Gaps:
+  menu packets/click handling, recipe book/advancement unlocks, brewing,
+  cached-last-recipe lookup, campfire multi-slot/lit state, furnace fuel
+  remainders other than lava buckets, and a Java recipe/furnace fixture.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/

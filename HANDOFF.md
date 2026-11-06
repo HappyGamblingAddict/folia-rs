@@ -113,6 +113,22 @@ Key files:
 - `crates/folia-core/src/block_breaking.rs`
 - `crates/folia-core/src/inventory.rs`
 
+### Crafting and smelting
+
+- `crafting.rs` matches the shipped recipe catalog with 1x1–3x3 shaped
+  patterns (CraftingInput-style tight crop, mirror, item tags/alternatives),
+  shapeless multiset rules, and vanilla's last-sorted-recipe-id priority.
+  `CraftingGrid::craft` consumes one item per occupied slot, preserves slot
+  components, and returns a `CraftOutput` that deposits through
+  `inventory::add_stack`.
+- `FurnaceState` models furnaces, blast furnaces, smokers, and campfires with
+  input/fuel/result slots, the common-fuel burn table, per-recipe cook times,
+  output stacking, exact XP accumulation, and extraction. Stonecutting and
+  smithing transforms are one-shot operations; smithing copies base components
+  onto the result. Special/decorated-pot/trim/opaque recipes fail with
+  `CraftingError::UnsupportedRecipe` instead of crafting nothing.
+- Tests: `tests/crafting.rs` (19) plus 5 focused lib tests.
+
 ### Block simulation
 
 - `tick.rs` implements vanilla update flags, a deterministic chunk-grouped
@@ -539,8 +555,12 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   Metadata covers indices 0-9 only, initial non-default spawn metadata is not
   sent, and there is no Java-captured metadata/equipment packet fixture.
 - Entity tracking range/culling and player physics corrections are not ported.
-- No block entity behavior, containers beyond the player inventory, crafting,
-  furnaces, etc.
+- Crafting/smelting exist as a tested state model, but there are no crafting or
+  furnace menus, click handling, recipe book/advancement unlocks, brewing, or
+  block-entity persistence. Special/decorated/trim recipes are explicit
+  unsupported errors.
+- No block entity behavior, containers beyond the player inventory, or other
+  smelting-adjacent menus.
 - No lighting updates after block changes beyond full chunk light payloads.
 - No online-mode encryption or Mojang authentication.
 - No NMS/CraftBukkit compatibility beyond the minimal bridge.

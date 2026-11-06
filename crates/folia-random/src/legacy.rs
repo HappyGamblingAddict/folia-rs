@@ -1,6 +1,6 @@
 //! The classic 48-bit linear congruential random source.
 
-use crate::{RandomSource, assert_bound_positive};
+use crate::{MarsagliaPolarGaussian, RandomSource, assert_bound_positive};
 
 /// Number of significant state bits in the LCG.
 pub const MODULUS_BITS: u32 = 48;
@@ -21,6 +21,7 @@ pub const INCREMENT: i64 = 11;
 #[derive(Debug, Clone)]
 pub struct LegacyRandomSource {
     seed: i64,
+    gaussian: MarsagliaPolarGaussian,
 }
 
 impl LegacyRandomSource {
@@ -29,6 +30,7 @@ impl LegacyRandomSource {
     pub const fn new(seed: i64) -> Self {
         Self {
             seed: (seed ^ MULTIPLIER) & MODULUS_MASK,
+            gaussian: MarsagliaPolarGaussian::new(),
         }
     }
 
@@ -37,6 +39,7 @@ impl LegacyRandomSource {
     /// Java: `LegacyRandomSource.setSeed(long)`.
     pub fn set_seed(&mut self, seed: i64) {
         self.seed = (seed ^ MULTIPLIER) & MODULUS_MASK;
+        self.gaussian.reset();
     }
 
     /// Returns the next `bits` high bits of the LCG state.
@@ -160,6 +163,13 @@ impl RandomSource for LegacyRandomSource {
     fn next_boolean(&mut self) -> bool {
         self.next_bits(1) != 0
     }
+
+    fn next_gaussian(&mut self) -> f64 {
+        let mut gaussian = std::mem::take(&mut self.gaussian);
+        let value = gaussian.next(self);
+        self.gaussian = gaussian;
+        value
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +201,26 @@ mod tests {
             )
             .next_long()
         );
+    }
+
+    #[test]
+    fn gaussian_matches_java() {
+        let mut random = LegacyRandomSource::new(42);
+        let expected = [
+            1.141_905_249_038_952_5,
+            0.919_407_969_973_102_7,
+            -0.949_866_585_923_176_6,
+            -1.106_990_284_364_309_4,
+            0.280_977_589_971_606_55,
+            0.684_622_599_980_920_8,
+        ];
+        for value in expected {
+            let actual = random.next_gaussian();
+            assert!(
+                (actual - value).abs() < 1e-14,
+                "expected {value}, got {actual}"
+            );
+        }
     }
 
     #[test]

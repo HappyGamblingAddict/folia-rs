@@ -111,6 +111,10 @@ impl RandomSource for WorldgenRandom {
     fn next_boolean(&mut self) -> bool {
         self.next_bits(1) != 0
     }
+
+    fn next_gaussian(&mut self) -> f64 {
+        self.random.next_gaussian()
+    }
 }
 
 #[cfg(test)]

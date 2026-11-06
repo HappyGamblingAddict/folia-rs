@@ -16,11 +16,13 @@
 //! The legacy and xoroshiro positional factories (`at`, `fromHashOf`,
 //! `fromSeed`) are available for worldgen noise construction.
 
+mod gaussian;
 mod legacy;
 mod support;
 mod worldgen;
 mod xoroshiro;
 
+pub use gaussian::MarsagliaPolarGaussian;
 pub use legacy::{LegacyPositionalRandomFactory, LegacyRandomSource};
 pub use md5::md5;
 pub use support::{
@@ -73,6 +75,11 @@ pub trait RandomSource {
     ///
     /// Java: `RandomSource.nextBoolean()`.
     fn next_boolean(&mut self) -> bool;
+
+    /// Returns the next standard-normal sample.
+    ///
+    /// Java: `RandomSource.nextGaussian()`.
+    fn next_gaussian(&mut self) -> f64;
 
     /// Returns a value in `min..=max`.
     ///

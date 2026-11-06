@@ -66,6 +66,13 @@ pub enum BlockPredicate {
     MatchingFluidTag { tag: String, offset: [i32; 3] },
     /// `BlockPredicate.solid(offset)`.
     Solid { offset: [i32; 3] },
+    /// `BlockPredicate.insideWorldBounds(offset)`.
+    InsideWorldBounds { offset: [i32; 3] },
+    /// `BlockPredicate.hasSturdyFace(offset, direction)`.
+    HasSturdyFace {
+        direction: FaceDirection,
+        offset: [i32; 3],
+    },
     /// `BlockPredicate.not(predicate)`.
     Not(Box<BlockPredicate>),
     /// `BlockPredicate.allOf(predicates)`.
@@ -85,7 +92,9 @@ impl BlockPredicate {
             | Self::MatchingBlockTag { .. }
             | Self::MatchingFluids { .. }
             | Self::MatchingFluidTag { .. }
-            | Self::Solid { .. } => true,
+            | Self::Solid { .. }
+            | Self::InsideWorldBounds { .. }
+            | Self::HasSturdyFace { .. } => true,
             Self::Not(predicate) => predicate.is_supported(),
             Self::AllOf(predicates) | Self::AnyOf(predicates) => {
                 predicates.iter().all(Self::is_supported)
@@ -96,6 +105,17 @@ impl BlockPredicate {
 
     /// `BlockPredicate.test(LevelReader, BlockPos)`.
     pub fn test(&self, world: &dyn PlacementWorld, pos: BlockPos) -> bool {
+        self.test_at(world, pos, i32::MIN, i32::MAX)
+    }
+
+    /// Test with the build-height bounds needed by `inside_world_bounds`.
+    pub fn test_at(
+        &self,
+        world: &dyn PlacementWorld,
+        pos: BlockPos,
+        min_y: i32,
+        height: i32,
+    ) -> bool {
         match self {
             Self::WouldSurvive { state, offset } => {
                 let target = pos.offset(offset[0], offset[1], offset[2]);
@@ -131,13 +151,23 @@ impl BlockPredicate {
                 let target = pos.offset(offset[0], offset[1], offset[2]);
                 world.block_at(target).is_some_and(is_solid_state)
             }
-            Self::Not(predicate) => !predicate.test(world, pos),
+            Self::InsideWorldBounds { offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                target.y() >= min_y && target.y() < min_y.saturating_add(height)
+            }
+            Self::HasSturdyFace { direction, offset } => {
+                let target = pos.offset(offset[0], offset[1], offset[2]);
+                world
+                    .block_at(direction.step(target))
+                    .is_some_and(is_solid_state)
+            }
+            Self::Not(predicate) => !predicate.test_at(world, pos, min_y, height),
             Self::AllOf(predicates) => predicates
                 .iter()
-                .all(|predicate| predicate.test(world, pos)),
+                .all(|predicate| predicate.test_at(world, pos, min_y, height)),
             Self::AnyOf(predicates) => predicates
                 .iter()
-                .any(|predicate| predicate.test(world, pos)),
+                .any(|predicate| predicate.test_at(world, pos, min_y, height)),
             Self::Unsupported { .. } => false,
         }
     }
@@ -307,6 +337,13 @@ pub enum IntProvider {
     },
     /// `WeightedListInt`.
     WeightedList(Vec<WeightedEntry<IntProvider>>),
+    /// `ClampedNormalInt`.
+    ClampedNormal {
+        mean: f32,
+        deviation: f32,
+        min_inclusive: i32,
+        max_inclusive: i32,
+    },
     /// Parsed but not ported.
     Unsupported { vanilla_type: String },
 }
@@ -320,6 +357,7 @@ impl IntProvider {
             IntProvider::BiasedToBottom { .. } => "minecraft:biased_to_bottom",
             IntProvider::Clamped { .. } => "minecraft:clamped",
             IntProvider::WeightedList(_) => "minecraft:weighted_list",
+            IntProvider::ClampedNormal { .. } => "minecraft:clamped_normal",
             IntProvider::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -365,6 +403,15 @@ impl IntProvider {
                 // inventing a value if that invariant ever breaks.
                 Err(UnsupportedModifier::new("minecraft:weighted_list"))
             }
+            IntProvider::ClampedNormal {
+                mean,
+                deviation,
+                min_inclusive,
+                max_inclusive,
+            } => {
+                let normal = *mean + (random.next_gaussian() as f32) * *deviation;
+                Ok((normal as i32).clamp(*min_inclusive, *max_inclusive))
+            }
             IntProvider::Unsupported { vanilla_type } => {
                 Err(UnsupportedModifier::new(vanilla_type.clone()))
             }
@@ -381,6 +428,7 @@ impl IntProvider {
             IntProvider::WeightedList(entries) => {
                 entries.iter().all(|entry| entry.data.is_supported())
             }
+            IntProvider::ClampedNormal { .. } => true,
             IntProvider::Unsupported { .. } => false,
         }
     }
@@ -536,6 +584,18 @@ pub enum PlacementModifierKind {
         min_inclusive: i32,
         max_inclusive: i32,
     },
+    /// `NoiseBasedCountPlacement`.
+    NoiseBasedCount {
+        noise_to_count_ratio: i32,
+        noise_factor: f64,
+        noise_offset: f64,
+    },
+    /// `NoiseThresholdCountPlacement`.
+    NoiseThresholdCount {
+        noise_level: f64,
+        below_noise: i32,
+        above_noise: i32,
+    },
     /// `SurfaceWaterDepthFilter`.
     SurfaceWaterDepth { max_water_depth: i32 },
     /// `BlockPredicateFilter`.
@@ -549,6 +609,42 @@ pub enum PlacementModifierKind {
     },
     /// Parsed but not ported.
     Unsupported { vanilla_type: String },
+}
+
+/// A six-way direction for `has_sturdy_face`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceDirection {
+    Up,
+    Down,
+    North,
+    South,
+    West,
+    East,
+}
+
+impl FaceDirection {
+    fn step(self, pos: BlockPos) -> BlockPos {
+        match self {
+            Self::Up => pos.above(),
+            Self::Down => pos.below(),
+            Self::North => pos.north(),
+            Self::South => pos.south(),
+            Self::West => pos.west(),
+            Self::East => pos.east(),
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "up" => Self::Up,
+            "down" => Self::Down,
+            "north" => Self::North,
+            "south" => Self::South,
+            "west" => Self::West,
+            "east" => Self::East,
+            _ => return None,
+        })
+    }
 }
 
 /// Direction used by `EnvironmentScanPlacement`'s vertical codec.
@@ -583,6 +679,8 @@ impl PlacementModifier {
             PlacementModifierKind::SurfaceRelativeThreshold { .. } => {
                 "minecraft:surface_relative_threshold_filter"
             }
+            PlacementModifierKind::NoiseBasedCount { .. } => "minecraft:noise_based_count",
+            PlacementModifierKind::NoiseThresholdCount { .. } => "minecraft:noise_threshold_count",
             PlacementModifierKind::SurfaceWaterDepth { .. } => {
                 "minecraft:surface_water_depth_filter"
             }
@@ -720,6 +818,36 @@ impl PlacementModifier {
                     Ok(Vec::new())
                 }
             }
+            PlacementModifierKind::NoiseBasedCount {
+                noise_to_count_ratio,
+                noise_factor,
+                noise_offset,
+            } => {
+                let value = crate::worldgen::simplex::biome_info_noise().get_value(
+                    f64::from(pos.x()) / *noise_factor,
+                    f64::from(pos.z()) / *noise_factor,
+                    false,
+                );
+                let count = ((value + *noise_offset) * f64::from(*noise_to_count_ratio)).ceil();
+                Ok(repeat_position(pos, count))
+            }
+            PlacementModifierKind::NoiseThresholdCount {
+                noise_level,
+                below_noise,
+                above_noise,
+            } => {
+                let value = crate::worldgen::simplex::biome_info_noise().get_value(
+                    f64::from(pos.x()) / 200.0,
+                    f64::from(pos.z()) / 200.0,
+                    false,
+                );
+                let count = if value < *noise_level {
+                    *below_noise
+                } else {
+                    *above_noise
+                };
+                Ok(repeat_position(pos, f64::from(count)))
+            }
             PlacementModifierKind::SurfaceWaterDepth { max_water_depth } => {
                 let ocean_floor = world.heightmap(Heightmap::OceanFloor, pos.x(), pos.z());
                 let world_surface = world.heightmap(Heightmap::WorldSurface, pos.x(), pos.z());
@@ -731,7 +859,7 @@ impl PlacementModifier {
                 }
             }
             PlacementModifierKind::BlockPredicate(predicate) => {
-                if predicate.test(world, pos) {
+                if predicate.test_at(world, pos, min_y, height) {
                     Ok(vec![pos])
                 } else {
                     Ok(Vec::new())
@@ -744,22 +872,22 @@ impl PlacementModifier {
                 allowed,
             } => {
                 let mut candidate = pos;
-                if !allowed.test(world, candidate) {
+                if !allowed.test_at(world, candidate, min_y, height) {
                     return Ok(Vec::new());
                 }
                 for _ in 0..*max_steps {
-                    if target.test(world, candidate) {
+                    if target.test_at(world, candidate, min_y, height) {
                         return Ok(vec![candidate]);
                     }
                     candidate = direction.step(candidate);
                     if world.block_at(candidate).is_none() {
                         return Ok(Vec::new());
                     }
-                    if !allowed.test(world, candidate) {
+                    if !allowed.test_at(world, candidate, min_y, height) {
                         break;
                     }
                 }
-                Ok(if target.test(world, candidate) {
+                Ok(if target.test_at(world, candidate, min_y, height) {
                     vec![candidate]
                 } else {
                     Vec::new()
@@ -781,6 +909,8 @@ impl PlacementModifier {
             | PlacementModifierKind::Biome
             | PlacementModifierKind::Heightmap(_)
             | PlacementModifierKind::SurfaceRelativeThreshold { .. }
+            | PlacementModifierKind::NoiseBasedCount { .. }
+            | PlacementModifierKind::NoiseThresholdCount { .. }
             | PlacementModifierKind::SurfaceWaterDepth { .. } => true,
             PlacementModifierKind::CountOnEveryLayer(count) => count.is_supported(),
             PlacementModifierKind::BlockPredicate(predicate) => predicate.is_supported(),
@@ -829,6 +959,13 @@ fn find_on_ground_y_position(
 fn is_empty_layer_state(state: &BlockState) -> bool {
     crate::chunk::is_air_state(state)
         || matches!(state.name.as_str(), "minecraft:water" | "minecraft:lava")
+}
+
+fn repeat_position(pos: BlockPos, count: f64) -> Vec<BlockPos> {
+    if !count.is_finite() || count <= 0.0 {
+        return Vec::new();
+    }
+    vec![pos; count as usize]
 }
 
 /// `SectionPos.blockToSectionCoord`.
@@ -925,6 +1062,16 @@ pub(crate) fn parse_modifier(value: &Value) -> io::Result<PlacementModifier> {
         "minecraft:block_predicate_filter" => PlacementModifierKind::BlockPredicate(
             parse_block_predicate(field(object, "predicate", &type_name)?)?,
         ),
+        "minecraft:noise_based_count" => PlacementModifierKind::NoiseBasedCount {
+            noise_to_count_ratio: int_field(object, "noise_to_count_ratio", &type_name)?,
+            noise_factor: float_field(object, "noise_factor", &type_name)? as f64,
+            noise_offset: optional_float(object, "noise_offset", &type_name)?.unwrap_or(0.0) as f64,
+        },
+        "minecraft:noise_threshold_count" => PlacementModifierKind::NoiseThresholdCount {
+            noise_level: float_field(object, "noise_level", &type_name)? as f64,
+            below_noise: int_field(object, "below_noise", &type_name)?,
+            above_noise: int_field(object, "above_noise", &type_name)?,
+        },
         "minecraft:environment_scan" => {
             let direction = match field(object, "direction_of_search", &type_name)?
                 .as_str()
@@ -1013,6 +1160,16 @@ fn parse_block_predicate(value: &Value) -> io::Result<BlockPredicate> {
             offset,
         }),
         "minecraft:solid" => Ok(BlockPredicate::Solid { offset }),
+        "minecraft:inside_world_bounds" => Ok(BlockPredicate::InsideWorldBounds { offset }),
+        "minecraft:has_sturdy_face" => {
+            let direction = FaceDirection::parse(
+                field(object, "direction", &type_name)?
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("{type_name} needs a string `direction`")))?,
+            )
+            .ok_or_else(|| invalid(format!("{type_name} has an invalid direction")))?;
+            Ok(BlockPredicate::HasSturdyFace { direction, offset })
+        }
         "minecraft:not" => Ok(BlockPredicate::Not(Box::new(parse_block_predicate(
             field(object, "predicate", &type_name)?,
         )?))),
@@ -1136,6 +1293,12 @@ pub(crate) fn parse_int_provider(value: &Value) -> io::Result<IntProvider> {
             max_inclusive: int_field(object, "max_inclusive", &type_name)?,
         },
         "minecraft:weighted_list" => parse_weighted_list(object, &type_name)?,
+        "minecraft:clamped_normal" => IntProvider::ClampedNormal {
+            mean: float_field(object, "mean", &type_name)?,
+            deviation: float_field(object, "deviation", &type_name)?,
+            min_inclusive: int_field(object, "min_inclusive", &type_name)?,
+            max_inclusive: int_field(object, "max_inclusive", &type_name)?,
+        },
         _ => IntProvider::Unsupported {
             vanilla_type: type_name,
         },
@@ -1291,6 +1454,24 @@ fn optional_int(object: &Map<String, Value>, key: &str, context: &str) -> io::Re
     }
 }
 
+fn float_field(object: &Map<String, Value>, key: &str, context: &str) -> io::Result<f32> {
+    field(object, key, context)?
+        .as_f64()
+        .map(|value| value as f32)
+        .ok_or_else(|| invalid(format!("{context} needs a number `{key}`")))
+}
+
+fn optional_float(
+    object: &Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> io::Result<Option<f32>> {
+    match object.get(key) {
+        None => Ok(None),
+        Some(_) => float_field(object, key, context).map(Some),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1339,6 +1520,10 @@ mod tests {
 
         fn next_boolean(&mut self) -> bool {
             panic!("unscripted next_boolean")
+        }
+
+        fn next_gaussian(&mut self) -> f64 {
+            panic!("unscripted next_gaussian")
         }
     }
 
@@ -1592,12 +1777,7 @@ mod tests {
 
     #[test]
     fn unported_modifier_fails_loudly() {
-        let modifier = parse(json!({
-            "type": "minecraft:noise_based_count",
-            "noise_to_count_ratio": 20,
-            "noise_factor": 400.0,
-            "noise_offset": 0.0
-        }));
+        let modifier = parse(json!({"type": "minecraft:not_a_real_modifier"}));
         let mut random = ScriptedRandom::new([], []);
         let error = modifier
             .get_positions(
@@ -1609,7 +1789,7 @@ mod tests {
                 384,
             )
             .unwrap_err();
-        assert_eq!(error.vanilla_type, "minecraft:noise_based_count");
+        assert_eq!(error.vanilla_type, "minecraft:not_a_real_modifier");
         assert!(!modifier.is_supported());
     }
 
@@ -1824,6 +2004,21 @@ mod tests {
         }))
         .unwrap();
         assert!(!unsupported.is_supported());
+    }
+
+    #[test]
+    fn clamped_normal_uses_the_cached_gaussian() {
+        let provider = parse_int_provider(&json!({
+            "type": "minecraft:clamped_normal",
+            "mean": 0.0,
+            "deviation": 3.0,
+            "min_inclusive": -10,
+            "max_inclusive": 10
+        }))
+        .unwrap();
+        let mut random = LegacyRandomSource::new(42);
+        assert_eq!(provider.sample(&mut random).unwrap(), 3);
+        assert_eq!(provider.sample(&mut random).unwrap(), 2);
     }
 
     #[test]

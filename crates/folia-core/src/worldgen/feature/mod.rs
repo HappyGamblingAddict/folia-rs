@@ -1366,14 +1366,10 @@ mod tests {
         assert_eq!(total, 888, "every placed feature's modifiers load");
         assert_eq!(supported + unsupported.values().sum::<usize>(), total);
         assert_eq!(
-            supported, 875,
-            "all shipped heightmaps and layer counts, surface-relative filters, \
-             block predicates, environment scans, and the world-free modifiers"
+            supported, 888,
+            "every shipped placement modifier now executes"
         );
-        assert_eq!(unsupported["minecraft:environment_scan"], 2);
-        assert_eq!(unsupported["minecraft:noise_threshold_count"], 6);
-        assert_eq!(unsupported["minecraft:noise_based_count"], 4);
-        assert_eq!(unsupported["minecraft:random_offset"], 1);
+        assert!(unsupported.is_empty(), "no shipped modifier is unsupported");
 
         // `end_platform` is a fixed position followed by a biome filter.
         let end_platform = data

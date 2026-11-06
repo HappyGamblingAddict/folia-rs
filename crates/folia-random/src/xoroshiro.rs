@@ -1,7 +1,7 @@
 //! The xoroshiro128++ random source and its raw state transition.
 
 use crate::support::{GOLDEN_RATIO_64, SILVER_RATIO_64, Seed128bit, upgrade_seed_to_128bit};
-use crate::{RandomSource, assert_bound_positive};
+use crate::{MarsagliaPolarGaussian, RandomSource, assert_bound_positive};
 
 /// Raw xoroshiro128++ generator state.
 ///
@@ -79,6 +79,7 @@ impl From<Seed128bit> for Xoroshiro128PlusPlus {
 #[derive(Debug, Clone)]
 pub struct XoroshiroRandomSource {
     generator: Xoroshiro128PlusPlus,
+    gaussian: MarsagliaPolarGaussian,
 }
 
 impl XoroshiroRandomSource {
@@ -88,6 +89,7 @@ impl XoroshiroRandomSource {
     pub fn new(seed: i64) -> Self {
         Self {
             generator: Xoroshiro128PlusPlus::from_seed(upgrade_seed_to_128bit(seed)),
+            gaussian: MarsagliaPolarGaussian::new(),
         }
     }
 
@@ -97,6 +99,7 @@ impl XoroshiroRandomSource {
     pub fn from_seed_128(seed: Seed128bit) -> Self {
         Self {
             generator: Xoroshiro128PlusPlus::from_seed(seed),
+            gaussian: MarsagliaPolarGaussian::new(),
         }
     }
 
@@ -106,6 +109,7 @@ impl XoroshiroRandomSource {
     pub fn from_parts(seed_lo: i64, seed_hi: i64) -> Self {
         Self {
             generator: Xoroshiro128PlusPlus::new(seed_lo, seed_hi),
+            gaussian: MarsagliaPolarGaussian::new(),
         }
     }
 
@@ -114,6 +118,7 @@ impl XoroshiroRandomSource {
     /// Java: `XoroshiroRandomSource.setSeed(long)`.
     pub fn set_seed(&mut self, seed: i64) {
         self.generator = Xoroshiro128PlusPlus::from_seed(upgrade_seed_to_128bit(seed));
+        self.gaussian.reset();
     }
 
     /// Returns the raw xoroshiro128++ state.
@@ -248,6 +253,13 @@ impl RandomSource for XoroshiroRandomSource {
 
     fn next_boolean(&mut self) -> bool {
         (self.generator.next_long() & 1) != 0
+    }
+
+    fn next_gaussian(&mut self) -> f64 {
+        let mut gaussian = std::mem::take(&mut self.gaussian);
+        let value = gaussian.next(self);
+        self.gaussian = gaussian;
+        value
     }
 
     fn consume_count(&mut self, count: u32) {

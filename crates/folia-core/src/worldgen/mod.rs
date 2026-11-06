@@ -8,5 +8,6 @@ pub mod density;
 pub mod feature;
 pub mod generator;
 pub mod noise;
+pub mod simplex;
 pub mod structure;
 pub mod surface;

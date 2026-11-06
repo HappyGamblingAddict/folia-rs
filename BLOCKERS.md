@@ -411,3 +411,19 @@ These are expected gaps, not reasons to stop:
 - Workaround: `LootProvider` is the intended hook for `crate::loot`; the
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
+
+## 2026-11-06 - P5.5/P5.6/P5.12 full AI/spawn parity
+
+- Blocker: `block_shapes.rs` is still a stub, so exact collision/outline shapes,
+  per-state path node types, door/gate state, and fence/step topology are not
+  available. `SpawnPlacements` per-entity predicates and structure-specific
+  spawn overrides also need data the current assets do not carry.
+- What was tried: Implemented the unblocked vertical slice: deterministic
+  bounded A* over `block_behaviour` collision/fluid flags, five goals, an AI
+  driver over an injected world, and a natural-spawn cycle with real biome mob
+  lists and real entity ids.
+- What is needed: P1.5 shape metadata, door/gate path metadata, and a Java
+  spawn-count/path trace fixture.
+- Workaround / next task: Keep the current full-cube collision approximation,
+  document it in `DECISIONS.md`, and continue with P5.2 persistence or P5.3
+  movement once collision shapes land.

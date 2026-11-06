@@ -10,7 +10,7 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Tests: **631 passing** on the full workspace gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -20,13 +20,23 @@ Last updated: 2026-11-06
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
   stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an
-  expanded Bukkit bridge (world/player/item/events).
+  block breaking/tools/drops/durability, exact surface biome zoom, an expanded
+  Bukkit bridge (world/player/item/events), and the P5 AI/spawn foundation.
+- P5 AI/spawn foundation (2026-11-06): `entity_ai.rs` adds vanilla-shaped
+  `Goal`/`GoalSelector` (priorities, flag locks, start/stop/tick), the
+  `FloatGoal`/`RandomStrollGoal`/`LookAtPlayerGoal`/`MeleeAttackGoal`/
+  `HurtByTargetGoal` slice, deterministic bounded A* pathfinding with one-block
+  step-up and explicit failures, `Navigation`, `LookControl`, and an
+  `AiDriver` over an injected `WorldView`. `spawn.rs` adds `MobCategory` caps,
+  embedded 1.21.11 biome spawn lists, real entity-type ids, spawn-placement
+  light/height/water checks, player-distance gates, deterministic 3x3x3 packs,
+  and a per-chunk `NaturalSpawner` cycle. New tests: 10 `entity_ai`, 6 `spawn`,
+  plus 4 lib unit tests.
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
-  ownership.
+  and Java light fixtures, P5 sensors/brains/full node evaluators/persistence/
+  despawn/armor, P6 pistons/block entities/full redstone, P7 Nether/End, P8
+  online mode, P9 plugin API depth, P10 region ownership.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,

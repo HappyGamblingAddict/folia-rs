@@ -1820,3 +1820,56 @@ Format:
   break/place/interact still bypass the event bus until a follow-up changes
   `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
   covered; the rest of P9.2 remains open.
+
+## 2026-11-06 - P5 AI foundation uses an injected WorldView
+- Context: Folia-RS world storage is global and player sessions are not the
+  right substrate for goal/pathfinding tests.
+- Decision: `entity_ai.rs` defines `WorldView` (blocks, light, biome, surface,
+  bounds) and drives goals/navigation through it. `MemoryWorld` is the
+  in-memory implementation used by focused tests; the region tick loop can
+  implement the same trait later.
+- Why: Keeps AI out of `WorldStorage`/`join.rs`, makes tests deterministic,
+  and leaves per-region ownership open without a global static.
+- Consequences: AI cannot yet see player sessions or chunk tickets; the driver
+  consumes `ActorView` snapshots and returns spawn/attack events for the
+  caller to apply.
+
+## 2026-11-06 - Bounded deterministic A* instead of the vanilla node evaluator
+- Context: `block_shapes.rs` is still a stub, so exact vanilla node types
+  (`WALKABLE`, `FENCE`, `DOOR_WOOD_CLOSED`, ...) cannot be computed.
+- Decision: Search four cardinal directions over `block_behaviour` collision
+  and fluid metadata. Allow one-block step-up, at most three blocks of fall,
+  reject liquids/lava, cap nodes/range, and return explicit
+  `InvalidStart`/`InvalidTarget`/`Unreachable`/`TooLarge` failures. Break cost
+  ties by `(x, y, z)`.
+- Why: It is testable now and behaviorally conservative on plain worlds.
+  Inventing node types without shape metadata would look like parity without
+  being it.
+- Consequences: Diagonals, doors/gates, light cost malus, swim/fly nodes, and
+  stuck detection remain open (P5.5).
+
+## 2026-11-06 - Biome spawn lists embedded in `spawn.rs`
+- Context: The captured `assets/` tree has entity-type ids and worldgen biomes
+  but no biome `spawners` data.
+- Decision: Embed the 1.21.11 vanilla data-pack spawner table (65 biomes, 785
+  entries) as a compact string in `spawn.rs`, parsed once with `OnceLock`.
+  Resolve entity ids through `registry::entity_type_id`, and keep only the 50
+  entity types that actually appear in a biome spawn list.
+- Why: The decompiled data pack is the reference specification; adding a new
+  asset file was outside this worker's file allow-list.
+- Consequences: Spawn data is real rather than guessed, but any future
+  datapack-override support must replace the embedded table.
+
+## 2026-11-06 - Light/height spawn rules are explicit approximations
+- Context: `WorldView` exposes stored sky/block light and a surface height, not
+  vanilla `Level.getMaxLocalRawBrightness` (which includes ambient darkening)
+  and not `SpawnPlacements` registrations for every type.
+- Decision: Implement `Monster.isDarkEnoughToSpawn` with sky > nextInt(32),
+  block-light limit 0 for the overworld, and a uniform 0..=7 threshold;
+  animals require grass below and raw light > 8. Encode the remaining placement
+  families as `Water`, `Lava`, `AnyLightMonster`, `SurfaceMonster`, `Mob`.
+  Pack placement walks a deterministic 3x3x3 cube around the candidate.
+- Why: These are the parity-critical rules for the zombie/cow slice and are
+  deterministic for a fixed seed.
+- Consequences: Vanilla's random 6-block pack walk, structure-specific spawn
+  overrides, and specialized predicates (ocelot/parrot/fox/etc.) remain open.

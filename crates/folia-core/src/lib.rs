@@ -1,4 +1,5 @@
 pub mod anvil;
+pub mod block_behaviour;
 pub mod block_update;
 pub mod chunk;
 pub mod chunk_packet;

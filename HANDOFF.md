@@ -40,25 +40,13 @@ Do not branch, reset, or push unless the user asks.
 Verified state (2026-11-06, merged workspace):
 
 ```text
-631 tests passing on the merged tree (full gate)
-637 tests passing on the merged tree (full gate)
+804 tests passing on the merged tree (full gate)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
 cargo build --workspace: clean
 native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
-```
-
-Recent P5 slice (2026-11-06):
-
-```text
-entity_ai.rs: Goal/GoalSelector flags+priority lifecycle, five goals,
-              LookControl, deterministic bounded A*, Navigation, AiDriver
-spawn.rs:     MobCategory caps, 65 embedded vanilla biome spawn lists,
-              real entity ids, light/height/distance rules, 3x3x3 packs,
-              NaturalSpawner per-chunk cycle
-tests:        10 tests/entity_ai.rs + 6 tests/spawn.rs + 4 lib unit tests
 ```
 
 Worldgen parity on the 16-column fixture:

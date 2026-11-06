@@ -8,469 +8,54 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): see `git log`; the tree is committed.
-- Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed), plus 19
-  focused structure-processor/pool integration tests in this slice.
-- Tests: **611 passing** on the last full workspace gate. This redstone-
-  component slice adds 10 `redstone` lib tests, 10 `tests/redstone2.rs` tests,
-  and 2 tick-state (container/registration) tests; the coordinator runs the next
-  full gate.
-- Tests: **634 passing** on the final full workspace gate (0 failed).
-- Tests: **630 passing** on the final full workspace gate (0 failed).
-- Tests: **611 passing** on the last full workspace gate; the incremental-light
-  slice adds 9 focused tests (1 lib + 8 `tests/light_incremental.rs`) and those
-  targets pass. The coordinator owns the next full gate.
-- Tests: **631 passing** on the full workspace gate (0 failed).
-- Tests: **637 passing** on the final full workspace gate (0 failed).
+- Current commit: see `git log`; the tree is committed and not pushed.
+- Tests: **804 passing** on the full merged gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
-  Java fixture. Ore features and `OreVeinifier` are wired, the placement pipeline
-  executes all 888 modifiers, and 171/224 configured feature types execute.
-- Major landed slices: registry/tag/loot assets, real light storage + sky/block
-  BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
-  fungi, structure template/start/piece/set foundation, component-aware item
-  stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
-  block breaking/tools/drops/durability, crafting/furnace/stonecutting/
-  smithing models, exact surface biome zoom, and an expanded Bukkit bridge
-  (world/player/item/events).
-- Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 recursive jigsaw/biome filtering/generator wiring, P3.6-P3.9
-  incremental light and Java light fixtures, P5 AI/spawning/armor, P6 pistons/
-  block entities/full redstone, P7 Nether/End, P8 online mode, P9 plugin API
-  depth, P10 region ownership.
-  stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button/
-  repeater/comparator/observer/redstone torch/pressure plates/tripwire,
-  block breaking/tools/drops/durability, exact surface biome zoom, and an
-  expanded Bukkit bridge (world/player/item/events).
-  stacks, scheduled/random/neighbour ticks, fluids (flow, quenching, lava fire,
-  bubble columns), redstone wire/lever/button, block breaking/tools/drops/
-  durability, exact surface biome zoom, and an expanded Bukkit bridge
-  (world/player/item/events).
-- Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/
-  redstone lamps/target blocks/tripwire hooks, P7 Nether/End, P8 online mode,
-  P9 plugin API depth, P10 region
-  ownership.
-  block breaking/tools/drops/durability, exact surface biome zoom, an
-  expanded Bukkit bridge (world/player/item/events), and Nether/End generation
-  through `generator::generate_dimension` (Overworld path unchanged).
-- Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 portals/time/multi-world wiring (generation slices landed),
-  P8 online mode, P9 plugin API depth, P10 region ownership.
-- Nether generation (2026-11-06): 128-block terrain column in a 256-block
-  dimension, bedrock floor/roof, lava below y=32, netherrack density, the
-  shipped five-biome multi-noise preset, soul-sand/basalt/nylium surface rules,
-  and quartz/magma/glowstone/vegetation features. `tests/nether_gen.rs` pins
-  bedrock y=0/127, lava at y=31, valid biomes, feature output, determinism, and
-  the dimension entry point.
-- End generation (2026-11-06): exact `EndIslandDensityFunction`, central and
-  outer islands, `TheEndBiomeSource`, and the `(100, 49, 0)` obsidian platform
-  across chunk borders. `tests/end_gen.rs` pins the central island, headroom,
-  platform, biomes, outer end stone, determinism, and the dimension entry point.
-  End cities/gateways/dragon arena remain open.
-- Major gaps: P1.5 metadata beyond collision/outline shapes and the current
-  behaviour table (support rules, waterlogging, tool/tier tables, per-state
-  random-tick behavior), P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9
-  incremental light and Java light fixtures, P5 AI/spawning/armor, P6
-  pistons/block entities/full redstone, P7 Nether/End, P8 online mode, P9 plugin
-  API depth, P10 region ownership.
-  block breaking/tools/drops/durability, exact surface biome zoom, an expanded
-  Bukkit bridge (world/player/item/events), and the P5 AI/spawn foundation.
-- P5 AI/spawn foundation (2026-11-06): `entity_ai.rs` adds vanilla-shaped
-  `Goal`/`GoalSelector` (priorities, flag locks, start/stop/tick), the
-  `FloatGoal`/`RandomStrollGoal`/`LookAtPlayerGoal`/`MeleeAttackGoal`/
-  `HurtByTargetGoal` slice, deterministic bounded A* pathfinding with one-block
-  step-up and explicit failures, `Navigation`, `LookControl`, and an
-  `AiDriver` over an injected `WorldView`. `spawn.rs` adds `MobCategory` caps,
-  embedded 1.21.11 biome spawn lists, real entity-type ids, spawn-placement
-  light/height/water checks, player-distance gates, deterministic 3x3x3 packs,
-  and a per-chunk `NaturalSpawner` cycle. New tests: 10 `entity_ai`, 6 `spawn`,
-  plus 4 lib unit tests.
-- Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 sensors/brains/full node evaluators/persistence/
-  despawn/armor, P6 pistons/block entities/full redstone, P7 Nether/End, P8
-  online mode, P9 plugin API depth, P10 region ownership.
-  redstone, P7 Nether/End, P8 online-mode server wiring and chat signing, P9
-  plugin API depth, P10 region ownership.
-- Online-mode login core landed 2026-11-06. `crypto.rs` has dependency-free
-  RSA-1024 generation (OS CSPRNG), PKCS#1 v1.5, DER SubjectPublicKeyInfo,
-  AES-128/CFB8, SHA-1, Java signed big-int hex, and constant-time comparison.
-  `protocol.rs` encodes `ClientboundHello`/`ServerboundKey` and owns an
-  encrypted `Connection`; `join.rs` runs the exchange, calls a mockable
-  `SessionAuthenticator` (curl-backed Mojang implementation), sends profile
-  properties in Login Success, and supports `prevent-proxy-connections`.
-  `online-mode=false` frames are unchanged. 22 integration tests pin Java/JCE
-  and NIST fixtures; no test touches the network. The native server still sets
-  `accept_logins: !online_mode` in `folia-server`, so online mode is not yet
-  reachable from a real client (see `BLOCKERS.md`).
-- P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
-- P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
-  block, item, entity type, fluid, game event, damage type, enchantment,
-  point-of-interest type, and worldgen tags into
-  `crates/folia-core/assets/tags/*.tsv` (602 non-empty tags across 604 files,
-  7,208 members).
-  `folia_core::tags` embeds them with `include_str!` and normalizes bare keys
-  to `minecraft:`. Cosmetic registries (`banner_pattern`, `dialog`,
-  `instrument`, `painting_variant`, `timeline`) and replacing the ore
-  feature's hard-coded target-tag sets are still open.
-- Feature generation is now wired into chunk generation. The vegetation slice
-  places oak and birch trees (straight trunk + blob foliage, driven by the
-  vanilla placed features and `random_selector`) in new forest, plains, and
-  birch-forest chunks. Straight-trunk spruce/pine use layered foliage, dark
-  oak uses its 2x2 branching trunk, forking acacia uses acacia foliage, fancy
-  oak uses its custom limb trunk and clipped height, cherry uses its forked
-  branches, giant mega spruce/pine use a 2x2 trunk and crown foliage, mega
-  jungle adds its branch walk and jungle foliage, `jungle_bush` uses the
-  straight trunk with bush foliage, azalea uses a bending trunk and
-  random-spread weighted foliage, mangrove uses an upwards-branching trunk and
-  waterlogged/muddy roots, fallen trees place a stump plus sideways logs, and
-  `jungle_tree`/`swamp_oak` parse and place their vine/cocoa decoration.
-  `place_on_ground` leaf litter,
-  `beehive`, `leave_vine`, `trunk_vine`, `cocoa`, `attached_to_leaves`,
-  `attached_to_logs`, and `creaking_heart` decorators execute; unsupported
-  decorator types make the whole tree config unsupported. All 888 shipped
-  placement modifiers execute; the remaining P2.2 gap is the Java position
-  fixture. The P2.5 aquatic/vine/mushroom batch now places seagrass (short
-  and tall), kelp, sea pickles, all three coral shapes, bamboo, vines,
-  twisting and weeping vines, huge brown/red mushrooms, huge crimson/warped
-  fungus with shroomlight and hanging vines, glowstone blobs, forest rocks,
-  fill layers, nether forest vegetation, and underwater magma. 162 of 224
-  configured features dispatch as supported. Beehive occupants and the
-  chunk-status pipeline are still open; pale moss is blocked on wiring its
-  now-supported `pale_moss_patch`.
-- P2.1/P2.2 core is in `worldgen/feature/{mod,placement}.rs`: framework,
-  typed loading, and a placement pipeline that executes all 888 shipped
-  modifiers (world-free transforms, `biome`, every heightmap, block
-  predicates, environment scans, layer/noise counts, surface-relative
-  filters, water depth, sapling survival, and Gaussian offsets). `biome` reads
-  world state through `PlacementWorld`; `BiomePlacementWorld` handles
-  pre-generation queries and `FeaturePlacementWorld` handles the chunk being
-  generated. The remaining 126 modifiers parse as explicit unsupported
-  variants. Generation wiring is now complete for the supported subset.
-- Plugin bridge (2026-11-06): `World`/`Block` read/write (`getBlockAt`,
-  `getType`/`setType`, `getLocation`, `getHighestBlockYAt`, biome, sky/block
-  light), `Player` identity/location/game mode/vitals/teleport/messages,
-  `PlayerInventory` slots 0-35, and `ItemStack` type/count/damage/name/lore/
-  unbreakable now cross JNI. `new ItemStack(...)` works through a Paper
-  `RegistryAccess`/`InternalAPIBridge` service shim. `BlockBreakEvent`,
-  `BlockPlaceEvent`, and `PlayerInteractEvent` are constructed with cancel
-  support and host-callable; vanilla break/place handlers still bypass them.
-  Java `BridgeApiTest` passes, and the `FOLIA_BRIDGE_SELFTEST=1` server run
-  edits a spawn block, round-trips a named/damaged sword, changes vitals/game
-  mode, and fires all three events with the expected cancellation results.
-  Live-session sync for health/food/inventory/teleport/messages, armor/off-hand
-  slots, enchantment/PDC persistence, and live event dispatch remain open.
-- Native server: builds and runs; optional JVM only starts when plugin jars
-  exist.
-- Worldgen parity: 98.75% block-class / 95.80% exact-name on the 16-column
-  fixture after ore/veinifier wiring.
-- Lighting now has real 2048-byte nibble layers per section. `light.rs` ports
-  `DataLayer` storage, per-column sky sources with a six-direction BFS, and
-  block-light BFS for the generated per-state emitter/opacity table. Chunk NBT
-  round-trips `SkyLight`/`BlockLight`; `light_bytes` prefers stored/computed
-  layers and keeps the height fallback only for chunks without light. Block
-  edits snapshot the old layers and run the vanilla two-phase decrease then
-  increase schedule in `LightScene`, including sky column source updates and
-  cross-chunk propagation into loaded neighbours. Changed sections are tracked
-  in `DirtySections`; edits persist and broadcast only those section payloads
-  (with separate payloads for touched neighbours). The first edit on a chunk
-  with no light data pays one whole-chunk initialization pass, then edits are
-  incremental. There is still no Java light fixture and light occlusion remains
-  full-cube because P1.5 shape metadata is missing.
-- Joins stream a square chunk column sized by the negotiated view distance
-  (the probe client asks for 6, so 13×13; the shipped server allows 10 and a
-  default client asks for 12, so a normal join streams 441 columns) and
-  re-stream new columns as
-  the player crosses chunk borders. The first join of a world without
-  `level.dat` writes one (DataVersion 4788, seed, `spawn.pos`, overworld
-  generator settings) marked `folia:written`, so the level is a real saved
-  world and later starts reuse its seed and spawn. Generated terrain is
-  written back to the region files with a `folia:written` stamp, so
-  exploration and block edits survive restarts. A level this server created
-  serves only stamped chunks (leftover flat chunks are regenerated); a foreign
-  `level.dat` or `FOLIA_LOAD_STORED=1` serves every stored chunk.
-- A player whose feet are inside a solid block on login (the captured spawn is
-  `y = -60`, four blocks above bedrock) is lifted to the first empty block of
-  their column, so no one spawns buried in stone.
-- Columns more than one chunk outside the live radius are unloaded on each
-  streaming batch, so a session's chunk set stays bounded while walking. The
-  radius is the smaller of `server.properties` `view-distance` and the client's
-  `ClientInformation` request, clamped to 2–16 chunks. No tickets, spawn
-  chunks, or cross-player dedupe yet, so each session still streams its own
-  copy.
-- Missing columns in a streaming batch are generated on up to eight worker
-  threads; each column is sent as soon as it is ready, nearest-first, with
-  stored columns taking their place in the same order and generated ones saved
-  just before sending. A cold 169-column join on a fresh level measured 7.7 s
-  versus 16.3 s with sequential generation; after palette-cached packet
-  encoding and worker-side packet building it measured 1.9 s (release, two runs
-  at 1.89-1.94 s).
-- `level.dat` records elapsed `Time`/`DayTime` and `LastPlayed` on shutdown
-  (`level::record_session`), rewriting the root atomically so fields this port
-  does not model survive.
-- Encoded chunk NBT carries `DataVersion` 4788 and `Status: "minecraft:full"`,
-  so a stored column describes its own format and completion state.
-- Region writes reuse a chunk's existing sectors when the new record fits;
-  saving the same chunk again overwrites in place, and an oversized record
-  appends a new copy as before.
-- Dead sectors are tracked; once they exceed a quarter of the live allocation,
-  `save_if_dirty` compacts the region (live records packed after the header)
-  before writing it.
-- `WorldStorage` caches up to 256 decoded chunks with FIFO eviction; `load_chunk`
-  serves repeats from memory, while `save_chunk`, `update_chunk`, and
-  `unload_region` replace or drop the cached copy so edits are never stale.
-- Chunk generation uses a bounded 16-column queue; workers stop when the
-  session drops the receiver, so a write failure cancels the rest of the batch
-  instead of generating chunks nobody will receive.
-- A movement packet moving more than ten blocks (squared distance > 100) is
-  reverted and answered with a position packet, so a single-packet teleport
-  cannot move a player through terrain or across the world.
-- Stored chunks carry `Heightmaps` for the three vanilla types, packed at 9 bits
-  per column; `stamp_chunk` recomputes them from the chunk so an edit cannot
-  leave a stale heightmap in the file.
-- A corrupt chunk record (invalid length, truncated payload, unknown
-  compression) reads as a missing chunk and is logged; intact neighbours still
-  load, so one damaged column cannot fail a join or a later save.
-- Block edits save through `WorldStorage::update_chunk`, which copies top-level
-  chunk fields the chunk model does not decode (`Status`, `Heightmaps`,
-  `BlockEntities`, `Entities`, `structures`, …) from the stored root instead of
-  dropping them on rewrite. Freshly generated columns still replace a stored
-  column outright, so stale block entities never attach to new terrain. Block
-  entities at positions an edit replaces are dropped, the way vanilla removes a
-  block entity when its block changes; other stored entities survive.
-- Overworld terrain is served from one process-wide `WorldStorage`
-  (`world::shared_overworld`, locked with `world::lock`) used by all sessions
-  and entity physics: a region save rewrites the whole `.mca`, so independent
-  instances used to drop each other's chunk writes. Generated chunks are
-  flushed every 5 s and on disconnect; block edits flush immediately.
-- Playerdata parses and saves vanilla survival vitals (health, hunger, XP,
-  score, air); new players start with vanilla's defaults, and a loaded file's
-  values are kept instead of being reset.
-- Playerdata is written on disconnect, after movement (throttled), and from the
-  1 s read-timeout path, so an idle session also saves every 5 s
-  (`PLAYER_SAVE_INTERVAL`) instead of only when the player moves. Saves stamp
-  `DataVersion` 4788, so the file is self-describing like vanilla's.
-- Shutdown asks sessions to close (`join::shutdown_sessions`, 5 s timeout): a
-  session in its play loop saves playerdata, flushes terrain, and returns, so
-  main's terrain flush and `level.dat` rewrite happen after players are done.
-- On shutdown the server flushes the process-wide overworld storage before
-  writing `level.dat`, so terrain still cached in region memory reaches disk on
-  an orderly stop; level rewrites also keep the previous file as
-  `level.dat_old`.
-- The native server reads stdin. Console `help`, `list`, `ops`, `op`, `deop`,
-  `gamemode`, and `stop` work; `run/ops.txt` persists operators. In-game
-  `/op`/`/deop` and `/gamemode` are operator-gated.
-- Void damage starts below `y = -128` (4 health per 500 ms), sends live health
-  updates, shows the combat-kill death screen, and respawns at world spawn on
-  the client's respawn command (auto-respawn after 2 s as a fallback). General
-  fall/fire/hunger damage and inventory drops are still missing.
-- Server-side player physics is live: `player_physics.rs` models the
-  standing/sneaking/swimming hitboxes, vanilla gravity/drag/friction, jump,
-  sprint jump, step height, axis-separated swept collision against per-state
-  block shape AABBs, fall distance, and fall damage. Movement packets are
-  reconciled instead of accepted verbatim: deltas up to `0.75` blocks are
-  replayed through the collider, a reproducible claim is accepted exactly, and
-  a blocked claim sends a position correction. Longer packets are lag bursts
-  that validate their destination. Fall damage sends health updates and death;
-  landing resets fall distance. Ladders, cobwebs, slime, elytra, water/lava
-  currents, swimming, bubbles, powder snow, and sprint/sneak input packets are
-  not ported yet.
-
-- Structure templates have a first P2.8 slice in
-  `worldgen/structure/template.rs`: gzip structure NBT parsing (DataVersion,
-  size, single or multi palettes, blocks, block-entity NBT, entities), Java
-  `StructureTemplate.transform`/`transform(Vec3)` coordinate math with mirror,
-  four rotations, rotation pivot and origin, and block placement through
-  `FeatureLevel`. `place_into` returns written/rejected counts, block-entity
-  NBT, and transformed entity descriptors; it does not spawn entities.
-  `processor.rs` now parses all 40 shipped processor lists (52 processors) and
-  applies every registered 1.21.11 processor kind, with ordered rules, block
-  position predicates, block-entity modifiers, and `capped` finalization.
-  `pool.rs` parses all 188 shipped template pools (1,198 entries / 1,204
-  element nodes / 4,880 expanded template slots), implements Java's weighted
-  `nextInt(size)` selection, and resolves/places one start-pool element through
-  the template-piece path. Recursive jigsaw connection, biome/dimension
-  filtering, random multi-palette selection, feature-pool placement, entity
-  spawning, loot/chest block entities, waterlogging, shape updates, exact
-  per-block state derivatives, and generator wiring are still unported.
-
-- Vegetation is partial: supported trees now place layered spruce/pine, dark
-  oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
-  beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
-  with mushrooms. Beehive block entities have no stored bees yet. The P2.5
-  ground-cover batch parses and places `random_patch`/`flower`, `simple_block`,
-  `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, and
-  `waterlogged_vegetation_patch`; the aquatic/vine/mushroom batch adds
-  `seagrass`, `kelp`, `sea_pickle`, coral tree/claw/mushroom, `bamboo`,
-  `underwater_magma`, `vines`, `twisting_vines`, `weeping_vines`, huge
-  brown/red mushrooms, huge crimson/warped fungus, `glowstone_blob`,
-  `forest_rock`, `fill_layer`, `nether_forest_vegetation`, and
-  `random_boolean_selector`. 162 of 224 configured features execute. The tree
-  `pale_moss` decorator is still unsupported even though its `pale_moss_patch`
-  dependency now exists, and kelp/nether vegetation/huge fungus still wait on
-  `noise_based_count`/`count_on_every_layer` placement before they appear in
-  generated chunks. Structures and most special features remain missing. Ore
-  and scattered-ore features are implemented and all 32 shipped configs are
-  covered, but generator wiring is still deferred because it lowers the
-  exact-name parity fixture until WorldgenRNG parity lands. Existing stored
-  chunks are not retroactively decorated, so features appear in newly generated
-  columns only.
-
-- P3.10 block simulation has a first vertical slice in `tick.rs`:
-  vanilla `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
-  `SUPPRESS_NEIGHBORS`, …), a chunk-grouped neighbour queue with position
-  deduplication and flag-union merging, a `ScheduledTickQueue` ordered by
-  trigger/priority/sub-tick with delay, dedup, and cancellation, and a
-  `RandomTickQueue` sampling 3 positions per 16x16x16 section from a
-  deterministic per-chunk seed. `block_update::set_block` queues and drains the
-  six neighbours; falling sand/gravel/concrete powder/anvils move one block per
-  scheduled tick, plant support uses `dirt`/farmland tags (including double
-  plants), and grass spreads to dirt. The server loop calls `tick::tick_world`
-  every tick. Leaf decay, crop growth, redstone, pistons, and NBT tick
-  persistence remain explicit gaps (see `BLOCKERS.md`). Fluid flow now also
-  covers lava/water quenching, lava fire ignition, fire aging through
-  `fluid::interaction_table()`, bubble columns, and plant destruction.
-- Folia region threading is not implemented beyond task queues.
+  Java fixture. Ore features and `OreVeinifier` are wired, all 888 placement
+  modifiers execute, and 171/224 configured feature types execute.
+- Second wave landed: per-state collision/outline shapes with swept physics;
+  incremental light decrease/increase, sky columns, and dirty sections;
+  crafting/furnace/stonecutting/smithing models; the 1,504-item prototype
+  catalog; structure processor lists and template pools; repeaters,
+  comparators, observers, torches, pressure plates, and tripwire; lava/water
+  quenching, fire, and bubble columns; Nether and End generation; entity goals,
+  pathfinding, and natural spawning; online-mode RSA/AES auth and encryption.
+- Major gaps: recursive jigsaw and structure generator/biome wiring; typed
+  block-entity storage and tickers; pistons; live join entity spawning and AI
+  tick integration; shape-aware light occlusion; loot-table gameplay wiring;
+  dimension storage/portals; chat signing; bridge live-session sync; Folia
+  region ownership.
+- Folia region threading is still task queues only.
 
 ## Current focus
 
-- P7.1–P7.3 now have `generator::Dimension` and deterministic Nether/End chunk
-  generation. Next: Java block-for-block dimension fixtures, Nether carvers and
-  fortresses/bastions, End cities/gateways/dragon arena, then wire
-  `generate_dimension` into `WorldStorage` and portals without changing the
-  Overworld path.
-1. P1.5 block shapes and collision metadata, then use it in physics, lighting,
-   and breaking.
-2. P2.8 recursive jigsaw connection, biome filtering, and generator wiring
-   (processor lists, template pools, and one-element expansion are done).
-1. P1.5 remaining metadata (support/occlusion rules, waterlogging, tool/tier
-   tables, per-state random-tick behavior), then use it in lighting and
-   breaking.
-2. P2.8 structure processor lists, template pools, jigsaw expansion, biome
-   filtering, and generator wiring.
-3. P3.6–P3.9 remaining light gaps: Java light fixtures and P1.5 shape
-   occlusion (nibble storage, decrease/increase queues, section-scoped
-   payloads, and cross-chunk propagation are done).
-4. P5 entity AI/goals, spawning, armor calculation, and join-session wiring.
-5. P6 pistons, block entities, redstone lamps/target blocks/tripwire hooks, and
-   the remaining fluid quenching/fire behavior.
-5. P6 pistons, block entities, repeaters/comparators, and the remaining fire
-   environment inputs/TNT priming plus production `tick.rs` fire registration.
-- P9.3 now has the first world/player/item proxies and P9.2 has three
-  cancellable block/interact events. Next: expose the live `join.rs` session
-  state (health/food/inventory/position/messages) to the bridge, call the event
-  entry points from the real break/place/interact handlers, and add armor/
-  off-hand plus enchantment/PDC item persistence.
-- P1.4 now has both the component-aware stack model and the per-item prototype
-  defaults. `scripts/extract_item_prototypes.ps1` boots the local 1.21.11 jar
-  and writes `assets/item_prototypes.json` (1,504 non-air items, 79,369 bytes):
-  stack size, durability, tool rules/tier/attack damage, food/eat time,
-  equippable slot, enchantability, repairable set, fire resistance, and rarity.
-  `item_prototypes.rs` exposes lookups by name/id, `defaults_for` and
-  `apply_defaults` component patches, an explicit stack-64/no-durability
-  fallback, and strict malformed-entry errors. Next: port the
-  `attribute_modifiers`, `potion_contents`, and `tool` network codecs, implement
-  `HashedStack` component hashing, and add a Java-captured component NBT/packet
-  fixture.
-- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
-  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth, torch
-  support, redstone, fluids, and piston behaviour; persist `ScheduledTick`s in
-  chunk NBT; replace the deterministic per-chunk random sampler with Java's
-  level RNG once feature/level RNG parity lands; add a Java neighbor-update
-  differential fixture.
-- P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
-  (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
-  powder snow, sprint/sneak input packets) and eventually move player
-  simulation onto its own 20 Hz tick instead of packet-driven reconciliation.
-- P1.3 tag data is available and the ore feature already resolves its four
-  target tags through `folia_core::tags`; add the remaining cosmetic
-  registries.
-- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
-  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth,
-  torch support, redstone, fluids, and piston behaviour; persist
-  `ScheduledTick`s in chunk NBT; replace the deterministic per-chunk random
-  sampler with Java's level RNG once parity lands; add a Java fixture.
-- P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
-  (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
-  powder snow, sprint/sneak input packets) and move player simulation onto its
-  own 20 Hz tick.
-- The P2.5 aquatic/vine/mushroom features are in place. Next: wire the tree
-  `pale_moss` decorator, port `simple_random_selector` for the dripleaf
-  pools, add `simple_block.schedule_tick`, and add beehive occupants.
-- P2.8 structure starts/pieces are in progress; template loading and
-  placement are already tested.
+1. P2.8 recursive jigsaw connection and structure generator/chunk-status wiring.
+2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
+3. P5 join-session entity spawning/tracking and AI tick integration.
+4. P1.5 shape-aware light occlusion and remaining support/waterlogging rules.
+5. P9.3 bridge live-session state and gameplay event dispatch.
 
 ## Next queue
 
-- [x] P0.1 Fix formatting and warnings
-- [x] P0.2 Refresh documentation
-- [x] P0.3 Track/validate generated assets
-- [x] P0.4 Add CI
-- [ ] P0.5 Make oracle data reproducible (deferred, see `BLOCKERS.md`)
-- [x] P0.6 Decide commit/backup policy
-- [ ] P1.1 Complete remaining registry dumps
-- [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
-- [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip, 1,504-item prototype catalog with tool/food/durability defaults; three network codecs, hashing, and a Java fixture remain)
-- [ ] P1.5 Block behavior metadata
-- [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
-- [~] P1.5 Block behavior metadata (per-state collision/outline shapes done;
-  support/occlusion rules, waterlogging, tool/tier tables, and per-state
-  random-tick behavior remain)
-- [~] P1.7 Loot and recipe assets (1,324 tables + 1,470 recipes extracted,
-  typed loaders/roll engine, crafting matcher; block-drop wiring remains)
-- [~] P2.1 Feature framework core (framework + loader done)
-- [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
-- [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
-- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive occupants/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart/pale-moss done; a Java tree fixture and generator draining of block entities remain)
-- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block` with `schedule_tick`, `simple_random_selector`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; placed-feature selector branches, kelp/nether placement modifiers, generator tick draining, and structures remain)
-- [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement, starts, pieces, processor lists, template pools, one-element expansion; recursive jigsaw, biome filtering, entity spawning, and generator wiring still open)
-- [~] P5.1 Entity metadata and living-entity core (typed metadata store,
-  dirty-only packets, health/damage/death, attributes, eight equipment slots;
-  remaining serializers, session/entity wiring, armor calculation, and a Java
-  fixture open)
-- [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore`, `OreVeinifier`, and generator wiring done; vein interpolation, disks/underwater magma in the same step, and the block-for-block Java fixture remain)
-- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
-- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
-- [~] P2.8 Structure templates and starts (template load/placement, random-spread
-  placement, sets, weighted selection, starts, pieces, bounds, references,
-  processor lists, template pools, one-element expansion, and igloo end to end
-  done; recursive jigsaw, biome/dimension filtering, structure NBT, and
-  entity/block-entity creation remain)
-- [x] P3.5 Real light storage
-- [~] P3.6 Sky-light engine (single-chunk, border margin, incremental source
-  updates; Java fixture remains)
-- [~] P3.7 Block-light engine (generated emission/opacity, decrease/increase
-  queues; Java fixture remains)
-- [~] P3.8 Incremental light updates (`DirtySections`, section-scoped
-  payloads, neighbour payloads; Java packet-body comparison remains)
-- [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
-  falling blocks, plant support, grass spread, server hook, water/lava flow,
-  wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;
-  leaf decay, crops, pistons, lamps, tripwire hooks, and NBT tick persistence
-  remain)
-  falling blocks, plant support, grass spread, server hook, water/lava flow +
-  lava/water quenching, lava ignition, bubble columns, wire/lever/button
-  redstone; production fire aging, leaf decay, crops, pistons, remaining
-  redstone, and NBT tick persistence remain)
-- [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
-  ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
-- [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
-  and burst validation done; teleport ack and special movement remain)
-- [~] P4.3 Block breaking progress (dig state, tool/tier checks, break times,
-  creative instant break, drops, durability done; real loot tables, item
-  entities, overlay packets, Unbreaking/Fortune/Silk Touch, adventure
-  `can_destroy`, and a Java fixture remain)
-
-- [~] P4.8 Crafting and recipe system (shaped/shapeless/transmute matching,
-  consumable outputs, furnace/blast-furnace/smoker/campfire state, stonecutting,
-  and smithing transforms done; menu packets, recipe book, brewing, cached
-  last-recipe behavior, campfire multi-slot state, and Java fixtures remain)
+- [x] P0.1-P0.4, P0.6 foundation, docs, assets, CI, commit policy.
+- [ ] P0.5 reproducible oracle data (deferred, see `BLOCKERS.md`).
+- [~] P1.4 components + item prototypes (network codecs, hashing, Java fixture).
+- [~] P1.5 shapes (support/occlusion/waterlogging/per-state random-tick rules).
+- [~] P1.7 loot/recipes (gameplay wiring; cooked by the next wave).
+- [~] P2.1/P2.2 framework + all 888 modifiers; 171/224 configured types.
+- [~] P2.3-P2.5 ores/trees/vegetation; remaining feature types and fixtures.
+- [~] P2.8 templates/starts/processors/pools; recursive jigsaw + wiring remain.
+- [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
+- [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
+- [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
+- [~] P4.8 crafting (menus, packets, recipe book, brewing).
+- [~] P5.1/P5.2 metadata/AI (join wiring, armor, more goals/sensors).
+- [~] P7.1-P7.3 Nether/End (storage, portals, structures, Java fixtures).
+- [~] P8.1 online mode core (binary wired; TLS, chat signing).
+- [~] P9.2/P9.3 bridge proxies/events (live sessions, API depth).
+- [ ] P10 Folia region ownership.
 
 ## Recently completed
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3

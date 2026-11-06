@@ -1,18 +1,11 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06
-> Current commit: see `git log` (all work is committed)
+> Current commit: see `git log` (all work is committed, not pushed)
 > Working tree: clean
-> Test status: **611 passing** on the full merged gate (0 failed), plus 19
-> focused structure-processor/pool tests in the current slice
-> Test status: **611 passing** on the last full merged gate; the redstone-
-> component slice adds 10 lib + 2 tick-state + 10 `tests/redstone2.rs` focused
-> tests, with `tests/fluids.rs` and `tests/ticks.rs` remaining green.
-> Test status: **634 passing** on the full merged gate (0 failed)
-> Test status: **630 passing** on the full merged gate (0 failed)
-> Test status: **631 passing** on the full merged gate (0 failed)
+> Test status: **804 passing** on the full merged gate (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
-> Overall completion estimate: **~22%** (range 15–28% depending on metric)
+> Overall completion estimate: **~25%** (range 18-30% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -34,24 +27,16 @@ where possible, a differential test against the Java oracle.
 | Area | Estimate | Notes |
 |---|---:|---|
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
-| Terrain generation | ~70% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler |
-| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring; Nether/End missing |
-| Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; Nether/End generation slices landed; structures are template/start-only |
-| Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
-| Player simulation | ~30% | Movement physics, multi-box collision, fall damage, break progress/tools/drops/durability; special movement missing |
-| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures are template/start-only; Nether/End missing |
-| Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, incremental decrease/increase queues, sky column updates, cross-chunk propagation, dirty-section payloads; Java fixtures and P1.5 shape occlusion missing |
-| Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
-| Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
-| Blocks/redstone/fluids | ~30% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks, full components missing |
-| Blocks/redstone/fluids | ~27% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching, lava fire, bubble columns, wire/lever/button; pistons, block entities, full components missing |
-| Entities | ~23% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; P5.1 metadata + P5.5/P5.6/P5.12 AI/spawn foundations; AI sensors/brains, full pathing, persistence, armor, per-viewer metadata missing |
-| Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
-| Networking | ~40% offline / ~35% online | Join path works offline; online crypto/auth core landed; server binary wiring and full packet coverage pending |
-| Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
-| Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
+| Terrain generation | ~75% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators |
+| Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring |
+| Lighting | ~45% | Nibble storage/NBT, sky+block BFS, per-state behaviour, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and shape occlusion missing |
+| Player simulation | ~35% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
+| Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
+| Blocks/redstone/fluids | ~30% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks missing |
+| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
+| Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
-| Overall rewrite | **~22%** | Foundation-heavy, content-light |
+| Overall rewrite | **~25%** | Foundation-heavy, content-light |
 
 
 ---

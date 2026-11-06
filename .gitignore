@@ -7,5 +7,6 @@ run/
 capture/
 dist/
 snapshots/
+logs/
 *.log
 

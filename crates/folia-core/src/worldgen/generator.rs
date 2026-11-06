@@ -30,6 +30,114 @@ const CELL_HEIGHT: i32 = 8;
 
 static GENERATOR: OnceLock<Arc<WorldGenerator>> = OnceLock::new();
 
+/// A server dimension with the type fields needed by generation.
+///
+/// This mirrors the shipped `dimension_type` documents for 1.21.11. Generation
+/// itself still goes through a per-dimension generator; the Overworld path is
+/// the existing [`WorldGenerator`] and is unchanged by this abstraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dimension {
+    Overworld,
+    Nether,
+    End,
+}
+
+impl Dimension {
+    pub const fn min_y(self) -> i32 {
+        match self {
+            Dimension::Overworld => -64,
+            Dimension::Nether | Dimension::End => 0,
+        }
+    }
+
+    pub const fn height(self) -> i32 {
+        match self {
+            Dimension::Overworld => 384,
+            Dimension::Nether | Dimension::End => 256,
+        }
+    }
+
+    /// Height of the generated noise column, which is shorter than the
+    /// dimension's build height in the Nether and the End.
+    pub const fn generated_height(self) -> i32 {
+        match self {
+            Dimension::Overworld => 384,
+            Dimension::Nether => 128,
+            Dimension::End => 128,
+        }
+    }
+
+    pub const fn logical_height(self) -> i32 {
+        match self {
+            Dimension::Overworld => 384,
+            Dimension::Nether => 128,
+            Dimension::End => 256,
+        }
+    }
+
+    pub const fn sea_level(self) -> i32 {
+        match self {
+            Dimension::Overworld => 63,
+            Dimension::Nether => 32,
+            Dimension::End => 0,
+        }
+    }
+
+    pub const fn has_skylight(self) -> bool {
+        !matches!(self, Dimension::Nether)
+    }
+
+    pub const fn has_ceiling(self) -> bool {
+        matches!(self, Dimension::Nether)
+    }
+
+    pub const fn coordinate_scale(self) -> f32 {
+        match self {
+            Dimension::Overworld => 1.0,
+            Dimension::Nether => 8.0,
+            Dimension::End => 1.0,
+        }
+    }
+
+    pub const fn ambient_light(self) -> f32 {
+        match self {
+            Dimension::Overworld => 0.0,
+            Dimension::Nether => 0.1,
+            Dimension::End => 0.25,
+        }
+    }
+}
+
+/// Generates one chunk in the requested dimension.
+///
+/// This is an explicit entry point for tests and future world storage. It is
+/// deliberately not wired into `join.rs` or `world.rs`; the Overworld branch
+/// runs the exact same [`WorldGenerator`] path as before, so existing parity
+/// fixtures are unaffected.
+pub fn generate_dimension(
+    dimension: Dimension,
+    chunk_x: i32,
+    chunk_z: i32,
+    seed: i64,
+) -> io::Result<Chunk> {
+    match dimension {
+        Dimension::Overworld => {
+            if let Some(generator) = configured()
+                && generator.seed() == seed
+            {
+                return generator.generate_chunk(chunk_x, chunk_z);
+            }
+            WorldGenerator::overworld(seed)?.generate_chunk(chunk_x, chunk_z)
+        }
+        Dimension::Nether => {
+            crate::worldgen::nether::NetherGenerator::new(seed)?.generate_chunk(chunk_x, chunk_z)
+        }
+        Dimension::End => {
+            crate::worldgen::end::EndGenerator::new(seed)?.generate_chunk(chunk_x, chunk_z)
+        }
+    }
+}
+
 /// Builds and installs the process-wide overworld generator. The server calls
 /// this once at startup with the level seed.
 pub fn configure(seed: i64) -> io::Result<()> {
@@ -220,6 +328,8 @@ impl WorldGenerator {
                         cells_x,
                         cells_z,
                         cells_y,
+                        CELL_WIDTH,
+                        CELL_HEIGHT,
                         local_x,
                         local_z,
                         y - self.min_y,
@@ -583,21 +693,28 @@ fn heightmap_blocks_motion(state: &BlockState) -> bool {
     true
 }
 
-fn sample_grid(
+/// Trilinear interpolation of a vanilla density grid.
+///
+/// `cell_width` / `cell_height` are `NoiseSettings.getCellWidth` and
+/// `getCellHeight` (size horizontal/vertical times four).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sample_grid(
     grid: &[f64],
     cells_x: usize,
     cells_z: usize,
     cells_y: usize,
+    cell_width: i32,
+    cell_height: i32,
     local_x: i32,
     local_z: i32,
     local_y: i32,
 ) -> f64 {
-    let cell_x = (local_x / CELL_WIDTH).clamp(0, cells_x as i32 - 2) as usize;
-    let cell_z = (local_z / CELL_WIDTH).clamp(0, cells_z as i32 - 2) as usize;
-    let cell_y = (local_y / CELL_HEIGHT).clamp(0, cells_y as i32 - 2) as usize;
-    let frac_x = f64::from(local_x.rem_euclid(CELL_WIDTH)) / f64::from(CELL_WIDTH);
-    let frac_z = f64::from(local_z.rem_euclid(CELL_WIDTH)) / f64::from(CELL_WIDTH);
-    let frac_y = f64::from(local_y.rem_euclid(CELL_HEIGHT)) / f64::from(CELL_HEIGHT);
+    let cell_x = (local_x / cell_width).clamp(0, cells_x as i32 - 2) as usize;
+    let cell_z = (local_z / cell_width).clamp(0, cells_z as i32 - 2) as usize;
+    let cell_y = (local_y / cell_height).clamp(0, cells_y as i32 - 2) as usize;
+    let frac_x = f64::from(local_x.rem_euclid(cell_width)) / f64::from(cell_width);
+    let frac_z = f64::from(local_z.rem_euclid(cell_width)) / f64::from(cell_width);
+    let frac_y = f64::from(local_y.rem_euclid(cell_height)) / f64::from(cell_height);
 
     let value = |x: usize, y: usize, z: usize| grid[(x * cells_z + z) * cells_y + y];
     let x0 = cell_x;

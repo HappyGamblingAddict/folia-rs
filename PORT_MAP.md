@@ -45,6 +45,9 @@ Rust tree: `crates/folia-core`.
 | `MultiNoiseBiomeSource` | `folia-core/src/worldgen/biome.rs` | Biome parameter list, climate quantization, minimum-fitness search; 1536/1536 Java quart samples exact |
 | `BiomeManager` fuzzy zoom | `folia-core/src/worldgen/biome_zoom.rs` | SHA-256 seed obfuscation, LCG fiddled-distance search over eight quart corners, `biome_at` against `BiomeSampler` |
 | `NoiseBasedChunkGenerator` base terrain | `folia-core/src/worldgen/generator.rs` | 4x8x4 density grid, trilinear interpolation, aquifer substance, bedrock/deepslate gradients, simple surface, sea-level water |
+| `LevelStem`/`DimensionType`, `NoiseBasedChunkGenerator` dispatch | `folia-core/src/worldgen/generator.rs` | `Dimension` models Overworld/Nether/End min/max Y, build/logical height, sea level, skylight, ceiling, coordinate scale, and ambient light; `generate_dimension` dispatches without changing the Overworld path |
+| `worldgen/noise_settings/nether.json`, `NoiseRouterData.nether`, Nether dimension/surface/biome preset | `folia-core/src/worldgen/nether.rs` | Partial: Nether router, 4x8x4 grid, netherrack/lava sea, bedrock gradients, five-biome multi-noise preset, soul-sand/basalt/nylium surface sequence, and Nether-specific `FeatureSorter` order; quartz/magma/glowstone/vegetation placement. Carvers, structures, and a Java fixture remain |
+| `worldgen/noise_settings/end.json`, `DensityFunctions.EndIslandDensityFunction`, `TheEndBiomeSource` | `folia-core/src/worldgen/end.rs` | Partial: exact island field, end density router/slide, central and outer islands, section-ring biomes, and the `(100, 49, 0)` obsidian platform across chunk borders. Cities, gateways, dragon arena, and a Java fixture remain |
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
 | `BlockBehaviour`, `BlockStateBase` per-state metadata | `folia-core/src/block_behaviour.rs` + `assets/block_state_behaviour.tsv.gz` | 29,671 per-state rows (air/motion/solid/collision, light emission/block, random tick, occlusion, replaceable, hardness/blast, friction/speed/jump, fluid); consumed by lighting and player physics; ticking/breaking consumers still partial |
 | `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
@@ -256,6 +259,16 @@ Rust tree: `crates/folia-core`.
 - The Rust bridge enforces the native-only path: `FOLIA_DISABLE_PLUGINS=1`
   never starts the JVM, and the same `cargo run` command served the selftest
   with `plugins/` populated.
+
+- Dimension generation: `tests/nether_gen.rs` (9 tests) pins bedrock at y=0 and
+  y=127, lava at y=31 with no air below the sea, netherrack terrain, valid
+  Nether biomes, quartz/glowstone feature output, determinism, the
+  `generate_dimension` entry point, and byte-identical Overworld dispatch.
+  `tests/end_gen.rs` (8 tests) pins the
+  central island, air headroom, the `(100, 49, 0)` platform in both overlapping
+  chunks, valid End biomes, outer-island end stone, determinism, and the entry
+  point. Overworld parity remains 98.75% block-class / 95.80% exact-name
+  (5886/6144) on the 16-column fixture.
 
 ## Porting rule
 

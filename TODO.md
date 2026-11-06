@@ -8,6 +8,7 @@
 > Test status: **611 passing** on the last full merged gate; the redstone-
 > component slice adds 10 lib + 2 tick-state + 10 `tests/redstone2.rs` focused
 > tests, with `tests/fluids.rs` and `tests/ticks.rs` remaining green.
+> Test status: **634 passing** on the full merged gate (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
@@ -33,6 +34,7 @@ where possible, a differential test against the Java oracle.
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~70% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler |
 | Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring; Nether/End missing |
+| Full worldgen | ~65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; Nether/End generation slices landed; structures are template/start-only |
 | Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
 | Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
@@ -81,6 +83,19 @@ where possible, a differential test against the Java oracle.
   neighbour-scheduled source-conversion test. Fire blocks still need a
   one-line `tick::behavior_for` registration for production aging; see
   `BLOCKERS.md`.
+- 2026-11-06: P7.1–P7.3 dimension generation slice — `generator::Dimension`
+  models the shipped Overworld/Nether/End type fields (build height, logical
+  height, sea level, skylight, ceiling, coordinate scale, ambient light), and
+  `generate_dimension(dimension, x, z, seed)` dispatches without touching the
+  Overworld generator. `worldgen/nether.rs` evaluates the Nether density router,
+  bedrock floor/roof, lava sea below y=32, the shipped multi-noise nether biome
+  preset, soul-sand/basalt/nylium surface rules, quartz/magma/glowstone
+  features, and a Nether-specific `FeatureSorter` order. `worldgen/end.rs`
+  ports `EndIslandDensityFunction`, the End density router, `TheEndBiomeSource`,
+  the central and outer islands, and the `(100, 49, 0)` obsidian platform.
+  3 Nether lib + 9 `tests/nether_gen.rs` + 3 End lib + 8 `tests/end_gen.rs`
+  tests. Full workspace gate 634 passing; Overworld parity is unchanged at
+  98.75% block-class / 95.80% exact-name.
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -1795,10 +1810,11 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 no portals, weather, time, or multi-world lifecycle. Folia is a multi-dimension
 server.
 
-**Current state:** `WorldStorage` has dimension paths; generation and gameplay
-are overworld-only. No time/weather/portals.
+**Current state:** `WorldStorage` has dimension paths; `worldgen` now has
+Overworld/Nether/End generation entry points, but gameplay and join/world
+storage stay Overworld-only. No time/weather/portals.
 
-### P7.1 Dimension abstraction `[ ]` `M`
+### P7.1 Dimension abstraction `[~]` `M`
 
 - **What:** Model dimension type, min/max Y, height, logical height, coordinate
   scale, ambient light, ceiling/skylight, fixed time, and per-dimension
@@ -1806,20 +1822,39 @@ are overworld-only. No time/weather/portals.
 - **Why:** Nether/End and plugins need a real dimension API.
 - **Done when:** The overworld path uses the abstraction with no behavior
   change.
+- **Progress (2026-11-06):** `generator::Dimension` carries the shipped
+  Overworld/Nether/End fields and `generate_dimension` dispatches to the
+  per-dimension generator. The Overworld branch reuses `WorldGenerator`
+  unchanged, so the parity fixture is byte-identical. Fixed time, per-dimension
+  game rules, and the public plugin `World` dimension API remain open.
 
-### P7.2 Nether generation `[ ]` `L`
+### P7.2 Nether generation `[~]` `L`
 
 - **What:** Port `minecraft:nether` noise settings, density functions, surface
   rules, carvers, features, structures, lava sea, and bedrock.
 - **Why:** A complete server needs the Nether.
 - **Done when:** Nether chunk parity fixtures pass.
+- **Progress (2026-11-06):** `worldgen/nether.rs` evaluates the Nether router
+  on the 4x8x4 grid, fills netherrack, lava below y=32, bedrock at y=0/127 with
+  the vanilla random gradients, applies the shipped soul-sand valley/basalt
+  deltas/crimson/warped/nether-wastes surface sequence, samples the five-biome
+  nether preset, and runs supported decoration steps with a Nether-specific
+  `FeatureSorter` order (quartz, magma, glowstone, vegetation). No carvers,
+  fortresses, bastions, or Java block-for-block fixture yet.
 
-### P7.3 End generation `[ ]` `L`
+### P7.3 End generation `[~]` `L`
 
 - **What:** Port the End central island, outer islands, end features, gateways,
   and dragon arena.
 - **Why:** End progression and end-game content.
 - **Done when:** End chunk parity fixtures pass.
+- **Progress (2026-11-06):** `worldgen/end.rs` ports
+  `EndIslandDensityFunction` exactly (`LegacyRandomSource(seed)`,
+  `consumeCount(17292)`), the `end/sloped_cheese` router and slide, the
+  `TheEndBiomeSource` section-ring biome choice, central and outer islands, and
+  the `(100, 49, 0)` obsidian platform across chunk borders. End cities,
+  gateways, the dragon fight, and the spike pillar remain open; the blended
+  base noise still uses the positional path instead of the legacy source.
 
 ### P7.4 Portals, travel, and respawn `[ ]` `M`
 

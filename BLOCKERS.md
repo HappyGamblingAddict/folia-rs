@@ -460,3 +460,25 @@ These are expected gaps, not reasons to stop:
 - Workaround: use `prototype`/`prototype_or_default` for the full prototype and
   `defaults_for`/`apply_defaults` for the modeled component subset. Do not claim
   full prototype-patch, network, or hashing parity.
+## 2026-11-06 - P2.8/P2.9 processor/pool slice leaves recursive jigsaw open
+
+- Status: Not a hard blocker. Processor lists, every registered processor kind,
+  all shipped template pools, weighted selection, and one-element start-pool
+  placement are implemented and tested.
+- Not ported (needs a larger placement/generation slice):
+  - `JigsawPlacement.Placer` recursive child placement, junction pieces,
+    expansion-hack height selection, free-space voxel shapes, and
+    `max_distance_from_center`/dimension-padding checks.
+  - `FeaturePoolElement` world placement; it currently returns
+    `UnsupportedFeatureElement` because it needs a configured/placed-feature
+    context and generator.
+  - Biome/dimension filtering in structure selection, random multi-palette
+    selection, structure NBT serialization, entity spawning, loot/chest block
+    entities, waterlogging, shape updates, and exact per-block state
+    derivatives (stairs shape, door hinge, rail shape, …).
+  - Starts are not attached to the generator's chunk-status pipeline.
+- Workaround / next task: Use `PoolCatalog::expand_start` and
+  `PoolExpansion::place` for focused pool/processor tests. Implement
+  `JigsawPlacement` plus generator wiring before claiming jigsaw structure
+  parity; do not replace the explicit `UnsupportedJigsaw` path with an empty or
+  approximate start.

@@ -13,11 +13,20 @@
 //! - [`start`] ports `StructureStart`, deterministic generation contexts, and
 //!   one non-jigsaw template structure end to end: the igloo
 //!   (`IglooStructure` + `IglooPieces`).
+//! - [`processor`] parses the shipped processor-list catalog and applies every
+//!   registered 1.21.11 processor kind over Java's raw-block chain, including
+//!   `capped` finalization.
+//! - [`pool`] parses the shipped template-pool catalog, implements Java's
+//!   weighted element selection, and resolves one start-pool element through
+//!   the template-piece path.
 //!
 //! Jigsaw structures parse their definition but fail loudly with
 //! [`StructureError::UnsupportedJigsaw`] instead of returning an empty start.
-//! Concentric-ring placement parses, but it needs a biome source and is skipped
-//! by [`set::StructureSetRegistry::structure_at_chunk`].
+//! [`pool::PoolCatalog::expand_start`] resolves and places one pool element;
+//! recursive jigsaw connection, junction expansion, and terrain adaptation are
+//! explicit later slices. Concentric-ring placement parses, but it needs a
+//! biome source and is skipped by
+//! [`set::StructureSetRegistry::structure_at_chunk`].
 //!
 //! Data markers (for example the igloo chest) are returned in
 //! [`piece::PiecePlacement::data_markers`] rather than being turned into block
@@ -25,6 +34,8 @@
 //! remain explicit later slices.
 
 pub mod piece;
+pub mod pool;
+pub mod processor;
 pub mod set;
 pub mod start;
 pub mod template;
@@ -71,7 +82,7 @@ impl fmt::Display for StructureError {
             } => write!(
                 formatter,
                 "structure `{structure}` is a jigsaw structure (start pool `{start_pool}`); \
-                 template-pool and jigsaw expansion are not implemented"
+                 recursive jigsaw expansion is not implemented"
             ),
             StructureError::UnsupportedStructureType {
                 structure,
@@ -96,6 +107,16 @@ pub use piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
     StructurePieceKind, TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,
     template_bounding_box,
+};
+pub use pool::{
+    LiquidSettings, PoolCatalog, PoolCatalogIndex, PoolElement, PoolElementEntry, PoolError,
+    PoolExpansion, ProcessorListRef, Projection, StructureTemplatePool,
+};
+pub use processor::{
+    BlockEntityModifier, BlockSet, IntProvider, PositionTest, ProcessedBlock,
+    ProcessorApplyContext, ProcessorCatalogIndex, ProcessorError, ProcessorRule, RawBlockInfo,
+    RuleTest, StructureProcessor, StructureProcessorCatalog, StructureProcessorList,
+    apply_processors, template_block_infos,
 };
 pub use set::{
     ConcentricRingsStructurePlacement, ExclusionZone, FrequencyReductionMethod, PlacementError,

@@ -1894,3 +1894,69 @@ Format:
   prototype rather than being invented as opaque tags. `block_breaking.rs` is
   not wired to the new catalog yet; it keeps its built-in `ToolMaterial` table
   until a follow-up owns that file.
+## 2026-11-06 - Structure processor/pool catalogs are compact direct-codec data
+
+- Context: `worldgen/processor_list` and `worldgen/template_pool` are registry
+  data in 1.21.11, and the project has no datapack loader yet. Copying the
+  decompiled JSON verbatim would be large, whitespace-dependent, and would make
+  byte-identity regeneration hard to check.
+- Decision: Add `scripts/extract_structure_data.ps1`, which normalizes every
+  identifier, sorts object keys, removes insignificant whitespace, appends one
+  newline, and writes `assets/structure_processors.json` and
+  `assets/template_pools.json`. Processor lists keep the direct-codec
+  `{ "processors": [...] }` shape so a datapack document can be passed to the
+  same parser; template pools keep `fallback`/`elements`. Counts include the
+  processor-list total/instances, pool/entry counts, every recursively nested
+  element node, and Java's expanded template-slot count (`sum(weight)`).
+- Why: This matches the existing loot/recipe catalog conventions, gives the
+  Rust loaders one deterministic input, and lets tests compare the asset against
+  a canonical JSON serialization. Running the extractor twice produces
+  byte-identical files.
+- Consequences: The assets are generated artifacts and must be regenerated from
+  decompiled data when the target version changes. They are not in
+  `tests/assets.rs` or `ASSETS.md` because those files are outside this slice;
+  the focused `tests/structure_processors.rs` test checks their canonical shape,
+  counts, and every parser family instead.
+
+## 2026-11-06 - Processors run on raw states, then placement rotates the result
+
+- Context: `StructureTemplate.placeInWorld` calls `processBlockInfos` on the raw
+  palette blocks and only afterwards applies
+  `state.mirror(settings.getMirror()).rotate(settings.getRotation())` while
+  writing. Applying processors to already-rotated states would change rule and
+  block-ignore predicates for rotated structures.
+- Decision: `processor::template_block_infos` transforms positions but keeps
+  template states raw. Every `StructureProcessor::process_block` sees Java's
+  two arguments (`original` raw block and `current` absolute processed block).
+  The pool placement path applies `transform_state` only after the processor
+  chain and finalize pass. Per-block random values use
+  `LegacyRandomSource::new(Mth.getSeed(absolutePos))`; `capped` uses
+  `LegacyRandomSource::new(levelSeed).forkPositional().at(offset)` and Java's
+  Fisher-Yates index shuffle.
+- Why: This preserves the Java predicate/ordering semantics, including the
+  ordered first-match `rule` processor, `capped`'s delegate calls, and the fact
+  that `block_age` constructs both stair arrays (consuming both random
+  facing/half draws) before choosing a mossy or normal result.
+- Consequences: Rule tests and block-entity modifiers can be differential-tested
+  on small synthetic templates. The first palette is still used for placement;
+  Java's random multi-palette selection remains a documented `template.rs` gap.
+
+## 2026-11-06 - Pool expansion places one element, not a recursive jigsaw
+
+- Context: Full `JigsawPlacement.Placer` needs junction pieces, voxel free-space
+  tracking, expansion-hack height selection, max-distance/height checks, and
+  biome/dimension filtering. The current slice adds pools/processors without
+  changing the generator's chunk-status pipeline.
+- Decision: `PoolCatalog::expand_start` mirrors the opening of
+  `JigsawPlacement.addPieces`: consume one `Rotation.getRandom` draw, then one
+  `StructureTemplatePool.getRandomTemplate` draw, build a
+  `TemplateStructurePiece`, and expose `PoolExpansion::place` for one element.
+  Empty starts return `None`; `feature_pool_element` placement fails explicitly
+  with `UnsupportedFeatureElement`. Recursive jigsaw connection is left as an
+  explicit later slice rather than silently approximated.
+- Why: This gives a real vertical slice through template pools, processors,
+  bounds, data markers, and block writing while keeping the unsupported
+  recursive path loud and testable.
+- Consequences: A start pool element can be resolved and placed deterministically
+  for a fixed seed, but jigsaw structures still return `UnsupportedJigsaw` from
+  `StructureDefinition::generate_start`. `P2.9` is now partially complete.

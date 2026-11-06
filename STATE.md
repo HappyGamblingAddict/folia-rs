@@ -10,7 +10,8 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Tests: **611 passing** on the final full workspace gate (0 failed), plus 19
+  focused structure-processor/pool integration tests in this slice.
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -24,10 +25,10 @@ Last updated: 2026-11-06
   smithing models, exact surface biome zoom, and an expanded Bukkit bridge
   (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
-  current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
-  ownership.
+  current table, P2.8 recursive jigsaw/biome filtering/generator wiring, P3.6-P3.9
+  incremental light and Java light fixtures, P5 AI/spawning/armor, P6 pistons/
+  block entities/full redstone, P7 Nether/End, P8 online mode, P9 plugin API
+  depth, P10 region ownership.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
   block, item, entity type, fluid, game event, damage type, enchantment,
@@ -204,9 +205,16 @@ Last updated: 2026-11-06
   four rotations, rotation pivot and origin, and block placement through
   `FeatureLevel`. `place_into` returns written/rejected counts, block-entity
   NBT, and transformed entity descriptors; it does not spawn entities.
-  Structure starts, pieces, structure sets, references, processors, template
-  pools, jigsaw expansion, random palette selection, and exact per-block state
-  derivatives (stairs shape, door hinge, …) are still unported.
+  `processor.rs` now parses all 40 shipped processor lists (52 processors) and
+  applies every registered 1.21.11 processor kind, with ordered rules, block
+  position predicates, block-entity modifiers, and `capped` finalization.
+  `pool.rs` parses all 188 shipped template pools (1,198 entries / 1,204
+  element nodes / 4,880 expanded template slots), implements Java's weighted
+  `nextInt(size)` selection, and resolves/places one start-pool element through
+  the template-piece path. Recursive jigsaw connection, biome/dimension
+  filtering, random multi-palette selection, feature-pool placement, entity
+  spawning, loot/chest block entities, waterlogging, shape updates, exact
+  per-block state derivatives, and generator wiring are still unported.
 
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
@@ -248,8 +256,8 @@ Last updated: 2026-11-06
 
 1. P1.5 block shapes and collision metadata, then use it in physics, lighting,
    and breaking.
-2. P2.8 structure processor lists, template pools, jigsaw expansion, biome
-   filtering, and generator wiring.
+2. P2.8 recursive jigsaw connection, biome filtering, and generator wiring
+   (processor lists, template pools, and one-element expansion are done).
 3. P3.6–P3.9 decrease queues, incremental section light packets, cross-chunk
    relighting, and Java light fixtures.
 4. P5 entity AI/goals, spawning, armor calculation, and join-session wiring.
@@ -319,7 +327,7 @@ Last updated: 2026-11-06
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive occupants/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart/pale-moss done; a Java tree fixture and generator draining of block entities remain)
 - [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block` with `schedule_tick`, `simple_random_selector`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; placed-feature selector branches, kelp/nether placement modifiers, generator tick draining, and structures remain)
-- [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement; starts, pieces, processors, pools, jigsaw, entity spawning still open)
+- [~] P2.8 Structure templates (gzip NBT load, palettes/blocks/entities, rotation/mirror/pivot placement, starts, pieces, processor lists, template pools, one-element expansion; recursive jigsaw, biome filtering, entity spawning, and generator wiring still open)
 - [~] P5.1 Entity metadata and living-entity core (typed metadata store,
   dirty-only packets, health/damage/death, attributes, eight equipment slots;
   remaining serializers, session/entity wiring, armor calculation, and a Java
@@ -328,9 +336,10 @@ Last updated: 2026-11-06
 - [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
 - [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
 - [~] P2.8 Structure templates and starts (template load/placement, random-spread
-  placement, sets, weighted selection, starts, pieces, bounds, references, and
-  igloo end to end done; biome/dimension filtering, processors, pools, jigsaw,
-  structure NBT, and entity/block-entity creation remain)
+  placement, sets, weighted selection, starts, pieces, bounds, references,
+  processor lists, template pools, one-element expansion, and igloo end to end
+  done; recursive jigsaw, biome/dimension filtering, structure NBT, and
+  entity/block-entity creation remain)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
@@ -382,6 +391,21 @@ Last updated: 2026-11-06
   3 unit + 13 integration tests cover diamond sword, netherite pickaxe, apple,
   potions, ender pearls, elytra, block-item fallback, patch idempotence,
   registry-id lookup, and a byte-identical extractor `-Check`.
+- 2026-11-06: P2.8 processor-list and template-pool slice —
+  `scripts/extract_structure_data.ps1` writes deterministic
+  `assets/structure_processors.json` (46,334 bytes; 40 lists / 52 processors)
+  and `assets/template_pools.json` (252,745 bytes; 188 pools / 1,204 element
+  nodes / 4,880 slots). `processor.rs` implements `block_ignore`, `block_rot`,
+  `gravity`, `jigsaw_replacement`, `protected_blocks`, `block_age`,
+  `blackstone_replace`, `lava_submerged_block`, `nop`, `capped`, and ordered
+  `rule` processors with all six rule tests, three position predicates, and
+  four block-entity modifiers; unknown types fail explicitly. `pool.rs`
+  implements single/legacy/feature/empty/list elements, projection, weights,
+  fallbacks, and Java's weighted element sequence. The expansion API resolves
+  a start pool and places one element through the template-piece path; recursive
+  jigsaw connection remains open. 19 focused `tests/structure_processors.rs`
+  tests; `structure_starts` 13 and lib structure tests stay green. Clippy and
+  fmt are clean.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/

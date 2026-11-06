@@ -3,7 +3,8 @@
 > Last updated: 2026-11-06
 > Current commit: see `git log` (all work is committed)
 > Working tree: clean
-> Test status: **611 passing** on the full merged gate (0 failed)
+> Test status: **611 passing** on the full merged gate (0 failed), plus 19
+> focused structure-processor/pool tests in the current slice
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
@@ -28,7 +29,7 @@ where possible, a differential test against the Java oracle.
 |---|---:|---|
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~70% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler |
-| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures are template/start-only; Nether/End missing |
+| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures have templates/starts/processors/pools but no recursive jigsaw or generator wiring; Nether/End missing |
 | Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
 | Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
@@ -166,6 +167,22 @@ where possible, a differential test against the Java oracle.
   spawn entities. Structure starts, pieces, sets, references, processor lists,
   template pools, jigsaw expansion, and random palette selection were still
   unported at that point. 13 focused tests. 426 tests on the last full run.
+- 2026-11-06: Structure processor lists and template pools — a new
+  `scripts/extract_structure_data.ps1` writes deterministic
+  `assets/structure_processors.json` (40 lists, 52 processors) and
+  `assets/template_pools.json` (188 pools, 1,198 entries, 1,204 element nodes,
+  4,880 expanded template slots). `processor.rs` parses and applies every
+  registered 1.21.11 processor: `block_ignore`, `block_rot`, `gravity`,
+  `jigsaw_replacement`, `rule` (six rule tests, three position predicates,
+  four block-entity modifiers), `nop`, `block_age`, `blackstone_replace`,
+  `lava_submerged_block`, `protected_blocks`, and `capped`; unknown processor
+  types fail explicitly. `pool.rs` parses single/legacy/feature/empty/list
+  elements, projection, weights, fallbacks, and implements Java's weighted
+  `nextInt(size)` selection. `PoolCatalog::expand_start` resolves one start-pool
+  element and `PoolExpansion::place` writes it through the template-piece path.
+  Recursive jigsaw connection remains a later slice. 19 focused
+  `tests/structure_processors.rs` tests; `structure_starts` and lib structure
+  tests stay green; fmt/clippy clean.
 - 2026-11-06: Structure start/piece/set foundation — `worldgen/structure/set.rs`
   parses the 20 shipped `structure_set` JSON documents and ports random-spread
   placement (spacing/separation/salt, linear/triangular spread, all four
@@ -833,14 +850,21 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   adds 13 integration tests for shipped set counts, fixed-seed placement chunk
   sets, weighted picks, igloo bounds for two rotations, fixed-origin template
   placement, an igloo placed at a fixed surface height, and jigsaw rejection.
-  Still open: biome/dimension filtering in registry-level selection, processor
-  lists, template pools, jigsaw expansion, random multi-palette selection,
-  structure NBT serialization, entity spawning, loot-table/chest block
-  entities, waterlogging, shape updates, and per-block state derivatives that
-  need P1.5 block behaviour (stairs shape, door hinge, rail shape, …). Starts
-  are not attached to the generator chunk-status pipeline yet.
+  The processor/pool slice adds `processor.rs` (all 40 shipped processor lists
+  and every registered 1.21.11 processor kind) and `pool.rs` (all 188 shipped
+  template pools, Java's weighted `nextInt(size)` selection, and one-element
+  start-pool expansion through `TemplateStructurePiece`). 19 focused
+  `tests/structure_processors.rs` tests pin catalog counts, canonical bytes,
+  every processor family, unknown-type failures, a fixed-seed weighted sequence,
+  projection placement, and expansion errors. Still open: recursive jigsaw
+  connection/junctions, biome/dimension filtering in registry-level selection,
+  random multi-palette selection, feature-pool world placement, structure NBT
+  serialization, entity spawning, loot-table/chest block entities, waterlogging,
+  shape updates, per-block state derivatives that need P1.5 block behaviour
+  (stairs shape, door hinge, rail shape, …), and generator chunk-status wiring.
+  Starts are not attached to the generator pipeline yet.
 
-### P2.9 Jigsaw structures `[ ]` `XL`
+### P2.9 Jigsaw structures `[~]` `XL`
 
 - **What:** Port jigsaw placement, junction expansion, template pools,
   processors, terrain adaptation, and structure bounding boxes.
@@ -848,6 +872,12 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   structures are jigsaw-based.
 - **Reference:** `.../structure/structures/JigsawStructure.java`,
   `.../structure/pools/*`, `.../structure/templatesystem/*`.
+- **Progress (2026-11-06):** template pools, projection, weights, fallbacks,
+  processor lists, and the first start-pool element are implemented. The
+  remaining jigsaw work is `JigsawPlacement.Placer`: recursive child placement,
+  junction pieces, expansion-hack height selection, free-space voxel shapes,
+  max-distance/height checks, biome/dimension filtering, and attaching starts to
+  the chunk-status pipeline.
 - **Done when:** At least one jigsaw structure matches Java start position and
   piece layout on a fixture seed.
 

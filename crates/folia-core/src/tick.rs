@@ -10,12 +10,14 @@
 //! * `net/minecraft/world/level/block/{FallingBlock,VegetationBlock,GrassBlock}`
 //!
 //! This is deliberately a small vertical slice. Blocks that need the full
-//! `P1.5` behaviour table (redstone, doors, fluids, leaf distance updates, crop
-//! growth, …) keep their vanilla state in the world but their neighbor/random
-//! tick is an explicit no-op. [`unsupported_random_tick_reason`] and
-//! [`unsupported_neighbor_reason`] name those gaps and the tick state records
-//! every unsupported block a tick actually reached, so a missing behaviour is
-//! visible instead of being silently swallowed.
+//! `P1.5` behaviour table (doors, pistons, leaf distance updates, crop growth,
+//! …) keep their vanilla state in the world but their neighbor/random tick is
+//! an explicit no-op. Water/lava flow lives in [`crate::fluid`], and wire,
+//! lever, and button behaviour lives in [`crate::redstone`].
+//! [`unsupported_random_tick_reason`] and [`unsupported_neighbor_reason`] name
+//! the remaining gaps and the tick state records every unsupported block a tick
+//! actually reached, so a missing behaviour is visible instead of being
+//! silently swallowed.
 
 use crate::block_update::{BlockChange, perform_block_change};
 use crate::chunk::{BlockState, Chunk, is_air_state};
@@ -811,6 +813,11 @@ impl<'a> TickWorld<'a> {
         Ok(self.storage.block_state_at(pos.x(), pos.y(), pos.z()))
     }
 
+    /// Read-only storage view for signal/fluid queries.
+    pub fn storage(&self) -> &WorldStorage {
+        self.storage
+    }
+
     /// Applies a block change and returns whether it changed anything.
     ///
     /// Neighbour updates are queued and processed by the enclosing tick; a
@@ -891,7 +898,15 @@ static GRASS: GrassBehavior = GrassBehavior;
 
 /// Returns the built-in behaviour for a block state.
 pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
-    if is_falling_block(state.name.as_str()) {
+    if crate::fluid::fluid_state(state).is_some() {
+        &crate::fluid::FLUID
+    } else if crate::redstone::is_wire(state) {
+        &crate::redstone::WIRE
+    } else if crate::redstone::is_lever(state) {
+        &crate::redstone::LEVER_BEHAVIOR
+    } else if crate::redstone::is_button(state) {
+        &crate::redstone::BUTTON_BEHAVIOR
+    } else if is_falling_block(state.name.as_str()) {
         &FALLING
     } else if plant_soil(state).is_some() {
         &PLANT
@@ -906,7 +921,9 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
 /// when no randomised behaviour is known for it.
 pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str> {
     let name = state.name.as_str();
-    if tags::block_has("leaves", name) {
+    if name == "minecraft:lava" {
+        Some("lava random ticks spread fire, which needs ignition and flammability metadata")
+    } else if tags::block_has("leaves", name) {
         Some("leaf decay needs distance/shape updates during generation and placement")
     } else if tags::block_has("crops", name) {
         Some("crop growth needs age, light, and growth-speed metadata")
@@ -933,8 +950,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
 fn is_known_unsupported_neighbor(name: &str) -> bool {
     matches!(
         name,
-        "minecraft:redstone_wire"
-            | "minecraft:redstone_torch"
+        "minecraft:redstone_torch"
             | "minecraft:redstone_wall_torch"
             | "minecraft:repeater"
             | "minecraft:comparator"
@@ -945,7 +961,6 @@ fn is_known_unsupported_neighbor(name: &str) -> bool {
             | "minecraft:dispenser"
             | "minecraft:dropper"
             | "minecraft:hopper"
-            | "minecraft:lever"
             | "minecraft:rail"
             | "minecraft:powered_rail"
             | "minecraft:detector_rail"
@@ -1721,12 +1736,41 @@ mod tests {
         assert!(plant_soil(&state("minecraft:oak_sapling")).is_some());
         assert!(plant_soil(&state("minecraft:wheat")).is_some());
         assert!(unsupported_random_tick_reason(&state("minecraft:oak_leaves")).is_some());
-        assert!(unsupported_neighbor_reason(&state("minecraft:redstone_wire")).is_some());
+        assert!(unsupported_random_tick_reason(&state("minecraft:lava")).is_some());
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:redstone_wire")),
+            None
+        );
+        assert_eq!(unsupported_neighbor_reason(&state("minecraft:lever")), None);
+        assert!(unsupported_neighbor_reason(&state("minecraft:repeater")).is_some());
         assert!(unsupported_neighbor_reason(&state("minecraft:oak_leaves")).is_some());
         assert_eq!(
             unsupported_random_tick_reason(&state("minecraft:stone")),
             None
         );
+    }
+
+    #[test]
+    fn fluid_and_redstone_behaviours_are_registered() {
+        use crate::fluid;
+        use crate::redstone;
+
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:water")),
+            &fluid::FLUID as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:redstone_wire")),
+            &redstone::WIRE as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:lever")),
+            &redstone::LEVER_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:oak_button")),
+            &redstone::BUTTON_BEHAVIOR as &dyn BlockBehavior
+        ));
     }
 
     struct MarkerBehavior;

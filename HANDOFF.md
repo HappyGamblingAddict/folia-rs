@@ -44,12 +44,13 @@ template loading.
 The tree contains the biome/RTree/chunk-biome work, the surface-rules port,
 carvers, generation speedups, the optional-JVM plugin host, the full 1.21.11
 registry/tag tables, real light storage, server-side player physics,
-ground-cover vegetation features, and the structure-template foundation.
+ground-cover vegetation features, the structure-template foundation, and the
+first scheduled-tick/fluid/redstone simulation slice.
 
 Verified state (2026-11-06, merged workspace):
 
 ```text
-426 tests (full workspace)
+519 tests (full workspace, skipping two CRLF asset-hash guards; see BLOCKERS.md)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -116,6 +117,21 @@ Key files:
 - `crates/folia-core/src/chunk_packet.rs`
 - `crates/folia-core/src/block_update.rs`
 - `crates/folia-core/src/inventory.rs`
+
+### Block simulation
+
+- `tick.rs` implements vanilla update flags, a deterministic chunk-grouped
+  neighbour queue, scheduled ticks with priority/delay/dedup, and seeded random
+  ticks. `tick_world` runs neighbour, scheduled, and random ticks in that order
+  every server tick.
+- `fluid.rs` adds scheduled water/lava flow: source/flowing/falling levels,
+  5-tick water vs 30-tick lava delays, drop-off, downward priority, slope search
+  toward holes, water source conversion, waterlogged placement, and drain.
+- `redstone.rs` adds `SignalGetter` strong/weak queries, wire 0..15
+  propagation/dedup through the neighbour queue, lever toggling, and button
+  press with a scheduled release.
+- Tests: `tests/ticks.rs` (10), `tests/fluids.rs` (7), plus focused
+  `--lib tick`/`--lib fluid`/`--lib redstone` unit tests.
 
 ### Feature framework
 
@@ -427,7 +443,10 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 ### Gameplay
 
-- Redstone is not ported.
+- Redstone is partial: wire, lever, and button are ported; repeaters,
+  comparators, torches, observers, pressure plates, lamps, pistons, and other
+  components are not. Fluids flow on scheduled ticks but lava fire/quenching
+  and block-destruction drops are not modeled.
 - Entity AI, goals, pathfinding, combat, and general damage are not ported.
   Players now take void damage, die, and respawn at world spawn; fall, fire,
   hunger, and projectile damage are still missing.
@@ -515,7 +534,9 @@ alternate world directory; `FOLIA_BIND` overrides the bind address;
 - [ ] Run `cargo fmt --check` and
       `cargo clippy --workspace --all-targets -- -D warnings`; both must be
       clean.
-- [ ] Run `cargo test --workspace`; expect 426 tests, 0 failed.
+- [ ] Run `cargo test --workspace`; expect 519 tests, 0 failed. In a checkout
+      that materialized `assets/*.tsv` with CRLF, skip the two asset-hash guards
+      (see `BLOCKERS.md`); the other 519 tests must pass.
 - [ ] If `world/region` was modified by a manual run, restore the fixture from
       `snapshots/folia-rs-20261104-193508-p2-biome-filter.zip` before debugging
       `world_chunk_packet`, and probe scratch levels with `FOLIA_LEVEL_NAME`.

@@ -167,6 +167,14 @@ pub(crate) fn perform_block_change(
     Ok(Some(change))
 }
 
+/// Dispatches `useWithoutItem` for the ported interactive blocks.
+///
+/// The live session's use-item-on path still handles block placement; this is
+/// the hook a future interaction handler should call for levers and buttons.
+pub fn use_block(storage: &mut WorldStorage, x: i32, y: i32, z: i32) -> io::Result<bool> {
+    crate::redstone::use_block(storage, BlockPos::new(x, y, z))
+}
+
 pub fn block_update_packet(x: i32, y: i32, z: i32, state_id: i32) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_BLOCK_UPDATE).unwrap();
@@ -425,6 +433,26 @@ mod tests {
         assert_eq!(section_of_block(-1, -1, -1), (-1, -1, -1));
         assert_eq!(section_of_block(0, 0, 0), (0, 0, 0));
         assert_eq!(section_of_block(16, 32, 48), (1, 2, 3));
+    }
+
+    #[test]
+    fn use_block_toggles_a_lever_through_the_shared_path() {
+        let root = temp_dir("use-lever");
+        let mut storage = WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&flat_chunk(0, 0), Compression::Zlib)
+            .expect("save flat chunk");
+        let lever = crate::registry::default_block_state("minecraft:lever").expect("lever state");
+        set_block(&mut storage, 2, -60, 2, lever)
+            .expect("place lever")
+            .expect("lever changed");
+
+        assert!(use_block(&mut storage, 2, -60, 2).expect("toggle lever"));
+        let state = storage.block_state_at(2, -60, 2).expect("lever is cached");
+        assert_eq!(crate::redstone::property(&state, "powered"), Some("true"));
+        assert!(crate::redstone::is_powered(&state));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

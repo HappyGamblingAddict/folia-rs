@@ -1309,3 +1309,41 @@ Format:
 - Consequences: The exact-name number in `STATE.md`/`PORT_MAP.md` is 92.02%
   until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
   the delta and its cause are recorded here.
+
+## 2026-11-06 - Fluid flow uses the vanilla amount/falling model over block levels
+
+- Context: The world model stores liquids as `minecraft:water`/`lava` with the
+  vanilla `level` property, not as separate source/flowing fluid registry
+  entries. Vanilla `FlowingFluid` operates on `FluidState` amount (1..8) plus a
+  falling flag, and `LiquidBlock.getFluidState` maps block levels 1..7 to
+  amounts 7..1 and level 8+ to falling amount 8.
+- Decision: Add `fluid::FluidState { kind, amount, falling }` and convert at
+  the block boundary. Level 0 is a source, 1..7 are flowing, 8+ are falling;
+  waterlogged blocks read as full water sources. Scheduled ticks are keyed by
+  the block name so `ScheduledTickQueue`'s existing `(pos, block)` check keeps
+  working.
+- Why: This preserves the vanilla algorithm (drop-off, falling priority, slope
+  search, two-source conversion) without adding fluid registry types to the
+  block model or changing `world.rs`.
+- Consequences: Flowing amount 8 non-falling collapses to level 0/source, as it
+  does in vanilla's `LiquidBlock` cache. Block-destruction drops and
+  water/lava quenching are not modeled; they are explicit gaps.
+
+## 2026-11-06 - Redstone updates ride the existing neighbour queue
+
+- Context: Wire propagation is a graph update; a direct recursive evaluator
+  would either recurse deeply or use an ad-hoc queue, and the task forbids
+  changing `world.rs` storage hooks.
+- Decision: `redstone::WireBehavior` recalculates a wire only when the normal
+  `tick` neighbour queue delivers a `neighbor_changed`/`on_place` callback.
+  `TickWorld::set_block` appends the six neighbours, and the queue's position
+  dedup plus `(target == current) -> no write` termination makes chains
+  deterministic without a second scheduler. `SignalReader` is a read-only view
+  over `WorldStorage`; `should_signal = false` reproduces
+  `RedStoneWireBlock.getBlockSignal`.
+- Why: It reuses the tested ordering/dedup path and keeps block storage
+  untouched. Identical worlds then produce identical `last_neighbor_updates`
+  sequences, which the integration test pins.
+- Consequences: Wire connection-shape properties are not recomputed yet, and
+  only power is modeled. Repeaters/comparators/torches/pistons still need
+  their own behaviour hooks.

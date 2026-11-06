@@ -3,9 +3,9 @@
 > Last updated: 2026-11-06  
 > Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
 > Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; this slice adds 16
-> integration + 3 lib focused tests and holds 98.71% block-class / 92.02%
-> exact-name parity.
+> Test status: **519 tests** on the last full run (the two asset-hash guards
+> fail only in this checkout because assets were materialized with CRLF; see
+> `BLOCKERS.md`). Focused fluid/redstone gates are green.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~18%** (range 12–22% depending on metric)
 
@@ -55,7 +55,7 @@ more expensive than designing for it now.
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
-| Blocks/redstone/fluids | ~10% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, and falling sand/gravel; fluids, redstone, pistons, block entities, and P1.5 metadata remain unported |
+| Blocks/redstone/fluids | ~20% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, falling sand/gravel, water/lava flow, and wire/lever/button redstone; pistons, block entities, remaining redstone components, and P1.5 metadata remain unported |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
@@ -65,6 +65,15 @@ more expensive than designing for it now.
 
 # Baseline: what is already done
 
+- 2026-11-06: P3.10 fluid/redstone slice — `fluid.rs` schedules water/lava
+  flow (source/flowing/falling levels, 5/30-tick delays, 1/2 drop-off,
+  downward priority, hole slope search, water-only source conversion,
+  waterlogged placement, drain), and `redstone.rs` adds strong/weak
+  `SignalGetter` queries, wire 0..15 propagation/dedup through the neighbour
+  queue, and lever toggle plus button press with a scheduled release. Focused:
+  8 fluid + 7 redstone + 1 block-update unit tests and 7 `tests/fluids.rs`
+  integration tests. Workspace: 519 tests when the two pre-existing CRLF
+  asset-hash guards are skipped.
 - 2026-11-06: P2.5 aquatic/vine/mushroom batch — `worldgen/feature/aquatic.rs`
   ports `seagrass`, `kelp`, `sea_pickle`, `coral_tree`/`coral_claw`/
   `coral_mushroom`, `bamboo`, and `underwater_magma`; `vines.rs` ports `vines`,
@@ -1019,20 +1028,28 @@ section-only light packets are still open.
   from the `dirt`/farmland tags (including double-plant halves), and grass
   spread; `BehaviorTable::with` is the callback interface for future blocks.
   The server loop calls `tick::tick_world` after entity ticks and seeds the
-  shared storage from `level.dat`. Focused tests: 11 unit (flags, queue order,
-  priority/delay/cancel, random sampling, behavior classification) and 10
-  integration (six-neighbour edits, plant removal, falling placement/support
-  removal, scheduled ticks, deterministic grass spread, unsupported reporting,
-  deterministic repeated ticks).
-- **Still open:** leaf distance/decay updates, crop/sapling growth, redstone,
-  fluids, pistons, doors, rails, and torch support need P1.5 block metadata.
-  Falling blocks move one block per scheduled tick instead of using a
+  shared storage from `level.dat`. `src/fluid.rs` adds scheduled water/lava
+  flow: source/flowing/falling state mapping, water 5 vs lava 30 tick delay,
+  1/2 level drop-off, downward priority, the 4/2-step slope search toward
+  holes, two-source conversion (water only), waterlogged placement, and
+  source-removal drain. `src/redstone.rs` adds `SignalReader` strong/weak
+  queries, `getDirectSignalTo`/`getBestNeighborSignal`, wire target strength
+  (adjacent source or strongest wire minus one, 0..15), and lever toggling plus
+  button press with the vanilla 20/30-tick release. Wire and fluid updates flow
+  through the existing neighbour queue; `behavior_for` registers all four
+  behaviours. Focused tests: 8 fluid + 7 redstone + 1 block-update unit tests
+  and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
+  drain, waterlogging, source conversion, determinism).
+- **Still open:** leaf distance/decay updates, crop/sapling growth, pistons,
+  doors, rails, torch support, lava fire spread/quenching, and the remaining
+  redstone components (repeater, comparator, torch, observer, pressure plates,
+  lamp). Falling blocks move one block per scheduled tick instead of using a
   `FallingBlockEntity`; scheduled ticks are not persisted to chunk NBT; the
   random-tick RNG is a deterministic hash of seed/chunk/tick rather than
   Java's `Level.random` sequence; `tick_world` runs over the storage cache
   rather than a ticket/loaded-chunk set; cancellation during a running tick
   (`clearArea` of `toRunThisTick`) is not modeled. No Java differential
-  neighbor-update fixture yet.
+  neighbor-update or fluid/redstone fixture yet.
 
 ### P3.11 Heightmap and chunk-packet exactness `[~]` `M`
 
@@ -1390,10 +1407,12 @@ damage, spawning, or equipment.
 neighbor updates, scheduled ticks, fluid flow, redstone, explosions, and
 block-specific behavior.
 
-**Current state:** Break/place only; no neighbor updates, scheduled ticks,
-random ticks, fluids, redstone, pistons, explosions, or block entities.
+**Current state:** The P3.10 tick slice provides update flags, neighbour and
+scheduled/random tick queues, falling blocks, plant support, grass spread,
+water/lava flow, and wire/lever/button redstone. Pistons, explosions, block
+entities, the remaining redstone components, and full P1.5 metadata are open.
 
-### P6.1 Block behavior framework `[ ]` `L`
+### P6.1 Block behavior framework `[~]` `L`
 
 - **What:** Define a block behavior interface/table with neighbor changed,
   scheduled tick, random tick, use, place, break, entity interaction, shape,
@@ -1401,8 +1420,13 @@ random ticks, fluids, redstone, pistons, explosions, or block entities.
 - **Why:** Redstone, fluids, crops, doors, and pistons all need block-specific
   callbacks.
 - **Done when:** At least 20 vanilla block types have behavior tests.
+- **Progress (2026-11-06):** `tick::BlockBehavior` and `tick::BehaviorTable`
+  provide random tick, scheduled tick, neighbor changed, shape update, and
+  place hooks; falling blocks, plants, grass, fluids, wire, lever, and buttons
+  are registered. Use/break/entity interaction and comparator output remain
+  open.
 
-### P6.2 Fluid system `[ ]` `L`
+### P6.2 Fluid system `[~]` `L`
 
 - **What:** Implement water/lava levels, source creation, flow direction,
   spread distance, waterlogging, infinite sources, lava/water interactions,
@@ -1411,17 +1435,29 @@ random ticks, fluids, redstone, pistons, explosions, or block entities.
 - **Reference:** `net/minecraft/world/level/material/*`,
   `LiquidBlock.java`, `FlowingFluid.java`.
 - **Done when:** Flow traces match Java for slopes, sources, and waterlogging.
+- **Progress (2026-11-06):** `fluid.rs` covers source/flowing/falling levels,
+  the 5/30-tick delays, 1/2 drop-off, downward priority, slope search toward
+  holes, water source conversion, waterlogged placement, and source-removal
+  drain, with focused flow tests. Lava/water quenching, lava fire, bubble
+  columns, block-destruction drops, and a Java flow trace fixture remain.
 
-### P6.3 Redstone core `[ ]` `L`
+### P6.3 Redstone core `[~]` `L`
 
 - **What:** Implement signal strength, power propagation, weak/strong power,
-  update ordering, and redstone components’ interfaces.
+  update ordering, and redstone components' interfaces.
 - **Why:** Redstone is a large but self-contained parity domain.
 - **Reference:** `net/minecraft/world/level/redstone/*`,
   `SignalGetter.java`, `RedstoneWireBlock.java`.
 - **Done when:** Basic wire/torch/lever circuits match Java tick-for-tick.
+- **Progress (2026-11-06):** `redstone.rs` implements `SignalGetter`-style
+  strong/weak queries (`getSignal`, `getDirectSignal`, `getDirectSignalTo`,
+  `getControlInputSignal`, `hasNeighborSignal`, `getBestNeighborSignal`), wire
+  target strength and 0..15 decay through the neighbour queue, lever toggling,
+  and button press with a scheduled release. Redstone torch/repeater/
+  comparator/observer/pressure-plate/door sources and a Java timing fixture are
+  still open.
 
-### P6.4 Redstone components `[ ]` `XL`
+### P6.4 Redstone components `[~]` `XL`
 
 - **What:** Port wire, torch, repeater, comparator, observer, piston/sticky
   piston, rails, buttons, levers, pressure plates, doors/trapdoors, dispensers,
@@ -1429,6 +1465,8 @@ random ticks, fluids, redstone, pistons, explosions, or block entities.
   copper bulbs, and crafters.
 - **Why:** These are the visible redstone surface players and plugins use.
 - **Done when:** Each component has a timing fixture against Java.
+- **Progress (2026-11-06):** Wire, lever, and button are implemented; the
+  remaining components are still explicit gaps.
 
 ### P6.5 Pistons and moving blocks `[ ]` `L`
 

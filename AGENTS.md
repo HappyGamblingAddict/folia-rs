@@ -88,6 +88,23 @@ One-command verification:
 .\scripts\verify.ps1 -Full    # includes generated-world join test
 ```
 
+## Test budget (avoid useless runs)
+
+Do not run the whole suite after every edit. Use this budget:
+
+1. During a slice, run only the focused target(s): `cargo test -p folia-core
+   --lib <module>` and/or `cargo test -p folia-core --test <slice>`.
+2. Run `cargo fmt --all` and one `cargo clippy --workspace --all-targets -- -D
+   warnings` before handing the slice back.
+3. Run the full `cargo test --workspace` and `worldgen_parity` exactly once
+   when merging the slice into the integration branch.
+4. Run `worldgen_join`, `view_distance_join`, and `scripts/verify.ps1 -Full`
+   only for changes that touch generation, join streaming, or shutdown. They
+   take tens of seconds and are not needed for unrelated edits.
+5. Never run two `cargo` commands against the same target directory
+   concurrently; it only serializes behind the lock and can confuse timing
+   tests.
+
 Snapshot before risky work:
 
 ```powershell

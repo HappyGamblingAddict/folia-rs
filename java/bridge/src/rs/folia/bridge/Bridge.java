@@ -47,6 +47,42 @@ public final class Bridge {
     /** Spawn position encoded as {@code x\ty\tz}. */
     public static native String nativeWorldSpawn(String world);
 
+    /** Full world time (vanilla {@code DayTime}). */
+    public static native long nativeWorldFullTime(String world);
+
+    public static native void nativeWorldSetFullTime(String world, long time);
+
+    public static native boolean nativeWorldIsDayTime(String world);
+
+    public static native boolean nativeWorldHasStorm(String world);
+
+    public static native void nativeWorldSetStorm(String world, boolean storm);
+
+    public static native int nativeWorldWeatherDuration(String world);
+
+    public static native void nativeWorldSetWeatherDuration(String world, int duration);
+
+    public static native boolean nativeWorldIsThundering(String world);
+
+    public static native void nativeWorldSetThundering(String world, boolean thundering);
+
+    public static native int nativeWorldThunderDuration(String world);
+
+    public static native void nativeWorldSetThunderDuration(String world, int duration);
+
+    public static native int nativeWorldClearWeatherDuration(String world);
+
+    public static native void nativeWorldSetClearWeatherDuration(String world, int duration);
+
+    public static native boolean nativeWorldSetSpawn(String world, double x, double y, double z);
+
+    // ---- Plugin config ------------------------------------------------------
+
+    /** Raw flat-YAML contents of {@code run/<plugin>/config.yml}. */
+    public static native String nativeConfigRead(String plugin);
+
+    public static native boolean nativeConfigWrite(String plugin, String contents);
+
     // ---- Player bridge ------------------------------------------------------
 
     public static native boolean nativePlayerExists(String uuid);
@@ -94,6 +130,32 @@ public final class Bridge {
     public static native int nativePlayerSelectedSlot(String uuid);
 
     public static native boolean nativePlayerSetSelectedSlot(String uuid, int slot);
+
+    // ---- Permissions --------------------------------------------------------
+
+    public static native boolean nativePlayerIsOp(String uuid);
+
+    public static native boolean nativePlayerSetOp(String uuid, boolean value);
+
+    public static native boolean nativePlayerPermissionHas(String uuid, String permission);
+
+    public static native boolean nativePlayerPermissionIsSet(String uuid, String permission);
+
+    /** Effective permissions encoded as {@code permission\t1|0} lines. */
+    public static native String nativePlayerPermissionEffective(String uuid);
+
+    public static native int nativePlayerPermissionAddAttachment(String uuid, String plugin);
+
+    public static native boolean nativePlayerPermissionRemoveAttachment(String uuid, int attachment);
+
+    public static native boolean nativePlayerPermissionSet(
+            String uuid, int attachment, String permission, boolean value);
+
+    public static native boolean nativePlayerPermissionUnset(
+            String uuid, int attachment, String permission);
+
+    /** Requests a disconnect; the live transport hook is not exposed yet. */
+    public static native boolean nativePlayerKick(String uuid, String reason);
 
     public static void boot(String pluginsDirectory, String dataDirectory) throws Exception {
         File plugins = new File(pluginsDirectory);

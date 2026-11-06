@@ -3,8 +3,11 @@ package rs.folia.example;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -13,9 +16,13 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.server.PluginEnableEvent;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.permissions.PermissionAttachment;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import rs.folia.bridge.Bridge;
 
@@ -33,6 +40,11 @@ import java.util.UUID;
 public final class HelloPlugin extends JavaPlugin implements Listener {
     private static final String PROBE_NAME = "BridgeProbe";
     private static final UUID PROBE_ID = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
+
+    /** Tiny service exercised through the Bukkit services manager. */
+    public interface GreetingService {
+        String greet(String name);
+    }
 
     private boolean selfTest;
 
@@ -55,10 +67,15 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         }
 
         readSpawnSurface();
+        exerciseConfig();
+        exerciseServices();
+        exerciseWorldDepth();
         if (selfTest) {
             runSelfTest();
         }
 
+        getServer().getScheduler().runTaskLater(this, () ->
+                getLogger().info("scheduler one-shot task from the embedded JVM"), 1L);
         getServer().getScheduler().runTaskTimer(this, () ->
                 getLogger().info("scheduler tick from the embedded JVM"), 1L, 20L);
     }
@@ -113,6 +130,80 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         if (type == Material.BEDROCK) {
             event.setCancelled(true);
             getLogger().info("cancelled bedrock interact through the Rust event bridge");
+        }
+    }
+
+    private void exerciseConfig() {
+        saveDefaultConfig();
+        String motd = getConfig().getString("motd", "missing");
+        int maxHomes = getConfig().getInt("max-homes", -1);
+        boolean debug = getConfig().getBoolean("debug", false);
+        getConfig().set("runtime-check", "ok");
+        getConfig().set("nested.value", 42);
+        saveConfig();
+        boolean configOk = !"missing".equals(motd);
+        getLogger().info("config self-test: motd=" + motd + " max-homes=" + maxHomes
+                + " debug=" + debug + " persisted=" + configOk);
+        if (!configOk) {
+            getLogger().severe("bridge config self-test FAILED: no bundled config value");
+        }
+    }
+
+    private void exerciseServices() {
+        GreetingService service = name -> "hello, " + name;
+        getServer().getServicesManager().register(
+                GreetingService.class, service, this, ServicePriority.Normal);
+        RegisteredServiceProvider<GreetingService> registration =
+                getServer().getServicesManager().getRegistration(GreetingService.class);
+        GreetingService loaded = getServer().getServicesManager().load(GreetingService.class);
+        boolean servicesOk = registration != null
+                && registration.getProvider() == service
+                && loaded == service
+                && getServer().getServicesManager().isProvidedFor(GreetingService.class);
+        getServer().getServicesManager().unregister(service);
+        getLogger().info("services self-test: registered=" + servicesOk
+                + " afterUnregister="
+                + getServer().getServicesManager().isProvidedFor(GreetingService.class));
+        if (!servicesOk) {
+            getLogger().severe("bridge services self-test FAILED");
+        }
+    }
+
+    private void exerciseWorldDepth() {
+        World world = getServer().getWorld("world");
+        if (world == null) {
+            return;
+        }
+        long previousFullTime = world.getFullTime();
+        long previousTime = world.getTime();
+        world.setTime(6_000L);
+        boolean timeOk = world.getTime() == 6_000L && world.isDayTime();
+        world.setTime(previousTime);
+        world.setFullTime(previousFullTime);
+
+        Location spawn = world.getSpawnLocation();
+        boolean spawnOk = spawn != null && spawn.getWorld() == world;
+        world.setStorm(true);
+        world.setThundering(true);
+        world.setWeatherDuration(100);
+        world.setThunderDuration(80);
+        world.setClearWeatherDuration(40);
+        boolean weatherOk = world.hasStorm() && world.isThundering()
+                && world.getWeatherDuration() == 100
+                && world.getThunderDuration() == 80
+                && world.getClearWeatherDuration() == 40;
+        world.setStorm(false);
+        world.setThundering(false);
+        world.setWeatherDuration(0);
+        world.setThunderDuration(0);
+        world.setClearWeatherDuration(0);
+
+        world.playSound(spawn, Sound.BLOCK_NOTE_BLOCK_PLING, 1.0F, 1.0F);
+        world.spawnParticle(Particle.END_ROD, spawn, 1);
+        getLogger().info("world depth self-test: time=" + timeOk + " weather=" + weatherOk
+                + " spawn=" + spawnOk + " effects are explicit no-ops");
+        if (!timeOk || !weatherOk || !spawnOk) {
+            getLogger().severe("bridge world depth self-test FAILED");
         }
     }
 
@@ -171,6 +262,9 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         meta.setDisplayName("Bridge Blade");
         meta.setLore(List.of("created by HelloPlugin", "stored by the Rust component model"));
         meta.setUnbreakable(true);
+        meta.addEnchant(Enchantment.SHARPNESS, 3, true);
+        meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+        boolean flagsInMemory = meta.getItemFlags().contains(ItemFlag.HIDE_ENCHANTS);
         sword.setItemMeta(meta);
         inventory.setItem(0, sword);
         ItemStack read = inventory.getItem(0);
@@ -179,7 +273,9 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
                 && read.getDurability() == 5
                 && read.getItemMeta() != null
                 && "Bridge Blade".equals(read.getItemMeta().getDisplayName())
-                && read.getItemMeta().isUnbreakable();
+                && read.getItemMeta().isUnbreakable()
+                && read.getEnchantmentLevel(Enchantment.SHARPNESS) == 3
+                && flagsInMemory;
         inventory.setItem(0, previous);
 
         GameMode previousMode = player.getGameMode();
@@ -197,12 +293,27 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         player.setFoodLevel(20);
         player.setSaturation(5.0F);
 
+        boolean initiallySet = player.isPermissionSet("bridge.selftest");
+        PermissionAttachment attachment =
+                player.addAttachment(this, "bridge.selftest", true);
+        boolean granted = player.hasPermission("bridge.selftest");
+        attachment.setPermission("bridge.selftest", false);
+        boolean revoked = !player.hasPermission("bridge.selftest")
+                && player.isPermissionSet("bridge.selftest");
+        attachment.remove();
+        boolean permissionOk = !initiallySet && granted && revoked
+                && !player.isPermissionSet("bridge.selftest");
+
         getLogger().info("player self-test: teleport=" + teleported
                 + " item=" + itemOk + " itemType=" + read.getType()
                 + " itemDamage=" + read.getDurability()
+                + " enchant=" + read.getEnchantmentLevel(Enchantment.SHARPNESS)
                 + " creative=" + creative
-                + " vitals=" + vitalsOk);
-        if (!teleported || !itemOk || creative != GameMode.CREATIVE || !vitalsOk) {
+                + " vitals=" + vitalsOk
+                + " permissions=" + permissionOk
+                + " op=" + player.isOp());
+        if (!teleported || !itemOk || creative != GameMode.CREATIVE || !vitalsOk
+                || !permissionOk) {
             getLogger().severe("bridge player/inventory self-test FAILED");
         } else {
             getLogger().info("bridge player/inventory self-test passed");

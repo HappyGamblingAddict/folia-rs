@@ -457,13 +457,33 @@ stream from `WorldStorage` and are not retroactively decorated.
   health/food/saturation. `setGameMode` reaches a live session; the rest is
   persisted through `PlayerSession` playerdata (live-session sync is pending).
 - `PlayerInventory`/`ItemStack` proxies: slots 0-35, type/count/damage,
-  display name, lore, unbreakable. `new ItemStack(...)` works through a
-  `RegistryAccess`/`InternalAPIBridge` service shim; armor/off-hand and
-  enchantment persistence remain open.
+  display name, lore, unbreakable, and enchantments. `new ItemStack(...)` and
+  `Enchantment`/`Sound` static constants work through a
+  `RegistryAccess`/`InternalAPIBridge` service shim; armor/off-hand, item
+  flags, and PDC persistence remain open.
+- `Player` permissions: Rust-owned attachments, `hasPermission`/
+  `isPermissionSet`, add/remove, timed attachments through the task queue, and
+  operator-default fallback for unset permissions.
+- Config: `plugin.getConfig()` is replaced at load time by a Rust-backed flat
+  scalar `config.yml` in `run/<plugin>/`; `saveDefaultConfig()` and
+  `saveConfig()` work. Nested sections, lists, comments, and stock
+  `reloadConfig()` remain open.
+- Services: typed `ServicesManager` register/unregister/load with priorities
+  and plugin-disable cleanup.
+- Scheduler: delayed/repeating tasks route through the Rust tick table; async
+  variants are explicitly downgraded to the server thread and `isSync()`
+  reports true.
+- World time (`getTime`/`setTime`/`getFullTime`/`isDayTime`), weather flags and
+  durations, and spawn location persist in `run/world_state.txt`. They do not
+  yet emit play packets to a live client.
 - Host-callable `BlockBreakEvent`, `BlockPlaceEvent`, and
   `PlayerInteractEvent` with cancellation. Vanilla break/place handlers still
   bypass the event bus until `join.rs` is wired.
-- Example plugin exercises the world, player, inventory, and event APIs.
+- `sendMessage` and `kickPlayer` currently log only: `join.rs` exposes no
+  outbound chat/disconnect queue. `playSound`/`spawnParticle` are logged
+  no-ops.
+- Example plugin exercises the world, player, inventory, permissions, config,
+  services, time/weather, enchantment, and event APIs.
   `FOLIA_BRIDGE_SELFTEST=1` also fires the three events from Rust and checks
   their cancellation results.
 - `FOLIA_DISABLE_PLUGINS=1` forces native-only startup even when jars exist.
@@ -581,8 +601,9 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Item stacks carry the component patch model and the prototype catalog. The
   `attribute_modifiers`/`potion_contents`/`tool` network codecs,
   `HashedStack` hashing, and a Java component NBT/packet fixture are still
-  missing. The plugin bridge persists type/count/damage/name/lore/unbreakable;
-  enchantments, PDC, and container contents do not cross the bridge yet.
+  missing. The plugin bridge persists type/count/damage/name/lore/unbreakable/
+  enchantments; item flags, PDC, and container contents do not cross the bridge
+  yet.
 - Generated chunks are at 98.75% class / 95.80% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is

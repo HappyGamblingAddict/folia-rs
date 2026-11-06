@@ -75,6 +75,7 @@ final class PluginHost {
         JavaPlugin plugin = (JavaPlugin) mainClass.getDeclaredConstructor().newInstance();
         Logger logger = Logger.getLogger("Minecraft." + description.getName());
         plugin.init(server.proxy(), description, dataFolder, jar, loader, description, logger);
+        BridgeConfig.install(plugin);
         server.registerCommands(plugin, description);
 
         server.registerPlugin(plugin);

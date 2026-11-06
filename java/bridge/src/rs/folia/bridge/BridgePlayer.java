@@ -14,7 +14,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.permissions.Permission;
 import org.bukkit.permissions.PermissionAttachment;
-import org.bukkit.permissions.PermissionAttachmentInfo;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scoreboard.Scoreboard;
 
@@ -44,6 +43,7 @@ final class BridgePlayer implements InvocationHandler {
     private final BridgeWorld world;
     private final Player proxy;
     private final BridgeInventory inventory;
+    private final BridgePermissions permissions;
 
     BridgePlayer(String name, UUID uniqueId, Server server, BridgeWorld world) {
         this.name = name == null || name.isEmpty() ? "Player" : name;
@@ -58,6 +58,7 @@ final class BridgePlayer implements InvocationHandler {
         );
         Bridge.nativePlayerIdentify(this.name, uuidString);
         this.inventory = new BridgeInventory(uuidString, proxy, this::location);
+        this.permissions = new BridgePermissions(proxy, uuidString);
     }
 
     Player proxy() {
@@ -165,11 +166,23 @@ final class BridgePlayer implements InvocationHandler {
             case "getPing" -> 0;
             case "getLocale" -> "en_us";
             case "getClientBrandName" -> "Folia-RS";
-            case "getEffectivePermissions" -> Set.<PermissionAttachmentInfo>of();
-            case "getPermissions", "getPermissionAttachments" -> Set.of();
-            case "hasPermission", "isPermissionSet", "isOp" -> true;
-            case "addAttachment" -> null;
-            case "removeAttachment" -> null;
+            case "getEffectivePermissions" -> permissions.getEffectivePermissions();
+            case "getPermissions" -> permissions.getPermissionNames();
+            case "getPermissionAttachments" -> Set.copyOf(permissions.attachments());
+            case "hasPermission" -> permission(args, true);
+            case "isPermissionSet" -> permission(args, false);
+            case "isOp" -> permissions.isOp();
+            case "setOp" -> {
+                permissions.setOp(args != null && Boolean.TRUE.equals(args[0]));
+                yield null;
+            }
+            case "addAttachment" -> addAttachment(args);
+            case "removeAttachment" -> {
+                if (args != null && args.length == 1 && args[0] instanceof PermissionAttachment attachment) {
+                    permissions.removeAttachment(attachment);
+                }
+                yield null;
+            }
             case "recalculatePermissions" -> null;
             case "getType" -> EntityType.PLAYER;
             case "getEntityId" -> uniqueId.hashCode();
@@ -195,8 +208,16 @@ final class BridgePlayer implements InvocationHandler {
                 Bridge.nativePlayerSendMessage(uuidString, message(args));
                 yield null;
             }
-            case "kick", "kickPlayer", "playSound", "playEffect", "spawnParticle",
-                 "setVelocity", "setFireTicks", "setRemainingAir", "setMaximumAir" -> null;
+            case "kickPlayer", "kick" -> {
+                Bridge.nativePlayerKick(uuidString, message(args));
+                yield null;
+            }
+            case "playSound", "playEffect", "spawnParticle", "stopSound", "stopAllSounds" -> {
+                Bridge.logger().fine(() -> "Ignoring client-only effect " + method.getName()
+                        + " from " + name + ": the bridge has no packet queue for it yet");
+                yield null;
+            }
+            case "setVelocity", "setFireTicks", "setRemainingAir", "setMaximumAir" -> null;
             case "getVelocity" -> new org.bukkit.util.Vector();
             case "getVehicle", "getPassenger", "getEjectPassengers" -> null;
             case "getNearbyEntities", "getPassengers" -> List.of();
@@ -208,6 +229,41 @@ final class BridgePlayer implements InvocationHandler {
             case "setMetadata", "removeMetadata" -> null;
             case "getPersistentDataContainer" -> null;
             default -> BridgeValues.defaultValue(method);
+        };
+    }
+
+    private Object permission(Object[] args, boolean checkValue) {
+        if (args == null || args.length == 0 || args[0] == null) {
+            return false;
+        }
+        if (args[0] instanceof Permission permission) {
+            return checkValue ? permissions.hasPermission(permission)
+                    : permissions.isPermissionSet(permission);
+        }
+        return checkValue ? permissions.hasPermission(String.valueOf(args[0]))
+                : permissions.isPermissionSet(String.valueOf(args[0]));
+    }
+
+    private Object addAttachment(Object[] args) {
+        if (args == null || args.length == 0 || !(args[0] instanceof Plugin plugin)) {
+            return null;
+        }
+        return switch (args.length) {
+            case 1 -> permissions.addAttachment(plugin);
+            case 2 -> args[1] instanceof Number number
+                    ? permissions.addAttachment(plugin, number.intValue())
+                    : permissions.addAttachment(plugin, String.valueOf(args[1]), true);
+            case 3 -> permissions.addAttachment(
+                    plugin,
+                    String.valueOf(args[1]),
+                    Boolean.TRUE.equals(args[2])
+            );
+            default -> permissions.addAttachment(
+                    plugin,
+                    String.valueOf(args[1]),
+                    Boolean.TRUE.equals(args[2]),
+                    ((Number) args[3]).intValue()
+            );
         };
     }
 

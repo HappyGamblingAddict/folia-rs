@@ -7,8 +7,9 @@ use folia_core::world::{self, WorldStorage};
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jdouble, jint, jlong, jstring};
 use jni::{InitArgsBuilder, JNIEnv, JNIVersion, JavaVM, NativeMethod};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -30,6 +31,7 @@ struct Task {
 unsafe impl Send for Task {}
 
 static NEXT_TASK_ID: AtomicI32 = AtomicI32::new(1);
+static NEXT_ATTACHMENT_ID: AtomicI32 = AtomicI32::new(1);
 static TASKS: LazyLock<Mutex<Vec<Task>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static BRIDGE: LazyLock<Mutex<Option<BridgeState>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -146,10 +148,147 @@ fn tick_tasks(env: &mut JNIEnv) {
 // Bridge state
 // ---------------------------------------------------------------------------
 
+/// The bridge-owned subset of world state exposed through the Bukkit `World`
+/// API. It is persisted in `run/world_state.txt` instead of `level.dat` so a
+/// plugin edit survives until the native server writes the level again.
+#[derive(Debug, Clone, PartialEq)]
+struct WorldState {
+    full_time: i64,
+    spawn: (f64, f64, f64),
+    storm: bool,
+    thundering: bool,
+    weather_duration: i32,
+    thunder_duration: i32,
+    clear_weather_duration: i32,
+}
+
+impl Default for WorldState {
+    fn default() -> Self {
+        Self {
+            full_time: 0,
+            spawn: (0.5, 64.0, 0.5),
+            storm: false,
+            thundering: false,
+            weather_duration: 0,
+            thunder_duration: 0,
+            clear_weather_duration: 0,
+        }
+    }
+}
+
+impl WorldState {
+    fn load(path: &Path) -> Self {
+        let mut state = Self::default();
+        let Ok(contents) = fs::read_to_string(path) else {
+            return state;
+        };
+        for line in contents.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "time" => {
+                    if let Ok(time) = value.parse() {
+                        state.full_time = time;
+                    }
+                }
+                "storm" => state.storm = value == "1" || value.eq_ignore_ascii_case("true"),
+                "thundering" => {
+                    state.thundering = value == "1" || value.eq_ignore_ascii_case("true");
+                }
+                "weather_duration" => {
+                    if let Ok(duration) = value.parse() {
+                        state.weather_duration = duration;
+                    }
+                }
+                "thunder_duration" => {
+                    if let Ok(duration) = value.parse() {
+                        state.thunder_duration = duration;
+                    }
+                }
+                "clear_weather_duration" => {
+                    if let Ok(duration) = value.parse() {
+                        state.clear_weather_duration = duration;
+                    }
+                }
+                "spawn_x" => {
+                    if let Ok(x) = value.parse() {
+                        state.spawn.0 = x;
+                    }
+                }
+                "spawn_y" => {
+                    if let Ok(y) = value.parse() {
+                        state.spawn.1 = y;
+                    }
+                }
+                "spawn_z" => {
+                    if let Ok(z) = value.parse() {
+                        state.spawn.2 = z;
+                    }
+                }
+                _ => {}
+            }
+        }
+        state
+    }
+
+    fn load_or_level(path: &Path, level_path: &Path) -> Self {
+        if path.exists() {
+            return Self::load(path);
+        }
+        let mut state = Self::default();
+        if let Ok(level) = folia_core::level::read(level_path) {
+            state.full_time = level.day_time;
+            if let Some((x, y, z)) = level.spawn {
+                state.spawn = (f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+            }
+        }
+        state
+    }
+
+    fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let contents = format!(
+            "time={}\nspawn_x={}\nspawn_y={}\nspawn_z={}\n\
+             storm={}\nthundering={}\nweather_duration={}\n\
+             thunder_duration={}\nclear_weather_duration={}\n",
+            self.full_time,
+            self.spawn.0,
+            self.spawn.1,
+            self.spawn.2,
+            u8::from(self.storm),
+            u8::from(self.thundering),
+            self.weather_duration,
+            self.thunder_duration,
+            self.clear_weather_duration,
+        );
+        fs::write(path, contents)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PermissionAttachmentState {
+    id: i32,
+    plugin: String,
+    permissions: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PermissionState {
+    attachments: Vec<PermissionAttachmentState>,
+}
+
 struct BridgeState {
     world_root: PathBuf,
+    data_root: PathBuf,
     playerdata_dir: PathBuf,
     players: HashMap<[u8; 16], PlayerSession>,
+    permissions: HashMap<[u8; 16], PermissionState>,
+    world_state: WorldState,
 }
 
 impl BridgeState {
@@ -158,26 +297,169 @@ impl BridgeState {
             .unwrap_or_else(|_| folia_core::config::ServerProperties::default());
         let level_name =
             std::env::var("FOLIA_LEVEL_NAME").unwrap_or_else(|_| properties.level_name.clone());
+        let world_root = root.join(&level_name);
+        let data_root = root.join("run");
+        let world_state = WorldState::load_or_level(
+            &data_root.join("world_state.txt"),
+            &world_root.join("level.dat"),
+        );
         Self {
-            world_root: root.join(&level_name),
+            world_root,
+            data_root,
             playerdata_dir: root.join("run").join("playerdata"),
             players: HashMap::new(),
+            permissions: HashMap::new(),
+            world_state,
         }
     }
 
     fn spawn(&self) -> ((f64, f64, f64), i32) {
         let level = folia_core::level::read(self.world_root.join("level.dat")).ok();
-        let (x, y, z) = level
-            .as_ref()
-            .and_then(|level| level.spawn)
-            .unwrap_or((0, 64, 0));
         let game_mode = level
             .as_ref()
             .map_or(0, |level| level.game_type.clamp(0, 3));
-        (
-            (f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5),
-            game_mode,
-        )
+        (self.world_state.spawn, game_mode)
+    }
+
+    fn world_state_path(&self) -> PathBuf {
+        self.data_root.join("world_state.txt")
+    }
+
+    fn save_world_state(&self) {
+        if let Err(error) = self.world_state.save(&self.world_state_path()) {
+            eprintln!("[bridge] could not persist world state: {error}");
+        }
+    }
+
+    fn plugin_config_path(&self, plugin: &str) -> PathBuf {
+        self.data_root
+            .join(safe_plugin_dir(plugin))
+            .join("config.yml")
+    }
+
+    fn read_plugin_config(&self, plugin: &str) -> String {
+        fs::read_to_string(self.plugin_config_path(plugin)).unwrap_or_default()
+    }
+
+    fn write_plugin_config(&self, plugin: &str, contents: &str) -> bool {
+        let path = self.plugin_config_path(plugin);
+        if let Some(parent) = path.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            eprintln!("[bridge] could not create plugin config directory: {error}");
+            return false;
+        }
+        match fs::write(&path, contents) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("[bridge] could not write {}: {error}", path.display());
+                false
+            }
+        }
+    }
+
+    fn permission_state(&mut self, uuid: [u8; 16]) -> &mut PermissionState {
+        self.permissions.entry(uuid).or_default()
+    }
+
+    fn add_permission_attachment(&mut self, uuid: [u8; 16], plugin: &str) -> i32 {
+        let id = NEXT_ATTACHMENT_ID.fetch_add(1, Ordering::SeqCst);
+        self.permission_state(uuid)
+            .attachments
+            .push(PermissionAttachmentState {
+                id,
+                plugin: plugin.to_owned(),
+                permissions: BTreeMap::new(),
+            });
+        id
+    }
+
+    fn remove_permission_attachment(&mut self, uuid: [u8; 16], id: i32) -> bool {
+        let Some(state) = self.permissions.get_mut(&uuid) else {
+            return false;
+        };
+        let before = state.attachments.len();
+        state.attachments.retain(|attachment| attachment.id != id);
+        before != state.attachments.len()
+    }
+
+    fn set_permission(
+        &mut self,
+        uuid: [u8; 16],
+        attachment: i32,
+        permission: &str,
+        value: bool,
+    ) -> bool {
+        let permission = normalize_permission(permission);
+        let Some(state) = self.permissions.get_mut(&uuid) else {
+            return false;
+        };
+        let Some(entry) = state
+            .attachments
+            .iter_mut()
+            .find(|entry| entry.id == attachment)
+        else {
+            return false;
+        };
+        entry.permissions.insert(permission, value);
+        true
+    }
+
+    fn unset_permission(&mut self, uuid: [u8; 16], attachment: i32, permission: &str) -> bool {
+        let permission = normalize_permission(permission);
+        let Some(state) = self.permissions.get_mut(&uuid) else {
+            return false;
+        };
+        let Some(entry) = state
+            .attachments
+            .iter_mut()
+            .find(|entry| entry.id == attachment)
+        else {
+            return false;
+        };
+        entry.permissions.remove(&permission).is_some()
+    }
+
+    fn effective_permissions(&mut self, uuid: [u8; 16]) -> BTreeMap<String, bool> {
+        let mut effective = BTreeMap::new();
+        if let Some(state) = self.permissions.get(&uuid) {
+            for attachment in &state.attachments {
+                for (permission, value) in &attachment.permissions {
+                    effective.insert(permission.clone(), *value);
+                }
+            }
+        }
+        effective
+    }
+
+    fn permission_is_set(&mut self, uuid: [u8; 16], permission: &str) -> bool {
+        self.effective_permissions(uuid)
+            .contains_key(&normalize_permission(permission))
+    }
+
+    fn permission_has(&mut self, uuid: [u8; 16], permission: &str, is_op: bool) -> bool {
+        self.effective_permissions(uuid)
+            .get(&normalize_permission(permission))
+            .copied()
+            .unwrap_or(is_op)
+    }
+
+    fn player_is_op(&mut self, uuid: [u8; 16]) -> bool {
+        let name = self.player(uuid).name.clone();
+        folia_core::join::is_operator(&name)
+    }
+
+    fn player_set_op(&mut self, uuid: [u8; 16], value: bool) -> bool {
+        let name = self.player(uuid).name.clone();
+        let command = if value {
+            format!("op {name}")
+        } else {
+            format!("deop {name}")
+        };
+        for line in folia_core::join::execute_console_command(&command) {
+            println!("[bridge] {line}");
+        }
+        folia_core::join::is_operator(&name) == value
     }
 
     fn ensure_player(&mut self, name: Option<&str>, uuid: [u8; 16]) -> &mut PlayerSession {
@@ -223,6 +505,31 @@ fn with_bridge<R>(f: impl FnOnce(&mut BridgeState) -> R) -> Option<R> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.as_mut().map(f)
+}
+
+fn normalize_permission(permission: &str) -> String {
+    permission.trim().to_ascii_lowercase()
+}
+
+/// Plugin names are used as `run/<name>/config.yml` directory names. Keep the
+/// exact name (PluginHost uses `description.getName()` too) but refuse path
+/// traversal and empty names.
+fn safe_plugin_dir(name: &str) -> String {
+    let trimmed = name.trim();
+    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).trim();
+    if base.is_empty() || base == "." || base == ".." {
+        "plugin".to_owned()
+    } else {
+        base.to_owned()
+    }
+}
+
+/// `Level.isBrightOutside` for the overworld timeline: sky darkening stays
+/// below 4 while the sky-light multiplier is above 11/15. The 1.21.11 timeline
+/// crosses that value at ticks 12523 (dusk) and 23478 (dawn).
+fn is_day_time(full_time: i64) -> bool {
+    let time = full_time.rem_euclid(24_000);
+    !(12_523..23_478).contains(&time)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +642,24 @@ fn world_set_block(state: &BridgeState, x: i32, y: i32, z: i32, material: &str) 
     set_block_in(&mut guard, x, y, z, material)
 }
 
+fn world_full_time(state: &BridgeState) -> i64 {
+    state.world_state.full_time
+}
+
+fn world_set_full_time(state: &mut BridgeState, time: i64) {
+    state.world_state.full_time = time;
+    state.save_world_state();
+}
+
+fn world_set_spawn(state: &mut BridgeState, x: f64, y: f64, z: f64) -> bool {
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return false;
+    }
+    state.world_state.spawn = (x, y, z);
+    state.save_world_state();
+    true
+}
+
 // ---------------------------------------------------------------------------
 // Item/inventory codec
 // ---------------------------------------------------------------------------
@@ -395,17 +720,30 @@ fn encode_stack(stack: &ItemStack) -> String {
         }
         _ => Vec::new(),
     };
+    let enchantments = match stack.get_component("minecraft:enchantments") {
+        Some(ComponentValue::Enchantments(levels)) => levels.clone(),
+        _ => BTreeMap::new(),
+    };
     let mut encoded = format!(
-        "{}\t{}\t{}\t{}\t{}",
+        "2\t{}\t{}\t{}\t{}\t{}\t{}",
         stack.item,
         stack.count,
         damage,
         hex_encode(&display_name),
-        u8::from(unbreakable)
+        u8::from(unbreakable),
+        lore.len()
     );
     for line in lore {
         encoded.push('\t');
         encoded.push_str(&hex_encode(&line));
+    }
+    encoded.push('\t');
+    encoded.push_str(&enchantments.len().to_string());
+    for (key, level) in enchantments {
+        encoded.push('\t');
+        encoded.push_str(&hex_encode(&key));
+        encoded.push('=');
+        encoded.push_str(&level.to_string());
     }
     encoded
 }
@@ -414,23 +752,35 @@ fn decode_stack(encoded: &str) -> ItemStack {
     if encoded.is_empty() {
         return ItemStack::empty();
     }
-    let mut fields = encoded.split('\t');
-    let item = fields.next().unwrap_or_default();
+    let fields: Vec<&str> = encoded.split('\t').collect();
+    if fields.first().is_some_and(|field| *field == "2") {
+        return decode_stack_v2(&fields);
+    }
+    decode_stack_v1(&fields)
+}
+
+fn decode_stack_v1(fields: &[&str]) -> ItemStack {
+    let item = fields.first().copied().unwrap_or_default();
     if item.is_empty() {
         return ItemStack::empty();
     }
     let count = fields
-        .next()
+        .get(1)
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);
     let damage = fields
-        .next()
+        .get(2)
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);
-    let display_name = fields.next().and_then(hex_decode).unwrap_or_default();
-    let unbreakable = fields.next().is_some_and(|value| value == "1");
+    let display_name = fields
+        .get(3)
+        .and_then(|value| hex_decode(value))
+        .unwrap_or_default();
+    let unbreakable = fields.get(4).is_some_and(|value| *value == "1");
     let lore: Vec<Tag> = fields
-        .filter_map(hex_decode)
+        .iter()
+        .skip(5)
+        .filter_map(|value| hex_decode(value))
         .filter(|line| !line.is_empty())
         .map(Tag::String)
         .collect();
@@ -447,6 +797,76 @@ fn decode_stack(encoded: &str) -> ItemStack {
     }
     if !lore.is_empty() {
         stack.set_component(ComponentValue::Lore(lore));
+    }
+    stack
+}
+
+fn decode_stack_v2(fields: &[&str]) -> ItemStack {
+    let item = fields.get(1).copied().unwrap_or_default();
+    if item.is_empty() {
+        return ItemStack::empty();
+    }
+    let count = fields
+        .get(2)
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    let damage = fields
+        .get(3)
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    let display_name = fields
+        .get(4)
+        .and_then(|value| hex_decode(value))
+        .unwrap_or_default();
+    let unbreakable = fields.get(5).is_some_and(|value| *value == "1");
+    let lore_count = fields
+        .get(6)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let lore_start: usize = 7;
+    let lore_end = lore_start.saturating_add(lore_count).min(fields.len());
+    let lore: Vec<Tag> = fields[lore_start..lore_end]
+        .iter()
+        .filter_map(|value| hex_decode(value))
+        .map(Tag::String)
+        .collect();
+    let enchantment_count = fields
+        .get(lore_end)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut enchantments = BTreeMap::new();
+    for value in fields
+        .iter()
+        .skip(lore_end.saturating_add(1))
+        .take(enchantment_count)
+    {
+        let Some((key, level)) = value.split_once('=') else {
+            continue;
+        };
+        let Some(key) = hex_decode(key) else {
+            continue;
+        };
+        let Ok(level) = level.parse::<i32>() else {
+            continue;
+        };
+        enchantments.insert(key, level);
+    }
+
+    let mut stack = ItemStack::new(item, count);
+    if damage > 0 {
+        stack.set_component(ComponentValue::Damage(damage));
+    }
+    if !display_name.is_empty() {
+        stack.set_component(ComponentValue::CustomName(Tag::String(display_name)));
+    }
+    if unbreakable {
+        stack.set_component(ComponentValue::Unbreakable);
+    }
+    if !lore.is_empty() {
+        stack.set_component(ComponentValue::Lore(lore));
+    }
+    if !enchantments.is_empty() {
+        stack.set_component(ComponentValue::Enchantments(enchantments));
     }
     stack
 }
@@ -625,6 +1045,181 @@ extern "system" fn native_world_spawn(
     })
     .unwrap_or_else(|| "0.5\t64\t0.5".to_owned());
     java_string(&mut env, &spawn)
+}
+
+extern "system" fn native_world_full_time(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jlong {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| world_full_time(&*state)).unwrap_or(0)
+}
+
+extern "system" fn native_world_set_full_time(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    time: jlong,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| world_set_full_time(state, time));
+}
+
+extern "system" fn native_world_is_day_time(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    u8::from(with_bridge(|state| is_day_time(state.world_state.full_time)).unwrap_or(true))
+}
+
+extern "system" fn native_world_has_storm(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    u8::from(with_bridge(|state| state.world_state.storm).unwrap_or(false))
+}
+
+extern "system" fn native_world_set_storm(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    storm: jboolean,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| {
+        state.world_state.storm = storm != 0;
+        state.world_state.weather_duration = 0;
+        state.world_state.clear_weather_duration = 0;
+        state.save_world_state();
+    });
+}
+
+extern "system" fn native_world_weather_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jint {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| state.world_state.weather_duration).unwrap_or(0)
+}
+
+extern "system" fn native_world_set_weather_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    duration: jint,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| {
+        state.world_state.weather_duration = duration.max(0);
+        state.save_world_state();
+    });
+}
+
+extern "system" fn native_world_is_thundering(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    u8::from(with_bridge(|state| state.world_state.thundering).unwrap_or(false))
+}
+
+extern "system" fn native_world_set_thundering(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    thundering: jboolean,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| {
+        state.world_state.thundering = thundering != 0;
+        state.world_state.thunder_duration = 0;
+        state.world_state.clear_weather_duration = 0;
+        state.save_world_state();
+    });
+}
+
+extern "system" fn native_world_thunder_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jint {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| state.world_state.thunder_duration).unwrap_or(0)
+}
+
+extern "system" fn native_world_set_thunder_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    duration: jint,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| {
+        state.world_state.thunder_duration = duration.max(0);
+        state.save_world_state();
+    });
+}
+
+extern "system" fn native_world_clear_weather_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+) -> jint {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| state.world_state.clear_weather_duration).unwrap_or(0)
+}
+
+extern "system" fn native_world_set_clear_weather_duration(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    duration: jint,
+) {
+    let _world = string_arg(&mut env, &world_name);
+    with_bridge(|state| {
+        state.world_state.clear_weather_duration = duration.max(0);
+        state.save_world_state();
+    });
+}
+
+extern "system" fn native_world_set_spawn(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    u8::from(with_bridge(|state| world_set_spawn(state, x, y, z)).unwrap_or(false))
+}
+
+// ---------------------------------------------------------------------------
+// Config native methods
+// ---------------------------------------------------------------------------
+
+extern "system" fn native_config_read(mut env: JNIEnv, _class: JClass, plugin: JString) -> jstring {
+    let plugin = string_arg(&mut env, &plugin);
+    let contents = with_bridge(|state| state.read_plugin_config(&plugin)).unwrap_or_default();
+    java_string(&mut env, &contents)
+}
+
+extern "system" fn native_config_write(
+    mut env: JNIEnv,
+    _class: JClass,
+    plugin: JString,
+    contents: JString,
+) -> jboolean {
+    let plugin = string_arg(&mut env, &plugin);
+    let contents = string_arg(&mut env, &contents);
+    u8::from(with_bridge(|state| state.write_plugin_config(&plugin, &contents)).unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1605,158 @@ extern "system" fn native_player_set_selected_slot(
     u8::from(saved)
 }
 
+extern "system" fn native_player_is_op(mut env: JNIEnv, _class: JClass, uuid: JString) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    u8::from(with_bridge(|state| state.player_is_op(uuid)).unwrap_or(false))
+}
+
+extern "system" fn native_player_set_op(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    value: jboolean,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    u8::from(with_bridge(|state| state.player_set_op(uuid, value != 0)).unwrap_or(false))
+}
+
+extern "system" fn native_player_permission_has(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    permission: JString,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let permission = string_arg(&mut env, &permission);
+    u8::from(
+        with_bridge(|state| {
+            let is_op = state.player_is_op(uuid);
+            state.permission_has(uuid, &permission, is_op)
+        })
+        .unwrap_or(false),
+    )
+}
+
+extern "system" fn native_player_permission_is_set(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    permission: JString,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let permission = string_arg(&mut env, &permission);
+    u8::from(with_bridge(|state| state.permission_is_set(uuid, &permission)).unwrap_or(false))
+}
+
+extern "system" fn native_player_permission_effective(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+) -> jstring {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return java_string(&mut env, "");
+    };
+    let encoded = with_bridge(|state| {
+        let mut encoded = String::new();
+        for (permission, value) in state.effective_permissions(uuid) {
+            encoded.push_str(&permission);
+            encoded.push('\t');
+            encoded.push(if value { '1' } else { '0' });
+            encoded.push('\n');
+        }
+        encoded
+    })
+    .unwrap_or_default();
+    java_string(&mut env, &encoded)
+}
+
+extern "system" fn native_player_permission_add_attachment(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    plugin: JString,
+) -> jint {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return -1;
+    };
+    let plugin = string_arg(&mut env, &plugin);
+    with_bridge(|state| state.add_permission_attachment(uuid, &plugin)).unwrap_or(-1)
+}
+
+extern "system" fn native_player_permission_remove_attachment(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    attachment: jint,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    u8::from(
+        with_bridge(|state| state.remove_permission_attachment(uuid, attachment)).unwrap_or(false),
+    )
+}
+
+extern "system" fn native_player_permission_set(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    attachment: jint,
+    permission: JString,
+    value: jboolean,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let permission = string_arg(&mut env, &permission);
+    u8::from(
+        with_bridge(|state| state.set_permission(uuid, attachment, &permission, value != 0))
+            .unwrap_or(false),
+    )
+}
+
+extern "system" fn native_player_permission_unset(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    attachment: jint,
+    permission: JString,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let permission = string_arg(&mut env, &permission);
+    u8::from(
+        with_bridge(|state| state.unset_permission(uuid, attachment, &permission)).unwrap_or(false),
+    )
+}
+
+extern "system" fn native_player_kick(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    reason: JString,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let reason = string_arg(&mut env, &reason);
+    // The live join session does not expose a disconnect packet queue to the
+    // bridge yet, so record the request instead of pretending the socket was
+    // closed. The join-session integration task owns the transport hook.
+    let name = with_bridge(|state| state.player(uuid).name.clone()).unwrap_or_default();
+    println!("[bridge] kick requested for {name}: {reason} (live disconnect transport pending)");
+    0
+}
+
 // ---------------------------------------------------------------------------
 // Plugin runtime
 // ---------------------------------------------------------------------------
@@ -1139,6 +1886,86 @@ impl PluginRuntime {
                     fn_ptr: native_world_spawn as *mut c_void,
                 },
                 NativeMethod {
+                    name: "nativeWorldFullTime".into(),
+                    sig: "(Ljava/lang/String;)J".into(),
+                    fn_ptr: native_world_full_time as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetFullTime".into(),
+                    sig: "(Ljava/lang/String;J)V".into(),
+                    fn_ptr: native_world_set_full_time as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldIsDayTime".into(),
+                    sig: "(Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_world_is_day_time as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldHasStorm".into(),
+                    sig: "(Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_world_has_storm as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetStorm".into(),
+                    sig: "(Ljava/lang/String;Z)V".into(),
+                    fn_ptr: native_world_set_storm as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldWeatherDuration".into(),
+                    sig: "(Ljava/lang/String;)I".into(),
+                    fn_ptr: native_world_weather_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetWeatherDuration".into(),
+                    sig: "(Ljava/lang/String;I)V".into(),
+                    fn_ptr: native_world_set_weather_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldIsThundering".into(),
+                    sig: "(Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_world_is_thundering as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetThundering".into(),
+                    sig: "(Ljava/lang/String;Z)V".into(),
+                    fn_ptr: native_world_set_thundering as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldThunderDuration".into(),
+                    sig: "(Ljava/lang/String;)I".into(),
+                    fn_ptr: native_world_thunder_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetThunderDuration".into(),
+                    sig: "(Ljava/lang/String;I)V".into(),
+                    fn_ptr: native_world_set_thunder_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldClearWeatherDuration".into(),
+                    sig: "(Ljava/lang/String;)I".into(),
+                    fn_ptr: native_world_clear_weather_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetClearWeatherDuration".into(),
+                    sig: "(Ljava/lang/String;I)V".into(),
+                    fn_ptr: native_world_set_clear_weather_duration as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSetSpawn".into(),
+                    sig: "(Ljava/lang/String;DDD)Z".into(),
+                    fn_ptr: native_world_set_spawn as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeConfigRead".into(),
+                    sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
+                    fn_ptr: native_config_read as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeConfigWrite".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_config_write as *mut c_void,
+                },
+                NativeMethod {
                     name: "nativePlayerExists".into(),
                     sig: "(Ljava/lang/String;)Z".into(),
                     fn_ptr: native_player_exists as *mut c_void,
@@ -1237,6 +2064,56 @@ impl PluginRuntime {
                     name: "nativePlayerSetSelectedSlot".into(),
                     sig: "(Ljava/lang/String;I)Z".into(),
                     fn_ptr: native_player_set_selected_slot as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerIsOp".into(),
+                    sig: "(Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_player_is_op as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerSetOp".into(),
+                    sig: "(Ljava/lang/String;Z)Z".into(),
+                    fn_ptr: native_player_set_op as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionHas".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_player_permission_has as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionIsSet".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_player_permission_is_set as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionEffective".into(),
+                    sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
+                    fn_ptr: native_player_permission_effective as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionAddAttachment".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;)I".into(),
+                    fn_ptr: native_player_permission_add_attachment as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionRemoveAttachment".into(),
+                    sig: "(Ljava/lang/String;I)Z".into(),
+                    fn_ptr: native_player_permission_remove_attachment as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionSet".into(),
+                    sig: "(Ljava/lang/String;ILjava/lang/String;Z)Z".into(),
+                    fn_ptr: native_player_permission_set as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPermissionUnset".into(),
+                    sig: "(Ljava/lang/String;ILjava/lang/String;)Z".into(),
+                    fn_ptr: native_player_permission_unset as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerKick".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;)Z".into(),
+                    fn_ptr: native_player_kick as *mut c_void,
                 },
             ];
             env.register_native_methods(&bridge, &methods)
@@ -1622,6 +2499,10 @@ mod tests {
             Tag::String("第二行".into()),
         ]));
         stack.set_component(ComponentValue::Unbreakable);
+        stack.set_component(ComponentValue::Enchantments(BTreeMap::from([
+            ("minecraft:sharpness".into(), 3),
+            ("minecraft:unbreaking".into(), 2),
+        ])));
 
         let encoded = encode_stack(&stack);
         let decoded = decode_stack(&encoded);
@@ -1648,7 +2529,32 @@ mod tests {
             decoded.get_component("minecraft:unbreakable"),
             Some(&ComponentValue::Unbreakable)
         );
+        assert_eq!(
+            decoded.get_component("minecraft:enchantments"),
+            Some(&ComponentValue::Enchantments(BTreeMap::from([
+                ("minecraft:sharpness".into(), 3),
+                ("minecraft:unbreaking".into(), 2),
+            ])))
+        );
         assert!(encode_stack(&ItemStack::empty()).is_empty());
+    }
+
+    #[test]
+    fn legacy_item_encoding_still_decodes() {
+        let encoded = format!(
+            "minecraft:stone\t12\t0\t{}\t1\t{}",
+            hex_encode(""),
+            hex_encode("legacy lore")
+        );
+        let decoded = decode_stack(&encoded);
+        assert_eq!(decoded, {
+            let mut expected = ItemStack::new("minecraft:stone", 12);
+            expected.set_component(ComponentValue::Unbreakable);
+            expected.set_component(ComponentValue::Lore(vec![Tag::String(
+                "legacy lore".into(),
+            )]));
+            expected
+        });
     }
 
     #[test]
@@ -1711,6 +2617,108 @@ mod tests {
         assert_eq!(session.z, -4.5);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_config_round_trips_through_the_rust_file() {
+        let root = temp_dir("config");
+        let state = BridgeState::new(&root);
+        assert!(state.read_plugin_config("HelloPlugin").is_empty());
+        let contents = "motd: \"Hello from Rust\"\nmax-homes: 3\ndebug: false\n";
+        assert!(state.write_plugin_config("HelloPlugin", contents));
+        assert_eq!(state.read_plugin_config("HelloPlugin"), contents);
+        assert_eq!(
+            state.plugin_config_path("HelloPlugin"),
+            root.join("run").join("HelloPlugin").join("config.yml")
+        );
+
+        assert!(state.write_plugin_config("../escape", "x"));
+        assert_eq!(state.read_plugin_config("../escape"), "x");
+        assert_eq!(safe_plugin_dir("../escape"), "escape");
+        assert_eq!(safe_plugin_dir(".."), "plugin");
+        assert_eq!(safe_plugin_dir(""), "plugin");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn permission_attachments_are_rust_owned() {
+        let root = temp_dir("permissions");
+        let mut state = BridgeState::new(&root);
+        let uuid = [0x22; 16];
+        state.ensure_player(Some("PermProbe"), uuid);
+
+        assert!(!state.permission_is_set(uuid, "bridge.test"));
+        assert!(!state.permission_has(uuid, "bridge.test", false));
+        assert!(state.permission_has(uuid, "bridge.test", true));
+
+        let first = state.add_permission_attachment(uuid, "HelloPlugin");
+        let second = state.add_permission_attachment(uuid, "OtherPlugin");
+        assert!(first > 0 && second > first);
+
+        assert!(state.set_permission(uuid, first, "Bridge.Test", true));
+        assert!(state.permission_is_set(uuid, "bridge.test"));
+        assert!(state.permission_has(uuid, "bridge.test", false));
+        assert_eq!(
+            state.effective_permissions(uuid),
+            BTreeMap::from([("bridge.test".to_owned(), true)])
+        );
+
+        assert!(state.set_permission(uuid, second, "bridge.test", false));
+        assert!(!state.permission_has(uuid, "bridge.test", true));
+        assert!(state.unset_permission(uuid, second, "bridge.test"));
+        assert!(state.permission_has(uuid, "bridge.test", true));
+
+        assert!(state.remove_permission_attachment(uuid, first));
+        assert!(!state.remove_permission_attachment(uuid, first));
+        assert!(!state.permission_is_set(uuid, "bridge.test"));
+        assert!(!state.permission_has(uuid, "bridge.test", false));
+
+        assert!(!state.set_permission(uuid, first, "bridge.test", true));
+        assert!(!state.unset_permission(uuid, first, "bridge.test"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn world_state_persists_time_spawn_and_weather() {
+        let root = temp_dir("worldstate");
+        let mut state = BridgeState::new(&root);
+        assert_eq!(state.world_state.spawn, (0.5, 64.0, 0.5));
+        world_set_full_time(&mut state, 18_000);
+        assert!(world_set_spawn(&mut state, 12.5, 70.0, -4.5));
+        state.world_state.storm = true;
+        state.world_state.weather_duration = 120;
+        state.world_state.thundering = true;
+        state.world_state.thunder_duration = 80;
+        state.world_state.clear_weather_duration = 40;
+        state.save_world_state();
+
+        let reloaded = BridgeState::new(&root);
+        assert_eq!(world_full_time(&reloaded), 18_000);
+        assert_eq!(reloaded.world_state.spawn, (12.5, 70.0, -4.5));
+        assert!(reloaded.world_state.storm);
+        assert!(reloaded.world_state.thundering);
+        assert_eq!(reloaded.world_state.weather_duration, 120);
+        assert_eq!(reloaded.world_state.thunder_duration, 80);
+        assert_eq!(reloaded.world_state.clear_weather_duration, 40);
+        let mut invalid = BridgeState::new(&root);
+        assert!(!world_set_spawn(&mut invalid, f64::NAN, 0.0, 0.0));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn day_time_matches_the_overworld_timeline() {
+        assert!(is_day_time(0));
+        assert!(is_day_time(6_000));
+        assert!(is_day_time(12_522));
+        assert!(!is_day_time(12_523));
+        assert!(!is_day_time(18_000));
+        assert!(!is_day_time(23_477));
+        assert!(is_day_time(23_478));
+        assert!(is_day_time(-1));
+        assert!(is_day_time(24_000));
     }
 
     #[test]

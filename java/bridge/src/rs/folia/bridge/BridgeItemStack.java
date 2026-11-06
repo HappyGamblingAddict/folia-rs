@@ -1,6 +1,7 @@
 package rs.folia.bridge;
 
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -215,6 +216,7 @@ public final class BridgeItemStack extends ItemStack {
         String displayName = "";
         boolean unbreakable = false;
         List<String> lore = List.of();
+        Map<Enchantment, Integer> enchantments = Map.of();
         ItemMeta itemMeta = stack.getItemMeta();
         if (itemMeta != null) {
             try {
@@ -228,18 +230,31 @@ public final class BridgeItemStack extends ItemStack {
                         lore = List.copyOf(lines);
                     }
                 }
+                Map<Enchantment, Integer> levels = itemMeta.getEnchants();
+                if (levels != null && !levels.isEmpty()) {
+                    enchantments = new java.util.LinkedHashMap<>(levels);
+                }
             } catch (RuntimeException ignored) {
                 // Foreign ItemMeta implementations may not support every getter.
             }
         }
         StringBuilder encoded = new StringBuilder();
-        encoded.append(name).append('\t')
+        encoded.append("2\t")
+                .append(name).append('\t')
                 .append(count).append('\t')
                 .append(damage).append('\t')
                 .append(BridgeValues.hex(displayName)).append('\t')
-                .append(unbreakable ? '1' : '0');
+                .append(unbreakable ? '1' : '0').append('\t')
+                .append(lore.size());
         for (String line : lore) {
             encoded.append('\t').append(BridgeValues.hex(line));
+        }
+        encoded.append('\t').append(enchantments.size());
+        for (Map.Entry<Enchantment, Integer> entry : enchantments.entrySet()) {
+            encoded.append('\t')
+                    .append(BridgeValues.hex(entry.getKey().getKey().toString()))
+                    .append('=')
+                    .append(entry.getValue());
         }
         return encoded.toString();
     }
@@ -249,6 +264,13 @@ public final class BridgeItemStack extends ItemStack {
             return new BridgeItemStack(Material.AIR, 0);
         }
         String[] fields = encoded.split("\t", -1);
+        if ("2".equals(fields[0])) {
+            return decodeV2(fields);
+        }
+        return decodeV1(fields);
+    }
+
+    private static BridgeItemStack decodeV1(String[] fields) {
         if (fields.length < 5) {
             return new BridgeItemStack(Material.AIR, 0);
         }
@@ -275,6 +297,69 @@ public final class BridgeItemStack extends ItemStack {
         }
         if (!displayName.isEmpty() || !lore.isEmpty() || unbreakable) {
             stack.setItemMeta(BridgeItemMeta.of(displayName, lore, unbreakable).proxy());
+        }
+        return stack;
+    }
+
+    private static BridgeItemStack decodeV2(String[] fields) {
+        if (fields.length < 7) {
+            return new BridgeItemStack(Material.AIR, 0);
+        }
+        Material material = Material.matchMaterial(fields[1]);
+        if (material == null) {
+            material = Material.AIR;
+        }
+        int count;
+        int damage;
+        int loreCount;
+        try {
+            count = Integer.parseInt(fields[2]);
+            damage = Integer.parseInt(fields[3]);
+            loreCount = Math.max(0, Integer.parseInt(fields[6]));
+        } catch (NumberFormatException exception) {
+            return new BridgeItemStack(Material.AIR, 0);
+        }
+        BridgeItemStack stack = new BridgeItemStack(material, count, (short) Math.max(0, damage));
+        String displayName = BridgeValues.unhex(fields[4]);
+        boolean unbreakable = "1".equals(fields[5]);
+        List<String> lore = new java.util.ArrayList<>(loreCount);
+        int index = 7;
+        for (int line = 0; line < loreCount && index < fields.length; line++, index++) {
+            lore.add(BridgeValues.unhex(fields[index]));
+        }
+        Map<Enchantment, Integer> enchantments = new java.util.LinkedHashMap<>();
+        if (index < fields.length) {
+            int enchantmentCount;
+            try {
+                enchantmentCount = Math.max(0, Integer.parseInt(fields[index]));
+            } catch (NumberFormatException exception) {
+                enchantmentCount = 0;
+            }
+            index++;
+            for (int line = 0; line < enchantmentCount && index < fields.length; line++, index++) {
+                String raw = fields[index];
+                int separator = raw.lastIndexOf('=');
+                if (separator <= 0) {
+                    continue;
+                }
+                NamespacedKey key =
+                        NamespacedKey.fromString(BridgeValues.unhex(raw.substring(0, separator)));
+                Enchantment enchantment = key == null ? null : Enchantment.getByKey(key);
+                if (enchantment == null) {
+                    continue;
+                }
+                try {
+                    enchantments.put(enchantment,
+                            Integer.parseInt(raw.substring(separator + 1)));
+                } catch (NumberFormatException ignored) {
+                    // Skip malformed levels rather than failing the whole stack.
+                }
+            }
+        }
+        if (!displayName.isEmpty() || !lore.isEmpty() || unbreakable || !enchantments.isEmpty()) {
+            BridgeItemMeta meta = BridgeItemMeta.of(displayName, lore, unbreakable);
+            meta.setEnchantments(enchantments);
+            stack.setItemMeta(meta.proxy());
         }
         return stack;
     }

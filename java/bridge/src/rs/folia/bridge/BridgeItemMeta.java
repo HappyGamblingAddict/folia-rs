@@ -104,6 +104,13 @@ final class BridgeItemMeta implements InvocationHandler {
         return maxStackSize == null ? 64 : maxStackSize;
     }
 
+    void setEnchantments(Map<Enchantment, Integer> levels) {
+        enchantments.clear();
+        if (levels != null) {
+            enchantments.putAll(levels);
+        }
+    }
+
     ItemMeta proxy() {
         return (ItemMeta) Proxy.newProxyInstance(
                 BridgeItemMeta.class.getClassLoader(),

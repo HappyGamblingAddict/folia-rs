@@ -47,6 +47,7 @@ final class BridgeServer {
     private final BridgeScheduler scheduler;
     private final BridgeEventBus events;
     private final BridgeCommandRegistry commands;
+    private final BridgeServicesManager services;
     private final org.bukkit.command.CommandMap commandMap;
     private final Map<String, Plugin> plugins = new LinkedHashMap<>();
     private final PluginManager pluginManager;
@@ -63,6 +64,7 @@ final class BridgeServer {
         this.scheduler = new BridgeScheduler(log, BridgeServer.class.getClassLoader());
         this.events = new BridgeEventBus(log);
         this.commands = new BridgeCommandRegistry();
+        this.services = new BridgeServicesManager(log);
         this.commandMap = (org.bukkit.command.CommandMap) Proxy.newProxyInstance(
                 BridgeServer.class.getClassLoader(),
                 new Class<?>[]{org.bukkit.command.CommandMap.class},
@@ -105,6 +107,7 @@ final class BridgeServer {
     }
 
     synchronized void unregisterPlugin(Plugin plugin) {
+        services.unregisterAll(plugin);
         plugins.values().removeIf(candidate -> candidate == plugin);
         commands.remove(plugin);
     }
@@ -250,7 +253,7 @@ final class BridgeServer {
             case "getServerTickManager" -> null;
             case "getServerLinks" -> null;
             case "getMessenger" -> null;
-            case "getServicesManager" -> null;
+            case "getServicesManager" -> services;
             case "getItemFactory" -> null;
             case "getCommandMap" -> commandMap;
             case "getPluginCommand" -> commands.get((String) args[0]);

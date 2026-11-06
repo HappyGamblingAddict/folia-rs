@@ -2156,11 +2156,13 @@ and basic item meta.
 **Current state:** Lazy JVM, real class loading, events, commands, scheduler,
 JNI ping, `World`/`Block` read/write over stored/cached chunks, `Player`
 playerdata-backed state, `PlayerInventory` slots 0-35, and `ItemStack` type/
-count/damage/name/lore/unbreakable. Three block/interact events are
-host-callable with cancellation. Still missing: live-session sync for
-health/food/inventory/teleport/messages, live event dispatch from `join.rs`,
-armor/off-hand slots, enchantment/PDC persistence, entities, services, config,
-permissions, and NMS shims.
+count/damage/name/lore/unbreakable/enchantments. Three block/interact events are
+host-callable with cancellation. The bridge now also has a Rust-backed flat YAML
+config, Rust-owned permission attachments with operator defaults,
+`ServicesManager`, persisted world time/weather/spawn, and a scheduler test
+seam. Still missing: live-session sync for health/food/inventory/teleport/
+messages/kick, live event dispatch from `join.rs`, armor/off-hand slots, PDC
+persistence, entity APIs, client sound/particle packets, and NMS shims.
 
 ### P9.1 Formalize the Rust↔Java ABI `[~]` `M`
 
@@ -2213,30 +2215,50 @@ permissions, and NMS shims.
   entities, `LivingEntity`, full chunk snapshots, and persistent-data containers
   remain open.
 
-### P9.4 Scheduler parity `[ ]` `M`
+### P9.4 Scheduler parity `[~]` `M`
 
 - **What:** Implement sync, async, region, entity, delayed, repeating, and
   cancellation semantics, including task IDs and owner lifecycle.
 - **Why:** Folia plugins specifically use region/entity schedulers.
 - **Done when:** Scheduler tests match Bukkit/Folia behavior and tasks stop on
   plugin disable.
+- **Progress (2026-11-06):** `runTaskLater`, `runTaskTimer`, `runTask`, the
+  legacy sync wrappers, cancellation by id/plugin, and plugin-disable cleanup
+  route through the Rust task table. `BridgeApiTest` pins delay/period/id
+  forwarding through a test backend. Async variants have no worker pool and are
+  explicitly downgraded to the server tick thread (`isSync()` returns true).
+  Folia region/entity schedulers and task timing against a real tick fixture
+  remain open.
 
-### P9.5 Commands and permissions `[ ]` `M`
+### P9.5 Commands and permissions `[~]` `M`
 
 - **What:** Complete `plugin.yml` commands, aliases, `CommandMap`,
   `PluginCommand`, tab completion, console senders, and permissions.
 - **Why:** Admin/player commands are a primary plugin surface.
 - **Done when:** A plugin command runs from console/chat with correct
   permission checks.
+- **Progress (2026-11-06):** `Player.hasPermission`/`isPermissionSet` and
+  `PermissionAttachment` add/remove/set/unset are backed by Rust permission
+  attachments. Explicit values override the player's operator flag; unset
+  permissions use the operator default. Timed attachments reuse the Rust task
+  queue. Permission wildcard/parent expansion from `plugin.yml`, permission
+  registration through `PluginManager.getPermission`, and live chat/command
+  permission checks remain open.
 
-### P9.6 Configuration and YAML `[ ]` `M`
+### P9.6 Configuration and YAML `[~]` `M`
 
 - **What:** Implement `getConfig`, `saveDefaultConfig`, `reloadConfig`,
   `saveConfig`, YAML parsing/writing, and file encoding behavior.
 - **Why:** Almost every plugin reads config on enable.
 - **Done when:** A config round-trips and comments/defaults behave like Bukkit.
+- **Progress (2026-11-06):** `plugin.getConfig()` is replaced at load time by a
+  `BridgeConfig` that reads/writes `run/<plugin>/config.yml` through the Rust
+  host. `getString/getInt/getBoolean/set` and dotted scalar paths round-trip;
+  `saveDefaultConfig()` copies the jar resource before the first read.
+  Nested sections, lists, maps, comments, and the stock `reloadConfig()` (which
+  replaces the bridge object with a YamlConfiguration) remain open.
 
-### P9.7 Services, plugin manager, and dependencies `[ ]` `M`
+### P9.7 Services, plugin manager, and dependencies `[~]` `M`
 
 - **What:** Implement `ServicesManager`, plugin descriptions, dependency/load
   order (`depend`, `softdepend`, `loadbefore`), `PluginManager` queries, and
@@ -2244,6 +2266,10 @@ permissions, and NMS shims.
 - **Why:** Plugin ecosystems rely on service lookup and load ordering.
 - **Done when:** A multi-plugin test set loads in the correct order and shares
   a service.
+- **Progress (2026-11-06):** `ServicesManager` supports typed
+  register/unregister/load, priority ordering, per-plugin listings, and
+  plugin-disable cleanup. `BridgeApiTest` covers priority and fallback.
+  Dependency ordering and a multi-plugin service test remain open.
 
 ### P9.8 Inventory, ItemStack, and PDC APIs `[~]` `L`
 
@@ -2253,10 +2279,11 @@ permissions, and NMS shims.
 - **Done when:** A plugin can create/modify items and have changes persist and
   appear on the client.
 - **Progress (2026-11-06):** Storage slots 0-35, item type/count, damage,
-  display name, lore, and unbreakable round-trip through the Rust component
-  model and playerdata. `new ItemStack(...)` works through the registry shim.
-  Enchantments, item flags, custom model data, PDC, armor/off-hand, and client
-  inventory updates remain open.
+  display name, lore, unbreakable, and enchantments round-trip through the Rust
+  component model and playerdata. `new ItemStack(...)` and enchantment static
+  constants work through the registry shim. Item flags remain on the Java meta
+  proxy only, and PDC, custom model data, armor/off-hand, container contents,
+  and client inventory updates remain open.
 
 ### P9.9 World/entity APIs `[~]` `L`
 
@@ -2266,10 +2293,13 @@ permissions, and NMS shims.
 - **Done when:** A plugin can build a small structure and spawn a mob through
   the API.
 - **Progress (2026-11-06):** Block get/set, highest-Y, biome, and light read
-  from `WorldStorage`; block edits persist and broadcast. Time/weather are
-  static defaults, and entity spawn/query, sounds, particles, explosions,
-  weather, and on-demand chunk generation remain open. World reads/writes only
-  cover stored or currently cached columns.
+  from `WorldStorage`; block edits persist and broadcast. World time,
+  isDayTime, storm/thunder flags and durations, and spawn location are
+  persisted in `run/world_state.txt`; `setTime` uses Bukkit's 24,000-tick
+  margin rule. Time/weather changes do not reach a live client yet.
+  `playSound`/`spawnParticle` are explicit no-ops, and entity spawn/query,
+  explosions, weather packets, and on-demand chunk generation remain open.
+  World reads/writes only cover stored or currently cached columns.
 
 ### P9.10 NMS/CraftBukkit shims `[ ]` `XL` long tail
 

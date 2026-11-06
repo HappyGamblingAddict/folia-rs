@@ -2437,3 +2437,41 @@ Format:
   `save_chunk_with_block_entities`. The ticker is explicit and is not called by
   `tick.rs` yet; chest/furnace menus, placement, spawner spawning, sign editing,
   and the remaining block-entity types are still open (see `BLOCKERS.md`).
+## 2026-11-06 - Bridge config, permissions, scheduler, and world state are host-owned
+
+- Context: Plugins expect `getConfig`, `hasPermission`/attachments, a scheduler,
+  services, and mutable world time/weather. The bridge previously returned
+  constants for all of these, and `JavaPlugin#getConfig` would otherwise create
+  a second YamlConfiguration that the host never sees.
+- Decision: `BridgeConfig` replaces `JavaPlugin#newConfig` at load time and
+  reads/writes `run/<plugin>/config.yml` through native calls. The file format
+  is a flat scalar YAML subset: dotted keys are serialized as dotted keys and
+  reconstructed as MemorySections; comments, lists, maps, and sections are
+  skipped explicitly.
+- Decision: Permissions live in Rust (`BridgeState::permissions`) as ordered
+  attachments keyed by a per-player id. Explicit attachment values win; an
+  unset permission falls back to `folia_core::join::is_operator`. Java mirrors
+  attachment mutations through native calls and returns a
+  `PermissionAttachment` subclass so `setPermission`/`remove` stay in sync.
+- Decision: Scheduler async variants are accepted but execute on the server
+  thread in the same Rust tick queue; `BukkitTask.isSync()` always reports
+  true. There is no bridge-owned worker pool yet, so this is an explicit
+  downgrade rather than a fake async claim.
+- Decision: World time, weather flags/durations, and spawn persist in
+  `run/world_state.txt`, not `level.dat`, to avoid concurrent writes with the
+  native level writer. `setTime` applies Bukkit's `(time - fullTime) % 24000`
+  margin. `isDayTime` uses the 1.21.11 timeline thresholds 12,523 / 23,478.
+- Decision: The item wire payload is versioned (`2<TAB>...`) and carries a
+  lore count plus enchantment key/level pairs into
+  `ComponentValue::Enchantments`. Legacy v1 payloads still decode. Item flags
+  remain in the Java meta proxy because the component model has no hide-flag
+  component; they are documented as non-persistent.
+- Why: These are the highest-value compatibility surfaces and all can be
+  tested without a live client socket.
+- Consequences: Config reload through the stock `reloadConfig()` replaces the
+  bridge object with YamlConfiguration; plugins must call `getConfig()` (which
+  lazily reloads the bridge file on first access). Weather/time changes are
+  persisted but not sent in play packets. `sendMessage`/`kickPlayer` still only
+  log because the join session exposes no outbound queue. `playSound` and
+  `spawnParticle` are logged no-ops. Enchantment/sound registry shims provide
+  identity only, not gameplay effects or audio.

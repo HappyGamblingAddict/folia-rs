@@ -191,10 +191,28 @@ Last updated: 2026-11-06
   chunks are not retroactively decorated, so features appear in newly generated
   columns only.
 
+- P3.10 block simulation has a first vertical slice in `tick.rs`:
+  vanilla `UPDATE_*` flags (`BLOCK_UPDATE`, `NEIGHBORS`, `SHAPE`,
+  `SUPPRESS_NEIGHBORS`, …), a chunk-grouped neighbour queue with position
+  deduplication and flag-union merging, a `ScheduledTickQueue` ordered by
+  trigger/priority/sub-tick with delay, dedup, and cancellation, and a
+  `RandomTickQueue` sampling 3 positions per 16x16x16 section from a
+  deterministic per-chunk seed. `block_update::set_block` queues and drains the
+  six neighbours; falling sand/gravel/concrete powder/anvils move one block per
+  scheduled tick, plant support uses `dirt`/farmland tags (including double
+  plants), and grass spreads to dirt. The server loop calls `tick::tick_world`
+  every tick. Leaf decay, crop growth, redstone, fluids, pistons, and NBT tick
+  persistence remain explicit gaps (see `BLOCKERS.md`).
 - Folia region threading is not implemented beyond task queues.
 
 ## Current focus
 
+- P3.10 now has flags/neighbour/scheduled/random tick queues and the server
+  tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth, torch
+  support, redstone, fluids, and piston behaviour; persist `ScheduledTick`s in
+  chunk NBT; replace the deterministic per-chunk random sampler with Java's
+  level RNG once feature/level RNG parity lands; add a Java neighbor-update
+  differential fixture.
 - P4.1/P4.2 now have a live physics slice: finish the movement feature gaps
   (ladders/vines/scaffolding, water/lava/swimming, cobwebs, slime, elytra,
   powder snow, sprint/sneak input packets, real block shapes) and eventually
@@ -241,6 +259,9 @@ Last updated: 2026-11-06
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
+  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
+  redstone, fluids, pistons, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
@@ -248,6 +269,18 @@ Last updated: 2026-11-06
 
 ## Recently completed
 
+- 2026-11-06: P3.10 tick slice — `tick.rs` adds vanilla update-flag values,
+  a chunk-grouped neighbour queue with dedup/flag merging, a scheduled-tick
+  queue ordered by trigger/priority/sub-tick with delay and cancellation, and a
+  deterministic 3-per-section random-tick sampler. `block_update::set_block`
+  now drains six neighbour updates and applies shape/support changes. Block
+  behaviour hooks implement falling sand/gravel/concrete powder/anvils one
+  block per scheduled tick, plant support from `dirt`/farmland tags including
+  double plants, and grass spread. `tick::tick_world` is wired into the server
+  loop with the shared storage and `level.dat` seed. Focused tests: 11 unit +
+  10 integration; clippy/fmt clean. Remaining gaps are leaf decay, crop/sapling
+  growth, redstone/fluids/pistons, NBT tick persistence, a Java neighbor
+  fixture, and the approximate random RNG.
 - 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
@@ -291,6 +324,9 @@ Last updated: 2026-11-06
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
+- [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
+  falling blocks, plant support, grass spread, server hook; leaf decay, crops,
+  redstone, fluids, pistons, and NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

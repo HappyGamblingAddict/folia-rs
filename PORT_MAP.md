@@ -24,8 +24,12 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light; stored/computed sky+block layers take precedence over the height fallback |
 | Player session / movement / playerdata | `folia-core/src/player.rs` | Movement packet parsing, gzip-NBT persistence, join session |
 | Player physics / movement validation | `folia-core/src/player_physics.rs` | AABB, gravity/drag, ground friction, jump, step-up, fall distance/damage, collision reconciliation; water/ladders/cobwebs/elytra and other special movement remain unported |
-| `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn |
+| `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn; edits now queue six neighbour updates and drain shape/support changes |
 | `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Whole-chunk sky+block light data after a block edit; incremental section-only updates not ported |
+| `Block.UPDATE_*`, `BlockBehaviour.UPDATE_SHAPE_ORDER`, `NeighborUpdater` | `folia-core/src/tick.rs` | Partial: vanilla flag values plus an internal shape bit, chunk-grouped deterministic neighbour queue, six-direction enqueue, shape/support checks, 512-chain limit |
+| `ScheduledTick`, `TickPriority`, `LevelTicks`, `LevelChunkTicks` | `folia-core/src/tick.rs` | Partial: trigger/priority/sub-tick ordering, delay, dedup, cancellation between ticks; no NBT persistence, region ownership, or cancel-during-tick |
+| `ServerLevel.tickChunk`, `LevelChunk.tickBlocks`, `RandomTick` | `folia-core/src/tick.rs` | Partial: 3 samples per 16x16x16 section from a deterministic seed/chunk/tick hash; Java level-RNG sequence and ticking-block lists not matched |
+| `FallingBlock`, `VegetationBlock`, `GrassBlock`, `SpreadingSnowyDirtBlock` | `folia-core/src/tick.rs` | Partial: falling sand/gravel/concrete powder/anvils move one block per scheduled tick; plant support from `dirt`/farmland and double-plant halves; grass spread; leaf/crop/redstone/fluid/piston behavior remains explicit unsupported |
 | Hotbar/full inventory and cursor | `folia-core/src/inventory.rs`, `player.rs` | 36 slots + cursor, container content/slot packets, clicks, creative slots, NBT persistence, placement consumption |
 | Entity tracking (`ClientboundAddEntity`, `RemoveEntities`, `EntityPositionSync`) | `folia-core/src/entity.rs` | Spawn/move/remove store, broadcasts, Java-matched packets |
 | Entity tick physics | `folia-core/src/entity.rs` | Gravity/drag, axis-separated AABB collision against `WorldStorage`, ground detection, per-tick sync |
@@ -146,6 +150,14 @@ Rust tree: `crates/folia-core`.
   - `read_region` parsed a nether region with 242 chunks / 3,872 sections and
     zero errors, plus an end region with 144 chunks / 2,305 sections and zero
     errors after handling sections that omit `block_states`.
+- P3.10 tick slice: 11 `tick` unit tests cover vanilla flag values,
+  neighbour dedup/flag merging/order, scheduled priority/sub-tick/delay/dedup/
+  cancel, deterministic random positions, callback filtering, behavior
+  classification, and priority clamping. 10 `tests/ticks.rs` tests cover the
+  six-neighbour edit sequence, plant removal by support change, falling sand
+  landing and support removal, scheduled delay/cancel, deterministic grass
+  spread, unsupported leaf reporting, and deterministic repeated world ticks.
+  `block_update` and `world` focused tests still pass; fmt and clippy are clean.
 - Plugin bridge: `cargo run` loads `HelloPlugin.jar`, dispatches
   `PluginEnableEvent`, registers and executes the `/hello` command, schedules a
   repeating task into the Rust task table, and receives the JNI `nativePing`

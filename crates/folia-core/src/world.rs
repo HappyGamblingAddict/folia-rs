@@ -1,6 +1,7 @@
 use crate::anvil::{Compression, RegionFile};
-use crate::chunk::{Chunk, decode_chunk, encode_chunk};
+use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
 use crate::nbt::Tag;
+use crate::tick::TickState;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -115,6 +116,8 @@ pub struct WorldStorage {
     cache_order: VecDeque<(i32, i32)>,
     cache_hits: u64,
     cache_misses: u64,
+    /// Neighbour/scheduled/random tick queues for this world.
+    tick: TickState,
 }
 
 impl WorldStorage {
@@ -126,6 +129,7 @@ impl WorldStorage {
             cache_order: VecDeque::new(),
             cache_hits: 0,
             cache_misses: 0,
+            tick: TickState::default(),
         }
     }
 
@@ -143,6 +147,47 @@ impl WorldStorage {
 
     pub fn loaded_regions(&self) -> usize {
         self.regions.len()
+    }
+
+    /// Read-only view of this world's tick queues and diagnostics.
+    pub fn tick_state(&self) -> &TickState {
+        &self.tick
+    }
+
+    /// Mutable view of this world's tick queues and diagnostics.
+    pub fn tick_state_mut(&mut self) -> &mut TickState {
+        &mut self.tick
+    }
+
+    /// Sets the seed used to derive per-chunk random-tick sampling.
+    pub fn set_tick_seed(&mut self, seed: i64) {
+        self.tick.random.seed = seed;
+    }
+
+    /// Chunk coordinates currently held in the decoded-chunk cache, sorted so a
+    /// tick pass has a deterministic order.
+    pub fn loaded_chunk_coords(&self) -> Vec<(i32, i32)> {
+        let mut coords: Vec<(i32, i32)> = self.chunks.keys().copied().collect();
+        coords.sort_unstable();
+        coords
+    }
+
+    /// Section Y coordinates of a cached chunk, sorted for deterministic random
+    /// tick sampling. Returns `None` when the chunk is not cached.
+    pub fn cached_section_ys(&self, chunk_x: i32, chunk_z: i32) -> Option<Vec<i8>> {
+        let chunk = self.chunks.get(&(chunk_x, chunk_z))?;
+        let mut ys: Vec<i8> = chunk.sections.iter().map(|section| section.y).collect();
+        ys.sort_unstable();
+        Some(ys)
+    }
+
+    /// Reads a block state from the decoded-chunk cache without loading a
+    /// region record. Returns `None` when the chunk is not cached.
+    pub fn block_state_at(&self, x: i32, y: i32, z: i32) -> Option<BlockState> {
+        let chunk = self.chunks.get(&(x.div_euclid(16), z.div_euclid(16)))?;
+        chunk
+            .block_state(x.rem_euclid(16) as usize, y, z.rem_euclid(16) as usize)
+            .cloned()
     }
 
     pub fn load_chunk(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Chunk>> {

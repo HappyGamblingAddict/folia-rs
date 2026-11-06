@@ -1089,3 +1089,91 @@ Format:
   entity spawning, waterlogging, shape updates, and a Java block-for-block
   placement fixture remain open. The focused test embeds four shipped gzip
   files so it does not depend on the out-of-tree decompiled data.
+
+## 2026-11-06 — P3.10 keeps the vanilla flag word and adds one internal shape bit
+
+- Context: Vanilla `Block.UPDATE_*` has no positive "shape update" bit; shape
+  updates run unless `UPDATE_KNOWN_SHAPE` (16) is set. The task also asks for
+  named `BLOCK_UPDATE`/`NEIGHBORS`/`SHAPE`/`SUPPRESS_NEIGHBORS` constants and
+  for deduplicated neighbour positions that do not lose the strongest flags.
+- Decision: `UpdateFlags` exposes the exact vanilla values plus aliases:
+  `BLOCK_UPDATE = UPDATE_CLIENTS = 2`, `NEIGHBORS = UPDATE_NEIGHBORS = 1`,
+  `SUPPRESS_NEIGHBORS = UPDATE_KNOWN_SHAPE = 16`, and a Rust-only
+  `SHAPE = 1 << 10`. `normalize` adds `SHAPE` whenever the caller did not ask to
+  suppress shapes, and merged queue entries OR their flags. Thus an explicit
+  shape request survives a later suppression request, while a caller that only
+  passes vanilla `UPDATE_ALL` still gets shape updates.
+- Why: It preserves the vanilla flag values for any future code that passes
+  them through while making dedup safe.
+- Consequences: The queued flags can contain bit 1024, which is not a vanilla
+  bit and must not be written to packet/NBT data.
+
+## 2026-11-06 — Neighbour updates are chunk-grouped and insertion-ordered
+
+- Context: Folia runs neighbour updates per region, and a world-global
+  hash-map iteration would make the order depend on process hash seeds.
+- Decision: `NeighborUpdateQueue` stores one insertion-ordered `Vec` per
+  `(chunk_x, chunk_z)` in a `BTreeMap`. Chunks drain in ascending coordinate
+  order and positions drain in first-enqueue order. Repeated positions merge
+  flags in place. The six directions use
+  `NeighborUpdater.UPDATE_ORDER` (`WEST,EAST,DOWN,UP,NORTH,SOUTH`), and the
+  chain is capped at vanilla's 512 updates.
+- Why: Deterministic, chunk-scoped storage is the smallest structure that can
+  later move to a region thread without changing ordering semantics.
+- Consequences: A position on a chunk border can be processed before a
+  same-source position in a higher chunk, unlike Java's recursive order. The
+  queue is world-global for now; `drain_chunk` exists for future region ticks.
+
+## 2026-11-06 — Scheduled ticks are world-global but LevelTicks-ordered
+
+- Context: Chunk storage cannot yet persist block ticks, and the port has no
+  ticket-owned loaded-chunk container set. A world-level queue is enough to
+  make behavior deterministic and testable.
+- Decision: `ScheduledTickQueue` keeps entries in a `BTreeMap` keyed by
+  `(trigger_tick, priority, sub_tick_order)` and deduplicates by
+  `(position, block)`, matching `LevelChunkTicks.ticksPerPosition`. Priority is
+  the vanilla `-3..=3` enum; sub-tick order is assigned on insertion. A due
+  tick executes only while the block at its position still has the scheduled
+  block name, matching `ServerLevel.tickBlock`.
+- Consequences: Pending ticks are not saved to chunk NBT and a tick whose
+  chunk is no longer cached is dropped. Cancellation between ticks works; a
+  callback cannot cancel a sibling already collected for the same tick. These
+  gaps are recorded in `BLOCKERS.md`.
+
+## 2026-11-06 — Random ticks use a stable per-chunk hash, not Java Level.random
+
+- Context: Java's random ticks draw from the level `RandomSource` sequence,
+  which depends on every prior world RNG consumer. Feature/level RNG parity is
+  not established yet, so reusing an approximate global sequence would make
+  tests order-dependent and still fail to match Java.
+- Decision: Sample `randomTickSpeed = 3` positions per 16x16x16 section from
+  `XoroshiroRandomSource::new(mix64(seed, chunk_x, chunk_z, tick))`, drawing
+  `nextInt(16)` for x, y, and z in that order. Sections are iterated by
+  ascending `y`, so selection is independent of map insertion order and
+  repeats exactly for the same seed/chunk/tick.
+- Why: Deterministic positions make falling/grass tests reproducible and keep
+  the door open to swapping in a Java-matching `Level.random` later.
+- Consequences: Positions are not a Java parity claim; a Java random-tick
+  fixture is still needed. Empty sections are sampled and filtered instead of
+  using Folia's per-section ticking-block list, which is simpler but slower.
+
+## 2026-11-06 — The P3.10 behaviour table is hard-coded and explicit
+
+- Context: P1.5 block metadata does not exist, so only a small set of blocks
+  can implement vanilla neighbour/random behaviour without guessing.
+- Decision: A `BlockBehavior` trait with a `BehaviorTable` implements falling
+  blocks (sand, red sand, gravel, suspicious variants, concrete powders,
+  anvils, dragon egg), `VegetationBlock`-style support from the `dirt` tag and
+  farmland, double-plant half checks, and grass spread. `BehaviorTable::with`
+  is the callback interface for future blocks. Leaves, crops, and saplings keep
+  their states but report unsupported random ticks; leaves/redstone/doors/rails/
+  torches report unsupported neighbour reactions, and the tick state records
+  every unsupported block a tick actually reached.
+- Decision: A falling block moves one block per scheduled tick (delay 2)
+  instead of creating a `FallingBlockEntity`. The landing block, its state, and
+  the neighbour update below it are correct, but timing differs from vanilla.
+- Why: This keeps unsupported behavior visible and gives a tested vertical
+  slice without inventing P1.5 flags.
+- Consequences: Real leaf decay, crop growth, redstone, fluid flow, pistons,
+  block entities, and torch support remain open; see `BLOCKERS.md` and
+  `TODO.md` P3.10.

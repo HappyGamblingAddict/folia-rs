@@ -1442,7 +1442,6 @@ mod tests {
     #[test]
     fn ore_placement_matches_the_java_oracle() {
         let data = FeatureData::vanilla();
-        let sampler = BiomeSampler::overworld(12_345).unwrap();
         let order = data.step_feature_order();
         assert_eq!(order[Decoration::UndergroundOres.index()].len(), 34);
         assert_eq!(

@@ -516,7 +516,6 @@ fn shipped_moss_and_pale_moss_patches_place_ground_cover() {
 #[test]
 fn decoration_steps_include_ground_cover_passes() {
     let data = FeatureData::vanilla();
-    let sampler = folia_core::worldgen::biome::BiomeSampler::overworld(0).unwrap();
     let order = data.step_feature_order();
     assert!(
         order[Decoration::UndergroundDecoration.index()]

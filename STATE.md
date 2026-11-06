@@ -20,6 +20,7 @@ Last updated: 2026-11-06
 - Tests: **812 total on this branch** (802 existing + 10 new light-occlusion
   tests). Focused light suites are green; the coordinator owns the full
   workspace gate.
+- Tests: **813 passing** on the full merged gate (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -29,6 +30,13 @@ Last updated: 2026-11-06
   all 4 simple selectors through a two-registry placed/configured resolver,
   plus disks, springs, lava lake, icebergs/blue ice/ice spikes, Nether blobs,
   basalt columns/pillar, delta, and pointed/cluster/large dripstone.
+  modifiers execute, and 171/224 configured feature types execute.
+- Structures: recursive `JigsawPlacement` (connectors, junctions, expansion
+  hack, free-space/max-distance checks, priority order), biome/dimension-filtered
+  `StructureGenerator`, opt-in generator wiring for surface structures, igloo and
+  desert-pyramid starts, waterlogging/`structure_void` handling, and explicit
+  missing-template/feature-element failures. Real village NBT assets and
+  feature-pool placement are still missing.
 - Second wave landed: per-state collision/outline shapes with swept physics;
   incremental light decrease/increase, sky columns, and dirty sections;
   crafting/furnace/stonecutting/smithing models; the 1,504-item prototype
@@ -63,11 +71,17 @@ Last updated: 2026-11-06
   region ownership.
   tick integration; loot-table gameplay wiring; dimension storage/portals;
   chat signing; bridge live-session sync; Folia region ownership.
+- Major gaps: shipped structure-template assets, terrain adaptation, structure
+  block-entity/entity persistence, typed block-entity storage and tickers;
+  pistons; live join entity spawning and AI tick integration; shape-aware light
+  occlusion; loot-table gameplay wiring; dimension storage/portals; chat
+  signing; bridge live-session sync; Folia region ownership.
 - Folia region threading is still task queues only.
 
 ## Current focus
 
-1. P2.8 recursive jigsaw connection and structure generator/chunk-status wiring.
+1. P2.8/P2.9 remaining: structure template asset extraction, feature-pool
+   placement, terrain adaptation, and structure serialization.
 2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
 3. P5 join-session entity tracking is wired for the pinned mob set; remaining
    work is P5.13 per-viewer parity, AI goals/sensors, persistence, and armor.
@@ -90,6 +104,9 @@ Last updated: 2026-11-06
 - [~] P2.3-P2.5 ores/trees/vegetation; remaining feature types and fixtures.
 - [~] P2.8 templates/starts/processors/pools; recursive jigsaw + wiring remain.
 - [~] P3.5-P3.8 light (storage/BFS/incremental/outline occlusion; Java fixtures).
+- [~] P2.8/P2.9 templates/starts/processors/pools/jigsaw + generator wiring;
+  template assets, feature pools, terrain adaptation, serialization remain.
+- [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
 - [~] P4.1-P4.3 physics/breaking (special movement, item entities/XP, Java
   fixture; shipped loot-table drops are wired).
@@ -176,6 +193,25 @@ Last updated: 2026-11-06
   use-shape-disabled blocks, slab/stair/snow, transparency, torch-under-slab,
   decrease/re-light, bulk comparison, border).
   Remaining: Java light fixtures and exact `canOcclude` flags.
+- 2026-11-06: P2.8/P2.9 recursive jigsaw + structure generator wiring -
+  `worldgen/structure/jigsaw.rs` ports `JigsawPlacement.Placer` (start
+  rotation/weighted element, optional named start jigsaw, `canAttach`
+  front/top/target matching, rigid vs terrain-matching Y, expansion-hack
+  max-size probing, block-aligned free-space collision with the max-distance
+  window, junction records, depth limits, `SequencedPriorityIterator` order).
+  `StructureStart` now carries jigsaw/desert payloads; jigsaw placement requires
+  templates and refuses the template-only path. `StructureGenerator` embeds all
+  34 structure biome tags, applies dimension gating (Nether/End sets excluded
+  from Overworld), regenerates starts per candidate placement chunk, and runs
+  before surface-step features in `WorldGenerator` only when a caller supplies
+  templates. `DesertPyramidPiece` ports the pyramid body, four chest loot
+  markers, cellar, collapsed roof, and suspicious-sand markers. Waterlogging is
+  applied by a wrapper; `structure_void` stays dropped by `JigsawReplacement`.
+  Tests: 5 `jigsaw` + 4 `structure_generation`; parity unchanged at 98.75%
+  block-class / 95.80% exact-name. Gaps: shipped NBT template asset,
+  feature-pool placement, terrain adaptation, serialization, block-entity
+  persistence/entity spawning, cross-chunk height sampling, Java-exact desert
+  random stream.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
 - 2026-11-06: P4.3 shipped block-drop tables - `block_breaking.rs` now rolls the
   real `minecraft:blocks/<block>` table for every break through

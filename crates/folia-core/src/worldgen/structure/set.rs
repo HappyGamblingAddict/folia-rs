@@ -7,6 +7,7 @@
 //! [`StructureSetRegistry::from_json_documents`].
 
 use crate::region::ChunkPos;
+use crate::tags::{self, TagRegistryKind};
 use folia_random::{LegacyRandomSource, RandomSource};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -613,6 +614,98 @@ impl StructureSetRegistry {
         Ok(None)
     }
 
+    /// Placement test, weighted selection, dimension gating and the shipped
+    /// structure biome tag check.
+    ///
+    /// Vanilla evaluates the biome at the generated stub position. This slice
+    /// samples the chunk center column at `biome_y` (the caller's sea level or
+    /// surface estimate) because starts are not generated until after the
+    /// selection step.
+    pub fn structure_at_chunk_filtered(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        seed: i64,
+        dimension: StructureDimension,
+        biome_y: i32,
+        biomes: &dyn StructureBiomeLookup,
+    ) -> Result<Option<SelectedStructure>, StructureSetError> {
+        self.structure_at_chunk_filtered_matching(
+            chunk_x,
+            chunk_z,
+            seed,
+            dimension,
+            biome_y,
+            biomes,
+            |_| true,
+        )
+    }
+
+    /// As [`Self::structure_at_chunk_filtered`], but only structures accepted
+    /// by `accept` can win. This lets the structure manager restrict a fixture
+    /// to one structure type without changing set order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn structure_at_chunk_filtered_matching(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        seed: i64,
+        dimension: StructureDimension,
+        biome_y: i32,
+        biomes: &dyn StructureBiomeLookup,
+        accept: impl Fn(&str) -> bool,
+    ) -> Result<Option<SelectedStructure>, StructureSetError> {
+        for set in &self.sets {
+            if set_dimension(&set.name) != dimension {
+                continue;
+            }
+            let mut stack = Vec::new();
+            match self.is_structure_chunk_named(
+                &set.name,
+                chunk_x,
+                chunk_z,
+                seed,
+                StructureSetConfig::default(),
+                &mut stack,
+            ) {
+                Ok(true) => {
+                    let Some(selection) = set.select_structure(seed, chunk_x, chunk_z) else {
+                        continue;
+                    };
+                    if !accept(&selection.structure) {
+                        continue;
+                    }
+                    let rule = structure_biome_rule(&selection.structure).ok_or_else(|| {
+                        StructureSetError::MissingBiomeRule {
+                            structure: selection.structure.clone(),
+                        }
+                    })?;
+                    if rule.dimension != dimension {
+                        continue;
+                    }
+                    let center_x = (chunk_x << 4) + 8;
+                    let center_z = (chunk_z << 4) + 8;
+                    let biome = biomes.biome_at(center_x, biome_y, center_z);
+                    if !biome_matches(rule.biomes, biome) {
+                        continue;
+                    }
+                    return Ok(Some(SelectedStructure {
+                        set: set.name.clone(),
+                        structure: selection.structure.clone(),
+                        chunk: ChunkPos::new(chunk_x, chunk_z),
+                    }));
+                }
+                Ok(false) => {}
+                Err(StructureSetError::Placement {
+                    source: PlacementError::RequiresBiomeSource { .. },
+                    ..
+                }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
     fn is_structure_chunk_named(
         &self,
         name: &str,
@@ -675,6 +768,230 @@ impl StructureSetRegistry {
     }
 }
 
+/// Dimension used for structure-set gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StructureDimension {
+    Overworld,
+    Nether,
+    End,
+}
+
+/// The biome tag and dimension of one shipped structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructureBiomeRule {
+    pub structure: &'static str,
+    pub biomes: &'static str,
+    pub dimension: StructureDimension,
+}
+
+/// `ChunkGenerator.getBiomeSource()` subset used by the selection filter.
+pub trait StructureBiomeLookup {
+    fn biome_at(&self, x: i32, y: i32, z: i32) -> &str;
+}
+
+/// The 34 shipped 1.21.11 structure definitions' biome tags and dimensions.
+/// These are the `biomes` field of `data/minecraft/worldgen/structure/*.json`
+/// plus the dimension each structure is registered in. The dimension is
+/// derived from the structure-set tags (Nether complexes/fossils and end
+/// cities are the only non-Overworld entries).
+pub const SHIPPED_STRUCTURE_BIOME_RULES: &[StructureBiomeRule] = &[
+    StructureBiomeRule {
+        structure: "minecraft:ancient_city",
+        biomes: "#minecraft:has_structure/ancient_city",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:bastion_remnant",
+        biomes: "#minecraft:has_structure/bastion_remnant",
+        dimension: StructureDimension::Nether,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:buried_treasure",
+        biomes: "#minecraft:has_structure/buried_treasure",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:desert_pyramid",
+        biomes: "#minecraft:has_structure/desert_pyramid",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:end_city",
+        biomes: "#minecraft:has_structure/end_city",
+        dimension: StructureDimension::End,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:fortress",
+        biomes: "#minecraft:has_structure/nether_fortress",
+        dimension: StructureDimension::Nether,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:igloo",
+        biomes: "#minecraft:has_structure/igloo",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:jungle_pyramid",
+        biomes: "#minecraft:has_structure/jungle_temple",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:mansion",
+        biomes: "#minecraft:has_structure/woodland_mansion",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:mineshaft",
+        biomes: "#minecraft:has_structure/mineshaft",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:mineshaft_mesa",
+        biomes: "#minecraft:has_structure/mineshaft_mesa",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:monument",
+        biomes: "#minecraft:has_structure/ocean_monument",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:nether_fossil",
+        biomes: "#minecraft:has_structure/nether_fossil",
+        dimension: StructureDimension::Nether,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ocean_ruin_cold",
+        biomes: "#minecraft:has_structure/ocean_ruin_cold",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ocean_ruin_warm",
+        biomes: "#minecraft:has_structure/ocean_ruin_warm",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:pillager_outpost",
+        biomes: "#minecraft:has_structure/pillager_outpost",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal",
+        biomes: "#minecraft:has_structure/ruined_portal_standard",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_desert",
+        biomes: "#minecraft:has_structure/ruined_portal_desert",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_jungle",
+        biomes: "#minecraft:has_structure/ruined_portal_jungle",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_mountain",
+        biomes: "#minecraft:has_structure/ruined_portal_mountain",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_nether",
+        biomes: "#minecraft:has_structure/ruined_portal_nether",
+        dimension: StructureDimension::Nether,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_ocean",
+        biomes: "#minecraft:has_structure/ruined_portal_ocean",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:ruined_portal_swamp",
+        biomes: "#minecraft:has_structure/ruined_portal_swamp",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:shipwreck",
+        biomes: "#minecraft:has_structure/shipwreck",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:shipwreck_beached",
+        biomes: "#minecraft:has_structure/shipwreck_beached",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:stronghold",
+        biomes: "#minecraft:has_structure/stronghold",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:swamp_hut",
+        biomes: "#minecraft:has_structure/swamp_hut",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:trail_ruins",
+        biomes: "#minecraft:has_structure/trail_ruins",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:trial_chambers",
+        biomes: "#minecraft:has_structure/trial_chambers",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:village_desert",
+        biomes: "#minecraft:has_structure/village_desert",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:village_plains",
+        biomes: "#minecraft:has_structure/village_plains",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:village_savanna",
+        biomes: "#minecraft:has_structure/village_savanna",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:village_snowy",
+        biomes: "#minecraft:has_structure/village_snowy",
+        dimension: StructureDimension::Overworld,
+    },
+    StructureBiomeRule {
+        structure: "minecraft:village_taiga",
+        biomes: "#minecraft:has_structure/village_taiga",
+        dimension: StructureDimension::Overworld,
+    },
+];
+
+pub fn structure_biome_rule(structure: &str) -> Option<&'static StructureBiomeRule> {
+    SHIPPED_STRUCTURE_BIOME_RULES
+        .iter()
+        .find(|rule| rule.structure == canonical_name(structure))
+}
+
+fn biome_matches(tag: &str, biome: &str) -> bool {
+    tags::has(
+        TagRegistryKind::Worldgen,
+        tag.strip_prefix('#').unwrap_or(tag),
+        biome,
+    )
+}
+
+/// The dimension a set is registered in. This is the vanilla
+/// `structure_set` dimension split: only the Nether complexes/fossils and End
+/// cities belong outside the Overworld.
+pub fn set_dimension(set_name: &str) -> StructureDimension {
+    match canonical_name(set_name).as_str() {
+        "minecraft:nether_complexes" | "minecraft:nether_fossils" => StructureDimension::Nether,
+        "minecraft:end_cities" => StructureDimension::End,
+        _ => StructureDimension::Overworld,
+    }
+}
+
 fn canonical_name(name: &str) -> String {
     if name.contains(':') {
         name.to_owned()
@@ -690,6 +1007,7 @@ pub enum StructureSetError {
     Placement { set: String, source: PlacementError },
     MissingSet { referenced: String, from: String },
     ExclusionCycle { set: String },
+    MissingBiomeRule { structure: String },
 }
 
 impl fmt::Display for StructureSetError {
@@ -713,6 +1031,12 @@ impl fmt::Display for StructureSetError {
             }
             StructureSetError::ExclusionCycle { set } => {
                 write!(formatter, "structure-set exclusion cycle through `{set}`")
+            }
+            StructureSetError::MissingBiomeRule { structure } => {
+                write!(
+                    formatter,
+                    "structure `{structure}` has no shipped biome rule"
+                )
             }
         }
     }

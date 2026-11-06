@@ -19,9 +19,14 @@ use crate::worldgen::feature::{
     WorldGenRegion,
 };
 use crate::worldgen::ore_vein::OreVeinifier;
+use crate::worldgen::structure::StructureDimension;
+use crate::worldgen::structure::set::StructureBiomeLookup;
+use crate::worldgen::structure::start::StructureGenerator;
+use crate::worldgen::structure::template::StructureTemplate;
 use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
 use folia_math::BlockPos;
 use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
+use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, OnceLock};
 
@@ -162,6 +167,7 @@ pub struct WorldGenerator {
     carvers: CarverSet,
     aquifer_factory: XoroshiroPositionalRandomFactory,
     ore_veins: OreVeinifier,
+    structures: Option<StructureGenerator>,
     seed: i64,
     min_y: i32,
     height: i32,
@@ -201,6 +207,7 @@ impl WorldGenerator {
             carvers: CarverSet::overworld(min_y),
             aquifer_factory,
             ore_veins,
+            structures: None,
             seed,
             min_y,
             height,
@@ -210,6 +217,31 @@ impl WorldGenerator {
 
     pub fn seed(&self) -> i64 {
         self.seed
+    }
+
+    /// Enables the shipped structure manager with the caller's template
+    /// provider. Without this the generator is the original terrain/feature
+    /// path and the parity fixtures are byte-for-byte unchanged.
+    pub fn with_shipped_structures(
+        mut self,
+        templates: HashMap<String, StructureTemplate>,
+    ) -> io::Result<Self> {
+        self.structures = Some(
+            StructureGenerator::shipped(templates)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?,
+        );
+        Ok(self)
+    }
+
+    /// Enables a prebuilt structure manager (used by tests and future
+    /// datapack/runtime loaders).
+    pub fn with_structure_generator(mut self, structures: StructureGenerator) -> Self {
+        self.structures = Some(structures);
+        self
+    }
+
+    pub fn structures(&self) -> Option<&StructureGenerator> {
+        self.structures.as_ref()
     }
 
     pub fn min_y(&self) -> i32 {
@@ -456,8 +488,20 @@ impl WorldGenerator {
             self.min_y,
             chunk.z.wrapping_mul(16),
         );
+        let mut structures_placed = false;
         for step in steps {
             let step = *step;
+            // Vanilla places structure pieces for a step before the features
+            // of that step. Surface structures are the only step this slice
+            // generates; run them before the first feature step at or after
+            // `surface_structures`.
+            if !structures_placed
+                && self.structures.is_some()
+                && step.index() >= Decoration::SurfaceStructures.index()
+            {
+                self.apply_structures(chunk, Decoration::SurfaceStructures)?;
+                structures_placed = true;
+            }
             let mut active = std::collections::HashSet::new();
             for biome in &chunk_biomes {
                 let Some(steps) = data.biome_features(biome) else {
@@ -506,6 +550,33 @@ impl WorldGenerator {
             }
         }
         Ok(())
+    }
+
+    /// Places structure starts whose pieces intersect the chunk currently
+    /// being generated. Selection is biome-filtered through the generator's
+    /// own sampler at sea level and restricted to the Overworld.
+    fn apply_structures(&self, chunk: &mut Chunk, step: Decoration) -> io::Result<()> {
+        let Some(structures) = &self.structures else {
+            return Ok(());
+        };
+        let chunk_pos = crate::region::ChunkPos::new(chunk.x, chunk.z);
+        let biomes = GeneratorBiomeLookup {
+            sampler: &self.biomes,
+        };
+        let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
+        structures
+            .place_for_chunk(
+                &mut region,
+                chunk_pos,
+                self.seed,
+                StructureDimension::Overworld,
+                self.sea_level,
+                &biomes,
+                8,
+                step,
+            )
+            .map(|_| ())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
     }
 
     /// Runs one placed feature with vanilla's lazy modifier stream.
@@ -584,6 +655,17 @@ impl WorldGenerator {
             }
         }
         indices
+    }
+}
+
+/// [`StructureBiomeLookup`] backed by the generator's multi-noise sampler.
+struct GeneratorBiomeLookup<'a> {
+    sampler: &'a BiomeSampler,
+}
+
+impl StructureBiomeLookup for GeneratorBiomeLookup<'_> {
+    fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
+        self.sampler.sample_block(x, y, z)
     }
 }
 

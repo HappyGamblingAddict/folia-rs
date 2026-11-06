@@ -1029,6 +1029,30 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   shape updates, per-block state derivatives that need P1.5 block behaviour
   (stairs shape, door hinge, rail shape, …), and generator chunk-status wiring.
   Starts are not attached to the generator pipeline yet.
+- **Progress (2026-11-06, recursive jigsaw slice):** `jigsaw.rs` ports
+  `JigsawPlacement.Placer`: deterministic start rotation/weighted element,
+  optional `start_jigsaw_name`, front/back connector matching (`canAttach`),
+  rigid vs terrain-matching Y rules, expansion-hack pool-size probing,
+  block-aligned free-space collision with the max-distance/height window,
+  junction records, generation depth, and `SequencedPriorityIterator` ordering.
+  `StructureStart` carries jigsaw and desert-pyramid payloads; jigsaw starts
+  place through `place_jigsaw_in_chunk` and refuse the template-only path
+  explicitly. `StructureGenerator` selects biome-filtered sets (all 34 shipped
+  structure biome tags embedded), rejects Nether/End sets for Overworld chunks,
+  and is wired into `WorldGenerator` behind an opt-in template manager; the
+  default generator path is unchanged, so parity fixtures do not regress.
+  `DesertPyramidPiece` ports the pyramid body, four chest markers (loot-table
+  NBT returned, not instantiated), cellar, collapsed roof, and suspicious-sand
+  markers. Waterlogging is applied by a wrapper around the shared pool
+  placement path; `structure_void` is still dropped by `JigsawReplacement`.
+  9 new focused tests (`tests/jigsaw.rs`, `tests/structure_generation.rs`) cover
+  fixed-seed multi-piece bounds, second-seed divergence, biome mismatch,
+  dimension gating, pinned igloo blocks in a generated chunk, waterlogging,
+  void handling, and desert-pyramid chest markers. Still open: real shipped NBT
+  template loading (the repo has no structure-template asset), feature-pool
+  placement, terrain adaptation, structure serialization, block-entity
+  persistence/entity spawning, start caching, and Java-exact cross-chunk height
+  sampling/desert random streams.
 
 ### P2.9 Jigsaw structures `[~]` `XL`
 
@@ -1044,6 +1068,14 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   junction pieces, expansion-hack height selection, free-space voxel shapes,
   max-distance/height checks, biome/dimension filtering, and attaching starts to
   the chunk-status pipeline.
+- **Progress (2026-11-06, recursive slice):** `JigsawPlacement.Placer` is ported
+  with connector matching, expansion hack, collision/max-distance rejection,
+  junction records, and priority ordering; `StructureGenerator` attaches
+  biome/dimension-filtered starts at surface-structure placement chunks and
+  `WorldGenerator` places their pieces before decoration features. Village
+  starts run through the recursive expander, but the shipped village NBT
+  templates are not embedded yet, so a real village fails loudly with a missing
+  template instead of returning an empty start. See P2.8 for the exact gaps.
 - **Done when:** At least one jigsaw structure matches Java start position and
   piece layout on a fixture seed.
 

@@ -105,8 +105,39 @@ fn piston_extends_pushes_one_block_and_places_the_head() {
         1
     );
     assert!(!piston::moving_collision_boxes(&storage, front).is_empty());
+    assert_eq!(
+        storage
+            .tick_state()
+            .pistons
+            .get(destination)
+            .expect("destination payload")
+            .progress,
+        0
+    );
 
-    run_ticks(&mut storage, 1, 3);
+    tick::tick_world(&mut storage, 1).unwrap();
+    assert_eq!(
+        storage
+            .tick_state()
+            .pistons
+            .get(destination)
+            .expect("half-way payload")
+            .progress,
+        1,
+        "first movement tick advances to 0.5"
+    );
+    tick::tick_world(&mut storage, 2).unwrap();
+    assert_eq!(
+        storage
+            .tick_state()
+            .pistons
+            .get(destination)
+            .expect("complete payload")
+            .progress,
+        2,
+        "second movement tick reaches 1.0"
+    );
+    tick::tick_world(&mut storage, 3).unwrap();
 
     let head = block(&storage, front);
     assert_eq!(head.name, "minecraft:piston_head");

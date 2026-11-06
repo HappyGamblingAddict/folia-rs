@@ -1,7 +1,7 @@
 # Folia-RS Master TODO & Roadmap
 
 > Last updated: 2026-11-06  
-> Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
+> Current commit: `9be2f27` (block-breaking slice; docs follow-up)
 > Working tree: clean; work is committed in coherent slices.
 > Test status: **426 tests** before this slice; the block-breaking slice adds
 > 13 lib + 9 integration focused tests (full gate rerun by the coordinator).

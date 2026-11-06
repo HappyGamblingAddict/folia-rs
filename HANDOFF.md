@@ -3,7 +3,7 @@
 Last updated: 2026-11-06  
 Repository: https://github.com/HappyGamblingAddict/folia-rs  
 Branch: `main`  
-Last local commit: `6e0e5fe` — "Merge structure template loading and placement" (not pushed)
+Last local commit: `9be2f27` — "Implement vanilla block breaking progress, drops, and durability" (not pushed)
 
 This document is a status snapshot for continuing the Rust rewrite of Folia 1.21.11.
 It is not a claim of parity. The project is still a partial server.

@@ -8,8 +8,9 @@ Last updated: 2026-11-06
 
 ## Current status
 
-- Current commit (informational only): `6e0e5fe`
-- Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
+- Current commit (informational only): `9be2f27` (block-breaking slice; docs
+  follow-up)
+- Working tree: clean; block-breaking slice committed.
 - Tests: **426 passing** on the last full gate; the block-breaking slice adds
   13 lib + 9 `tests/block_breaking.rs` tests (full gate rerun by the
   coordinator).

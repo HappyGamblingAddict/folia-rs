@@ -198,7 +198,15 @@ fn login_reaches_play_state_with_captured_world() {
         let packet = read_packet(&mut client).expect("placement updates");
         match packet_id(&packet) {
             8 => placed_update = Some(packet),
-            47 => placed_light = Some(packet),
+            47 => {
+                // Incremental light may also emit neighbour-chunk updates;
+                // this assertion targets the edited chunk (0, 0).
+                let mut reader = PacketReader::new(&packet);
+                assert_eq!(reader.read_varint().unwrap(), 47);
+                if reader.read_varint().unwrap() == 0 && reader.read_varint().unwrap() == 0 {
+                    placed_light = Some(packet);
+                }
+            }
             18 => placement_content = Some(packet),
             _ => {}
         }

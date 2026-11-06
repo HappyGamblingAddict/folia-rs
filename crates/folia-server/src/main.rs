@@ -31,6 +31,7 @@ fn main() -> Result<()> {
     folia_core::join::configure_operators(root.join("run").join("ops.txt"));
     folia_core::join::configure_world_dir(root.join(&level_name));
     folia_core::join::configure_view_distance(properties.view_distance);
+    folia_core::join::configure_online_mode(properties.online_mode);
     folia_core::join::configure_game_mode(
         match properties.gamemode.to_ascii_lowercase().as_str() {
             "creative" => 1,
@@ -233,7 +234,7 @@ fn start_status_server(properties: &ServerProperties) -> Result<()> {
         motd: properties.motd.clone(),
         max_players: properties.max_players,
         online_players: 0,
-        accept_logins: !properties.online_mode,
+        accept_logins: true,
         ..StatusConfig::default()
     });
 

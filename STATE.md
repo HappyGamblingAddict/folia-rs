@@ -10,7 +10,10 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): see `git log`; the tree is committed.
 - Working tree: clean.
-- Tests: **611 passing** on the final full workspace gate (0 failed).
+- Tests: **611 passing** on the last full workspace gate. This redstone-
+  component slice adds 10 `redstone` lib tests, 10 `tests/redstone2.rs` tests,
+  and 2 tick-state (container/registration) tests; the coordinator runs the next
+  full gate.
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -19,13 +22,15 @@ Last updated: 2026-11-06
 - Major landed slices: registry/tag/loot assets, real light storage + sky/block
   BFS, player physics and fall damage, trees plus ground-cover/aquatic/vines/
   fungi, structure template/start/piece/set foundation, component-aware item
-  stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button,
+  stacks, scheduled/random/neighbour ticks, fluids, redstone wire/lever/button/
+  repeater/comparator/observer/redstone torch/pressure plates/tripwire,
   block breaking/tools/drops/durability, exact surface biome zoom, and an
   expanded Bukkit bridge (world/player/item/events).
 - Major gaps: P1.5 collision shapes and per-state block metadata beyond the
   current table, P2.8 jigsaw/pools/processor/wiring, P3.6-P3.9 incremental light
-  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/full
-  redstone, P7 Nether/End, P8 online mode, P9 plugin API depth, P10 region
+  and Java light fixtures, P5 AI/spawning/armor, P6 pistons/block entities/
+  redstone lamps/target blocks/tripwire hooks, P7 Nether/End, P8 online mode,
+  P9 plugin API depth, P10 region
   ownership.
 - P0.1–P0.4 and P0.6 are complete. P0.5 is deferred (see `BLOCKERS.md`).
 - P1.3 core tag registries are ported: `scripts/extract_tags.ps1` flattens
@@ -252,8 +257,8 @@ Last updated: 2026-11-06
 3. P3.6–P3.9 decrease queues, incremental section light packets, cross-chunk
    relighting, and Java light fixtures.
 4. P5 entity AI/goals, spawning, armor calculation, and join-session wiring.
-5. P6 pistons, block entities, repeaters/comparators, and the remaining fluid
-   quenching/fire behavior.
+5. P6 pistons, block entities, redstone lamps/target blocks/tripwire hooks, and
+   the remaining fluid quenching/fire behavior.
 - P9.3 now has the first world/player/item proxies and P9.2 has three
   cancellable block/interact events. Next: expose the live `join.rs` session
   state (health/food/inventory/position/messages) to the bridge, call the event
@@ -330,8 +335,9 @@ Last updated: 2026-11-06
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook, water/lava flow,
-  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
-  and NBT tick persistence remain)
+  wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;
+  leaf decay, crops, pistons, lamps, tripwire hooks, and NBT tick persistence
+  remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,
@@ -342,6 +348,20 @@ Last updated: 2026-11-06
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-06: P3.10 redstone components — `redstone.rs` extends the first
+  slice with repeaters (facing/input side, delay 1–4, 2/4/6/8-tick scheduled
+  toggles, live side locking, strong output, delay cycling), comparators
+  (compare/subtract, rear and side inputs, `ContainerSignalSource` container
+  strength, stored output, scheduled refresh), observers (front-change
+  detection, one two-tick pulse), redstone torches (floor/wall attachment,
+  inversion, vanilla 8-in-60-tick burn-out with a 160-tick restart), wooden/
+  stone/weighted pressure plates, and tripwire (occupancy API, pressed state,
+  ten-tick release, connection shape). Wire now recomputes its
+  `north/east/south/west` connection shape through the same neighbour queue.
+  `tick.rs` adds `ContainerSignals`, comparator-output/occupancy/torch-toggle
+  state, `TickWorld` notification/state helpers, and registers every new
+  behaviour. Focused: 10 lib, 2 tick-state, and 10 `tests/redstone2.rs` tests;
+  `tests/fluids.rs` and `tests/ticks.rs` stay green; fmt/clippy clean.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/
@@ -534,8 +554,9 @@ Last updated: 2026-11-06
 - [~] P3.8 Incremental light updates (full-chunk recompute/replay; section-only still open)
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook, water/lava flow,
-  wire/lever/button redstone; leaf decay, crops, pistons, remaining redstone,
-  and NBT tick persistence remain)
+  wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;
+  leaf decay, crops, pistons, lamps, tripwire hooks, and NBT tick persistence
+  remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

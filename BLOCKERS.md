@@ -54,17 +54,18 @@ Format:
   shape/support checks, scheduled ticks (priority/delay/sub-tick/dedup/cancel),
   random ticks (3 per 16x16x16 section), falling sand/gravel/concrete
   powder/anvils, plant support, grass spread, scheduled water/lava flow, and
-  wire/lever/button redstone.
+  wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone.
 - Not implemented (needs P1.5 block metadata or a bigger tick model):
-  leaf `distance` propagation and decay, crop/sapling growth, torch/rail/door/
-  fence/piston behaviour, the remaining redstone components (repeater,
-  comparator, torch, observer, pressure plates, lamps), lava fire spread, and
-  water/lava quenching to stone/obsidian/cobblestone, and block-entity ticks.
+  leaf `distance` propagation and decay, crop/sapling growth, rail/door/fence
+  behaviour, pistons, redstone lamps, target blocks, tripwire-hook signal
+  chains, item-frame analog inputs, lava fire spread, water/lava quenching to
+  stone/obsidian/cobblestone, and block-entity ticks.
 - Fluid shape collision uses a full-cube/occlusion approximation instead of
   `Shapes.mergedFaceOccludes`; flowing water/lava through partial shapes can
   differ from Java. Block-destruction drops are not modeled for fluids.
-- Redstone wire tracks power but not its connection-shape properties
-  (`north/east/south/west` stay as placed); only power propagation is updated.
+- Redstone wire now recomputes its `north/east/south/west` connection shape, but
+  `isFaceSturdy` is the shared full-cube approximation: trapdoors and other
+  partial shapes can connect or not connect differently from Java.
 - Falling blocks move one block per scheduled tick instead of spawning a
   `FallingBlockEntity` with gravity. The landing block and its neighbour
   updates are correct, but fall timing differs from vanilla.
@@ -82,6 +83,35 @@ Format:
   cancellation between ticks works.
 - No Java differential neighbor-update, fluid, or redstone fixture exists yet,
   so this is a behavior-tested slice, not a parity claim.
+
+## 2026-11-06 — P3.10 redstone components are a behavior slice, not parity
+
+- Implemented: repeater delay/facing/locking/strong output, comparator
+  compare/subtract with container inputs, observer two-tick pulses, redstone
+  torch inversion and burn-out, wooden/stone/weighted pressure plates, tripwire
+  occupancy and connection shape, and wire connection-shape updates. All of
+  them run through the existing neighbour and scheduled-tick queues.
+- Comparator output is stored in `TickState::comparator_outputs`; it is not a
+  block entity and is not written to chunk NBT. A restart loses the learned
+  output until the comparator's next scheduled refresh.
+- Comparator analog inputs are the registered `ContainerSignalSource` entries
+  only. Item frames, daylight detectors, lecterns, sculk sensors, and the other
+  `hasAnalogOutputSignal` blocks are not modeled.
+- Pressure plates and tripwire never inspect entities themselves: the entity
+  layer must call `set_pressure_plate_occupancy`/`set_tripwire_occupancy` with
+  counts that already exclude spectators and trigger-ignoring entities.
+- Tripwire hooks are not implemented, so a pressed tripwire changes only its own
+  `powered` state. Tripwire source recalculation (`TripWireHookBlock`) and hook
+  signal output are explicit gaps, and hooks are reported through
+  `unsupported_neighbor_reason`.
+- Redstone-torch burn-out follows vanilla (`8` off toggles in `60` ticks, then a
+  `160`-tick restart) rather than the task brief's shorthand of “60 toggles in
+  60 ticks”. The toggle log lives on `TickState` and is not persisted.
+- Repeater/comparator `locked` properties are cached for shape/client updates;
+  behaviour decisions use the live `getAlternateSignal`, matching vanilla's
+  overridden `isLocked(level, pos, state)`.
+- No Java differential redstone trace exists yet; the focused tests encode the
+  Java formulas and packet-visible state transitions.
 
 ## 2026-11-06 — P5.1 entity metadata/health/equipment is a core slice
 

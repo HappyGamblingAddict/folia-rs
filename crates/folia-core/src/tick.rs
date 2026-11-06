@@ -13,7 +13,8 @@
 //! `P1.5` behaviour table (doors, pistons, leaf distance updates, crop growth,
 //! …) keep their vanilla state in the world but their neighbor/random tick is
 //! an explicit no-op. Water/lava flow lives in [`crate::fluid`], and wire,
-//! lever, and button behaviour lives in [`crate::redstone`].
+//! lever, button, repeater, comparator, observer, redstone-torch, pressure-plate,
+//! and tripwire behaviour lives in [`crate::redstone`].
 //! [`unsupported_random_tick_reason`] and [`unsupported_neighbor_reason`] name
 //! the remaining gaps and the tick state records every unsupported block a tick
 //! actually reached, so a missing behaviour is visible instead of being
@@ -648,6 +649,68 @@ impl RandomTickQueue {
     }
 }
 
+/// A block-entity-like container that can drive a comparator.
+///
+/// Chests, furnaces, hoppers, barrels, and the other vanilla containers will
+/// implement this and register themselves in [`TickState::containers`] at their
+/// block position. The redstone module then never needs to know which inventory
+/// block is present, and inventory changes can call
+/// [`crate::redstone::notify_container_changed`] to make the comparator
+/// re-evaluate on its normal two-tick schedule.
+pub trait ContainerSignalSource: Send + Sync {
+    /// Vanilla `Container.getAnalogOutputSignal` (`0..=15`).
+    fn analog_output_signal(&self) -> i32;
+}
+
+/// Position-keyed container signal sources for comparator inputs.
+#[derive(Default)]
+pub struct ContainerSignals {
+    sources: HashMap<BlockPos, Box<dyn ContainerSignalSource>>,
+}
+
+impl ContainerSignals {
+    /// Registers (or replaces) the container at `pos`.
+    pub fn insert(&mut self, pos: BlockPos, source: Box<dyn ContainerSignalSource>) {
+        self.sources.insert(pos, source);
+    }
+
+    /// Removes the container at `pos`, returning whether one was present.
+    pub fn remove(&mut self, pos: BlockPos) -> bool {
+        self.sources.remove(&pos).is_some()
+    }
+
+    /// The analog output at `pos`, clamped to the comparator input range.
+    pub fn signal(&self, pos: BlockPos) -> Option<i32> {
+        self.sources
+            .get(&pos)
+            .map(|source| source.analog_output_signal().clamp(0, 15))
+    }
+
+    /// Number of registered containers.
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// True when no container is registered.
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
+    /// Drops every registered container.
+    pub fn clear(&mut self) {
+        self.sources.clear();
+    }
+}
+
+impl std::fmt::Debug for ContainerSignals {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ContainerSignals")
+            .field("len", &self.sources.len())
+            .finish()
+    }
+}
+
 /// One neighbour update that was handed to a block behaviour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProcessedNeighborUpdate {
@@ -671,6 +734,19 @@ pub struct TickState {
     pub scheduled: ScheduledTickQueue,
     /// Random-tick sampler settings.
     pub random: RandomTickQueue,
+    /// Block-entity containers that expose a comparator signal.
+    pub containers: ContainerSignals,
+    /// Comparator output strength learned by the last scheduled refresh.
+    ///
+    /// Vanilla stores this in `ComparatorBlockEntity`. The port keeps it on the
+    /// tick state until block entities are serialized; the value is cleared when
+    /// the comparator block is replaced.
+    pub comparator_outputs: HashMap<BlockPos, i32>,
+    /// Occupancy counts supplied by the entity layer for pressure plates and
+    /// tripwire. The block behaviours never count entities themselves.
+    pub occupancy: HashMap<BlockPos, crate::redstone::PlateOccupancy>,
+    /// Redstone-torch off toggles used for vanilla's 8-in-60-tick burn-out.
+    pub torch_toggles: Vec<crate::redstone::TorchToggle>,
     /// Neighbour updates processed during the current top-level edit/tick.
     pub last_neighbor_updates: Vec<ProcessedNeighborUpdate>,
     /// Blocks whose random tick was selected but is explicitly unsupported.
@@ -865,6 +941,85 @@ impl<'a> TickWorld<'a> {
             .schedule_after(self.tick, pos, block, delay, priority);
     }
 
+    /// Queues the six neighbours of `pos` without changing the block.
+    ///
+    /// Vanilla diodes call `updateNeighborsInFront` after refreshing their
+    /// output, even when the block state itself did not change.
+    pub fn notify_neighbors(&mut self, pos: BlockPos) {
+        self.storage
+            .tick_state_mut()
+            .neighbors
+            .enqueue_neighbors(pos, UpdateFlags::ALL | UpdateFlags::SHAPE);
+    }
+
+    /// The comparator output stored for `pos` (`ComparatorBlockEntity`).
+    pub fn comparator_output(&self, pos: BlockPos) -> i32 {
+        self.storage
+            .tick_state()
+            .comparator_outputs
+            .get(&pos)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Stores a comparator output strength (`0..=15`).
+    pub fn set_comparator_output(&mut self, pos: BlockPos, output: i32) {
+        self.storage
+            .tick_state_mut()
+            .comparator_outputs
+            .insert(pos, output.clamp(0, 15));
+    }
+
+    /// Occupancy counts recorded by the entity layer for `pos`.
+    pub fn occupancy(&self, pos: BlockPos) -> crate::redstone::PlateOccupancy {
+        self.storage
+            .tick_state()
+            .occupancy
+            .get(&pos)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Replaces the occupancy counts for `pos`.
+    pub fn set_occupancy(&mut self, pos: BlockPos, occupancy: crate::redstone::PlateOccupancy) {
+        self.storage
+            .tick_state_mut()
+            .occupancy
+            .insert(pos, occupancy);
+    }
+
+    /// Drops torch toggles older than the vanilla 60-tick window.
+    pub fn prune_torch_toggles(&mut self) {
+        let tick = self.tick;
+        self.storage
+            .tick_state_mut()
+            .torch_toggles
+            .retain(|toggle| {
+                tick.saturating_sub(toggle.tick) <= crate::redstone::REDSTONE_TORCH_TOGGLE_WINDOW
+            });
+    }
+
+    /// Records one redstone-torch off toggle and reports whether the torch has
+    /// now toggled at least eight times inside the 60-tick window.
+    pub fn record_torch_toggle(&mut self, pos: BlockPos) -> bool {
+        self.prune_torch_toggles();
+        let tick = self.tick;
+        let toggles = &mut self.storage.tick_state_mut().torch_toggles;
+        toggles.push(crate::redstone::TorchToggle { pos, tick });
+        toggles.iter().filter(|toggle| toggle.pos == pos).count()
+            >= crate::redstone::REDSTONE_TORCH_MAX_TOGGLES
+    }
+
+    /// Number of recorded off toggles for `pos` inside the current window.
+    pub fn torch_toggle_count(&self, pos: BlockPos) -> usize {
+        self.storage
+            .tick_state()
+            .torch_toggles
+            .iter()
+            .filter(|toggle| toggle.pos == pos)
+            .count()
+    }
+
     /// A per-position deterministic random source.
     pub fn random(&self, pos: BlockPos) -> XoroshiroRandomSource {
         let seed = self.storage.tick_state().random.seed;
@@ -906,6 +1061,18 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::LEVER_BEHAVIOR
     } else if crate::redstone::is_button(state) {
         &crate::redstone::BUTTON_BEHAVIOR
+    } else if crate::redstone::is_repeater(state) {
+        &crate::redstone::REPEATER_BEHAVIOR
+    } else if crate::redstone::is_comparator(state) {
+        &crate::redstone::COMPARATOR_BEHAVIOR
+    } else if crate::redstone::is_observer(state) {
+        &crate::redstone::OBSERVER_BEHAVIOR
+    } else if crate::redstone::is_redstone_torch(state) {
+        &crate::redstone::REDSTONE_TORCH_BEHAVIOR
+    } else if crate::redstone::is_pressure_plate(state) {
+        &crate::redstone::PRESSURE_PLATE_BEHAVIOR
+    } else if crate::redstone::is_tripwire(state) {
+        &crate::redstone::TRIPWIRE_BEHAVIOR
     } else if is_falling_block(state.name.as_str()) {
         &FALLING
     } else if plant_soil(state).is_some() {
@@ -940,8 +1107,10 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     let name = state.name.as_str();
     if tags::block_has("leaves", name) {
         Some("leaf distance updates need P1.5 state/shape metadata")
+    } else if name == "minecraft:tripwire_hook" {
+        Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
-        Some("redstone, doors, rails, torches, and piston behaviour are not ported")
+        Some("doors, rails, pistons, and non-redstone torch support are not ported")
     } else {
         None
     }
@@ -950,14 +1119,9 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
 fn is_known_unsupported_neighbor(name: &str) -> bool {
     matches!(
         name,
-        "minecraft:redstone_torch"
-            | "minecraft:redstone_wall_torch"
-            | "minecraft:repeater"
-            | "minecraft:comparator"
-            | "minecraft:piston"
+        "minecraft:piston"
             | "minecraft:sticky_piston"
             | "minecraft:moving_piston"
-            | "minecraft:observer"
             | "minecraft:dispenser"
             | "minecraft:dropper"
             | "minecraft:hopper"
@@ -1311,6 +1475,15 @@ pub(crate) fn on_block_change(
     process: bool,
 ) -> io::Result<()> {
     let tick = storage.tick_state().current_tick;
+    if !crate::redstone::is_comparator(new_state) {
+        storage.tick_state_mut().comparator_outputs.remove(&pos);
+    }
+    if !crate::redstone::is_pressure_plate(new_state) && !crate::redstone::is_tripwire(new_state) {
+        storage.tick_state_mut().occupancy.remove(&pos);
+    }
+    if old.is_some_and(|old| old.name != new_state.name) {
+        storage.tick_state_mut().containers.remove(pos);
+    }
     let behavior = behavior_for(new_state);
     {
         let mut world = TickWorld::new(storage, tick);
@@ -1742,7 +1915,34 @@ mod tests {
             None
         );
         assert_eq!(unsupported_neighbor_reason(&state("minecraft:lever")), None);
-        assert!(unsupported_neighbor_reason(&state("minecraft:repeater")).is_some());
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:repeater")),
+            None
+        );
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:comparator")),
+            None
+        );
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:observer")),
+            None
+        );
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:redstone_torch")),
+            None
+        );
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:stone_pressure_plate")),
+            None
+        );
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:tripwire")),
+            None
+        );
+        assert!(
+            unsupported_neighbor_reason(&state("minecraft:tripwire_hook")).is_some(),
+            "the hook signal chain is still an explicit gap"
+        );
         assert!(unsupported_neighbor_reason(&state("minecraft:oak_leaves")).is_some());
         assert_eq!(
             unsupported_random_tick_reason(&state("minecraft:stone")),
@@ -1771,6 +1971,53 @@ mod tests {
             behavior_for(&state("minecraft:oak_button")),
             &redstone::BUTTON_BEHAVIOR as &dyn BlockBehavior
         ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:repeater")),
+            &redstone::REPEATER_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:comparator")),
+            &redstone::COMPARATOR_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:observer")),
+            &redstone::OBSERVER_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:redstone_wall_torch")),
+            &redstone::REDSTONE_TORCH_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:stone_pressure_plate")),
+            &redstone::PRESSURE_PLATE_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:tripwire")),
+            &redstone::TRIPWIRE_BEHAVIOR as &dyn BlockBehavior
+        ));
+    }
+
+    struct FixedContainer(i32);
+    impl ContainerSignalSource for FixedContainer {
+        fn analog_output_signal(&self) -> i32 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn container_signals_are_position_keyed_and_clamped() {
+        let mut containers = ContainerSignals::default();
+        containers.insert(BlockPos::new(1, 2, 3), Box::new(FixedContainer(9)));
+        assert_eq!(containers.signal(BlockPos::new(1, 2, 3)), Some(9));
+        containers.insert(BlockPos::new(4, 5, 6), Box::new(FixedContainer(99)));
+        assert_eq!(containers.signal(BlockPos::new(4, 5, 6)), Some(15));
+        assert_eq!(containers.signal(BlockPos::new(7, 8, 9)), None);
+        assert_eq!(containers.len(), 2);
+        assert!(containers.remove(BlockPos::new(1, 2, 3)));
+        assert!(!containers.remove(BlockPos::new(1, 2, 3)));
+        assert_eq!(containers.len(), 1);
+        containers.clear();
+        assert!(containers.is_empty());
     }
 
     struct MarkerBehavior;

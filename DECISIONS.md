@@ -1820,3 +1820,43 @@ Format:
   break/place/interact still bypass the event bus until a follow-up changes
   `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
   covered; the rest of P9.2 remains open.
+
+## 2026-11-06 - Redstone components reuse the tick queues and keep comparator output on TickState
+
+- Context: The first redstone slice covered wire, levers, and buttons only.
+  Repeaters, comparators, observers, torches, pressure plates, and tripwire need
+  scheduled ticks and entity-derived inputs, but the port has no block entities,
+  no entity store on `WorldStorage`, and cannot edit `world.rs`.
+- Decision: Repeaters use vanilla's `facing` convention (input side) and emit
+  strong power toward `facing.opposite()`; locking is evaluated live from
+  `getAlternateSignal`, while the `locked` property is only a cached shape/client
+  value. Comparator output is kept in `TickState::comparator_outputs` keyed by
+  position, matching `ComparatorBlockEntity` behaviour until block entities and
+  NBT persistence land.
+- Decision: Container inputs go through `tick::ContainerSignalSource` and the
+  per-world `TickState::containers` registry. A chest/furnace implements the
+  trait, registers at its block position, and calls
+  `redstone::notify_container_changed` when its contents change. The comparator
+  never needs to know inventory layouts, and tests can register a fake container.
+- Decision: Pressure plates and tripwire take already-filtered
+  `PlateOccupancy { entities, living }` counts from the entity layer instead of
+  scanning an entity collection that `TickState` does not have. The block
+  behaviours own the vanilla signal/schedule/release logic; the entity layer
+  owns spectator/trigger-ignoring filtering.
+- Decision: Redstone-torch burn-out uses vanilla's
+  `RedstoneTorchBlock` constants: eight off toggles within 60 ticks, then a
+  160-tick restart delay. The task brief's “60 toggles in 60 ticks” is a
+  shorthand; the decompiled source is authoritative. Toggles are kept in
+  `TickState::torch_toggles`.
+- Decision: Wire connection shape is recomputed from `getConnectingSide` and
+  `getConnectionState`, including the dot/cross stub rules, on placement and on
+  neighbour changes. `isFaceSturdy` uses the shared full-cube solidity
+  approximation until P1.5 shapes exist.
+- Why: The existing neighbour queue plus scheduled queue already provide
+  deterministic ordering and dedup, so a second redstone scheduler would
+  duplicate tested behaviour. Per-world tick state keeps tests isolated and
+  leaves comparator/torch/pressure state reusable when block entities arrive.
+- Consequences: Comparator outputs, plate occupancy, torch toggles, and pending
+  scheduled ticks are not persisted to chunk NBT; a restart resets them.
+  Tripwire hooks, pistons, lamps, target blocks, and item-frame/analog block
+  inputs remain explicit gaps. No Java differential redstone trace exists yet.

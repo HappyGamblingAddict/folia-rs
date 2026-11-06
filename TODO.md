@@ -3,7 +3,9 @@
 > Last updated: 2026-11-06
 > Current commit: see `git log` (all work is committed)
 > Working tree: clean
-> Test status: **611 passing** on the full merged gate (0 failed)
+> Test status: **611 passing** on the last full merged gate; the redstone-
+> component slice adds 10 lib + 2 tick-state + 10 `tests/redstone2.rs` focused
+> tests, with `tests/fluids.rs` and `tests/ticks.rs` remaining green.
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
@@ -32,7 +34,7 @@ where possible, a differential test against the Java oracle.
 | Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
 | Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
-| Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
+| Blocks/redstone/fluids | ~30% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks, full components missing |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
@@ -44,6 +46,16 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-06: P3.10 redstone components — `redstone.rs` adds repeaters
+  (facing/input side, delay 1–4, scheduled toggles, live locking, strong
+  output, delay cycling), comparators (compare/subtract, rear/side inputs,
+  `ContainerSignalSource` container strength, stored output, scheduled
+  refresh), observers (two-tick pulse), redstone torches (floor/wall attach,
+  inversion, burn-out), pressure plates (wood/stone/weighted), tripwire
+  (occupancy, pressed state, release, connections), and wire connection-shape
+  updates. `tick.rs` adds container/comparator/occupancy/torch state and
+  registers every behaviour. Focused: 10 lib + 2 tick + 10 integration tests;
+  fluids and ticks suites stay green; fmt/clippy clean.
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -1166,9 +1178,9 @@ section-only light packets are still open.
   and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
   drain, waterlogging, source conversion, determinism).
 - **Still open:** leaf distance/decay updates, crop/sapling growth, pistons,
-  doors, rails, torch support, lava fire spread/quenching, and the remaining
-  redstone components (repeater, comparator, torch, observer, pressure plates,
-  lamp). Falling blocks move one block per scheduled tick instead of using a
+  doors, rails, regular torch support, lava fire spread/quenching, redstone
+  lamps/target blocks/tripwire hooks, and analog block inputs. Falling blocks
+  move one block per scheduled tick instead of using a
   `FallingBlockEntity`; scheduled ticks are not persisted to chunk NBT; the
   random-tick RNG is a deterministic hash of seed/chunk/tick rather than
   Java's `Level.random` sequence; `tick_world` runs over the storage cache
@@ -1590,8 +1602,9 @@ block-specific behavior.
 
 **Current state:** The P3.10 tick slice provides update flags, neighbour and
 scheduled/random tick queues, falling blocks, plant support, grass spread,
-water/lava flow, and wire/lever/button redstone. Pistons, explosions, block
-entities, the remaining redstone components, and full P1.5 metadata are open.
+water/lava flow, and wire/lever/button/repeater/comparator/observer/redstone
+torch/pressure-plate/tripwire redstone. Pistons, explosions, block entities,
+redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 
 ### P6.1 Block behavior framework `[~]` `L`
 
@@ -1603,9 +1616,10 @@ entities, the remaining redstone components, and full P1.5 metadata are open.
 - **Done when:** At least 20 vanilla block types have behavior tests.
 - **Progress (2026-11-06):** `tick::BlockBehavior` and `tick::BehaviorTable`
   provide random tick, scheduled tick, neighbor changed, shape update, and
-  place hooks; falling blocks, plants, grass, fluids, wire, lever, and buttons
-  are registered. Use/break/entity interaction and comparator output remain
-  open.
+  place hooks plus `TickWorld` notification/comparator/occupancy/torch helpers;
+  falling blocks, plants, grass, fluids, wire, levers, buttons, repeaters,
+  comparators, observers, redstone torches, pressure plates, and tripwire are
+  registered. Entity interaction and non-player use remain open.
 
 ### P6.2 Fluid system `[~]` `L`
 
@@ -1633,10 +1647,11 @@ entities, the remaining redstone components, and full P1.5 metadata are open.
 - **Progress (2026-11-06):** `redstone.rs` implements `SignalGetter`-style
   strong/weak queries (`getSignal`, `getDirectSignal`, `getDirectSignalTo`,
   `getControlInputSignal`, `hasNeighborSignal`, `getBestNeighborSignal`), wire
-  target strength and 0..15 decay through the neighbour queue, lever toggling,
-  and button press with a scheduled release. Redstone torch/repeater/
-  comparator/observer/pressure-plate/door sources and a Java timing fixture are
-  still open.
+  target strength/connection shape and 0..15 decay through the neighbour queue,
+  lever toggling, buttons, repeaters (delay/facing/locking/strong output),
+  comparators (compare/subtract plus container inputs), observers, redstone
+  torches with burn-out, pressure plates, and tripwire. Redstone lamps, target
+  blocks, tripwire hooks, doors, and a Java timing fixture are still open.
 
 ### P6.4 Redstone components `[~]` `XL`
 
@@ -1646,8 +1661,11 @@ entities, the remaining redstone components, and full P1.5 metadata are open.
   copper bulbs, and crafters.
 - **Why:** These are the visible redstone surface players and plugins use.
 - **Done when:** Each component has a timing fixture against Java.
-- **Progress (2026-11-06):** Wire, lever, and button are implemented; the
-  remaining components are still explicit gaps.
+- **Progress (2026-11-06):** Wire, lever, button, repeater, comparator,
+  observer, redstone torch, wooden/stone/weighted pressure plates, and tripwire
+  are implemented. Pistons, rails, doors/trapdoors, dispensers/droppers/hoppers,
+  daylight detectors, target blocks, note blocks, bells, copper bulbs, crafters,
+  and tripwire hooks remain explicit gaps.
 
 ### P6.5 Pistons and moving blocks `[ ]` `L`
 

@@ -52,13 +52,10 @@ first scheduled-tick/fluid/redstone simulation slice.
 Verified state (2026-11-06, merged workspace):
 
 ```text
-<<<<<<< HEAD
 426 tests (last full workspace gate); this slice adds 13 focused
 structure tests
 519 tests (full workspace, skipping two CRLF asset-hash guards; see BLOCKERS.md)
-=======
 511 tests (full workspace)
->>>>>>> task/loot
 0 failed
 + 6 lib + 12 integration focused tests in the entity metadata slice
 cargo fmt --check: clean
@@ -608,13 +605,10 @@ alternate world directory; `FOLIA_BIND` overrides the bind address;
 - [ ] Run `cargo fmt --check` and
       `cargo clippy --workspace --all-targets -- -D warnings`; both must be
       clean.
-<<<<<<< HEAD
 - [ ] Run `cargo test --workspace`; expect 519 tests, 0 failed. In a checkout
       that materialized `assets/*.tsv` with CRLF, skip the two asset-hash guards
       (see `BLOCKERS.md`); the other 519 tests must pass.
-=======
 - [ ] Run `cargo test --workspace`; expect 511 tests, 0 failed.
->>>>>>> task/loot
 - [ ] If `world/region` was modified by a manual run, restore the fixture from
       `snapshots/folia-rs-20261104-193508-p2-biome-filter.zip` before debugging
       `world_chunk_packet`, and probe scratch levels with `FOLIA_LEVEL_NAME`.

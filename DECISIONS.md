@@ -1312,7 +1312,6 @@ Format:
   until feature-RNG/terrain parity improves. Do not claim the slice is neutral;
   the delta and its cause are recorded here.
 
-<<<<<<< HEAD
 ## 2026-11-06 - Entity metadata and living state are separate from physics
 
 - Context: The entity store is a global `HashMap<i32, Entity>` with physics
@@ -1653,7 +1652,6 @@ Format:
 - Consequences: Wire connection-shape properties are not recomputed yet, and
   only power is modeled. Repeaters/comparators/torches/pistons still need
   their own behaviour hooks.
-=======
 ## 2026-11-06 - Loot and recipe data use one normalized catalog per kind
 
 - Context: 1.21.11 ships 1,324 loot-table JSON files and 1,470 recipe JSON
@@ -1706,4 +1704,3 @@ Format:
   entries.
 - Consequences: A genuine CRLF-only content edit is not detected; any other
   byte change is. Regenerate the manifest with LF output when adding assets.
->>>>>>> task/loot

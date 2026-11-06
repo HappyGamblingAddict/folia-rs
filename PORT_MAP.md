@@ -64,13 +64,10 @@ Rust tree: `crates/folia-core`.
 
 ## Verification evidence
 
-<<<<<<< HEAD
 - `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
   29 random tests (426 total), 0 failed (2026-11-06, last full gate before the
   block-behaviour slice). That slice adds 4 integration + 2 lib focused tests.
-=======
 - `cargo test --workspace` → 511 total, 0 failed (2026-11-06).
->>>>>>> task/loot
 - P2.5 focused evidence: `worldgen::feature::vegetation` adds 8 unit tests and
   `tests/vegetation.rs` adds 15 integration tests covering shipped
   `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,

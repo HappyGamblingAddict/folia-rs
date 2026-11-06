@@ -8,19 +8,16 @@ Last updated: 2026-11-06
 
 ## Current status
 
-<<<<<<< HEAD
 - Current commit (informational only): see `git log` (entity metadata,
   block-behaviour, feature gaps, surface, structure, and breaking merged).
 - Working tree: clean; these slices are merged.
 - Tests: **426 passing** on the last full gate; block breaking adds 13 lib
   + 9 integration focused tests. Parity: 98.71% block-class / 91.98%
   exact-name.
-=======
 - Current commit (informational only): `6e0e5fe`
 - Working tree: aquatic/vine/mushroom slice merged; docs being resolved.
 - Tests: **511 passing** on the last full gate; this slice adds 9 loot
   integration tests and one asset-manifest test.
->>>>>>> task/loot
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -285,7 +282,6 @@ Last updated: 2026-11-06
 
 ## Current focus
 
-<<<<<<< HEAD
 - P5.1 metadata/health/equipment core is in place. Next: wire
   `LivingEntity` into spawned entities and player sessions, send the initial
   non-default metadata snapshot, add the remaining serializers (effect
@@ -297,13 +293,11 @@ Last updated: 2026-11-06
   send the block-damage overlay packet, model Unbreaking, parse adventure
   `can_destroy`, add status-effect/haste sources, and capture a Java
   break-time/drop fixture.
-=======
 - P1.7 now has the vanilla loot and recipe catalogs plus loaders. Next: wire
   block/entity drops through `LootCatalog::roll`, add the P4.8 crafting
   matcher, and close the function gaps (`enchant_with_levels`,
   `copy_components`, `copy_state`, `set_stew_effect`, `set_instrument`) once
   the enchantment/instrument registries and block-state context are available.
->>>>>>> task/loot
 - P1.4 has a working component-aware stack model. Next: dump per-item prototype
   component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
   defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
@@ -384,7 +378,6 @@ Last updated: 2026-11-06
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
-<<<<<<< HEAD
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/
@@ -446,7 +439,6 @@ Last updated: 2026-11-06
   determinism). Workspace run passes 519 tests when the two pre-existing CRLF
   asset-hash checks are skipped; those fail only in this checkout because
   `assets/*.tsv` were materialized with CRLF. See `BLOCKERS.md`.
-=======
 - 2026-11-06: P1.7 loot and recipe catalogs — `scripts/extract_loot_recipes.ps1`
   normalizes 1,324 loot tables and 1,470 recipes into compact sorted JSON with
   per-type indexes (block 1,083, entity 114, chest 65; shaped 706, shapeless
@@ -457,7 +449,6 @@ Last updated: 2026-11-06
   opaquely and surface in `LootRoll::report`; `tests/loot.rs` covers the shipped
   diamond-ore, stone, and simple-dungeon tables, recipe serializers, opaque
   payloads, determinism, and component functions. 9 focused tests.
->>>>>>> task/loot
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

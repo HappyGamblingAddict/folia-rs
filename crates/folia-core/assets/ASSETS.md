@@ -91,6 +91,19 @@ catalogs; unknown functions and conditions survive as typed `Opaque` variants.
 | `loot_tables.json` | 11 table types: block 1,083, entity 114, chest 65, shearing 22, gift 21, archaeology 6, fishing 4, block_interact 4, equipment 3, entity_interact 1, barter 1 | 1,324 | 662,482 | `0x8c3b7afac27e3096` |
 | `recipes.json` | 22 recipe types: shaped 706, shapeless 320, stonecutting 254, smelting 73, transmute 32, blasting 25, smithing_trim 18, smithing_transform 12, campfire 9, smoking 9, special/decorated 13 | 1,470 | 356,848 | `0x9b844794502a181f` |
 
+## Item and structure catalogs
+
+`scripts/extract_item_prototypes.ps1` dumps item default components from the
+local 1.21.11 server jar. `scripts/extract_structure_data.ps1` normalizes the
+`worldgen/processor_list` and `worldgen/template_pool` trees. Both emit sorted,
+namespaced, whitespace-free JSON with a `counts` index.
+
+| File | Content | Entries | Bytes | FNV-1a-64 |
+|---|---|---:|---:|---|
+| `item_prototypes.json` | 1,504 non-air items; 423 with overrides | 1,504 | 79,369 | `0xf179dfed29cdcdad` |
+| `structure_processors.json` | 40 lists, 52 processors (block_rot 6, capped 4, protected_blocks 7, rule 35) | 40 | 46,334 | `0x446c0e7b069e66c4` |
+| `template_pools.json` | 188 pools, 1,198 entries, 1,204 element nodes | 188 | 252,745 | `0xaa6434676fdae64c` |
+
 ## Worldgen and math
 
 | File | Content | Size | FNV-1a-64 |

@@ -54,7 +54,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 20] = [
+    let expected: [(&str, usize, u64); 23] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
         (
             "block_state_behaviour.tsv.gz",
@@ -83,6 +83,9 @@ fn generated_assets_match_the_manifest() {
         ("tags/worldgen.tsv", 35_799, 0xf2e0_3c73_7a04_1e7c),
         ("loot_tables.json", 662_482, 0x8c3b_7afa_c27e_3096),
         ("recipes.json", 356_848, 0x9b84_4794_502a_181f),
+        ("item_prototypes.json", 79_369, 0xf179_dfed_29cd_cdad),
+        ("structure_processors.json", 46_334, 0x446c_0e7b_069e_66c4),
+        ("template_pools.json", 252_745, 0xaa64_3467_6fda_e64c),
     ];
 
     for (name, length, hash) in expected {

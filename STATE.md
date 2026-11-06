@@ -9,7 +9,9 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit: see `git log`; the tree is committed and not pushed.
-- Tests: **804 passing** on the full merged gate (0 failed).
+- Tests: **812 total on this branch** (802 existing + 10 new light-occlusion
+  tests). Focused light suites are green; the coordinator owns the full
+  workspace gate.
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -24,9 +26,8 @@ Last updated: 2026-11-06
   pathfinding, and natural spawning; online-mode RSA/AES auth and encryption.
 - Major gaps: recursive jigsaw and structure generator/biome wiring; typed
   block-entity storage and tickers; pistons; live join entity spawning and AI
-  tick integration; shape-aware light occlusion; loot-table gameplay wiring;
-  dimension storage/portals; chat signing; bridge live-session sync; Folia
-  region ownership.
+  tick integration; loot-table gameplay wiring; dimension storage/portals;
+  chat signing; bridge live-session sync; Folia region ownership.
 - Folia region threading is still task queues only.
 
 ## Current focus
@@ -34,7 +35,8 @@ Last updated: 2026-11-06
 1. P2.8 recursive jigsaw connection and structure generator/chunk-status wiring.
 2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
 3. P5 join-session entity spawning/tracking and AI tick integration.
-4. P1.5 shape-aware light occlusion and remaining support/waterlogging rules.
+4. P1.5 remaining support/waterlogging rules and exact
+   `canOcclude`/`useShapeForLightOcclusion` flags.
 5. P9.3 bridge live-session state and gameplay event dispatch.
 
 ## Next queue
@@ -47,7 +49,7 @@ Last updated: 2026-11-06
 - [~] P2.1/P2.2 framework + all 888 modifiers; 171/224 configured types.
 - [~] P2.3-P2.5 ores/trees/vegetation; remaining feature types and fixtures.
 - [~] P2.8 templates/starts/processors/pools; recursive jigsaw + wiring remain.
-- [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
+- [~] P3.5-P3.8 light (storage/BFS/incremental/outline occlusion; Java fixtures).
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
 - [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
 - [~] P4.8 crafting (menus, packets, recipe book, brewing).
@@ -58,6 +60,17 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-06: P1.5/P3.6-P3.8 outline light occlusion - `light.rs` replaces
+  the light-block-only approximation with cached per-state outline face masks
+  (`face_occludes(state_id, direction)`), pairwise `shapeOccludes` union checks
+  in both increase engines, `isEdgeOccluded` sky-column scans, and
+  shape-change rechecks in `LightScene`. Slabs, stairs, snow layers, farmland,
+  paths, and carpets block their full faces while fences, panes, walls,
+  glass, water, leaves, and ice keep their attenuation. New
+  `tests/light_occlusion.rs` has 10 focused tests (masks, opaque emitters,
+  use-shape-disabled blocks, slab/stair/snow, transparency, torch-under-slab,
+  decrease/re-light, bulk comparison, border).
+  Remaining: Java light fixtures and exact `canOcclude` flags.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
   shaped matching with CraftingInput-style bounding-box cropping, mirrored
   patterns, ingredient item/tag/alternative matching, and vanilla's

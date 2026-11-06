@@ -18,17 +18,26 @@
 //! Opacity and emission come from the generated per-state
 //! [`crate::block_behaviour`] table. Unknown states resolve the same way
 //! [`crate::block_behaviour::light_block`] does: fully opaque and non-emitting,
-//! which is conservative because it can never fabricate light. Block shapes
-//! (and therefore Java's face-occlusion checks) are still full cubes; the
-//! engine uses the per-state light-block value, exactly like the whole-chunk
-//! path it replaces.
+//! which is conservative because it can never fabricate light.
+//!
+//! Face occlusion follows Java 1.21.11's `LightEngine.getLightBlockInto` /
+//! `shapeOccludes`: a neighbouring cell only receives light when the union of
+//! the two states' outline face projections does not cover the whole face.
+//! Slabs, stairs, snow layers, farmland, and paths therefore block light
+//! through their full faces while still letting it enter from their open
+//! sides. States that are full cubes but intentionally transparent (glass,
+//! ice, leaves, water, honey, slime) keep their light-block attenuation and do
+//! not shape-occlude, matching `canOcclude=false` in vanilla.
 
+use crate::block_shapes::{self, Aabb};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::{LIGHT_SECTION_COUNT, OVERWORLD_MIN_SECTION};
+use crate::math::{Axis, Direction};
 use crate::protocol::PacketWriter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io;
+use std::sync::OnceLock;
 
 /// Side length of a light section.
 pub const SECTION_SIZE: usize = 16;
@@ -54,6 +63,350 @@ const PROPAGATION_DIRECTIONS: [(i32, i32, i32); 6] = [
 const DIRECTION_ALL: u8 = 0b11_1111;
 /// Bit for UP, the direction sky source entries skip.
 const DIRECTION_UP: u8 = 1 << 1;
+
+/// Tolerance for the 1/16-grid shape coordinates in `block_shapes`.
+const SHAPE_EPSILON: f64 = 1.0e-7;
+
+/// One block face projected onto the unit square of the adjacent block.
+#[derive(Clone, Copy)]
+struct FaceRect {
+    min_u: f64,
+    max_u: f64,
+    min_v: f64,
+    max_v: f64,
+}
+
+/// Cached per-state face masks, indexed by registry state id.
+///
+/// `geometry` is what [`face_occludes`] exposes; `light` additionally applies
+/// the block's `useShapeForLightOcclusion` policy and drops ordinary full
+/// cubes so opaque emitters can still light their neighbours.
+struct FaceMaskTable {
+    geometry: Box<[u8]>,
+    light: Box<[u8]>,
+}
+
+static FACE_MASKS: OnceLock<FaceMaskTable> = OnceLock::new();
+
+/// Light attenuation for a registry block-state id.
+///
+/// This mirrors [`crate::block_behaviour::light_block`] without requiring a
+/// [`BlockState`] value. Unknown ids stay conservative: fully opaque.
+pub fn light_block(state_id: i32) -> u8 {
+    crate::block_behaviour::by_id(state_id).map_or(MAX_LIGHT, |behaviour| behaviour.light_block)
+}
+
+/// Light emission for a registry block-state id.
+///
+/// Unknown ids emit no light.
+pub fn light_emission(state_id: i32) -> u8 {
+    crate::block_behaviour::by_id(state_id).map_or(0, |behaviour| behaviour.light_emission)
+}
+
+fn state_id(state: &BlockState) -> i32 {
+    crate::registry::block_state_id(state)
+}
+
+/// Blocks that override `useShapeForLightOcclusion` in 1.21.11.
+///
+/// The generated behaviour table does not carry this flag, so the set is
+/// transcribed from the decompiled block classes. Full cubes are still handled
+/// by their `light_block`; this list only decides which partial outlines may
+/// occlude a face. `_carpet` is included deliberately: this port treats
+/// carpets as shape-occluding even though vanilla `CarpetBlock` leaves the
+/// flag false, matching the shape-occlusion task contract.
+fn uses_shape_for_light_occlusion(state_id: i32) -> bool {
+    let Some(behaviour) = crate::block_behaviour::by_id(state_id) else {
+        return false;
+    };
+    let name = behaviour.name.as_str();
+    name.ends_with("_slab")
+        || name.ends_with("_stairs")
+        || name.ends_with("_shelf")
+        || name.ends_with("_carpet")
+        || matches!(
+            name,
+            "minecraft:end_portal_frame"
+                | "minecraft:dirt_path"
+                | "minecraft:daylight_detector"
+                | "minecraft:enchanting_table"
+                | "minecraft:farmland"
+                | "minecraft:lectern"
+                | "minecraft:piston_head"
+                | "minecraft:piston"
+                | "minecraft:sticky_piston"
+                | "minecraft:snow"
+                | "minecraft:sculk_shrieker"
+                | "minecraft:stonecutter"
+                | "minecraft:sculk_sensor"
+                | "minecraft:calibrated_sculk_sensor"
+        )
+}
+
+fn axis_min(bounds: &Aabb, axis: Axis) -> f64 {
+    match axis {
+        Axis::X => bounds.min_x,
+        Axis::Y => bounds.min_y,
+        Axis::Z => bounds.min_z,
+    }
+}
+
+fn axis_max(bounds: &Aabb, axis: Axis) -> f64 {
+    match axis {
+        Axis::X => bounds.max_x,
+        Axis::Y => bounds.max_y,
+        Axis::Z => bounds.max_z,
+    }
+}
+
+fn is_full_cube(boxes: &[Aabb]) -> bool {
+    boxes.len() == 1 && {
+        let bounds = boxes[0];
+        bounds.min_x <= SHAPE_EPSILON
+            && bounds.min_y <= SHAPE_EPSILON
+            && bounds.min_z <= SHAPE_EPSILON
+            && bounds.max_x >= 1.0 - SHAPE_EPSILON
+            && bounds.max_y >= 1.0 - SHAPE_EPSILON
+            && bounds.max_z >= 1.0 - SHAPE_EPSILON
+    }
+}
+
+/// Whether a state only attenuates light without occluding a face.
+///
+/// Vanilla clears `getOcclusionShape` for `canOcclude=false` blocks, and glass,
+/// ice, leaves, water, honey, slime, and the other full-cube transparent
+/// blocks all fit that category. Empty outlines (air, fluids, plants) never
+/// occlude either.
+fn shape_transparent(state_id: i32) -> bool {
+    let boxes = block_shapes::outline_boxes(state_id);
+    boxes.is_empty() || (light_block(state_id) < MAX_LIGHT && is_full_cube(boxes))
+}
+
+/// Project the extreme slice of a state's outline onto the face square.
+///
+/// This mirrors `VoxelShape.getFaceShape(direction)`: only boxes that reach the
+/// outermost coordinate along the direction's axis contribute, and the sliced
+/// axis is collapsed. A box whose face is merely *near* the block boundary
+/// (farmland at 15/16) still covers the projected square, exactly like Java's
+/// `SliceShape`.
+fn push_face_rects(
+    state_id: i32,
+    direction: Direction,
+    rects: &mut Vec<FaceRect>,
+    light_policy: bool,
+) {
+    if shape_transparent(state_id) {
+        return;
+    }
+    if light_policy && !uses_shape_for_light_occlusion(state_id) {
+        return;
+    }
+    let boxes = block_shapes::outline_boxes(state_id);
+    if boxes.is_empty() || is_full_cube(boxes) {
+        // Ordinary full cubes leave `useShapeForLightOcclusion` false in
+        // vanilla, so their light-block value is the only occluder. That is
+        // also what lets opaque emitters such as glowstone light neighbours.
+        return;
+    }
+    let axis = direction.axis();
+    let positive = direction == axis.positive();
+    let mut plane = if positive {
+        f64::NEG_INFINITY
+    } else {
+        f64::INFINITY
+    };
+    for bounds in boxes {
+        let coordinate = if positive {
+            axis_max(bounds, axis)
+        } else {
+            axis_min(bounds, axis)
+        };
+        plane = if positive {
+            plane.max(coordinate)
+        } else {
+            plane.min(coordinate)
+        };
+    }
+
+    for bounds in boxes {
+        let at_face = if positive {
+            axis_max(bounds, axis) >= plane - SHAPE_EPSILON
+        } else {
+            axis_min(bounds, axis) <= plane + SHAPE_EPSILON
+        };
+        if !at_face {
+            continue;
+        }
+        let (min_u, min_v, max_u, max_v) = match axis {
+            Axis::X => (bounds.min_y, bounds.min_z, bounds.max_y, bounds.max_z),
+            Axis::Y => (bounds.min_x, bounds.min_z, bounds.max_x, bounds.max_z),
+            Axis::Z => (bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y),
+        };
+        let min_u = min_u.max(0.0);
+        let min_v = min_v.max(0.0);
+        let max_u = max_u.min(1.0);
+        let max_v = max_v.min(1.0);
+        if max_u - min_u <= SHAPE_EPSILON || max_v - min_v <= SHAPE_EPSILON {
+            continue;
+        }
+        rects.push(FaceRect {
+            min_u,
+            max_u,
+            min_v,
+            max_v,
+        });
+    }
+}
+
+/// Whether the union of face rectangles covers the whole unit square.
+///
+/// Coordinate compression keeps this exact for the small box counts in the
+/// shape table without needing a general polygon clipper.
+fn rects_cover_unit_square(rects: &[FaceRect]) -> bool {
+    if rects.is_empty() {
+        return false;
+    }
+    let mut u_coords = Vec::with_capacity(rects.len() * 2 + 2);
+    let mut v_coords = Vec::with_capacity(rects.len() * 2 + 2);
+    u_coords.extend([0.0, 1.0]);
+    v_coords.extend([0.0, 1.0]);
+    for rect in rects {
+        u_coords.push(rect.min_u);
+        u_coords.push(rect.max_u);
+        v_coords.push(rect.min_v);
+        v_coords.push(rect.max_v);
+    }
+    u_coords.sort_by(f64::total_cmp);
+    v_coords.sort_by(f64::total_cmp);
+    u_coords.dedup_by(|left, right| (*left - *right).abs() <= SHAPE_EPSILON);
+    v_coords.dedup_by(|left, right| (*left - *right).abs() <= SHAPE_EPSILON);
+
+    for u_pair in u_coords.windows(2) {
+        let (min_u, max_u) = (u_pair[0], u_pair[1]);
+        if max_u - min_u <= SHAPE_EPSILON {
+            continue;
+        }
+        let u = (min_u + max_u) * 0.5;
+        for v_pair in v_coords.windows(2) {
+            let (min_v, max_v) = (v_pair[0], v_pair[1]);
+            if max_v - min_v <= SHAPE_EPSILON {
+                continue;
+            }
+            let v = (min_v + max_v) * 0.5;
+            let covered = rects.iter().any(|rect| {
+                u >= rect.min_u - SHAPE_EPSILON
+                    && u <= rect.max_u + SHAPE_EPSILON
+                    && v >= rect.min_v - SHAPE_EPSILON
+                    && v <= rect.max_v + SHAPE_EPSILON
+            });
+            if !covered {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn face_occludes_uncached(state_id: i32, direction: Direction) -> bool {
+    if shape_transparent(state_id) {
+        return false;
+    }
+    if is_full_cube(block_shapes::outline_boxes(state_id)) {
+        return true;
+    }
+    let mut rects = Vec::with_capacity(8);
+    push_face_rects(state_id, direction, &mut rects, false);
+    rects_cover_unit_square(&rects)
+}
+
+/// Full-face mask of a state, cached after the first shape lookup.
+fn face_mask(state_id: i32) -> u8 {
+    let table = face_masks();
+    match usize::try_from(state_id) {
+        Ok(index) => table.geometry.get(index).copied().unwrap_or(DIRECTION_ALL),
+        Err(_) => DIRECTION_ALL,
+    }
+}
+
+fn face_masks() -> &'static FaceMaskTable {
+    FACE_MASKS.get_or_init(|| {
+        let count = block_shapes::state_count();
+        let mut geometry = vec![DIRECTION_ALL; count];
+        let mut light = vec![0u8; count];
+        for index in 0..count {
+            let id = index as i32;
+            let mut faces = 0u8;
+            for direction in Direction::ALL {
+                if face_occludes_uncached(id, direction) {
+                    faces |= 1 << direction.data_3d();
+                }
+            }
+            geometry[index] = faces;
+            if uses_shape_for_light_occlusion(id) {
+                let boxes = block_shapes::outline_boxes(id);
+                if !boxes.is_empty() && !is_full_cube(boxes) && !shape_transparent(id) {
+                    light[index] = faces;
+                }
+            }
+        }
+        FaceMaskTable {
+            geometry: geometry.into_boxed_slice(),
+            light: light.into_boxed_slice(),
+        }
+    })
+}
+
+/// Whether the state's outline covers the whole block face in `direction`.
+///
+/// A bottom slab is `true` for [`Direction::Up`] and [`Direction::Down`] and
+/// `false` for its four sides. A straight stair covers the faces of its full
+/// slab half but not the open step. Fences, walls, and panes never cover a
+/// complete face; transparent full cubes (glass, leaves, ice) and fluids
+/// (water) return `false` so their per-state attenuation is not overridden.
+///
+/// Opaque full cubes return `true` for every direction because their outline
+/// covers each face. This is the geometric answer; the engines additionally
+/// require `useShapeForLightOcclusion`, so doors, trapdoors, campfires,
+/// fences, and similar blocks keep only their `light_block` attenuation.
+pub fn face_occludes(state_id: i32, direction: Direction) -> bool {
+    face_mask(state_id) & (1u8 << direction.data_3d()) != 0
+}
+
+/// Face mask that participates in the light engines.
+///
+/// Full cubes are excluded even when they are opaque: vanilla's
+/// `useShapeForLightOcclusion` is false for ordinary blocks, and their
+/// `light_block == 15` already stops propagation. Excluding them is what lets
+/// a glowstone/sea-lantern cell emit into its neighbours. Partial shapes are
+/// only included for blocks that override the flag (see
+/// [`uses_shape_for_light_occlusion`]); doors, trapdoors, campfires, and
+/// similar `useShapeForLightOcclusion=false` blocks stay transparent.
+fn light_face_mask(state_id: i32) -> u8 {
+    let table = face_masks();
+    match usize::try_from(state_id) {
+        Ok(index) => table.light.get(index).copied().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// Java `LightEngine.shapeOccludes`: the union of both cells' face shapes
+/// decides whether light can cross the shared face.
+fn pair_shape_occludes(first_id: i32, second_id: i32, direction: Direction) -> bool {
+    let first_bit = 1u8 << direction.data_3d();
+    let second_bit = 1u8 << direction.opposite().data_3d();
+    if light_face_mask(first_id) & first_bit != 0 || light_face_mask(second_id) & second_bit != 0 {
+        return true;
+    }
+    let mut rects = Vec::with_capacity(8);
+    push_face_rects(first_id, direction, &mut rects, true);
+    push_face_rects(second_id, direction.opposite(), &mut rects, true);
+    rects_cover_unit_square(&rects)
+}
+
+/// Java `ChunkSkyLightSources.isEdgeOccluded` for the pair above/below.
+fn sky_edge_occluded(upper_id: i32, lower_id: i32) -> bool {
+    light_block(lower_id) != 0 || pair_shape_occludes(upper_id, lower_id, Direction::Down)
+}
 
 /// A 4-bit-per-cell light array, laid out exactly like vanilla `DataLayer`:
 /// `index = y << 8 | z << 4 | x`, low nibble for even indices, high for odd.
@@ -484,13 +837,19 @@ impl<'a> Volume<'a> {
         self.x_size * self.z_size * self.y_size
     }
 
+    fn state_id(&self, local_x: i32, local_z: i32, y: i32) -> i32 {
+        self.state(local_x, local_z, y).map_or(0, state_id)
+    }
+
     /// Vanilla `ChunkSkyLightSources`: return the Y of the lowest cell that
-    /// still receives direct sky light, i.e. one above the first light-blocking
-    /// block in the column. A fully transparent column starts at the bottom of
+    /// still receives direct sky light, i.e. one above the first occluded
+    /// edge in the column. A fully transparent column starts at the bottom of
     /// the loaded volume.
     fn sky_source_y(&self, local_x: i32, local_z: i32) -> i32 {
         for y in (self.min_y..=self.max_y).rev() {
-            if self.opacity(local_x, local_z, y) != 0 {
+            let lower = self.state_id(local_x, local_z, y);
+            let upper = self.state_id(local_x, local_z, y + 1);
+            if sky_edge_occluded(upper, lower) {
                 return y + 1;
             }
         }
@@ -562,7 +921,8 @@ fn propagate(volume: &Volume<'_>, light: &mut [u8], mut queue: VecDeque<usize>) 
             continue;
         }
         let (x, z, y) = volume.position(index);
-        for (dx, dy, dz) in PROPAGATION_DIRECTIONS {
+        for (direction, &(dx, dy, dz)) in PROPAGATION_DIRECTIONS.iter().enumerate() {
+            let direction = Direction::ALL[direction];
             let nx = x + dx;
             let ny = y + dy;
             let nz = z + dz;
@@ -580,10 +940,18 @@ fn propagate(volume: &Volume<'_>, light: &mut [u8], mut queue: VecDeque<usize>) 
             }
             let candidate = level - cost;
             let neighbour = volume.index(nx, nz, ny);
-            if candidate > light[neighbour] {
-                light[neighbour] = candidate;
-                queue.push_back(neighbour);
+            if candidate <= light[neighbour] {
+                continue;
             }
+            if pair_shape_occludes(
+                volume.state_id(x, z, y),
+                volume.state_id(nx, nz, ny),
+                direction,
+            ) {
+                continue;
+            }
+            light[neighbour] = candidate;
+            queue.push_back(neighbour);
         }
     }
 }
@@ -1019,13 +1387,21 @@ impl<'a> LightScene<'a> {
         let Some(new_state) = self.state(x, y, z).cloned() else {
             return;
         };
+        let old_id = old_state.map_or(0, state_id);
+        let new_id = state_id(&new_state);
         let new_emission = crate::block_behaviour::light_emission(&new_state);
         self.update_block_light(x, y, z, new_emission);
 
-        let old_opacity = old_state.map_or(0, crate::block_behaviour::light_block);
-        let new_opacity = crate::block_behaviour::light_block(&new_state);
-        if old_opacity != new_opacity {
-            self.update_sky_column(x, y, z, old_opacity);
+        let old_opacity = light_block(old_id);
+        let new_opacity = light_block(new_id);
+        let old_mask = light_face_mask(old_id);
+        let new_mask = light_face_mask(new_id);
+        // Java `hasDifferentLightProperties` also rechecks a state that uses
+        // its shape for light occlusion, even when the light-block value is
+        // unchanged. Rotating a stair changes which partial faces are exposed
+        // without necessarily changing either state's full-face mask.
+        if old_opacity != new_opacity || old_mask != new_mask || old_mask != 0 || new_mask != 0 {
+            self.update_sky_column(x, y, z, old_id);
         }
         self.flush_queues();
     }
@@ -1050,9 +1426,10 @@ impl<'a> LightScene<'a> {
 
     /// Port of `SkyLightEngine`'s column source bookkeeping for one changed
     /// column, followed by the per-cell decrease/pull at the edit position.
-    fn update_sky_column(&mut self, x: i32, y: i32, z: i32, old_opacity: u8) {
-        let old_source = self.column_source_y_with(x, z, Some((y, old_opacity)));
+    fn update_sky_column(&mut self, x: i32, y: i32, z: i32, old_id: i32) {
+        let old_source = self.column_source_y_with(x, z, Some((y, old_id)));
         let new_source = self.column_source_y(x, z);
+        let source_changed = new_source != old_source;
 
         if new_source > old_source {
             let top = new_source - 1;
@@ -1095,6 +1472,19 @@ impl<'a> LightScene<'a> {
                     Layer::Sky,
                     IncreaseSeed::plain(MAX_LIGHT, DIRECTION_ALL & !DIRECTION_UP),
                 );
+            } else if !source_changed {
+                // Vanilla `checkNode` re-runs a direct-sky cell after a shape
+                // change: clear the light that used the old side faces, then
+                // pull it back in through the new ones.
+                self.decrease
+                    .push(x, y, z, Layer::Sky, MAX_LIGHT, DIRECTION_ALL);
+                self.increase.push(
+                    x,
+                    y,
+                    z,
+                    Layer::Sky,
+                    IncreaseSeed::plain(MAX_LIGHT, DIRECTION_ALL),
+                );
             }
         } else {
             let stored = self.layer_get(Layer::Sky, x, y, z);
@@ -1122,7 +1512,7 @@ impl<'a> LightScene<'a> {
                 continue;
             }
 
-            for (direction, (dx, dy, dz)) in PROPAGATION_DIRECTIONS.iter().enumerate() {
+            for (direction, &(dx, dy, dz)) in PROPAGATION_DIRECTIONS.iter().enumerate() {
                 if entry.mask & (1 << direction) == 0 {
                     continue;
                 }
@@ -1137,17 +1527,22 @@ impl<'a> LightScene<'a> {
                     continue;
                 }
                 let candidate = level - opacity;
-                if candidate > self.layer_get(layer, nx, ny, nz) {
-                    self.layer_set(layer, nx, ny, nz, candidate);
-                    if candidate > 1 {
-                        self.increase.push(
-                            nx,
-                            ny,
-                            nz,
-                            layer,
-                            IncreaseSeed::plain(candidate, DIRECTION_ALL & !(1 << (direction ^ 1))),
-                        );
-                    }
+                if candidate <= self.layer_get(layer, nx, ny, nz) {
+                    continue;
+                }
+                let face = Direction::ALL[direction];
+                if pair_shape_occludes(self.state_id(x, y, z), self.state_id(nx, ny, nz), face) {
+                    continue;
+                }
+                self.layer_set(layer, nx, ny, nz, candidate);
+                if candidate > 1 {
+                    self.increase.push(
+                        nx,
+                        ny,
+                        nz,
+                        layer,
+                        IncreaseSeed::plain(candidate, DIRECTION_ALL & !(1 << (direction ^ 1))),
+                    );
                 }
             }
         }
@@ -1163,7 +1558,7 @@ impl<'a> LightScene<'a> {
                 from_level,
                 mask,
             } = entry;
-            for (direction, (dx, dy, dz)) in PROPAGATION_DIRECTIONS.iter().enumerate() {
+            for (direction, &(dx, dy, dz)) in PROPAGATION_DIRECTIONS.iter().enumerate() {
                 if mask & (1 << direction) == 0 {
                     continue;
                 }
@@ -1220,17 +1615,28 @@ impl<'a> LightScene<'a> {
         self.column_source_y_with(x, z, None)
     }
 
-    fn column_source_y_with(&self, x: i32, z: i32, override_state: Option<(i32, u8)>) -> i32 {
+    fn column_source_y_with(&self, x: i32, z: i32, override_state: Option<(i32, i32)>) -> i32 {
         for y in (self.min_y..=self.max_y).rev() {
-            let opacity = match override_state {
-                Some((override_y, opacity)) if y == override_y => opacity,
-                _ => self.opacity(x, y, z),
-            };
-            if opacity != 0 {
+            let lower = self.state_id_with(x, y, z, override_state);
+            let upper = self.state_id_with(x, y + 1, z, override_state);
+            if sky_edge_occluded(upper, lower) {
                 return y + 1;
             }
         }
         self.min_y
+    }
+
+    fn state_id_with(&self, x: i32, y: i32, z: i32, override_state: Option<(i32, i32)>) -> i32 {
+        if let Some((override_y, id)) = override_state
+            && y == override_y
+        {
+            return id;
+        }
+        self.state_id(x, y, z)
+    }
+
+    fn state_id(&self, x: i32, y: i32, z: i32) -> i32 {
+        self.state(x, y, z).map_or(0, state_id)
     }
 
     fn chunk(&self, chunk_x: i32, chunk_z: i32) -> Option<&Chunk> {
@@ -1440,7 +1846,9 @@ fn write_bitset(writer: &mut PacketWriter, mask: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block_behaviour::{light_block, light_emission};
+    use crate::block_behaviour::{
+        light_block as behaviour_light_block, light_emission as behaviour_light_emission,
+    };
 
     fn state(name: &str) -> BlockState {
         BlockState {
@@ -1476,45 +1884,49 @@ mod tests {
     #[test]
     fn generated_block_behaviour_drives_light_values() {
         let air = state("minecraft:air");
-        assert_eq!(light_block(&air), 0);
-        assert_eq!(light_emission(&air), 0);
+        assert_eq!(behaviour_light_block(&air), 0);
+        assert_eq!(behaviour_light_emission(&air), 0);
 
         let torch = state("minecraft:torch");
-        assert_eq!(light_emission(&torch), 14);
-        assert_eq!(light_block(&torch), 0);
+        assert_eq!(behaviour_light_emission(&torch), 14);
+        assert_eq!(behaviour_light_block(&torch), 0);
 
         for name in ["minecraft:glowstone", "minecraft:lava"] {
-            assert_eq!(light_emission(&state(name)), 15, "{name}");
+            assert_eq!(behaviour_light_emission(&state(name)), 15, "{name}");
         }
 
         let magma = state("minecraft:magma_block");
-        assert_eq!(light_emission(&magma), 3, "vanilla magma emits 3, not 15");
+        assert_eq!(
+            behaviour_light_emission(&magma),
+            3,
+            "vanilla magma emits 3, not 15"
+        );
 
         assert_eq!(
-            light_block(&state("minecraft:water")),
+            behaviour_light_block(&state("minecraft:water")),
             1,
             "water attenuates by one"
         );
         assert_eq!(
-            light_block(&state("minecraft:oak_leaves")),
+            behaviour_light_block(&state("minecraft:oak_leaves")),
             1,
             "leaves attenuate by one"
         );
         assert_eq!(
-            light_block(&state("minecraft:glass")),
+            behaviour_light_block(&state("minecraft:glass")),
             0,
             "glass does not attenuate light"
         );
         assert_eq!(
-            light_block(&state("minecraft:tinted_glass")),
+            behaviour_light_block(&state("minecraft:tinted_glass")),
             15,
             "tinted glass is opaque"
         );
 
         let unknown = state("minecraft:not_a_real_emitter");
-        assert_eq!(light_emission(&unknown), 0);
+        assert_eq!(behaviour_light_emission(&unknown), 0);
         assert_eq!(
-            light_block(&unknown),
+            behaviour_light_block(&unknown),
             15,
             "unknown states stay conservative and opaque"
         );

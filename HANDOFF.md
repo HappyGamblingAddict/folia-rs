@@ -183,14 +183,17 @@ Key files:
   relative 3, one `clamped_normal` offset).
 - `worldgen/feature/ore.rs` ports `minecraft:ore` and
   `minecraft:scattered_ore` with all 30 + 2 shipped configs, exact target
-  states, and the four referenced block tags. Placement is tested directly.
-  Generator wiring is intentionally off until feature-RNG parity; enabling it
-  lowers the exact-name fixture from 92.09% to 89.06%. `OreVeinifier` remains
-  unported.
+  states, and the four referenced block tags. `worldgen/ore_vein.rs` ports
+  `OreVeinifier`. The generator runs the vein filler in the density pass and
+  `underground_ores` by default (ore/scattered-ore types only). The placement
+  pipeline now consumes feature RNG lazily between positions and uses the
+  biome-parameter-order `FeatureSorter` indices, which took exact-name parity
+  from 92.01% to 95.80% (5886/6144); block-class is 98.75% (6067/6144).
 - Wired into generation: `WorldGenerator::apply_decorations` runs the supported
-  `underground_decoration`, `vegetal_decoration`, and `top_layer_modification`
-  features after carvers, using a chunk-backed `FeaturePlacementWorld`.
-  `underground_ores` stays off. Oak/birch trees generate in forest/plains/birch
+  `underground_ores`, `underground_decoration`, `vegetal_decoration`, and
+  `top_layer_modification` features after carvers, using a chunk-backed
+  `FeaturePlacementWorld` and vanilla's lazy placement stream. Oak/birch trees
+  generate in forest/plains/birch
   chunks; spruce/pine use layered foliage, dark oak uses its 2x2 branching
   trunk, forking acacia uses acacia foliage, fancy oak uses its limb trunk and
   clipped height, cherry uses its branch walk and hanging foliage, giant mega
@@ -352,6 +355,9 @@ bedrock layers: exact at 16 sampled Java columns
 block-class agreement (solid/air/water/lava): 98.71% (6065/6144)
 exact block names: 92.01% (5653/6144)
 water blocks: Rust 281 / Java 289, 36 water mismatches
+block-class agreement (solid/air/water/lava): 98.75% (6067/6144)
+exact block names: 95.80% (5886/6144)
+water blocks: Rust 282 / Java 289, 35 water mismatches
 surface height difference: 0.62 blocks average
 ```
 
@@ -365,6 +371,8 @@ columns (6144 blocks) and reports class agreement, exact names, water counts,
 and the top class confusions. After P2.12 the numbers are 98.71% block-class /
 92.01% exact-name; the one-block exact-name change is the corrected surface
 column start, which shifts a single extension boundary on the captured chunk.
+and the top class confusions. Ore/vein wiring lifted the numbers from
+92.01%/98.71%; the vein-only, no-ore-step baseline is 92.37% (5675/6144).
 
 Generation performance in the debug test profile:
 
@@ -446,8 +454,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 ### World generation
 
-- Ore and scattered-ore features are ported but not wired into generation;
-  `OreVeinifier` is not ported.
+- Ore/scattered-ore and `OreVeinifier` are wired. Remaining gaps: vein noise
+  should be sampled through `NoiseChunk`'s interpolation grid, the active biome
+  set should span the 3x3 chunk region (and features should write into it),
+  `disk_*`/`underwater_magma` in the same step are not wired, and 7 of the
+  fixture's 33 Java ore blocks still differ.
 - The P2.5 ground-cover types are ported, but most aquatic plants (seagrass,
 - The P2.5 ground-cover and aquatic/vine/mushroom types are ported;
   remaining aquatic plants, structures, and special features are still
@@ -494,6 +505,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   it, but loot tables, item entities, Unbreaking/Fortune/Silk Touch, and the
   block-damage overlay packet are still open.
 - Generated chunks are at 98.71% class / 92.02% exact-name agreement, not
+- Item stacks still carry only `item + count`; data components are not encoded
+  (durability, enchants, container contents are not preserved).
+- Block behavior metadata (hardness, light, solidity, tool rules) is not
+  generated, so physics/lighting/breaking cannot be fully correct.
+- Generated chunks are at 98.75% class / 95.80% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is
   ~2.7 s; still too slow for a production login path.
@@ -551,6 +567,12 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
    new `WorldGenRegion` tick/block-entity sinks from the generator. Ore
    wiring/`OreVeinifier` (P2.3) still waits on feature-RNG parity.
    `feature_data.json` already has every definition.
+2. **Finish vegetation (P2.4/P2.5).** Wire the tree `pale_moss` decorator to
+   `minecraft:pale_moss_patch`, then port remaining aquatic plants, vines,
+   mushrooms/huge fungi, `simple_random_selector`, and the remaining placement
+   modifiers. Ore wiring and `OreVeinifier` (P2.3) are done; the next ore work
+   is vein-noise interpolation and disks/`underwater_magma`. `feature_data.json`
+   already has every definition.
 3. **Real lighting (P3.5–P3.8).** Persisted sky/block light nibble arrays, the
    sky-light and block-light engines, then incremental light packets.
 4. **Surface fidelity (P2.12 code landed).** Capture a Java frozen-ocean /

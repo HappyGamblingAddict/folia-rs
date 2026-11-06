@@ -57,6 +57,9 @@ Rust tree: `crates/folia-core`.
 | `structure/templatesystem/StructureTemplate`, `StructurePlaceSettings`, `Rotation`, `Mirror` | `folia-core/src/worldgen/structure/template.rs` | Partial: gzip structure NBT (palettes, blocks, block-entity NBT, entities), mirror/rotation/pivot/origin transforms, `FeatureLevel` block writing; starts, pieces, structure sets/references, processors, template pools, jigsaw, random palette selection, and entity spawning are not ported |
 | `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border, and per-state emission/attenuation from `block_behaviour`; decrease queues, incremental updates, and Java light fixtures still open |
 | `OreVeinifier` | `folia-core/src/worldgen/ore_vein.rs` | Standalone copper/iron vein pass over the noise router (toggle/ridged/gap, granite/tuff filler, raw-ore chance); generator wiring still pending |
+| `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border; decrease queues, generated opacity/emission tables, and Java light fixtures still open |
+| `OreVeinifier` | `folia-core/src/worldgen/ore_vein.rs` | Ported copper/iron vein pass over the noise router (toggle/ridged/gap, granite/tuff filler, raw-ore chance) and wired into the generator's solid-position density fill before surface rules/carvers; vein noise interpolation through `NoiseChunk` is still open |
+| `OreFeature`, `ScatteredOreFeature`, `OreConfiguration`, ore placement pipeline | `folia-core/src/worldgen/feature/ore.rs`, `folia-core/src/worldgen/generator.rs` | Ported all 30 ore + 2 scattered-ore configs, ellipsoid/branch elimination, air-exposure discard, four target tags. `Decoration::UndergroundOres` is enabled with vanilla's lazy placement stream and biome-parameter-order `FeatureSorter` indices; disks/`underwater_magma` in the same step and cross-chunk writes remain open |
 | `SimplexNoise`, `PerlinSimplexNoise`, `Biome.BIOME_INFO_NOISE`/`FROZEN_TEMPERATURE_NOISE` | `folia-core/src/worldgen/simplex.rs` | Ported with Java-pinned reference values; used by noise-count placement and the frozen-ocean temperature modifier |
 | `Biome.getTemperature`, `TemperatureModifier.FROZEN` | `folia-core/src/worldgen/biome_climate.rs` | 65 extracted biome base temperatures/modifiers; frozen-ocean iceberg melt now uses the exact noise branch |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs` | Partial: base entity physics for tracked entities; AI/goals/damage not ported |
@@ -91,6 +94,11 @@ Rust tree: `crates/folia-core`.
 - Parity after the aquatic slice: 98.71% block-class (6065/6144) / 92.02%
   exact-name (5654/6144); the one-block exact delta from 92.04% is a
   tall-seagrass pair on a column whose Rust terrain already differs from Java.
+- Parity after ore/vein wiring: 98.75% block-class (6067/6144) / 95.80%
+  exact-name (5886/6144), up from 92.01%/98.71%. The ore step adds 211 exact
+  blocks; the vein filler and the no-ore baseline reach 92.37% (5675/6144).
+  Remaining gaps are vein-noise interpolation, the 3x3-chunk feature region,
+  and seven Java ore blocks that still differ.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
   are clean (2026-11-06).
 - Item components (`tests/item_components.rs`): 17 integration + 8 unit tests
@@ -179,7 +187,7 @@ Rust tree: `crates/folia-core`.
 - All 1225 `final_density` values on the chunk `(0,-1)` 4x8x4 interpolation grid
   match Java within `1e-9` (`worldgen/generator.rs` test,
   `assets/java-density-grid.txt`).
-- Generated chunk `(0,-1)` uses the noise aquifer, surface rules and carvers: block-class agreement with the Java chunk is 98.71% (6065/6144 sampled positions), exact block names are 92.02% (5654/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
+- Generated chunk `(0,-1)` uses the noise aquifer, surface rules, carvers, ore-vein filler, and the supported decoration steps: block-class agreement with the Java chunk is 98.75% (6067/6144 sampled positions), exact block names are 95.80% (5886/6144), and surface heights differ by 0.62 blocks on average. Bedrock layers match Java exactly at all 16 sampled columns (`assets/java-chunk-0--1.txt`). Multi-noise biome sampling matches Java at all 1536 sampled quart cells (`assets/java-biome-samples.txt`).
 - `tests/worldgen_join.rs` logs in with no region directory, streams 49
   generated terrain chunks, and checks the palette contains bedrock.
 - Live server startup logs `[rust] noise world generator ready (seed=0)`.

@@ -9,15 +9,17 @@ use crate::worldgen::density::{DensityFunction, NoiseRouter};
 use folia_random::{RandomSource, XoroshiroPositionalRandomFactory};
 use std::sync::Arc;
 
-const VEININESS_THRESHOLD: f64 = 0.4;
+const VEININESS_THRESHOLD: f64 = 0.4_f32 as f64;
 const EDGE_ROUNDOFF_BEGIN: f64 = 20.0;
 const MAX_EDGE_ROUNDOFF: f64 = 0.2;
-const VEIN_SOLIDNESS: f64 = 0.7;
-const MIN_RICHNESS: f64 = 0.1;
-const MAX_RICHNESS: f64 = 0.3;
-const MAX_RICHNESS_THRESHOLD: f64 = 0.6;
+const VEIN_SOLIDNESS: f32 = 0.7;
+// Java declares these as `float` and passes them to `double` parameters, so
+// the binary value is the f32 rounding, not the decimal literal.
+const MIN_RICHNESS: f64 = 0.1_f32 as f64;
+const MAX_RICHNESS: f64 = 0.3_f32 as f64;
+const MAX_RICHNESS_THRESHOLD: f64 = 0.6_f32 as f64;
 const CHANCE_OF_RAW_ORE_BLOCK: f32 = 0.02;
-const SKIP_ORE_IF_GAP_NOISE_IS_BELOW: f64 = -0.3;
+const SKIP_ORE_IF_GAP_NOISE_IS_BELOW: f64 = -0.3_f32 as f64;
 
 /// The two vanilla vein types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +121,7 @@ impl OreVeinifier {
         }
 
         let mut random = self.random.at(x, y, z);
-        if random.next_float() > VEIN_SOLIDNESS as f32 {
+        if random.next_float() > VEIN_SOLIDNESS {
             return None;
         }
         if self.vein_ridged.compute(x, y, z) >= 0.0 {

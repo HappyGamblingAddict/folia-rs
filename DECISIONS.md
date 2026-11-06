@@ -858,6 +858,9 @@ Format:
 - Consequences: Ore configs are no longer unsupported, but generated worlds
   remain ore-free for now. `OreVeinifier` and block-for-block ore positions are
   still open; P2.3 stays `[~]`.
+- Superseded (2026-11-06): the detector wiring landed with the lazy placement
+  stream, parameter-order feature indices, and `OreVeinifier`; see the
+  "Ore wiring uses a lazy placement stream" entry below.
 
 ## 2026-11-06 â€” Tags are flattened at extraction, not resolved at runtime
 
@@ -1704,3 +1707,38 @@ Format:
   entries.
 - Consequences: A genuine CRLF-only content edit is not detected; any other
   byte change is. Regenerate the manifest with LF output when adding assets.
+## 2026-11-06 - Ore wiring uses a lazy placement stream and parameter-order feature indices
+
+- Context: The earlier ore wiring attempt lowered exact-name parity from 92.09%
+  to 89.06%, which was attributed to approximate feature RNG. The actual causes
+  were narrower: `apply_decorations` collected every placement position before
+  running the configured feature, and `FeatureData::step_feature_order` built
+  `FeatureSorter` indices from the biome registry order.
+- Decision: In `worldgen/generator.rs`, walk placement modifiers depth-first
+  and run the configured feature at each leaf before continuing the walk, so
+  feature RNG is consumed between placement attempts exactly like vanilla's
+  lazy `Stream.flatMap` (`PlacedFeature.placeWithContext`).
+- Decision: Build the per-step feature order with vanilla's
+  `FeatureSorter.buildFeaturesPerStep` over `MultiNoiseBiomeSource`'s
+  `possibleBiomes()` order (`assets/biome_params.txt`), including edges across
+  step boundaries. This is a local copy because `feature/mod.rs` is outside
+  this slice's file scope; `FeatureData::step_feature_order` still returns the
+  registry-order variant for its existing tests and should adopt the parameter
+  order later so the two cannot drift.
+- Decision: Enable `Decoration::UndergroundOres` by default but run only
+  `minecraft:ore`/`minecraft:scattered_ore` types there. The same vanilla step
+  also holds `disk_*` and `underwater_magma`, which are supported features but
+  need separate surface/cave wiring; leaving them out keeps the change scoped
+  to ores instead of silently changing disk placement.
+- Decision: Run `OreVeinifier` as a solid-position block-state filler before
+  surface rules and carvers, matching `NoiseChunk`'s filler chain. The vein
+  constants are the Java `float` values promoted to `double` so boundary
+  comparisons match.
+- Why: These three changes turn the regression into a large gain and keep the
+  RNG/order semantics in the generator where the parity test exercises them.
+- Consequences: Exact-name parity is 95.80% (5886/6144) and block-class 98.75%
+  (6067/6144); the vein-only, no-ore-step baseline is 92.37% (5675/6144).
+  Remaining gaps: vein noise should be sampled through `NoiseChunk`'s
+  interpolation grid, the active biome set should span the 3x3 chunk region,
+  features should be allowed to write into that region, and 7 of the fixture's
+  33 Java ore blocks still differ. Do not claim block-for-block ore parity.

@@ -730,3 +730,21 @@ These are expected gaps, not reasons to stop:
   constants resolvable but provide identity only, not vanilla stats or audio.
 - Services are process-local and in-memory; dependency/load ordering and a
   multi-plugin service test remain open.
+## 2026-11-06 - P6.5 pistons are behaviour-tested, not a Java differential claim
+
+- Scope: `piston.rs` implements piston/sticky-piston extension and retraction,
+  head placement, the 12-block `PistonStructureResolver` (line and branch
+  chains), sticky pulls, slime/honey rules, immovable blocks, plant/fluid
+  destruction, scheduled two-tick moving blocks, and `block_shapes` collision
+  for heads and moving blocks. 7 lib + 9 `tests/pistons.rs` tests.
+- Not modelled: moving-piston payloads and `PistonMovingBlockEntity` contents
+  are not persisted to chunk NBT; moved states carry no block-entity data.
+  Entity collision/pushing, honey entity drag, `PistonMath` entity movement,
+  and piston sounds/game events are not wired. The block-entity name table is a
+  curated list, not a generated registry dump, so an obscure BE block could be
+  pushed instead of rejected.
+- Parity status: tests encode the decompiled resolver rules and observable
+  block transitions; there is no captured Java tick-by-tick piston trace yet.
+  Do not claim piston parity from this slice.
+- Workaround / next task: keep the explicit `MovingPiston` payload when typed
+  block entities land, then add payload NBT and a Java differential fixture.

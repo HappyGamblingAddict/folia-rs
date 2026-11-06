@@ -15,6 +15,8 @@ Last updated: 2026-11-06
   drop slice adds 13 `tests/loot_drops.rs` tests (focused runs green).
 - Tests: **804 passing** on the last merged gate (0 failed); the block-entity
   slice adds **3 lib + 9 integration tests** (focused green on this branch).
+- Tests: **817 passing** with the two known CRLF asset-hash guards skipped;
+  the piston slice adds 7 lib + 9 `tests/pistons.rs` tests (0 failed).
 - Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
   warnings.
 - Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
@@ -44,6 +46,14 @@ Last updated: 2026-11-06
   shape-aware light occlusion; loot-table gameplay wiring; dimension
   storage/portals; chat signing; bridge live-session sync; Folia region
   ownership.
+  quenching, fire, and bubble columns; pistons and sticky pistons; Nether and
+  End generation; entity goals, pathfinding, and natural spawning; online-mode
+  RSA/AES auth and encryption.
+- Major gaps: recursive jigsaw and structure generator/biome wiring; typed
+  block-entity storage and tickers; live join entity spawning and AI tick
+  integration; shape-aware light occlusion; loot-table gameplay wiring;
+  dimension storage/portals; chat signing; bridge live-session sync; Folia
+  region ownership.
 - Folia region threading is still task queues only.
 
 ## Current focus
@@ -54,6 +64,7 @@ Last updated: 2026-11-06
    work is P5.13 per-viewer parity, AI goals/sensors, persistence, and armor.
 2. P4.7/P6 remaining block-entity menus, placement wiring, and ticker
    integration; pistons.
+2. P6 typed block entities (chest/furnace/sign/spawner) and moving-block NBT.
 3. P5 join-session entity spawning/tracking and AI tick integration.
 4. P1.5 shape-aware light occlusion and remaining support/waterlogging rules.
 5. P9.3 bridge live-session state and gameplay event dispatch.
@@ -72,6 +83,8 @@ Last updated: 2026-11-06
 - [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
 - [~] P4.1-P4.3 physics/breaking (special movement, item entities/XP, Java
   fixture; shipped loot-table drops are wired).
+- [~] P3.10 ticks/redstone/fluids (pistons landed; lamps, tripwire hooks, leaf
+  decay, crops, and NBT tick persistence remain).
 - [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
 - [~] P4.7 block entities (typed chest/furnace/sign/spawner + chunk NBT/world
   persistence done; other types, menus, placement, and live ticks remain).
@@ -129,6 +142,19 @@ Last updated: 2026-11-06
   tests pass; live `FOLIA_BRIDGE_SELFTEST=1` plugin startup passes. Live
   message/kick transport, weather/time packets, item flags/PDC persistence,
   plugin.yml permission expansion, and stock `reloadConfig` remain open.
+- 2026-11-06: P6.5 pistons — `piston.rs` ports `PistonBaseBlock`,
+  `PistonHeadBlock`, `MovingPistonBlock`, `PistonStructureResolver`, and the
+  moving-block payload. Extension/retraction follow the facing direction,
+  including the 12-block push limit, slime/honey chains (honey never sticks to
+  slime), obsidian/bedrock/block-entity rejection, plant/fluid destruction,
+  sticky one-block retraction, scheduled two-tick movement, shape/neighbour
+  updates through `TickWorld::set_block`, and `block_shapes`-based head/moving
+  collision boxes. Moving payloads are explicit in `PistonState` because
+  `block_entity.rs` still has no typed API. Focused: 7 lib + 9
+  `tests/pistons.rs`; full workspace gate 817 passing with the two known CRLF
+  asset-hash guards skipped; fmt/clippy clean. Gaps: entity pushing, block
+  entity contents in moved states, Java differential traces, and payload NBT
+  persistence.
 - 2026-11-06: P4.8 crafting/furnace model — `crafting.rs` implements 1x1–3x3
 - 2026-11-06: P4.3 shipped block-drop tables - `block_breaking.rs` now rolls the
   real `minecraft:blocks/<block>` table for every break through
@@ -456,12 +482,12 @@ Last updated: 2026-11-06
 - [~] P3.10 Neighbor updates, scheduled ticks, random ticks (flags, queues,
   falling blocks, plant support, grass spread, server hook, water/lava flow,
   wire/lever/button/repeater/comparator/observer/torch/plate/tripwire redstone;
-  leaf decay, crops, pistons, lamps, tripwire hooks, and NBT tick persistence
-  remain)
+  pistons/sticky pistons; leaf decay, crops, lamps, tripwire hooks, and NBT tick
+  persistence remain)
   falling blocks, plant support, grass spread, server hook, water/lava flow +
   lava/water quenching, lava ignition, bubble columns, wire/lever/button
-  redstone; production fire aging, leaf decay, crops, pistons, remaining
-  redstone, and NBT tick persistence remain)
+  redstone; production fire aging, leaf decay, crops, remaining redstone, and
+  NBT tick persistence remain)
 - [~] P4.1 Player entity and physics (walk/fall/jump/step/fall damage done;
   ladders, water, cobwebs, slime, elytra, and a standalone tick remain)
 - [~] P4.2 Movement validation (collision replay, 10-block net, corrections,

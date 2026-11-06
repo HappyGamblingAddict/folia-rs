@@ -5,6 +5,8 @@
 > Working tree: clean
 > Test status: **804 passing** on the last merged gate; the block-entity slice
 > adds 3 lib + 9 integration tests (focused green on this branch)
+> Test status: **817 passing** with the two known CRLF asset guards skipped
+> (9 piston integration + 7 piston lib tests added in this slice)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~25%** (range 18-30% depending on metric)
 
@@ -36,6 +38,8 @@ where possible, a differential test against the Java oracle.
 | Blocks/redstone/fluids | ~30% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks missing |
 | Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
 | Blocks/redstone/fluids | ~35% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire, typed chest/furnace/sign/spawner block entities with chunk NBT persistence; other block-entity types, menus/placement wiring, pistons, lamps/targets/hooks missing |
+| Entities | ~25% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations; join wiring, sensors/brains, armor, per-viewer metadata missing |
+| Blocks/redstone/fluids | ~31% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire, pistons/sticky pistons; block entities, lamps/targets/hooks missing |
 | Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
@@ -73,6 +77,14 @@ where possible, a differential test against the Java oracle.
   9 `tests/block_entity.rs` tests; `world_round_trip` and `bulk_validation`
   stay green; fmt/clippy clean. Remaining: other block-entity types, container
   menus/packets, placement/ticker wiring, and a Java NBT fixture.
+- 2026-11-06: P6.5 pistons — `piston.rs` ports piston/sticky-piston extension and
+  retraction, head placement, the 12-block `PistonStructureResolver` (line and
+  branch chains), sticky one-block pulls, slime/honey stickiness (honey never
+  sticks to slime), obsidian/bedrock/block-entity immovability,
+  plant/fluid destruction, scheduled two-tick moving blocks, and
+  `block_shapes`-based head/moving collision boxes. Payloads are explicit
+  `PistonState` entries until typed block entities land. 7 lib + 9 integration
+  tests; full gate 817 passing with the two known CRLF asset guards skipped.
 - 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
   non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
   `item_prototypes.rs` loads it once, validates the counts and every field, and
@@ -1343,8 +1355,8 @@ section-only light packets are still open.
   behaviours. Focused tests: 8 fluid + 7 redstone + 1 block-update unit tests
   and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
   drain, waterlogging, source conversion, determinism).
-- **Still open:** leaf distance/decay updates, crop/sapling growth, pistons,
-  doors, rails, regular torch support, lava fire spread/quenching, redstone
+- **Still open:** leaf distance/decay updates, crop/sapling growth, doors,
+  rails, regular torch support, lava fire spread/quenching, redstone
   lamps/target blocks/tripwire hooks, and analog block inputs. Falling blocks
   move one block per scheduled tick instead of using a
   `FallingBlockEntity`; scheduled ticks are not persisted to chunk NBT; the
@@ -1837,6 +1849,9 @@ torch/pressure-plate/tripwire redstone. Typed chest/furnace/sign/spawner
 block entities and chunk NBT persistence now exist. Pistons, explosions,
 remaining block-entity types/menus, redstone lamps/target blocks/tripwire
 hooks, and full P1.5 metadata are open.
+water/lava flow, wire/lever/button/repeater/comparator/observer/redstone
+torch/pressure-plate/tripwire redstone, and pistons. Explosions, block entities,
+redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 
 ### P6.1 Block behavior framework `[~]` `L`
 
@@ -1899,17 +1914,26 @@ hooks, and full P1.5 metadata are open.
 - **Why:** These are the visible redstone surface players and plugins use.
 - **Done when:** Each component has a timing fixture against Java.
 - **Progress (2026-11-06):** Wire, lever, button, repeater, comparator,
-  observer, redstone torch, wooden/stone/weighted pressure plates, and tripwire
-  are implemented. Pistons, rails, doors/trapdoors, dispensers/droppers/hoppers,
-  daylight detectors, target blocks, note blocks, bells, copper bulbs, crafters,
-  and tripwire hooks remain explicit gaps.
+  observer, redstone torch, wooden/stone/weighted pressure plates, tripwire,
+  and piston/sticky-piston are implemented. Rails, doors/trapdoors,
+  dispensers/droppers/hoppers, daylight detectors, target blocks, note blocks,
+  bells, copper bulbs, crafters, and tripwire hooks remain explicit gaps.
 
-### P6.5 Pistons and moving blocks `[ ]` `L`
+### P6.5 Pistons and moving blocks `[~]` `L`
 
 - **What:** Implement piston push/pull, block-moving entities, slime/honey
   interactions, and entity pushing.
 - **Why:** Pistons are a common redstone/automation and plugin dependency.
 - **Done when:** Piston sequences match Java including block entities.
+- **Progress (2026-11-06):** `piston.rs` ports extension/retraction, head
+  placement, `PistonStructureResolver` (12-block line limit, branch chains,
+  sticky pulls, slime/honey rules, immovable blocks, plant/fluid destruction),
+  the two-tick moving payload, and `block_shapes` collision for heads/moving
+  blocks. Behaviours are registered in `tick::behavior_for` and all mutations
+  flow through the neighbour/shape queue. Focused: 7 lib + 9
+  `tests/pistons.rs`. Remaining: entity pushing/velocity, block-entity payload
+  contents (the explicit `MovingPiston` carries only the state), payload NBT
+  persistence, and a Java differential sequence trace.
 
 ### P6.6 Explosions `[ ]` `M`
 

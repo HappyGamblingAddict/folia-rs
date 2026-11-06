@@ -13,6 +13,24 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-06 - Pistons use explicit moving-block payloads
+
+- Context: `block_entity.rs` is still a stub with no typed moving-block API, but
+  pistons must preserve the moved state across two movement ticks.
+- Decision: `piston::PistonState` stores a `MovingPiston { moved_state,
+  direction, extending, is_source_piston, progress }` per moving-block position
+  on `TickState`. Movement is driven by scheduled `minecraft:moving_piston`
+  ticks (0 -> 0.5 -> 1.0, then finalize), matching
+  `PistonMovingBlockEntity.tick`. Extension/retraction trigger immediately from
+  the neighbour update, like vanilla block events, so no artificial retraction
+  delay is added.
+- Why: The block-level behaviour is testable now, and the payload has the exact
+  fields a future typed block entity needs. Leaving the moved state in a global
+  side table without scheduling would lose blocks on chunk reload.
+- Consequences: Moving-piston payloads are not persisted to chunk NBT yet, and
+  block-entity contents are not part of the payload. Entity pushing/velocity
+  and Java differential traces remain open.
+
 ## 2026-11-04 â€” Git is not part of the workflow
 
 - Context: The working tree contains large uncommitted changes and the user

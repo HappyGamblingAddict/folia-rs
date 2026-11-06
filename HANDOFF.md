@@ -642,6 +642,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   unsupported errors.
 - No block entity behavior, containers beyond the player inventory, or other
   smelting-adjacent menus.
+- Redstone is partial: wire, lever, button, repeater, comparator, observer,
+  torch, pressure plate, tripwire, and piston/sticky-piston are ported;
+  rails, doors, lamps, targets, hooks, and other components are not. Fluids
+  flow on scheduled ticks but lava fire/quenching and block-destruction drops
+  are not modeled.
 - Entity AI, goals, pathfinding, combat, and general damage are not ported.
   Players now take void damage, die, and respawn at world spawn; fall, fire,
   hunger, and projectile damage are still missing. The new `LivingEntity`

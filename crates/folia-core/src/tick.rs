@@ -10,11 +10,12 @@
 //! * `net/minecraft/world/level/block/{FallingBlock,VegetationBlock,GrassBlock}`
 //!
 //! This is deliberately a small vertical slice. Blocks that need the full
-//! `P1.5` behaviour table (doors, pistons, leaf distance updates, crop growth,
-//! …) keep their vanilla state in the world but their neighbor/random tick is
-//! an explicit no-op. Water/lava flow lives in [`crate::fluid`], and wire,
-//! lever, button, repeater, comparator, observer, redstone-torch, pressure-plate,
-//! and tripwire behaviour lives in [`crate::redstone`].
+//! `P1.5` behaviour table (doors, leaf distance updates, crop growth, …) keep
+//! their vanilla state in the world but their neighbor/random tick is an
+//! explicit no-op. Water/lava flow lives in [`crate::fluid`]; wire, lever,
+//! button, repeater, comparator, observer, redstone-torch, pressure-plate, and
+//! tripwire behaviour lives in [`crate::redstone`]; pistons and moving blocks
+//! live in [`crate::piston`].
 //! [`unsupported_random_tick_reason`] and [`unsupported_neighbor_reason`] name
 //! the remaining gaps and the tick state records every unsupported block a tick
 //! actually reached, so a missing behaviour is visible instead of being
@@ -747,6 +748,8 @@ pub struct TickState {
     pub occupancy: HashMap<BlockPos, crate::redstone::PlateOccupancy>,
     /// Redstone-torch off toggles used for vanilla's 8-in-60-tick burn-out.
     pub torch_toggles: Vec<crate::redstone::TorchToggle>,
+    /// Moving-piston payloads keyed by their moving-block position.
+    pub pistons: crate::piston::PistonState,
     /// Neighbour updates processed during the current top-level edit/tick.
     pub last_neighbor_updates: Vec<ProcessedNeighborUpdate>,
     /// Blocks whose random tick was selected but is explicitly unsupported.
@@ -952,6 +955,34 @@ impl<'a> TickWorld<'a> {
             .enqueue_neighbors(pos, UpdateFlags::ALL | UpdateFlags::SHAPE);
     }
 
+    /// Queues one neighbour update at `pos` from `source`.
+    pub fn queue_neighbor_update(&mut self, source: BlockPos, pos: BlockPos, flags: u32) {
+        self.storage
+            .tick_state_mut()
+            .neighbors
+            .enqueue(source, pos, flags);
+    }
+
+    /// The moving-piston payload at `pos`, if any.
+    pub fn piston_payload(&self, pos: BlockPos) -> Option<crate::piston::MovingPiston> {
+        self.storage.tick_state().pistons.get(pos).cloned()
+    }
+
+    /// Stores a moving-piston payload at `pos`.
+    pub fn set_piston_payload(&mut self, pos: BlockPos, payload: crate::piston::MovingPiston) {
+        self.storage.tick_state_mut().pistons.insert(pos, payload);
+    }
+
+    /// Removes and returns the moving-piston payload at `pos`.
+    pub fn remove_piston_payload(&mut self, pos: BlockPos) -> Option<crate::piston::MovingPiston> {
+        self.storage.tick_state_mut().pistons.remove(pos)
+    }
+
+    /// Moving-piston payload positions in deterministic order.
+    pub fn piston_positions(&self) -> Vec<BlockPos> {
+        self.storage.tick_state().pistons.positions().collect()
+    }
+
     /// The comparator output stored for `pos` (`ComparatorBlockEntity`).
     pub fn comparator_output(&self, pos: BlockPos) -> i32 {
         self.storage
@@ -1073,6 +1104,12 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::PRESSURE_PLATE_BEHAVIOR
     } else if crate::redstone::is_tripwire(state) {
         &crate::redstone::TRIPWIRE_BEHAVIOR
+    } else if crate::piston::is_piston(state) {
+        &crate::piston::PISTON_BEHAVIOR
+    } else if crate::piston::is_piston_head(state) {
+        &crate::piston::PISTON_HEAD_BEHAVIOR
+    } else if crate::piston::is_moving_piston(state) {
+        &crate::piston::MOVING_PISTON_BEHAVIOR
     } else if state.name == "minecraft:fire" {
         &crate::fluid::FIRE
     } else if is_falling_block(state.name.as_str()) {
@@ -1112,7 +1149,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     } else if name == "minecraft:tripwire_hook" {
         Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
-        Some("doors, rails, pistons, and non-redstone torch support are not ported")
+        Some("doors, rails, and non-redstone torch support are not ported")
     } else {
         None
     }
@@ -1121,10 +1158,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
 fn is_known_unsupported_neighbor(name: &str) -> bool {
     matches!(
         name,
-        "minecraft:piston"
-            | "minecraft:sticky_piston"
-            | "minecraft:moving_piston"
-            | "minecraft:dispenser"
+        "minecraft:dispenser"
             | "minecraft:dropper"
             | "minecraft:hopper"
             | "minecraft:rail"

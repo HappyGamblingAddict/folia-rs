@@ -37,8 +37,10 @@ Rust tree: `crates/folia-core`.
 | `BuiltInRegistries` / `RegistryDataLoader` block, item, entity type, biome registries | `folia-core/src/registry.rs` + `assets/*.tsv` | 29,671 block states, 1,166 block defaults, item/entity/biome IDs; name and property lookups |
 | `net/minecraft/tags/*`, `data/minecraft/tags/**` | `folia-core/src/tags.rs` + `assets/tags/*.tsv` | 9 registries, 602 non-empty tags (604 files) / 7,208 flattened members; nested `#tag` refs resolved by `scripts/extract_tags.ps1` |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
-| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay; `no_op` implemented, other feature types explicitly unsupported |
-| `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; 6 world-free modifiers plus `BiomeFilter` (via `PlacementWorld`) execute with vanilla draw order (667/888 shipped), the rest report `PlacementFailure` |
+| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features; 134/224 configured features dispatch as supported |
+| `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; 6 world-free modifiers plus `BiomeFilter` (via `PlacementWorld`) execute with vanilla draw order (762/888 shipped), the rest report `PlacementFailure` |
+| `RandomPatchFeature`, `SimpleBlockFeature`, `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`, `VegetationPatchFeature`, `WaterloggedVegetationPatchFeature`, `stateproviders/*` | `folia-core/src/worldgen/feature/vegetation.rs` | Ported: random patch/flower, simple block, pile, column, multiface, vegetation and waterlogged patches; simple/weighted/randomized-int/noise/noise-threshold/dual-noise/rotated providers; predicate-only nested placements; Java HashSet order for patch vegetation |
+| `tree.rs` state-provider path | `folia-core/src/worldgen/feature/tree.rs` | Unchanged on purpose: vegetation providers are independent so tree placement RNG and the existing simple-provider draw caveat stay stable |
 | `net/minecraft/world/level/lighting/*` | - | Not ported |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs` | Partial: base entity physics for tracked entities; AI/goals/damage not ported |
 | `net/minecraft/world/level/block/*` redstone/gameplay | — | Not ported |
@@ -47,6 +49,13 @@ Rust tree: `crates/folia-core`.
 
 - `cargo test --workspace` → 217 core unit + 45 core integration + 62 math +
   27 random tests (351 total), 0 failed (2026-11-06).
+- P2.5 focused evidence: `worldgen::feature::vegetation` adds 8 unit tests and
+  `tests/vegetation.rs` adds 15 integration tests covering shipped
+  `patch_grass_plain`/`flower_plain`/`moss_patch`/`pale_moss_patch` parsing,
+  random-patch success/failure, all provider draw orders, block pile/column,
+  multiface attachment, vegetation and waterlogged patch behavior, Java
+  HashSet ordering, and deterministic generation. Parity is unchanged at
+  98.76% block-class / 92.09% exact-name (5658/6144).
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
   are clean (2026-11-06).
 - Tag tables cover 602 non-empty tags (604 files) / 7,208 flattened members

@@ -8,11 +8,12 @@
 //! (`PlacedFeature.placeWithContext`): modifiers are typed and executed in
 //! vanilla order. Only the `biome` filter needs world state, which it reads
 //! through [`PlacementWorld`]; [`BiomePlacementWorld`] implements that from the
-//! generator's biome source. Configured
-//! features whose vanilla type has no Rust port yet load as
-//! [`ConfiguredFeatureKind::Unsupported`] and fail loudly with
-//! [`UnsupportedFeature`] instead of silently doing nothing; placement
-//! modifiers that read the world do the same through [`UnsupportedModifier`].
+//! generator's biome source. The `vegetation` module adds the ground-cover
+//! feature batch and its state providers. Configured features whose vanilla
+//! type has no Rust port yet load as [`ConfiguredFeatureKind::Unsupported`] and
+//! fail loudly with [`UnsupportedFeature`] instead of silently doing nothing;
+//! placement modifiers that read the world do the same through
+//! [`UnsupportedModifier`].
 
 use crate::chunk::{BlockState, Chunk};
 use crate::worldgen::biome::BiomeSampler;
@@ -28,6 +29,12 @@ use std::sync::OnceLock;
 mod ore;
 mod placement;
 mod tree;
+mod vegetation;
+
+use vegetation::{
+    BlockColumnFeature, BlockPileFeature, MultifaceGrowthFeature, RandomPatchFeature,
+    SimpleBlockFeature, VegetationPatchFeature,
+};
 
 pub use placement::{
     BlockPredicate, HeightProvider, Heightmap, IntProvider, PlacementFailure, PlacementModifier,
@@ -268,6 +275,18 @@ pub enum ConfiguredFeatureKind {
     Ore(Box<ore::OreFeature>),
     /// `minecraft:scattered_ore`.
     ScatteredOre(Box<ore::ScatteredOreFeature>),
+    /// `minecraft:random_patch` and `minecraft:flower`.
+    RandomPatch(Box<RandomPatchFeature>),
+    /// `minecraft:simple_block`.
+    SimpleBlock(Box<SimpleBlockFeature>),
+    /// `minecraft:block_pile`.
+    BlockPile(Box<BlockPileFeature>),
+    /// `minecraft:block_column`.
+    BlockColumn(Box<BlockColumnFeature>),
+    /// `minecraft:multiface_growth`.
+    MultifaceGrowth(Box<MultifaceGrowthFeature>),
+    /// `minecraft:vegetation_patch` and `minecraft:waterlogged_vegetation_patch`.
+    VegetationPatch(Box<VegetationPatchFeature>),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
@@ -318,6 +337,12 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::RandomSelector(_) => "minecraft:random_selector",
             ConfiguredFeatureKind::Ore(_) => "minecraft:ore",
             ConfiguredFeatureKind::ScatteredOre(_) => "minecraft:scattered_ore",
+            ConfiguredFeatureKind::RandomPatch(feature) => feature.vanilla_type(),
+            ConfiguredFeatureKind::SimpleBlock(_) => "minecraft:simple_block",
+            ConfiguredFeatureKind::BlockPile(_) => "minecraft:block_pile",
+            ConfiguredFeatureKind::BlockColumn(_) => "minecraft:block_column",
+            ConfiguredFeatureKind::MultifaceGrowth(_) => "minecraft:multiface_growth",
+            ConfiguredFeatureKind::VegetationPatch(feature) => feature.vanilla_type(),
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -332,6 +357,12 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::RandomSelector(_)
                 | ConfiguredFeatureKind::Ore(_)
                 | ConfiguredFeatureKind::ScatteredOre(_)
+                | ConfiguredFeatureKind::RandomPatch(_)
+                | ConfiguredFeatureKind::SimpleBlock(_)
+                | ConfiguredFeatureKind::BlockPile(_)
+                | ConfiguredFeatureKind::BlockColumn(_)
+                | ConfiguredFeatureKind::MultifaceGrowth(_)
+                | ConfiguredFeatureKind::VegetationPatch(_)
         )
     }
 
@@ -363,6 +394,14 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::ScatteredOre(feature) => {
                 Ok(feature.place(level, random, origin))
             }
+            ConfiguredFeatureKind::RandomPatch(feature) => feature.place(level, random, origin),
+            ConfiguredFeatureKind::SimpleBlock(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::BlockPile(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::BlockColumn(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::MultifaceGrowth(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::VegetationPatch(feature) => feature.place(level, random, origin),
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
                 vanilla_type: vanilla_type.clone(),
@@ -690,6 +729,8 @@ fn parse_configured(
     entries: &Map<String, Value>,
 ) -> io::Result<HashMap<String, ConfiguredFeature>> {
     let mut configured = HashMap::with_capacity(entries.len());
+    let mut patches = Vec::new();
+    let mut vegetation_patches = Vec::new();
     let mut selectors = Vec::new();
     for (name, entry) in entries {
         let entry = entry
@@ -701,78 +742,148 @@ fn parse_configured(
             .ok_or_else(|| invalid(format!("configured feature {name} is missing `type`")))?;
         let id = resource_location(name);
 
-        let kind = match vanilla_type {
-            "minecraft:no_op" => ConfiguredFeatureKind::NoOp(NoOpFeature),
-            "minecraft:tree" => {
-                let config = entry.get("config").ok_or_else(|| {
-                    invalid(format!("configured feature {name} is missing `config`"))
-                })?;
-                match tree::parse_tree_config(config)? {
-                    Some(feature) => ConfiguredFeatureKind::Tree(Box::new(feature)),
-                    None => ConfiguredFeatureKind::Unsupported {
-                        vanilla_type: vanilla_type.to_owned(),
-                    },
-                }
-            }
-            "minecraft:fallen_tree" => {
-                let config = entry.get("config").ok_or_else(|| {
-                    invalid(format!("configured feature {name} is missing `config`"))
-                })?;
-                match tree::parse_fallen_tree_config(config)? {
-                    Some(feature) => ConfiguredFeatureKind::FallenTree(Box::new(feature)),
-                    None => ConfiguredFeatureKind::Unsupported {
-                        vanilla_type: vanilla_type.to_owned(),
-                    },
-                }
-            }
-            "minecraft:random_selector" => {
-                selectors.push((id.clone(), entry.clone()));
+        match vanilla_type {
+            "minecraft:random_patch" | "minecraft:flower" => {
+                patches.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
-            "minecraft:ore" => {
-                let config = entry.get("config").ok_or_else(|| {
-                    invalid(format!("configured feature {name} is missing `config`"))
-                })?;
-                match ore::parse_ore_config(config)? {
-                    Some(feature) => ConfiguredFeatureKind::Ore(Box::new(feature)),
-                    None => ConfiguredFeatureKind::Unsupported {
-                        vanilla_type: vanilla_type.to_owned(),
-                    },
-                }
+            "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => {
+                vegetation_patches.push((id, vanilla_type.to_owned(), entry.clone()));
+                continue;
             }
-            "minecraft:scattered_ore" => {
-                let config = entry.get("config").ok_or_else(|| {
-                    invalid(format!("configured feature {name} is missing `config`"))
-                })?;
-                match ore::parse_scattered_ore_config(config)? {
-                    Some(feature) => ConfiguredFeatureKind::ScatteredOre(Box::new(feature)),
-                    None => ConfiguredFeatureKind::Unsupported {
-                        vanilla_type: vanilla_type.to_owned(),
-                    },
-                }
+            "minecraft:random_selector" => {
+                selectors.push((id, vanilla_type.to_owned(), entry.clone()));
+                continue;
             }
-            _ => ConfiguredFeatureKind::Unsupported {
-                vanilla_type: vanilla_type.to_owned(),
-            },
-        };
+            _ => {}
+        }
+
+        let kind = parse_configured_kind(&id, vanilla_type, entry, &configured)?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
 
-    // Selectors reference other configured features, so they are resolved
-    // after every supported feature (and no-op) has been parsed.
-    for (id, entry) in selectors {
-        let config = entry
-            .get("config")
-            .ok_or_else(|| invalid(format!("configured feature {id} is missing `config`")))?;
-        let kind = match parse_selector(config, &configured)? {
-            Some(selector) => ConfiguredFeatureKind::RandomSelector(selector),
-            None => ConfiguredFeatureKind::Unsupported {
-                vanilla_type: "minecraft:random_selector".to_owned(),
-            },
-        };
+    // Patches nest inline placed features; vegetation patches also reference
+    // simple-block configured features. Resolve those after the direct types.
+    for (id, vanilla_type, entry) in patches {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        configured.insert(id.clone(), ConfiguredFeature { id, kind });
+    }
+    for (id, vanilla_type, entry) in vegetation_patches {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
+        configured.insert(id.clone(), ConfiguredFeature { id, kind });
+    }
+    // Selectors reference other configured features, so they are resolved last.
+    for (id, vanilla_type, entry) in selectors {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured)?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     Ok(configured)
+}
+
+fn parse_configured_kind(
+    id: &str,
+    vanilla_type: &str,
+    entry: &Map<String, Value>,
+    configured: &HashMap<String, ConfiguredFeature>,
+) -> io::Result<ConfiguredFeatureKind> {
+    if vanilla_type == "minecraft:no_op" {
+        return Ok(ConfiguredFeatureKind::NoOp(NoOpFeature));
+    }
+    let config = entry
+        .get("config")
+        .ok_or_else(|| invalid(format!("configured feature {id} is missing `config`")))?;
+    let unsupported = || ConfiguredFeatureKind::Unsupported {
+        vanilla_type: vanilla_type.to_owned(),
+    };
+    match vanilla_type {
+        "minecraft:tree" => Ok(match tree::parse_tree_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Tree(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:fallen_tree" => Ok(match tree::parse_fallen_tree_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::FallenTree(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:random_selector" => Ok(match parse_selector(config, configured)? {
+            Some(selector) => ConfiguredFeatureKind::RandomSelector(selector),
+            None => unsupported(),
+        }),
+        "minecraft:ore" => Ok(match ore::parse_ore_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Ore(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:scattered_ore" => Ok(match ore::parse_scattered_ore_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::ScatteredOre(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:random_patch" | "minecraft:flower" => Ok(
+            match vegetation::parse_random_patch_config(config, configured, id, vanilla_type)? {
+                Some(feature) => ConfiguredFeatureKind::RandomPatch(Box::new(feature)),
+                None => unsupported(),
+            },
+        ),
+        "minecraft:simple_block" => Ok(match vegetation::parse_simple_block_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::SimpleBlock(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:block_pile" => Ok(match vegetation::parse_block_pile_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::BlockPile(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:block_column" => Ok(match vegetation::parse_block_column_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::BlockColumn(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:multiface_growth" => {
+            Ok(match vegetation::parse_multiface_growth_config(config)? {
+                Some(feature) => ConfiguredFeatureKind::MultifaceGrowth(Box::new(feature)),
+                None => unsupported(),
+            })
+        }
+        "minecraft:vegetation_patch" | "minecraft:waterlogged_vegetation_patch" => Ok(
+            match vegetation::parse_vegetation_patch_config(
+                config,
+                configured,
+                id,
+                vanilla_type == "minecraft:waterlogged_vegetation_patch",
+            )? {
+                Some(feature) => ConfiguredFeatureKind::VegetationPatch(Box::new(feature)),
+                None => unsupported(),
+            },
+        ),
+        _ => Ok(unsupported()),
+    }
+}
+
+/// Parses a configured feature embedded in a nested placed feature.
+///
+/// Inline features can themselves be containers (`random_patch` inside
+/// `random_patch`) or references to already-parsed configured features.
+pub(crate) fn parse_inline_configured_feature(
+    id: &str,
+    value: &Value,
+    configured: &HashMap<String, ConfiguredFeature>,
+) -> io::Result<Option<Box<ConfiguredFeature>>> {
+    if let Some(reference) = value.as_str() {
+        let reference = resource_location(reference);
+        return Ok(configured
+            .get(&reference)
+            .filter(|feature| feature.is_supported())
+            .map(|feature| Box::new(feature.clone())));
+    }
+    let entry = value
+        .as_object()
+        .ok_or_else(|| invalid("inline configured feature must be an object"))?;
+    let vanilla_type = entry
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("inline configured feature {id} is missing `type`")))?;
+    let kind = parse_configured_kind(id, vanilla_type, entry, configured)?;
+    let feature = ConfiguredFeature {
+        id: id.to_owned(),
+        kind,
+    };
+    Ok(feature.is_supported().then(|| Box::new(feature)))
 }
 
 fn parse_selector(
@@ -1389,19 +1500,39 @@ mod tests {
     #[test]
     fn unsupported_features_fail_loudly() {
         let data = FeatureData::vanilla();
-        let patch = data
-            .configured("minecraft:pale_moss_patch")
-            .expect("pale_moss_patch is in the dump");
-        assert!(!patch.is_supported());
+        let feature = data
+            .configured("minecraft:huge_brown_mushroom")
+            .expect("huge_brown_mushroom is in the dump");
+        assert!(!feature.is_supported());
         let mut chunk = chunk();
         let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
         let mut random = LegacyRandomSource::new(0);
-        let error = patch
+        let error = feature
             .place(&mut level, &mut random, BlockPos::new(0, 0, 0))
             .expect_err("unported feature must not pretend to place");
-        assert_eq!(error.feature, "minecraft:pale_moss_patch");
-        assert_eq!(error.vanilla_type, "minecraft:vegetation_patch");
+        assert_eq!(error.feature, "minecraft:huge_brown_mushroom");
+        assert_eq!(error.vanilla_type, "minecraft:huge_brown_mushroom");
         assert!(level.chunk.sections.is_empty());
+    }
+
+    #[test]
+    fn ground_cover_features_are_dispatched_as_supported() {
+        let data = FeatureData::vanilla();
+        for (id, vanilla_type) in [
+            ("minecraft:patch_grass", "minecraft:random_patch"),
+            ("minecraft:flower_plain", "minecraft:flower"),
+            ("minecraft:single_piece_of_grass", "minecraft:simple_block"),
+            ("minecraft:pile_hay", "minecraft:block_pile"),
+            ("minecraft:cave_vine", "minecraft:block_column"),
+            ("minecraft:glow_lichen", "minecraft:multiface_growth"),
+            ("minecraft:moss_patch", "minecraft:vegetation_patch"),
+        ] {
+            let feature = data
+                .configured(id)
+                .unwrap_or_else(|| panic!("{id} is in the dump"));
+            assert!(feature.is_supported(), "{id} should be executable");
+            assert_eq!(feature.vanilla_type(), vanilla_type);
+        }
     }
 
     #[test]

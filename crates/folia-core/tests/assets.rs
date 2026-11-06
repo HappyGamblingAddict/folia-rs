@@ -54,13 +54,14 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 23] = [
+    let expected: [(&str, usize, u64); 24] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
         (
             "block_state_behaviour.tsv.gz",
             284_415,
             0x11e9_f4a0_1cc0_afc7,
         ),
+        ("block_shapes.tsv.gz", 161_523, 0x5c6a_d70b_8935_56e2),
         ("biome_climate.tsv", 2_096, 0x41c1_162e_e672_03b5),
         ("block_defaults.tsv", 37_605, 0x7c29_fe7e_3a74_07a8),
         ("item_ids.tsv", 45_873, 0xb3fc_5940_89ab_5bf7),

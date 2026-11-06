@@ -41,6 +41,7 @@ $assets = @(
     "crates/folia-core/assets/biome_ids.txt",
     "crates/folia-core/assets/biome_params.txt",
     "crates/folia-core/assets/block_defaults.tsv",
+    "crates/folia-core/assets/block_shapes.tsv.gz",
     "crates/folia-core/assets/block_state_behaviour.tsv.gz",
     "crates/folia-core/assets/block_states.tsv",
     "crates/folia-core/assets/entity_type_ids.tsv",

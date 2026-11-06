@@ -17,6 +17,7 @@ does not fail the manifest.
 |---|---|---:|---:|---|
 | `block_states.tsv` | state id, block name, sorted `key=value` properties | 29,671 | 2,595,686 | `0x3da1dcdd58b4f738` |
 | `block_state_behaviour.tsv.gz` | per-state air/motion/solid/collision/light/random-tick/occlusion/replaceable/hardness/blast/friction/speed/jump/fluid | 29,671 | 284,415 (gz) | `0x11e9f4a01cc0afc7` |
+| `block_shapes.tsv.gz` | per-state collision and outline AABB lists (vanilla oracle) | 29,671 | 161,523 (gz) | `0x5c6ad70b893556e2` |
 | `block_defaults.tsv` | block name, default state id | 1,166 | 37,605 | `0x7c29fe7e3a7407a8` |
 | `item_ids.tsv` | item id, item name | 1,505 | 45,873 | `0xb3fc594089ab5bf7` |
 | `entity_type_ids.tsv` | entity type id, entity type name | 157 | 3,772 | `0x4d7c78e0dac39e50` |

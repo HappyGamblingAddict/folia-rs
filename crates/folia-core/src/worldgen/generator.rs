@@ -15,14 +15,13 @@ use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
 use crate::worldgen::feature::{
-    ConfiguredFeature, DECORATION_STEPS, Decoration, FeatureData, Heightmap, PlacedFeature,
-    PlacementWorld, WorldGenRegion,
+    ConfiguredFeature, Decoration, FeatureData, Heightmap, PlacedFeature, PlacementWorld,
+    WorldGenRegion,
 };
 use crate::worldgen::ore_vein::OreVeinifier;
 use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
 use folia_math::BlockPos;
 use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, OnceLock};
 
@@ -335,7 +334,7 @@ impl WorldGenerator {
             chunk_biomes.insert(self.biomes.biome_name(*entry));
         }
 
-        let step_order = java_step_feature_order();
+        let step_order = data.step_feature_order();
         let mut worldgen_random = WorldgenRandom::new(0);
         let decoration_seed = worldgen_random.set_decoration_seed(
             self.seed,
@@ -476,116 +475,6 @@ impl WorldGenerator {
         }
         indices
     }
-}
-
-/// Vanilla `FeatureSorter.buildFeaturesPerStep` order for every decoration step.
-///
-/// `FeatureData::step_feature_order` sorts by the biome **registry** order. A
-/// `MultiNoiseBiomeSource` builds `possibleBiomes()` from the biome parameter
-/// list instead (`OverworldBiomeBuilder` order, preserved by
-/// `assets/biome_params.txt`), and that order decides the first-encounter
-/// feature index used by `WorldgenRandom.setFeatureSeed`. The two orders agree
-/// for most features but not all; for example `ore_clay` and `ore_gold_extra`
-/// swap places at the end of `underground_ores`, which gives every clay blob
-/// the wrong seed. This local copy keeps the generator honest until
-/// `FeatureData::step_feature_order` adopts the parameter order.
-fn java_step_feature_order() -> &'static [Vec<String>] {
-    static ORDER: OnceLock<Vec<Vec<String>>> = OnceLock::new();
-    ORDER.get_or_init(build_java_step_feature_order).as_slice()
-}
-
-fn build_java_step_feature_order() -> Vec<Vec<String>> {
-    let data = FeatureData::vanilla();
-    let mut feature_indices: HashMap<&str, usize> = HashMap::new();
-    let mut features: Vec<&str> = Vec::new();
-    let mut graph: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
-
-    for biome in biome_parameter_order() {
-        let Some(steps) = data.biome_features(biome) else {
-            continue;
-        };
-        // Java flattens all steps for a biome before adding dependency edges, so
-        // an edge also connects the last feature of one step to the first
-        // feature of the next.
-        let mut flat = Vec::new();
-        for (step, list) in steps.iter().enumerate() {
-            for id in list {
-                let index = match feature_indices.get(id.as_str()) {
-                    Some(index) => *index,
-                    None => {
-                        let index = features.len();
-                        features.push(id);
-                        feature_indices.insert(id, index);
-                        index
-                    }
-                };
-                flat.push((step, index));
-            }
-        }
-        for pair in flat.windows(2) {
-            graph.entry(pair[0]).or_default().insert(pair[1]);
-        }
-    }
-
-    let mut visited = BTreeSet::new();
-    let mut in_progress = BTreeSet::new();
-    let mut ordered = Vec::new();
-    for root in graph.keys().copied().collect::<Vec<_>>() {
-        if !visited.contains(&root) {
-            feature_order_dfs(&graph, root, &mut visited, &mut in_progress, &mut ordered);
-        }
-    }
-    ordered.reverse();
-
-    let mut by_step = vec![Vec::new(); DECORATION_STEPS];
-    for (step, index) in ordered {
-        if step < DECORATION_STEPS {
-            by_step[step].push(features[index].to_owned());
-        }
-    }
-    by_step
-}
-
-fn biome_parameter_order() -> Vec<&'static str> {
-    const BIOME_PARAMS: &str = include_str!("../../assets/biome_params.txt");
-    let mut seen = HashSet::new();
-    let mut order = Vec::new();
-    for line in BIOME_PARAMS.lines() {
-        let mut fields = line.split('\t');
-        if fields.next() != Some("param") {
-            continue;
-        }
-        let Some(name) = fields.next() else {
-            continue;
-        };
-        if seen.insert(name) {
-            order.push(name);
-        }
-    }
-    order
-}
-
-fn feature_order_dfs(
-    graph: &BTreeMap<(usize, usize), BTreeSet<(usize, usize)>>,
-    node: (usize, usize),
-    visited: &mut BTreeSet<(usize, usize)>,
-    in_progress: &mut BTreeSet<(usize, usize)>,
-    ordered: &mut Vec<(usize, usize)>,
-) {
-    if visited.contains(&node) {
-        return;
-    }
-    if !in_progress.insert(node) {
-        panic!("feature order cycle found");
-    }
-    if let Some(neighbours) = graph.get(&node) {
-        for next in neighbours {
-            feature_order_dfs(graph, *next, visited, in_progress, ordered);
-        }
-    }
-    in_progress.remove(&node);
-    visited.insert(node);
-    ordered.push(node);
 }
 
 /// [`PlacementWorld`] backed by the chunk currently being generated.
@@ -1040,7 +929,7 @@ mod tests {
 
     #[test]
     fn feature_order_uses_the_biome_parameter_order() {
-        let order = java_step_feature_order();
+        let order = FeatureData::vanilla().step_feature_order();
         let ores = &order[Decoration::UndergroundOres.index()];
         assert_eq!(ores.len(), 34);
         assert_eq!(ores[0], "minecraft:ore_dirt");

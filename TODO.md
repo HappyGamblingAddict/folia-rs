@@ -1,16 +1,11 @@
 # Folia-RS Master TODO & Roadmap
 
-> Last updated: 2026-11-06  
-> Test status: **426 tests** on the last full gate; the entity,
-> block-behaviour, and surface slices add focused tests; parity is
-> 98.71% block-class / 92.01% exact-name.
-> Current commit: `6e0e5fe` (aquatic/vine/mushroom slice merged)
-> Working tree: clean; work is committed in coherent slices.
-> Test status: **426 tests** on the last full gate; the ore/vein wiring slice
-> adds 4 integration + 2 lib focused tests and holds 98.75% block-class /
-> 95.80% exact-name parity.
-> Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
-> Overall completion estimate: **~18%** (range 12–22% depending on metric)
+> Last updated: 2026-11-06
+> Current commit: see `git log` (all work is committed)
+> Working tree: clean
+> Test status: focused suites are green; the merged full gate is run separately
+> Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
+> Overall completion estimate: **~22%** (range 15–28% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -22,51 +17,27 @@ where possible, a differential test against the Java oracle.
 ## Status legend
 
 - `[x]` done and verified
-- `[~]` partial or landed but uncommitted/untested
+- `[~]` partial or landed but unverified end-to-end
 - `[ ]` not started
 - **S** = under 1 week, **M** = 1–3 weeks, **L** = 1–2 months,
   **XL** = 2–6 months for one experienced engineer. Sizes are relative only.
-
-## Ordered path at a glance
-
-```text
-P0  Cleanup & guardrails
-P1  Data, registries, item components
-P2  Worldgen content: features, structures, dimensions
-P3  Chunk lifecycle, lighting, block updates
-P4  Player simulation and interaction
-P5  Entities, AI, combat, spawning
-P6  Block behavior, redstone, fluids, ticks
-P7  Dimensions and world systems
-P8  Networking, authentication, multiplayer
-P9  Plugin compatibility
-P10 Folia regionization and concurrency
-P11 Parity, performance, release hardening
-```
-
-P10 is architectural. Start its design **before** P4/P5 grow large; retrofitting
-per-region ownership after global mutable gameplay state spreads will be much
-more expensive than designing for it now.
 
 ## Completion dashboard
 
 | Area | Estimate | Notes |
 |---|---:|---|
-| Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
-| Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
-| Full worldgen | ~45-50% | Aquatic/vine/mushroom feature batch landed; ore/scattered features translated but unwired; veinifier, scheduled ticks, remaining placement modifiers, structures, and Nether/End content missing |
-| Lighting | ~30–35% | Real nibble storage/NBT, single-chunk sky + block BFS over the generated per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures still missing |
-| Player simulation | ~25% | Movement is simulated and collision-checked with per-state friction/speed/jump metadata; block break is instant |
-| Entities | ~15% | Tracking, gravity/AABB, typed metadata packets, raw health/damage/death, attributes, and equipment; no AI, spawning, armor, or per-viewer metadata |
-| Full worldgen | ~50-55% | Aquatic/vine/mushroom batch and ore/scattered-ore plus `OreVeinifier` wiring landed; scheduled ticks, remaining placement modifiers, disks/underwater magma in the ore step, structures, and Nether/End content missing |
-| Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
-| Player simulation | ~28% | Movement is simulated and collision-checked; block break progress, tool tiers, drops, and durability are now server-validated |
-| Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
-| Blocks/redstone/fluids | ~20% | Break/place, neighbor/shape updates, scheduled ticks, random ticks, grass spread, falling sand/gravel, water/lava flow, and wire/lever/button redstone; pistons, block entities, remaining redstone components, and P1.5 metadata remain unported |
+| Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
+| Terrain generation | ~70% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler |
+| Full worldgen | ~60–65% | All 888 placement modifiers, 171/224 feature types, trees/ground cover/aquatic/vines/fungi; structures are template/start-only; Nether/End missing |
+| Lighting | ~35% | Nibble storage/NBT, sky+block BFS, per-state behaviour table, neighbour-aware edits; incremental section updates and Java fixtures missing |
+| Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
+| Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
+| Blocks/redstone/fluids | ~25% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button; pistons, block entities, full components missing |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
-| Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler; almost no gameplay API |
+| Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
 | Folia regionization | ~10% | Task queues exist; world state is still globally shared |
-| Overall rewrite | **~18%** | Foundation-heavy, content-light |
+| Overall rewrite | **~22%** | Foundation-heavy, content-light |
+
 
 ---
 

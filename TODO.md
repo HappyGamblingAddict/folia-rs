@@ -37,6 +37,7 @@ where possible, a differential test against the Java oracle.
 | Player simulation | ~30% | Movement physics, collision, fall damage, break progress/tools/drops/durability; special movement and full shapes missing |
 | Entities | ~20% | Tracking, gravity/AABB, metadata packets, attributes, equipment, raw damage/death; AI, spawning, armor, per-viewer metadata missing |
 | Blocks/redstone/fluids | ~30% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire; pistons, block entities, lamps/targets/hooks, full components missing |
+| Blocks/redstone/fluids | ~27% | Break/place, neighbour/shape updates, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching, lava fire, bubble columns, wire/lever/button; pistons, block entities, full components missing |
 | Networking | ~40% offline / 0% online | Join path works offline; no encryption, auth, or full packet coverage |
 | Plugin compatibility | ~10–15% | Lifecycle, events, commands, scheduler, basic proxies; most gameplay API unfinished |
 | Plugin compatibility | ~15–20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, storage inventory, basic item meta, three cancellable events |
@@ -68,6 +69,18 @@ where possible, a differential test against the Java oracle.
   updates. `tick.rs` adds container/comparator/occupancy/torch state and
   registers every behaviour. Focused: 10 lib + 2 tick + 10 integration tests;
   fluids and ticks suites stay green; fmt/clippy clean.
+- 2026-11-06: P6.2 fluid interactions — `fluid.rs` adds lava/water quenching
+  (source+water -> obsidian, flowing+water -> cobblestone, downward lava into
+  water -> stone, exact `LiquidBlock`/`LavaFluid` faces), lava fire ignition
+  with the ported `FireBlock.bootStrap` odds, scheduled fire aging/burnout via
+  `FireBehavior`/`interaction_table()`, soul-sand and magma bubble columns with
+  the `Entity` velocity update (including the 1.8/0.7 and -0.9/-0.3 caps), and
+  fluid destruction of replaceable plants. `tests/fluid_interactions.rs` adds
+  16 focused tests (exact-coordinate contacts, fire, columns, plant
+  destruction, two-world determinism) and `tests/fluids.rs` adds the
+  neighbour-scheduled source-conversion test. Fire blocks still need a
+  one-line `tick::behavior_for` registration for production aging; see
+  `BLOCKERS.md`.
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -1691,9 +1704,14 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 - **Done when:** Flow traces match Java for slopes, sources, and waterlogging.
 - **Progress (2026-11-06):** `fluid.rs` covers source/flowing/falling levels,
   the 5/30-tick delays, 1/2 drop-off, downward priority, slope search toward
-  holes, water source conversion, waterlogged placement, and source-removal
-  drain, with focused flow tests. Lava/water quenching, lava fire, bubble
-  columns, block-destruction drops, and a Java flow trace fixture remain.
+  holes, water source conversion, waterlogged placement, source-removal drain,
+  lava/water quenching (obsidian/cobblestone/stone), lava fire ignition,
+  scheduled fire aging/burnout, soul-sand/magma bubble columns, the per-tick
+  entity velocity update, and fluid destruction of replaceable plants.
+  `tests/fluids.rs` (8) and `tests/fluid_interactions.rs` (16) pin the flow and
+  interaction rules. Remaining: a Java flow/contact/fire/velocity fixture,
+  production fire registration in `tick.rs`, fire weather/difficulty/TNT, and
+  block-destruction loot drops.
 
 ### P6.3 Redstone core `[~]` `L`
 

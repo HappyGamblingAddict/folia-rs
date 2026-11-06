@@ -238,6 +238,46 @@ fn two_sources_convert_a_flowing_block_to_a_source() {
 }
 
 #[test]
+fn neighbour_change_schedules_the_source_conversion() {
+    let mut storage = floor_storage("water-neighbour-update");
+    place(&mut storage, 7, -60, 8, water(0));
+    run_ticks(&mut storage, 1, 5);
+
+    let flow = BlockPos::new(8, -60, 8);
+    assert_eq!(
+        level(&storage, 8, -60, 8),
+        Some(1),
+        "the source spread one flowing level east"
+    );
+
+    // Drop the tick queued when the flowing block was created, so the next
+    // scheduled entry can only come from the neighbour change below.
+    assert_eq!(storage.tick_state_mut().scheduled.cancel(flow), 1);
+    assert!(
+        !storage
+            .tick_state()
+            .scheduled
+            .has_scheduled_tick(flow, "minecraft:water")
+    );
+
+    place(&mut storage, 9, -60, 8, water(0));
+    assert!(
+        storage
+            .tick_state()
+            .scheduled
+            .has_scheduled_tick(flow, "minecraft:water"),
+        "the second source's neighbour update queues the flowing block"
+    );
+
+    run_ticks(&mut storage, 6, 10);
+    assert_eq!(
+        level(&storage, 8, -60, 8),
+        Some(0),
+        "two adjacent sources plus a solid floor convert the flow to a source"
+    );
+}
+
+#[test]
 fn fluid_and_redstone_ticks_are_deterministic() {
     let mut first = floor_storage("determinism-a");
     let mut second = floor_storage("determinism-b");

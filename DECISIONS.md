@@ -1999,3 +1999,94 @@ Format:
   scheduled ticks are not persisted to chunk NBT; a restart resets them.
   Tripwire hooks, pistons, lamps, target blocks, and item-frame/analog block
   inputs remain explicit gaps. No Java differential redstone trace exists yet.
+## 2026-11-06 - Lava/water contact follows the decompiled 1.21.11 branches
+
+- Context: The slice brief said "source lava + water above -> stone", but the
+  decompiled 1.21.11 `LiquidBlock.shouldSpreadLiquid` checks the block above
+  (reversed `POSSIBLE_FLOW_DIRECTIONS` starts at `Direction.DOWN`) and converts
+  a lava *source* to obsidian and a *flowing* lava block to cobblestone. Only
+  `LavaFluid.spreadTo` produces stone, and only when lava flows downward into a
+  water `LiquidBlock`.
+- Decision: Follow the decompiled Java exactly: source lava with water above or
+  on a horizontal face -> obsidian; flowing lava with water above or on a
+  horizontal face -> cobblestone; lava flowing down into water -> stone; water
+  below a lava source is not a contact face (it is handled by the downward
+  flow branch). Diagonal water never converts. The blue-ice-over-soul-soil
+  basalt branch is included.
+- Why: AGENTS.md makes the decompiled Folia source the specification for
+  vanilla behaviour, and the objective also says "per Java's exact branch".
+- Consequences: `tests/fluid_interactions.rs` pins all of these outcomes at
+  exact coordinates. If the brief intended a different rule, it conflicts with
+  the 1.21.11 source and should be raised as a spec change, not implemented as
+  a divergence.
+
+## 2026-11-06 - Fire and bubble-column behaviour sit in fluid.rs behind a table
+
+- Context: This slice may not edit `tick.rs`, whose `behavior_for` dispatches
+  only fluids, redstone, falling blocks, plants, and grass. `minecraft:fire`,
+  `minecraft:soul_sand`, and `minecraft:magma_block` therefore resolve to the
+  no-op behaviour under the production `tick_world`.
+- Decision: Implement `FireBehavior` and `interaction_table()` in `fluid.rs`,
+  and use the table in tests/future callers. Lava fire ignition is live under
+  the default table because lava itself is a fluid and routes to
+  `FluidBehavior::random_tick`. Bubble columns are created without soul
+  sand/magma callbacks: a water source over soul sand or magma performs
+  `BubbleColumnBlock.updateColumn` on its own normal 5-tick fluid tick. That is
+  effect-equivalent to `SoulSandBlock`/`MagmaBlock`'s 20-tick scheduled check,
+  but earlier by up to 15 ticks.
+- Why: It keeps the allowed file scope while making the algorithms real and
+  testable instead of adding gameplay logic to `tick.rs` or faking callbacks.
+- Consequences: Production `tick_world` ages fire only after a one-line
+  registration in `tick.rs` (or a caller that uses `interaction_table`); fire
+  blocks placed by lava will persist at age 0 until then. Bubble columns work
+  under the default table but can appear sooner than Java's 20-tick check.
+  Both gaps are recorded in `BLOCKERS.md`.
+
+## 2026-11-06 - Fire flammability uses the bootstrapped FireBlock odds
+
+- Context: The generated per-state `block_state_behaviour` table carries
+  collision/light/tick data but not `BlockBehaviour.Properties.ignitedByLava`.
+  `FireBlock.canBurn` and `LavaFluid.isFlammable` need that flag.
+- Decision: Embed the exact 1.21.11 `FireBlock.bootStrap` `(block, ignite,
+  burn)` registration list in `fluid.rs` and use `ignite > 0` as the
+  `ignitedByLava` predicate. Waterlogged states report zero odds, matching
+  `FireBlock.getIgniteOdds`/`getBurnOdds`.
+- Why: The list is the authoritative source for every block FireBlock knows
+  about, is fully deterministic, and can be replaced by a dumped per-state
+  column later without changing the algorithms.
+- Consequences: Datapack blocks added after 1.21.11 or blocks with
+  `ignitedByLava` but no FireBlock registration would be treated as
+  non-flammable until the behaviour dump grows that column.
+
+## 2026-11-06 - Fire environment inputs are fixed defaults in the tick slice
+
+- Context: `TickWorld` has no weather, difficulty, player-tracking, or
+  `EnvironmentAttributes` state, and the slice may not edit `tick.rs`/`world.rs`.
+- Decision: `canSpreadFireAround` is treated as the unlimited `-1` game rule;
+  rain/extinguish checks are skipped; increased burnout is off; and the spread
+  formula uses `server.properties`' default easy difficulty (id 1). Fire delay
+  uses Paper's default `fireTickDelay = 1` plus `nextInt(10)`. TNT burnout
+  consumes the same random draws but leaves the TNT block in place because
+  primed-TNT entities do not exist yet.
+- Why: These are the vanilla defaults for a fresh server, and inventing
+  per-world state outside the allowed files would be a fake parity claim.
+- Consequences: Fire behaves correctly for the default overworld rules, but
+  rain, difficulty changes, `fireSpreadRadiusAroundPlayer`, TNT priming, and
+  the increased-burnout attribute remain explicit gaps.
+
+## 2026-11-06 - Fluid destruction replaces blocks but spawns no drops
+
+- Context: `FlowingFluid.spreadTo` calls `beforeDestroyingBlock`, which drops
+  the replaced block's loot unless it is a `LiquidBlockContainer`. This port has
+  no item-entity/loot path in the allowed files.
+- Decision: `destroyed_by_fluid` classifies replaceable container-less blocks
+  (plants, torches, fire, ...) and `spread_to` still performs the replacement;
+  `beforeDestroyingBlock` is an explicit documented no-op. Waterlogged
+  containers are waterlogged instead of destroyed, and `LiquidBlock`s use the
+  quench rules.
+- Why: The observable block change (fluid replaces the plant/fire) is correct,
+  and a fake item drop would be worse than an explicitly documented missing
+  drop.
+- Consequences: No item entities appear when a fluid breaks a plant/torch/fire.
+  The block state and fluid flow are correct and tested; loot drops wait on the
+  item-entity pipeline.

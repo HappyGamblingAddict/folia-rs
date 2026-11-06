@@ -3,8 +3,9 @@
 > Last updated: 2026-11-06  
 > Current commit: `513bb11` (baseline)  
 > Working tree: 30 pre-existing uncommitted paths, including all Nov 3 registry work  
-> Test status: **351 tests + 17 new focused player-physics tests** at the last
-> focused run; the coordinator runs the full gate after merging  
+> Test status: **351-test baseline plus focused lighting, player-physics,
+> vegetation and placement suites (green)**; the coordinator runs the merged
+> full gate after combining slices.
 > Formatting: `cargo fmt --check` and Clippy (`-D warnings`) are clean  
 > Overall completion estimate: **~15%** (range 10–25% depending on metric)
 
@@ -50,7 +51,7 @@ more expensive than designing for it now.
 |---|---:|---|
 | Foundation (M0–M2) | 85–90% | Protocol, NBT, Anvil, chunks, login, inventory basics, physics, scheduler |
 | Terrain generation | ~65% | Density, biomes, aquifers, surface, carvers are strong |
-| Full worldgen | ~35–40% | Ore/scattered features translated; generator wiring and veinifier pending; vegetation/trees partial; structures and Nether/End missing |
+| Full worldgen | ~40-45% | Ground-cover/vegetation feature batch landed; ore/scattered features translated but unwired; veinifier, remaining aquatic plants/vines/mushrooms, structures, and Nether/End missing |
 | Lighting | ~25–30% | Real nibble storage/NBT, single-chunk sky + block BFS, neighbour-aware edits; incremental section updates and Java fixtures still missing |
 | Player simulation | ~25% | Movement is simulated and collision-checked; block break is instant |
 | Entities | ~10% | Tracking and gravity/AABB only; no AI, metadata, damage, spawning |
@@ -70,6 +71,14 @@ more expensive than designing for it now.
   collides against `WorldStorage`, and reconciles movement packets with
   corrections. Live fall damage sends health updates and death. 12 focused
   tests.
+- 2026-11-06: P2.5 ground-cover batch — `worldgen/feature/vegetation.rs`
+  implements `random_patch`/`flower`, `simple_block`, `block_pile`,
+  `block_column`, `multiface_growth`, `vegetation_patch`, and
+  `waterlogged_vegetation_patch`, with inline nested placed features and all
+  shipped state provider types. 134 of 224 configured features execute.
+  Generation now runs `underground_decoration`, `vegetal_decoration`, and
+  `top_layer_modification` (ores stay off). 8 unit + 15 integration tests;
+  parity unchanged at 98.76% block-class / 92.09% exact-name.
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` flattens nine
   registries into `assets/tags/*.tsv` (602 non-empty tags across 604 files,
   7,208 members) and
@@ -82,8 +91,10 @@ more expensive than designing for it now.
   feature-RNG parity because it regresses the exact-name fixture. 341 tests.
 - 2026-11-06: Creaking-heart decorator — parses `creaking_heart`, shuffles
   logs, requires six surrounding logs, and writes a dormant natural heart;
-  focused test covers success and rejection. Pale moss stays unsupported
-  because its patch feature is not ported. 337 tests passing.
+  focused test covers success and rejection. Pale moss stays unsupported at
+  that point because its patch feature is not ported (the patch landed in the
+  P2.5 batch on 2026-11-06; the tree decorator still needs wiring). 337 tests
+  passing.
 - 2026-11-05: Fallen-tree slice — a stump, sideways logs with axis tags,
   whole-log ground validation, and `attached_to_logs` mushrooms; shipped
   `fallen_oak_tree` fixture places 5 logs (4 sideways) and 4 mushrooms at seed
@@ -542,11 +553,11 @@ consumes it.
   integer states (6 propagules on the synthetic oak fixture at seed 7).
   Creaking hearts now shuffle logs, require six surrounding logs, and place a
   dormant natural heart. An unsupported decorator type makes the whole tree
-  config unsupported. Still open: beehive block-entity bee payload, pale moss
-  (blocked on `pale_moss_patch` and block tags), and block-for-block Java
-  fixtures.
+  config unsupported. Still open: beehive block-entity bee payload, the
+  `pale_moss` tree decorator (its `pale_moss_patch` dependency now exists), and
+  block-for-block Java fixtures.
 
-### P2.5 Vegetation and ground cover `[ ]` `L`
+### P2.5 Vegetation and ground cover `[~]` `L`
 
 - **What:** Port `RandomPatchFeature`, `SimpleBlockFeature`,
   `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`,
@@ -560,6 +571,22 @@ consumes it.
 - **Reference:** `.../feature/*` and `.../feature/configurations/*`.
 - **Done when:** Block-class agreement exceeds 99.9% on the fixture and water
   mismatches drop to zero.
+- **Progress (2026-11-06):** `worldgen/feature/vegetation.rs` ports all seven
+  base feature types above with `simple`, `weighted`, `randomized_int`,
+  `noise`, `noise_threshold`, `dual_noise`, and `rotated` state providers.
+  Inline nested placed features are parsed for `random_patch`/`flower` and
+  vegetation patches, including the `block_predicate_filter` predicates they
+  use. 134/224 configured features now execute; 90 remain explicit
+  `Unsupported`.
+- **Still open:** `simple_block.schedule_tick` (pale forest flowers), the
+  `simple_random_selector` used by the dripleaf pools, remaining aquatic plants
+  (`seagrass`, `kelp`, `sea_pickle`, coral), vines, mushrooms/huge fungi,
+  bamboo, and structure features. The tree `pale_moss` decorator still needs
+  to be wired to the now-supported `pale_moss_patch`.
+- **Parity note:** Enabling the three decoration steps did not change the
+  fixture: 98.76% block-class / 92.09% exact-name. The new placed features
+  remain mostly gated by unported top-level placement modifiers, so they are
+  parsed but do not yet affect the fixture.
 
 ### P2.6 Cave, dripstone, sculk, and special features `[ ]` `L`
 

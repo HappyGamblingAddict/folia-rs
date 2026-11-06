@@ -5,8 +5,9 @@
 //! produces stone/air/water/lava, then the full vanilla surface-rule tree
 //! (bedrock floor, deepslate gradient, badlands, snow/ice, swamp water, ...)
 //! replaces the near-surface blocks, the cave and canyon carvers replay their
-//! starts from the 17x17 neighbourhood, and the supported vegetation features
-//! decorate the chunk. Ores, other features and structures are not applied yet.
+//! starts from the 17x17 neighbourhood, and the supported underground,
+//! vegetation, and top-layer features decorate the chunk. Ores, other features
+//! and structures are not applied yet.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer, is_air_state};
 use crate::worldgen::aquifer::{Aquifer, AquiferSubstance};
@@ -303,7 +304,11 @@ impl WorldGenerator {
             self.min_y,
             chunk.z.wrapping_mul(16),
         );
-        for step in [Decoration::VegetalDecoration] {
+        for step in [
+            Decoration::UndergroundDecoration,
+            Decoration::VegetalDecoration,
+            Decoration::TopLayerModification,
+        ] {
             let mut active = std::collections::HashSet::new();
             for biome in &chunk_biomes {
                 let Some(steps) = data.biome_features(biome) else {

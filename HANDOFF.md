@@ -140,14 +140,24 @@ Key files:
 - `FeatureData::vanilla()` loads the embedded `feature_data.json`, normalizes
   bare dump keys to `minecraft:` ids, and validates all 224 configured, 258
   placed and 65 biome feature lists at load time.
-- `minecraft:no_op`, `minecraft:tree` (straight trunk + blob foliage),
-  `minecraft:fallen_tree`, `minecraft:ore`, `minecraft:scattered_ore`, and
-  `minecraft:random_selector` are implemented. Every other vanilla type loads
-  as `Unsupported`; calling `place()` returns an `UnsupportedFeature` error
-  rather than silently doing nothing.
+- Implemented feature types: `no_op`, `tree`, `fallen_tree`, `ore`,
+  `scattered_ore`, `random_selector`, `random_patch`/`flower`, `simple_block`,
+  `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, and
+  `waterlogged_vegetation_patch`. 134 of 224 configured features execute;
+  every other type loads as `Unsupported` and `place()` returns an
+  `UnsupportedFeature` error rather than silently doing nothing.
+- `worldgen/feature/vegetation.rs` ports the ground-cover batch with inline
+  nested placed features and the shipped state providers: simple, weighted,
+  randomized-int, noise, noise-threshold, dual-noise, and rotated. Provider
+  draws follow vanilla order (`simple` draws nothing). Nested placements are
+  predicate-only because every shipped patch uses `block_predicate_filter`;
+  unsupported nest types make the parent explicitly unsupported. Vegetation
+  patch positions use Java `HashSet` bucket order.
 - Feature tests cover deterministic replay for a seed, different-seed divergence,
   chunk/vertical write bounds, no-op behavior, decoration ordering, definition
-  counts, tag values, loud unsupported errors, and loader validation.
+  counts, tag values, loud unsupported errors, provider draw order, shipped
+  patch parsing, patch success/failure, block pile/column truncation, multiface
+  attachment, and waterlogged patch behavior.
 - `worldgen/feature/placement.rs` types every placement modifier and
   `IntProvider`/`HeightProvider`, and executes the six world-free modifiers
   plus `biome` with vanilla draw order. `PlacedFeature::placement_positions`
@@ -167,9 +177,10 @@ Key files:
   Generator wiring is intentionally off until feature-RNG parity; enabling it
   lowers the exact-name fixture from 92.09% to 89.06%. `OreVeinifier` remains
   unported.
-- Wired into generation: `WorldGenerator::apply_vegetation` runs the supported
-  `vegetal_decoration` features after carvers, using a chunk-backed
-  `FeaturePlacementWorld`. Oak/birch trees generate in forest/plains/birch
+- Wired into generation: `WorldGenerator::apply_decorations` runs the supported
+  `underground_decoration`, `vegetal_decoration`, and `top_layer_modification`
+  features after carvers, using a chunk-backed `FeaturePlacementWorld`.
+  `underground_ores` stays off. Oak/birch trees generate in forest/plains/birch
   chunks; spruce/pine use layered foliage, dark oak uses its 2x2 branching
   trunk, forking acacia uses acacia foliage, fancy oak uses its limb trunk and
   clipped height, cherry uses its branch walk and hanging foliage, giant mega
@@ -179,15 +190,20 @@ Key files:
   mangrove uses an upwards-branching trunk and waterlogged/muddy roots, fallen
   trees place a stump plus sideways logs, and leaf litter, beehives, vines,
   cocoa, alter-ground podzol, attached-to-leaves, attached-to-logs, and
-  creaking hearts decorate the supported shapes. Pale moss is blocked on the
-  unported `pale_moss_patch`; beehive occupants and block-for-block Java
-  fixtures remain open.
+  creaking hearts decorate the supported shapes. The tree `pale_moss` decorator
+  still needs wiring to the now-supported `pale_moss_patch`; beehive occupants
+  and block-for-block Java fixtures remain open. Most remaining aquatic
+  plants, vines,
+  mushrooms/huge fungi, structures, the dripleaf `simple_random_selector`, and
+  `schedule_tick` simple blocks are still unported.
 
 
 Key files:
 
 - `crates/folia-core/src/worldgen/feature/mod.rs`
 - `crates/folia-core/src/worldgen/feature/placement.rs`
+- `crates/folia-core/src/worldgen/feature/vegetation.rs`
+- `crates/folia-core/tests/vegetation.rs`
 - `crates/folia-core/assets/feature_data.json`
 
 ### Registries and generated assets
@@ -203,8 +219,9 @@ Key files:
   last resort for a block name that is not in the registry at all.
 - `feature_data.json` contains 224 configured features, 258 placed features and
   65 biome feature lists extracted from the Java server. It is loaded and
-  validated by the feature framework; supported tree features execute during
-  chunk generation.
+  validated by the feature framework; 134 configured features (trees,
+  ground-cover patches, ores, selectors, and the P2.5 batch) execute during
+  chunk generation where their placement modifiers are also supported.
 - `block_state_count()` exposes the loaded state count and is asserted by the
   registry test.
 - `assets/ASSETS.md` is the versioned manifest (version, DataVersion, line/byte
@@ -303,7 +320,8 @@ carver mask itself.
 
 `tests/worldgen_parity.rs` compares every block in the fixture's 16 sampled
 columns (6144 blocks) and reports class agreement, exact names, water counts,
-and the top class confusions.
+and the top class confusions. Enabling the P2.5 decoration steps did not change
+these numbers: 98.76% block-class / 92.09% exact-name.
 
 Generation performance in the debug test profile:
 
@@ -387,10 +405,14 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 - Ore and scattered-ore features are ported but not wired into generation;
   `OreVeinifier` is not ported.
-- Lush-cave vegetation/moss/clay, ocean plants/gravel, and other features are
-  not ported; these account for most remaining class mismatches.
-- Most vegetation, structures, and other features are not ported; the
-  supported tree subset runs after carvers.
+- The P2.5 ground-cover types are ported, but most aquatic plants (seagrass,
+  kelp, sea pickle, coral), vines, mushrooms/huge fungi, bamboo, structures, and
+  special features are not. The tree `pale_moss` decorator still needs wiring
+  to the now-supported patch.
+- `simple_block.schedule_tick: true` and `simple_random_selector` remain
+  explicit unsupported paths, so pale forest flowers and the dripleaf pools do
+  not execute. Vegetation noise providers use Xoroshiro-backed `NormalNoise`
+  instead of Java's Legacy-seeded stream (see `DECISIONS.md`).
 - Surface rules are ported, but the frozen-ocean temperature modifier
   (`Biome.FROZEN_TEMPERATURE_NOISE`/`BIOME_INFO_NOISE`, a
   `PerlinSimplexNoise`) is approximated. Frozen/deep-frozen ocean temperature
@@ -400,11 +422,12 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   fuzzy zoomer. Both match vanilla's separate lookup paths.
 - Paper's `generate-flat-bedrock` option is assumed disabled (the captured
   oracle used random bedrock depths).
-- Only the `minecraft:no_op`, `minecraft:tree`, `minecraft:fallen_tree`, and
-  `minecraft:random_selector` configured feature types execute; the rest fail
-  loudly. Some world-dependent placement modifiers (non-ocean heightmaps,
-  non-sapling predicates, environment scans, noise counts) still return
-  explicit `PlacementFailure`s.
+- 134 of 224 configured feature types execute: `no_op`, trees, fallen trees,
+  ores/scattered ores, random selectors, random patches/flowers, simple blocks,
+  block piles, block columns, multiface growth, and vegetation patches. The
+  rest fail loudly. Some world-dependent placement modifiers (non-ocean
+  heightmaps, non-sapling predicates, environment scans, noise counts) still
+  return explicit `PlacementFailure`s.
 - Item stacks still carry only `item + count`; data components are not encoded
   (durability, enchants, container contents are not preserved).
 - Block behavior metadata (hardness, light, solidity, tool rules) is not
@@ -448,10 +471,11 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 
 1. **Guard the baseline (P0.3–P0.5).** Track/validate the generated assets,
    add CI, and make the Java oracle dumps reproducible.
-2. **Build the feature framework (P2.1/P2.2).** `Feature` trait, configured and
-   placed features, placement modifiers, then wire ore features and port
-   `OreVeinifier` (P2.3) after feature-RNG parity.
-   `feature_data.json` already has every definition.
+2. **Finish vegetation (P2.4/P2.5).** Wire the tree `pale_moss` decorator to
+   `minecraft:pale_moss_patch`, then port remaining aquatic plants, vines,
+   mushrooms/huge fungi, `simple_random_selector`, and the remaining placement
+   modifiers. Ore wiring/`OreVeinifier` (P2.3) still waits on feature-RNG
+   parity. `feature_data.json` already has every definition.
 3. **Real lighting (P3.5–P3.8).** Persisted sky/block light nibble arrays, the
    sky-light and block-light engines, then incremental light packets.
 4. **Finish surface fidelity.** Port `PerlinSimplexNoise` and the frozen-ocean

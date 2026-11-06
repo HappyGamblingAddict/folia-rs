@@ -964,3 +964,79 @@ Format:
   levitation/slow falling, sprint/sneak input packets, and real teleport
   acknowledgement. The player tick still follows movement packets rather than a
   standalone 20 Hz player scheduler.
+
+## 2026-11-06 - Vegetation providers stay independent from the tree path
+
+- Context: The tree module already has a private `BlockStateProvider` parser,
+  but its `simple_state_provider` samples through the weighted path and draws a
+  random value. Vanilla `SimpleStateProvider.getState` does not draw. Vegetation
+  needs exact provider RNG order, and changing the shared parser would alter
+  every existing tree fixture.
+- Decision: Keep `vegetation.rs` state providers separate. `Simple` returns the
+  state without a draw; `Weighted` draws one `nextInt(totalWeight)`;
+  `RandomizedInt` samples its source before its property value; the noise
+  providers index by position and only consume a draw where vanilla does
+  (`NoiseThresholdProvider` low/high branch); `Rotated` consumes one draw for
+  the axis.
+- Consequences: Tree placement RNG is unchanged. Vegetation has its own tested
+  provider behavior, and the documented simple-provider draw caveat still
+  applies only to trees.
+
+## 2026-11-06 - Nested vegetation placements are evaluated locally
+
+- Context: `placement.rs` is intentionally outside this slice, and its
+  `block_predicate_filter` only supports sapling `would_survive`. Every nested
+  placement used by the shipped `random_patch`/`flower` configs is a
+  `block_predicate_filter` with air/fluid/block predicates.
+- Decision: Parse and execute nested placed features inside `vegetation.rs`
+  with a predicate-only placement chain. Supported predicates are
+  `matching_blocks`, `matching_fluids`, `would_survive`, `replaceable`, `solid`,
+  `has_sturdy_face`, `all_of`, `any_of`, and `not`. Any other nested modifier
+  makes the parent configured feature an explicit `Unsupported`, never a silent
+  skip.
+- Consequences: All 23 non-scheduled shipped `random_patch` configs and 8 of 9
+  `flower` configs parse; the shipped `patch_grass_plain`, `flower_plain`,
+  `moss_patch`, and `pale_moss_patch` definitions are executable. Top-level
+  placement modifiers are still handled by `placement.rs`, so features whose
+  outer placement uses an unported modifier remain wired but inactive.
+
+## 2026-11-06 - Vegetation noise providers use the available NormalNoise path
+
+- Context: Vanilla seeds `NoiseBasedStateProvider` with
+  `WorldgenRandom(new LegacyRandomSource(seed))`. The current
+  `folia_core::worldgen::noise::NormalNoise::create` constructor accepts only a
+  `XoroshiroRandomSource`, and `noise.rs` is outside this task's file scope.
+- Decision: Construct provider noise with `XoroshiroRandomSource::new(seed)`
+  and keep the exact vanilla evaluation formula (scale, octaves, threshold,
+  dual-noise mapping). This is deterministic and tested, but it is not a
+  block-for-block Java noise-provider parity claim.
+- Consequences: Flower/meadow provider state choices can differ from Java until
+  `NormalNoise` accepts a generic `RandomSource` seeded from a
+  `LegacyRandomSource`. The gap is recorded here and in `TODO.md`/`PORT_MAP.md`.
+
+## 2026-11-06 - Vegetation patch sets follow Java HashSet iteration order
+
+- Context: `VegetationPatchFeature` stores ground positions in a `HashSet` and
+  then iterates it to place vegetation. `BlockPos.hashCode` and the default
+  `HashSet` bucket order therefore influence RNG consumption.
+- Decision: Collect positions once, emulate Java's `(y + z * 31) * 31 + x`
+  hashCode and `h ^ (h >>> 16)` bucket spread, use the smallest power-of-two
+  table that satisfies the 0.75 load factor (minimum 16), and iterate buckets
+  in ascending order with insertion order inside a bucket.
+- Consequences: Vegetation patch vegetation order is deterministic and matches
+  the common Java `HashSet` case. Treeification of very large buckets is not
+  modeled; shipped patches never reach that size.
+
+## 2026-11-06 - `schedule_tick` and `simple_random_selector` stay explicit gaps
+
+- Context: Two shipped simple-block configs (`pale_forest_flowers`,
+  `flower_pale_garden`) request `schedule_tick: true`, and both dripleaf
+  vegetation patches nest `minecraft:simple_random_selector`. The chunk
+  generation boundary has no tick queue, and `simple_random_selector` is not
+  ported.
+- Decision: Treat `schedule_tick: true` simple blocks and vegetation patches
+  whose nested feature is `simple_random_selector` as explicit `Unsupported`
+  rather than placing the block and silently dropping the scheduled tick or the
+  selector. The remaining 134 configured features keep executing.
+- Consequences: `pale_forest_flowers`, `flower_pale_garden`,
+  `clay_with_dripleaves`, and `clay_pool_with_dripleaves` remain unsupported.

@@ -10,10 +10,9 @@ Last updated: 2026-11-06
 
 - Current commit (informational only): `513bb11`
 - Working tree: uncommitted by design; Git is not used for workflow.
-- Tests: **351 passing** at the last full run; this slice adds 17 focused
-  player-physics tests (12 integration, 5 lib) and passes the focused runs,
-  `movement_validation`, and `join`. The full workspace gate is run by the
-  coordinator after merging.
+- Tests: **351 passing** baseline; focused lighting (7), player-physics (17),
+  vegetation (23), and placement (3) suites are green. The merged workspace
+  gate is run by the coordinator.
 - Formatting: `cargo fmt --check` clean.
 - Build warnings: none.
 - Clippy: `cargo clippy --workspace --all-targets -- -D warnings` clean.
@@ -169,12 +168,18 @@ Last updated: 2026-11-06
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
   beehives, hanging/trunk vines, cocoa, altered podzol ground, and fallen logs
-  with mushrooms. Beehive block entities have no stored bees yet; pale moss
-  (blocked on `pale_moss_patch`), structures, and most other features are still
-  missing. Ore and scattered-ore features are implemented and all 32 shipped
-  configs are covered, but generator wiring is deferred because it lowers the
+  with mushrooms. Beehive block entities have no stored bees yet. The P2.5
+  ground-cover batch now parses and places `random_patch`/`flower`,
+  `simple_block`, `block_pile`, `block_column`, `multiface_growth`,
+  `vegetation_patch`, and `waterlogged_vegetation_patch`; 134 of 224 configured
+  features execute. The tree `pale_moss` decorator is still unsupported even
+  though its `pale_moss_patch` dependency now exists. Most remaining aquatic
+  plants, vines,
+  mushrooms/huge fungi, structures, and most special features remain missing.
+  Ore and scattered-ore features are implemented and all 32 shipped configs are
+  covered, but generator wiring is still deferred because it lowers the
   exact-name parity fixture until WorldgenRNG parity lands. Existing stored
-  chunks are not retroactively decorated, so trees appear in newly generated
+  chunks are not retroactively decorated, so features appear in newly generated
   columns only.
 
 - Folia region threading is not implemented beyond task queues.
@@ -189,21 +194,20 @@ Last updated: 2026-11-06
 - P1.3 tag data is available; wire `stone_ore_replaceables` and the other ore
   target tags through `folia_core::tags` instead of the hard-coded sets in
   `worldgen/feature/ore.rs`, then add the remaining cosmetic registries.
-- Pale moss (blocked on `pale_moss_patch` and block tags) and beehive
-  occupant NBT are the remaining P2.4 tree gaps; blob/bush/random-spread/
-  spruce/pine/dark oak/acacia/fancy/cherry/mega-pine/jungle foliage, bending
-  trunks, fallen trees, creaking hearts, and the leaf-litter/beehive/vine/
-  cocoa/alter-ground/attached-to-leaves/attached-to-logs slices are done.
+- The P2.5 base features are in place. Next: wire the tree `pale_moss`
+  decorator to the now-supported `pale_moss_patch`, then port remaining aquatic
+  plants (`seagrass`, `kelp`, `sea_pickle`), vines, mushrooms/huge fungi, and the
+  remaining patch containers (`simple_random_selector` for the dripleaf pools).
+  Beehive occupant NBT is still the remaining P2.4 tree gap.
 
 1. P2.3 — wire ore/scattered-ore into generation after WorldgenRNG parity,
    port `OreVeinifier`, and keep the 92.09% exact-name fixture.
-2. P2.4 — pale-moss patch dependency, beehive occupants, and a Java tree fixture.
-3. P2.5 — vegetation and ground cover.
-4. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
+2. P2.4/P2.5 - pale-moss tree decorator, beehive occupants, remaining aquatic
+   plants, vines, mushrooms/huge fungi, and a Java tree fixture.
+3. P3.5–P3.8 — real light storage and engines. P3.5 is complete; continue
    P3.6–P3.8 with generated opacity/emission data, incremental section packets,
    and Java light-array/packet fixtures.
-5. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
-
+4. P0.5 — reproducible oracle dumps, once a capture run is acceptable.
 ## Next queue
 
 - [x] P0.1 Fix formatting and warnings
@@ -219,7 +223,8 @@ Last updated: 2026-11-06
 - [~] P2.1 Feature framework core (framework + loader done)
 - [~] P2.2 Placement modifiers (world-free, `biome`, ocean-floor heightmap, water depth, sapling predicates done)
 - [~] P2.3 Ores and ore veins (`minecraft:ore` + `minecraft:scattered_ore` and all 32 shipped configs done; generator wiring and `OreVeinifier` pending feature-RNG parity)
-- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss blocked on `pale_moss_patch`/tags)
+- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
+- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch` done; `schedule_tick`, `simple_random_selector`, most remaining aquatic plants, vines, mushrooms/huge fungi, and structures remain)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (hand-written emitter/opacity table)
@@ -231,7 +236,7 @@ Last updated: 2026-11-06
 
 ## Recently completed
 
-- 2026-11-06: First real lighting slice – `light.rs` adds vanilla-compatible
+- 2026-11-06: First real lighting slice — `light.rs` adds vanilla-compatible
   `DataLayer` nibble storage, `SectionLight` layers on every `ChunkSection`,
   `SkyLight`/`BlockLight` NBT decode/encode, per-column sky sources with a
   six-direction BFS under overhangs, block-light BFS over an explicit emitter
@@ -244,13 +249,23 @@ Last updated: 2026-11-06
   emitter, packet masks, border torch, edit persistence). Emitter/opacity data
   is still hand-written; incremental section-only light packets and Java light
   fixtures remain open.
-- 2026-11-06: Player physics and movement validation – `player_physics.rs`
+- 2026-11-06: Player physics and movement validation — `player_physics.rs`
   implements the vanilla walking/falling formulas, AABB collision against
   `WorldStorage`, step-up, fall distance/damage, and movement reconciliation.
   The live session keeps the ten-block safety net, accepts legal walking
   without corrections, sends position corrections for blocked claims, and
   sends health updates on fall damage. 12 focused `player_physics` tests plus
   updated playerdata/movement tests pass; clippy is clean.
+- 2026-11-06: P2.5 ground-cover batch — `worldgen/feature/vegetation.rs`
+  ports `RandomPatchFeature` (also `flower`), `SimpleBlockFeature`,
+  `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`,
+  `VegetationPatchFeature`, and `WaterloggedVegetationPatchFeature`, including
+  inline nested placed features, the shipped state providers, and Java
+  `HashSet` bucket order for patch positions. `FeatureData` now dispatches
+  134/224 configured features. Generation runs `underground_decoration`,
+  `vegetal_decoration`, and `top_layer_modification`; `underground_ores` stays
+  off. Focused tests: 8 unit + 15 integration. Exact-name parity remains
+  92.09% (5658/6144), block-class 98.76% (6068/6144).
 
 - 2026-11-06: Vanilla tag registries — `scripts/extract_tags.ps1` walks the
   decompiled tag tree, resolves nested `#tag` references with cycle detection

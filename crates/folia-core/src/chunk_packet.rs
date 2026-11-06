@@ -145,6 +145,7 @@ pub fn flat_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
                 palette: vec!["minecraft:plains".into()],
                 indices: vec![0; 64],
             }),
+            light: crate::light::SectionLight::default(),
         }],
     }
 }
@@ -234,6 +235,21 @@ pub fn heightmap_nbt(chunk: &Chunk) -> Tag {
 }
 
 pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
+    if chunk.has_light() {
+        stored_light_bytes(chunk)
+    } else {
+        // Preserve the original height-based payload for chunks that have no
+        // real light data yet (for example a freshly generated column before it
+        // is passed through the light engine).
+        height_light_bytes(chunk)
+    }
+}
+
+/// Build the light payload from the chunk's stored/computed layers. Sections
+/// without stored layers inside the height approximation's range fall back to
+/// the old per-column sky light, which keeps captured flat-world packets
+/// byte-identical while real layers take precedence.
+fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
     let heights: Vec<i32> = (0..256)
         .map(|index| {
             let x = index % 16;
@@ -241,10 +257,76 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
             column_height(chunk, x, z, HeightKind::WorldSurface)
         })
         .collect();
+    let max_sky_index = max_sky_index(chunk);
 
-    let highest_section = highest_block_section(chunk);
-    let max_sky_index =
-        (i32::from(highest_section) - (i32::from(OVERWORLD_MIN_SECTION) - 1) + 1).max(0) as usize;
+    let mut sky_mask = 0u64;
+    let mut block_mask = 0u64;
+    let mut empty_sky = 0u64;
+    let mut empty_block = 0u64;
+    let mut sky_updates: Vec<crate::light::DataLayer> = Vec::new();
+    let mut block_updates: Vec<crate::light::DataLayer> = Vec::new();
+
+    for index in 0..LIGHT_SECTION_COUNT {
+        let section_y = i32::from(OVERWORLD_MIN_SECTION) - 1 + index as i32;
+        let section_light = chunk.section(section_y as i8).map(|section| &section.light);
+        let stored_sky = section_light.and_then(|light| light.sky.as_ref());
+        let stored_block = section_light.and_then(|light| light.block.as_ref());
+        let within_fallback = index <= max_sky_index;
+        if stored_sky.is_none() && stored_block.is_none() && !within_fallback {
+            continue;
+        }
+
+        let (sky, sky_from_fallback) = match stored_sky {
+            Some(layer) => (layer.clone(), false),
+            None => (fallback_sky_layer(&heights, section_y), true),
+        };
+        let block = match stored_block {
+            Some(layer) => layer.clone(),
+            None => crate::light::DataLayer::new(),
+        };
+
+        if sky.is_empty() {
+            empty_sky |= 1 << index;
+        } else if !sky_from_fallback || !sky.is_filled_with(15) || index <= max_sky_index {
+            sky_mask |= 1 << index;
+            sky_updates.push(sky);
+        }
+
+        if block.is_empty() {
+            empty_block |= 1 << index;
+        } else {
+            block_mask |= 1 << index;
+            block_updates.push(block);
+        }
+    }
+
+    let mut writer = PacketWriter::new();
+    write_bitset(&mut writer, sky_mask);
+    write_bitset(&mut writer, block_mask);
+    write_bitset(&mut writer, empty_sky);
+    write_bitset(&mut writer, empty_block);
+    writer.write_varint(sky_updates.len() as i32).unwrap();
+    for update in sky_updates {
+        writer.write_varint(2048).unwrap();
+        writer.write_bytes(update.as_bytes());
+    }
+    writer.write_varint(block_updates.len() as i32).unwrap();
+    for update in block_updates {
+        writer.write_varint(2048).unwrap();
+        writer.write_bytes(update.as_bytes());
+    }
+    writer.into_inner()
+}
+
+fn height_light_bytes(chunk: &Chunk) -> Vec<u8> {
+    let heights: Vec<i32> = (0..256)
+        .map(|index| {
+            let x = index % 16;
+            let z = index / 16;
+            column_height(chunk, x, z, HeightKind::WorldSurface)
+        })
+        .collect();
+    let max_sky_index = max_sky_index(chunk);
 
     let mut sky_mask = 0u64;
     let block_mask = 0u64;
@@ -254,37 +336,15 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
 
     for index in 0..LIGHT_SECTION_COUNT {
         let section_y = i32::from(OVERWORLD_MIN_SECTION) - 1 + index as i32;
-        let mut data = [0u8; 2048];
-        let mut all_zero = true;
-        let mut all_full = true;
-
-        for z in 0..16 {
-            for x in 0..16 {
-                let height = heights[x + z * 16];
-                for local_y in 0..16 {
-                    let world_y = section_y * 16 + local_y;
-                    let light = if world_y >= height { 15u8 } else { 0u8 };
-                    if light == 0 {
-                        all_full = false;
-                    } else {
-                        all_zero = false;
-                    }
-                    let cell = ((local_y as usize) << 8) | (z << 4) | x;
-                    let byte = cell >> 1;
-                    if cell & 1 == 0 {
-                        data[byte] |= light;
-                    } else {
-                        data[byte] |= light << 4;
-                    }
-                }
-            }
-        }
+        let layer = fallback_sky_layer(&heights, section_y);
+        let all_zero = layer.is_empty();
+        let all_full = layer.is_filled_with(15);
 
         if all_zero {
             empty_sky |= 1 << index;
         } else if !all_full || index <= max_sky_index {
             sky_mask |= 1 << index;
-            sky_updates.push(data);
+            sky_updates.push(*layer.as_bytes());
         }
 
         if index <= max_sky_index && index < LIGHT_SECTION_COUNT {
@@ -304,6 +364,27 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
     }
     writer.write_varint(0).unwrap(); // block updates
     writer.into_inner()
+}
+
+fn fallback_sky_layer(heights: &[i32], section_y: i32) -> crate::light::DataLayer {
+    let mut layer = crate::light::DataLayer::new();
+    for z in 0..16 {
+        for x in 0..16 {
+            let height = heights[x + z * 16];
+            for local_y in 0..16 {
+                let world_y = section_y * 16 + local_y;
+                if world_y >= height {
+                    layer.set(x, local_y as usize, z, 15);
+                }
+            }
+        }
+    }
+    layer
+}
+
+fn max_sky_index(chunk: &Chunk) -> usize {
+    let highest_section = highest_block_section(chunk);
+    (i32::from(highest_section) - (i32::from(OVERWORLD_MIN_SECTION) - 1) + 1).max(0) as usize
 }
 
 fn write_bitset(writer: &mut PacketWriter, mask: u64) {
@@ -613,6 +694,7 @@ mod tests {
                     palette: vec!["minecraft:plains".into()],
                     indices: vec![0; 64],
                 }),
+                light: crate::light::SectionLight::default(),
             }],
         };
 

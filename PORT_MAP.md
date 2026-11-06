@@ -9,7 +9,7 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/nbt/SnbtParser`, `TagParser` | `folia-core/src/snbt.rs` | Ported subset: compounds/lists/typed arrays/escapes |
 | `net/minecraft/network/Varint21FrameDecoder`, VarInt helpers | `folia-core/src/varint.rs`, `protocol.rs` | Ported: VarInt/VarLong, packet framing, handshake/status/ping |
 | `net/minecraft/world/level/chunk/storage/RegionFile` | `folia-core/src/anvil.rs` | Ported: location/timestamp tables, chunk records, compression |
-| `net/minecraft/world/level/chunk/PalettedContainer`, `LevelChunkSection` | `folia-core/src/chunk.rs` | Ported: block/biome palettes, packed indices, section lookup |
+| `net/minecraft/world/level/chunk/PalettedContainer`, `LevelChunkSection` | `folia-core/src/chunk.rs` | Ported: block/biome palettes, packed indices, section lookup; optional `SkyLight`/`BlockLight` layers now round-trip through NBT |
 | `net/minecraft/core/BlockPos`, `Direction`, `SectionPos`, `world/phys/Vec3`, `AABB`, `util/Mth` | `folia-math` | Ported by math task |
 | `net/minecraft/util/RandomSource`, `LegacyRandomSource`, `XoroshiroRandomSource` | `folia-random` | Ported, Java-differential sequences |
 | `net/minecraft/world/level/storage/LevelData`, `PrimaryLevelData` | `folia-core/src/level.rs` | Ported subset: seed, spawn, version, game type |
@@ -21,10 +21,10 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/server/MinecraftServer` tick loop | `crates/folia-server/src/jvm.rs` | Partial: Rust loop drives plugins and region tasks |
 | Folia plugin schedulers | `java/bridge` + Rust `TASKS` table | Partial: sync tasks are Rust-owned; region/async/entity schedulers not yet |
 | `net/minecraft/network/protocol/login/*`, configuration/play initial packets | `folia-core/src/join.rs` + `assets/join_*.bin` | Login → configuration → Join Game; captured registries, live chunk stream |
-| `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live 7×7 chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light |
+| `net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket` | `folia-core/src/chunk_packet.rs` | Live chunk packets from `WorldStorage`/flat chunks with dynamic heightmaps and light; stored/computed sky+block layers take precedence over the height fallback |
 | Player session / movement / playerdata | `folia-core/src/player.rs` | Movement packet parsing, gzip-NBT persistence, join session |
 | `ClientboundBlockUpdatePacket`, `ClientboundSectionBlocksUpdatePacket` | `folia-core/src/block_update.rs` | Chunk mutation, heightmap/light recompute, persistence, broadcast, ServerboundPlayerAction/UseItemOn |
-| `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Full chunk light data after block changes |
+| `ClientboundLightUpdatePacket` | `folia-core/src/block_update.rs` | Whole-chunk sky+block light data after a block edit; incremental section-only updates not ported |
 | Hotbar/full inventory and cursor | `folia-core/src/inventory.rs`, `player.rs` | 36 slots + cursor, container content/slot packets, clicks, creative slots, NBT persistence, placement consumption |
 | Entity tracking (`ClientboundAddEntity`, `RemoveEntities`, `EntityPositionSync`) | `folia-core/src/entity.rs` | Spawn/move/remove store, broadcasts, Java-matched packets |
 | Entity tick physics | `folia-core/src/entity.rs` | Gravity/drag, axis-separated AABB collision against `WorldStorage`, ground detection, per-tick sync |
@@ -39,7 +39,7 @@ Rust tree: `crates/folia-core`.
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
 | `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay; `no_op` implemented, other feature types explicitly unsupported |
 | `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; 6 world-free modifiers plus `BiomeFilter` (via `PlacementWorld`) execute with vanilla draw order (667/888 shipped), the rest report `PlacementFailure` |
-| `net/minecraft/world/level/lighting/*` | - | Not ported |
+| `net/minecraft/world/level/lighting/*`, `chunk/DataLayer`, `ChunkSkyLightSources` | `folia-core/src/light.rs` | Partial: `DataLayer` nibble storage, per-column sky sources, sky/block BFS increase propagation, one-block neighbour border; decrease queues, generated opacity/emission tables, and Java light fixtures still open |
 | `net/minecraft/world/entity/*` | `folia-core/src/entity.rs` | Partial: base entity physics for tracked entities; AI/goals/damage not ported |
 | `net/minecraft/world/level/block/*` redstone/gameplay | — | Not ported |
 
@@ -60,7 +60,12 @@ Rust tree: `crates/folia-core`.
   `chunk source: 49 from WorldStorage, 0 generated flat chunks`.
 - Differential chunk test: generated heightmaps and light bytes for the real
   chunk `(0,-1)` are byte-identical to the captured Java packet
-  (`tests/world_chunk_packet.rs`).
+  (`tests/world_chunk_packet.rs`), including when the light payload is built
+  from the decoded `SkyLight`/`BlockLight` NBT layers.
+- Lighting tests (`tests/lighting.rs`): nibble/NBT round-trip, sky falloff
+  under a roofed shaft, torch block-light radius, unsupported emitter, packet
+  masks vs stored arrays, neighbour torch across a chunk border, and a block
+  edit that persists/reloads block light.
 - `read_player` prints the persisted position after the probe:
   `pos=(12.50, -60.00, 8.25) on_ground=true`.
 - `PlayerJoinEvent` is delivered to the Java bridge:

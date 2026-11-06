@@ -52,6 +52,14 @@ Format:
 
 These are expected gaps, not reasons to stop:
 
+- Lighting is a first slice, not full vanilla light-engine parity. `light.rs`
+  recomputes a whole chunk (plus a one-block neighbour margin) with an explicit
+  hand-written opacity/emission table. Block behaviour metadata (P1.5) is still
+  missing, so unknown blocks are opaque and unsupported emitters return 0.
+  Incremental decrease/increase section bookkeeping, queued cross-chunk
+  relighting, generation-time lighting, and a Java light-array/packet fixture
+  remain open. `magma_block` deliberately emits 3 (vanilla) even though the
+  task brief listed it as 15.
 - `BiomeManager` has no Java fixture. Its seed obfuscation is pinned to NIST
   SHA-256 vectors and its quart selection to values derived from the Java
   source; a Java `getBiome` dump would lock it down.

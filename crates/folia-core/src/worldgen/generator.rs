@@ -151,6 +151,7 @@ impl WorldGenerator {
                     palette: vec!["minecraft:plains".into()],
                     indices: vec![0; 64],
                 }),
+                light: crate::light::SectionLight::default(),
             });
         }
 

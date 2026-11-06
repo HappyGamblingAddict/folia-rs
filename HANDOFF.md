@@ -500,18 +500,25 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   rest fail loudly. Some world-dependent placement modifiers (non-ocean
   heightmaps, non-sapling predicates, environment scans, noise counts) still
   return explicit `PlacementFailure`s.
-- Item stacks are component-aware, but per-item prototype defaults
-  (`max_stack_size`, `max_damage`, `minecraft:tool`, food/tool defaults) are
-  not dumped yet. The breaking code falls back to the exact `ToolMaterial`
-  table for vanilla tools and writes `max_damage` on first wear.
+- Item stacks are component-aware and per-item prototype defaults are now
+  dumped by `scripts/extract_item_prototypes.ps1` into
+  `assets/item_prototypes.json` (1,504 non-air items, 79,369 bytes): stack
+  size, durability, tool rules/tier/attack damage, food/eat time, equippable
+  slot, enchantability, repairable set, fire resistance, and rarity.
+  `item_prototypes.rs` validates the catalog, looks items up by name/id, and
+  supplies `defaults_for`/`apply_defaults` patches for the modeled
+  `item_components` subset. The breaking code still uses its built-in
+  `ToolMaterial` table and writes `max_damage` on first wear; wiring it to the
+  catalog is a follow-up.
 - Block behaviour metadata is generated (`block_state_behaviour.tsv.gz`) and
   covers hardness, light, solidity, motion, friction, and fluids. Breaking uses
   it, but loot tables, item entities, Unbreaking/Fortune/Silk Touch, and the
   block-damage overlay packet are still open.
-- Item stacks carry the component patch model, but prototype defaults and the
-  attribute/potion/tool network codecs are still missing. The plugin bridge
-  persists type/count/damage/name/lore/unbreakable; enchantments, PDC, and
-  container contents do not cross the bridge yet.
+- Item stacks carry the component patch model and the prototype catalog. The
+  `attribute_modifiers`/`potion_contents`/`tool` network codecs,
+  `HashedStack` hashing, and a Java component NBT/packet fixture are still
+  missing. The plugin bridge persists type/count/damage/name/lore/unbreakable;
+  enchantments, PDC, and container contents do not cross the bridge yet.
 - Generated chunks are at 98.75% class / 95.80% exact-name agreement, not
   100%.
 - Chunk generation is ~15.7 s for 49 debug chunks, of which carver replay is

@@ -44,6 +44,16 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
+  non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
+  `item_prototypes.rs` loads it once, validates the counts and every field, and
+  supplies stack limits, durability, tool rules/tier/attack damage, food/eat
+  time, equippable slot, enchantability, repairable set, fire resistance, and
+  rarity. `defaults_for`/`apply_defaults` bridge the modeled subset into
+  `item_components`; unknown items keep the explicit stack-64/no-durability
+  fallback. 3 unit + 13 integration tests, including a byte-identical extractor
+  `-Check`. The remaining P1.4 work is network codecs, `HashedStack` hashing,
+  and a Java component fixture.
 - 2026-11-06: P5.1 metadata/health/equipment core — `entity_metadata.rs` adds a
   typed synched-data store keyed by entity id with dirty-only
   `ClientboundSetEntityData` encoding, `LivingEntity` raw damage with the
@@ -462,11 +472,22 @@ stacks only carry `item + count`.
   emitted as malformed bytes. Inventory merge/split/click/creative-slot and
   selected-item consumption respect full component equality and
   `max_stack_size`. 8 unit + 17 integration tests; stone/dirt packet bodies and
-  the captured Java join fixture stay green. Still open: item prototype
-  component defaults (`max_stack_size`, `max_damage`, food/tool defaults) are
-  not dumped, `attribute_modifiers`/`potion_contents`/`tool` network codecs,
-  component hashing for `HashedStack`, and a Java-captured component NBT/packet
-  fixture.
+  the captured Java join fixture stay green.
+  **Prototype defaults (2026-11-06):** `scripts/extract_item_prototypes.ps1`
+  boots the local 1.21.11 jar and dumps all 1,504 non-air item prototypes into
+  `assets/item_prototypes.json` (79,369 B, FNV-1a-64 `0xf179dfed29cdcdad`).
+  Each entry stores only non-default fields; `item_prototypes.rs` fills the
+  stack-64/no-durability fallback and exposes by-name/by-id lookups plus
+  `defaults_for`/`apply_defaults` patches. Tool entries carry tier, rule speed,
+  correct-for-drops tags, attack damage/speed, and durability; food entries
+  carry nutrition, saturation, and the `consumable` eat time. 3 unit + 13
+  integration tests cover diamond sword, netherite pickaxe, apple, potion,
+  ender pearl, elytra, block-item fallback, malformed entries, and a
+  byte-identical extractor `-Check`. Still open: `attribute_modifiers`/
+  `potion_contents`/`tool` network codecs, component hashing for `HashedStack`,
+  a Java-captured component NBT/packet fixture, and component patches for the
+  prototype fields `item_components` does not model yet (equippable,
+  enchantability, repairable, fire resistance).
 
 ### P1.5 Block behavior metadata table `[ ]` `L`
 

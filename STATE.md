@@ -259,11 +259,17 @@ Last updated: 2026-11-06
   state (health/food/inventory/position/messages) to the bridge, call the event
   entry points from the real break/place/interact handlers, and add armor/
   off-hand plus enchantment/PDC item persistence.
-- P1.4 has a working component-aware stack model. Next: dump per-item prototype
-  component defaults (`max_stack_size`, `max_damage`, food/tool/enchantment
-  defaults), port the `attribute_modifiers`, `potion_contents`, and `tool`
-  network codecs, implement `HashedStack` component hashing, and add a
-  Java-captured component NBT/packet fixture.
+- P1.4 now has both the component-aware stack model and the per-item prototype
+  defaults. `scripts/extract_item_prototypes.ps1` boots the local 1.21.11 jar
+  and writes `assets/item_prototypes.json` (1,504 non-air items, 79,369 bytes):
+  stack size, durability, tool rules/tier/attack damage, food/eat time,
+  equippable slot, enchantability, repairable set, fire resistance, and rarity.
+  `item_prototypes.rs` exposes lookups by name/id, `defaults_for` and
+  `apply_defaults` component patches, an explicit stack-64/no-durability
+  fallback, and strict malformed-entry errors. Next: port the
+  `attribute_modifiers`, `potion_contents`, and `tool` network codecs, implement
+  `HashedStack` component hashing, and add a Java-captured component NBT/packet
+  fixture.
 - P3.10 now has flags/neighbour/scheduled/random tick queues and the server
   tick hook. Next: P1.5 metadata for leaf distance/decay, crop growth, torch
   support, redstone, fluids, and piston behaviour; persist `ScheduledTick`s in
@@ -303,7 +309,7 @@ Last updated: 2026-11-06
 - [x] P0.6 Decide commit/backup policy
 - [ ] P1.1 Complete remaining registry dumps
 - [~] P1.3 Port tags (nine core registries done; cosmetic registries and ore-tag wiring remain)
-- [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip; prototype defaults, three network codecs, hashing, and a Java fixture remain)
+- [~] P1.4 Item component model (patch/NBT/network subset, inventory merge/split, playerdata round-trip, 1,504-item prototype catalog with tool/food/durability defaults; three network codecs, hashing, and a Java fixture remain)
 - [ ] P1.5 Block behavior metadata
 - [~] P1.7 Loot and recipe assets (1,324 tables + 1,470 recipes extracted,
   typed loaders/roll engine; drop wiring and crafting matcher remain)
@@ -342,6 +348,19 @@ Last updated: 2026-11-06
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-06: P1.4 item prototype catalog — `scripts/extract_item_prototypes.ps1`
+  boots the local Folia 1.21.11 jar through `Bootstrap.bootStrap`, reads every
+  non-air `BuiltInRegistries.ITEM` prototype component map, and writes
+  `assets/item_prototypes.json` (1,504 items, 79,369 B, FNV-1a-64
+  `0xf179dfed29cdcdad`). Only non-default fields are stored (`{}` = stack 64,
+  no durability), with a recomputable `counts` index. `item_prototypes.rs`
+  adds `ItemPrototype`, `ToolPrototype` (rules/tier/speed/attack damage/
+  correct-for-drops), `FoodPrototype` (nutrition/saturation/eat time),
+  `IngredientSet`, catalog lookups by name/id, `defaults_for`/`apply_defaults`
+  component patches for `item_components`, and strict malformed-entry errors.
+  3 unit + 13 integration tests cover diamond sword, netherite pickaxe, apple,
+  potions, ender pearls, elytra, block-item fallback, patch idempotence,
+  registry-id lookup, and a byte-identical extractor `-Check`.
 - 2026-11-06: P5.1 entity metadata/health/equipment core — `entity_metadata.rs`
   adds `EntityMetadata`/`MetadataStore` with vanilla dirty semantics,
   typed `MetadataValue` serializers (byte/int/long/float/string/component/

@@ -1345,9 +1345,16 @@ instantly on start-destroy and places on use-item-on.
   shaped (pattern/key), shapeless, smelting, blasting, smoking, campfire,
   stonecutting, smithing transform/trim, transmute, decorated pot, and the
   special crafting recipes. Ingredients are typed item/tag/alternatives and
-  match through `folia_core::tags`; results carry item components. Still open:
-  grid/container matching, recipe book/advancement unlocks, crafting menus,
-  brewing, and exact recipe-selection order.
+  match through `folia_core::tags`; results carry item components.
+  `src/crafting.rs` now implements 2x2/3x3 shaped matching (tight bounding-box
+  crop, mirror, tags/alternatives), shapeless multiset matching, transmute,
+  one-item consumption with component preservation, furnace/blast-furnace/
+  smoker/campfire state (fuel table, cook time, XP, extraction), stonecutting,
+  and smithing transforms. Lookup uses vanilla's last-sorted-recipe-id
+  priority. Unsupported special/decorated/pot/trim recipes fail explicitly.
+  Still open: menu packets and click handling, recipe book/advancement
+  unlocks, brewing, cached-last-recipe behavior, campfire multi-slot/lit state,
+  and Java recipe/furnace fixtures.
 
 ### P4.9 Health, damage, hunger, XP, and effects `[~]` `L`
 

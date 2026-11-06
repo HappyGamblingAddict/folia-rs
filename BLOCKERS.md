@@ -411,3 +411,28 @@ These are expected gaps, not reasons to stop:
 - Workaround: `LootProvider` is the intended hook for `crate::loot`; the
   fallback table covers common survival blocks. Do not claim loot-table,
   Fortune/Silk Touch, or item-entity parity until those land.
+
+## 2026-11-06 - P4.8 crafting is a behaviour model, not menu/packet parity
+
+- Scope: `crafting.rs` implements shaped/shapeless/transmute matching, one-item
+  consumption with component preservation, furnace/blast-furnace/smoker/
+  campfire state, the common-fuel burn table, exact recipe XP accumulation,
+  stonecutting, and smithing transforms. 19 `tests/crafting.rs` + 5 lib tests.
+- Not ported (needs menus, registries, or richer state):
+  - Special crafting recipes (`crafting_special_*`), decorated pots, smithing
+    trims, and opaque recipe types have no transform. Automatic lookup skips
+    them; addressing one by id returns `CraftingError::UnsupportedRecipe`.
+  - No crafting/furnace menu packets, click handling, result-slot preview,
+    recipe book/advancement unlocks, or vanilla `lastRecipe` cache fast path.
+  - Brewing is not modeled.
+  - Campfires are a single input/result pair with an assumed-lit state; vanilla
+    has four slots and a block `lit` property. Furnaces do not persist state to
+    block-entity NBT yet, and only the lava-bucket fuel remainder is modeled.
+  - XP is accumulated exactly per completed item instead of vanilla's
+    per-recipe counts plus extraction rounding.
+- What is needed: menu/container wiring in `join.rs`, block-entity storage, and
+  a Java recipe/furnace fixture to compare selected recipe ids, output stacks,
+  fuel times, and XP.
+- Workaround / next task: Keep these as explicit gaps. `CraftOutput::deposit`
+  already uses `inventory::add_stack`, so menu code can consume the model
+  without changing the matcher.

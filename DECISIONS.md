@@ -1820,3 +1820,45 @@ Format:
   break/place/interact still bypass the event bus until a follow-up changes
   `join.rs`. `BlockBreakEvent`, `BlockPlaceEvent`, and `PlayerInteractEvent` are
   covered; the rest of P9.2 remains open.
+
+## 2026-11-06 - Crafting lookup crops the grid and prefers the last sorted recipe id
+
+- Context: 1.21.11 `CraftingInput.ofPositioned` trims empty border rows/columns
+  before `ShapedRecipePattern.matches` runs, and `RecipeManager.getRecipeFor`
+  takes `list.getLast()` from a resource-location sorted stream. Older versions
+  scanned offsets directly and returned the first match.
+- Decision: `CraftingGrid` exposes its tight bounding box; shaped matching crops
+  the input logically, compares the normalized 1-3 wide/tall pattern, then tries
+  the mirror before the plain pattern. Every lookup (`CraftingGrid::craft`,
+  furnace `find_recipe`, stonecutting, smithing) scans `RecipeCatalog` in
+  `BTreeMap` order and keeps the last match. Shapeless matching uses one unit
+  per occupied slot (not stack count) and solves the ingredient/item bipartite
+  matching like `StackedContents.tryPick`, so duplicate ingredients need
+  duplicate items and overlapping tags can fall back to a later assignment.
+- Why: This reproduces vanilla's offset/translation behavior and its recipe
+  conflict priority without maintaining a separate offset loop, and it matches
+  the shipped sorted catalog layout.
+- Consequences: A future recipe-reload path must preserve resource-location
+  ordering, and a menu's cached `lastRecipe` fast path is still unported. A
+  malformed shaped pattern is an explicit `InvalidPattern` error instead of a
+  silent non-match.
+
+## 2026-11-06 - Furnace XP is accumulated exactly; campfire is a single-slot model
+
+- Context: `AbstractFurnaceBlockEntity` stores per-recipe counters and converts
+  them to XP when a player extracts the result (`awardUsedRecipes` uses vanilla's
+  experience rounding). Campfires have four independent cooking slots and a lit
+  block state, while the current block-entity layer has no slots or campfire
+  state yet.
+- Decision: `FurnaceState` accumulates the recipe `experience` exactly as each
+  item completes and `extract` returns that float with the output. Furnace,
+  blast furnace, and smoker share one tick model with the vanilla fuel table and
+  recipe cook times; `FurnaceKind::Campfire` uses the same model with a single
+  input/result pair, no fuel, and the 600-tick campfire recipes.
+- Why: Exact accumulation is deterministic and keeps the future menu packet
+  fields (`litTimeRemaining`, `litTotalTime`, `cookingTimer`,
+  `cookingTotalTime`) directly testable without a player/RNG dependency.
+- Consequences: XP differs from vanilla only in the final random rounding at
+  extraction, and campfire slot count/lit state must be widened when the
+  campfire block entity lands. Furnace fuel crafting remainders are only handled
+  for lava buckets (to empty buckets).

@@ -1481,3 +1481,104 @@ Format:
 - Consequences: The extra air iteration disappears and the extension boundary
   tests use Java's height. The fixture's exact-name count moves by one block
   (92.02% -> 92.01%, 5654 -> 5653); block-class stays 98.71%.
+## 2026-11-06 - Structure-set JSON is embedded until a structure-set asset exists
+
+- Context: The structure start/piece/set slice is limited to
+  `worldgen/structure/{mod,start,piece,set}.rs`, one new integration test, and
+  the five status documents. The shipped 1.21.11 `worldgen/structure_set`
+  documents live only in the out-of-tree decompiled data pack, and the project
+  has no structure-set asset under `crates/folia-core/assets`.
+- Decision: Embed the 20 shipped documents as JSON string copies (insignificant
+  whitespace normalized) in `set.rs` and parse them through the same
+  `StructureSetRegistry::from_json_documents` entry point a future datapack or
+  asset loader will use. Canonicalize bare file names to `minecraft:<name>` so
+  exclusion zones (`minecraft:villages`) resolve against registry entries.
+- Why: This keeps the slice testable and preserves the exact shipped data
+  without adding an unplanned asset file. The JSON is source data, not game
+  logic.
+- Consequences: A later asset-extraction task should move the same documents
+  under `assets/` and have tests pin their bytes/checksums. The parser and
+  registry do not change when that happens.
+
+## 2026-11-06 - Structure-set selection is placement-only for now
+
+- Context: `ChunkGenerator.createStructures` filters structure sets by
+  dimension and by whether the set's structures have valid biomes before it
+  tests placement. This slice exposes `structure_at_chunk(chunk_x, chunk_z,
+  seed)` without a dimension/biome source, because attaching starts to chunk
+  generation is explicitly out of scope.
+- Decision: `StructureSetRegistry::structure_at_chunk` evaluates every shipped
+  set in resource-name order and returns the first placement match and weighted
+  selection. Concentric-ring strongholds parse but are skipped by the registry
+  method and report `PlacementError::RequiresBiomeSource` when queried directly.
+  The returned `SelectedStructure` names the set and structure; callers that
+  own a generator must still apply dimension and biome filtering.
+- Why: The placement math, exclusion zones, and weighted draw are independent
+  of biomes and can be pinned exactly now. Adding a fake biome predicate would
+  hide the remaining gap.
+- Consequences: `structure_at_chunk` can return a nether/end set for an
+  overworld chunk in this slice. Tests call per-set placement when they need
+  that distinction. The next generator slice must filter by dimension and
+  structure biomes before generating a start.
+
+## 2026-11-06 - Weighted selection uses the first vanilla draw
+
+- Context: `ChunkGenerator.createStructures` removes a failed entry from a
+  copy of the weighted list and draws again until one structure generates or
+  the list is empty. This slice does not generate starts while selecting.
+- Decision: `StructureSet::select_structure` performs exactly one
+  `setLargeFeatureSeed(seed, chunkX, chunkZ)` + `nextInt(totalWeight)` draw and
+  returns the selected entry. A single-entry set consumes no random values.
+- Why: The first draw is the only one that can succeed when biome validation is
+  absent; adding retries without knowing which start is valid would produce a
+  different answer than Java for no testable benefit.
+- Consequences: When start generation and biome checks are wired, the retry
+  loop belongs with `tryGenerateStructure`, not in `select_structure`.
+
+## 2026-11-06 - Jigsaw definitions parse but fail loudly
+
+- Context: Villages, ancient cities, trial chambers, bastions, and many other
+  shipped structures use `minecraft:jigsaw`. Template pools, junction
+  expansion, processors, and terrain adaptation are not ported.
+- Decision: Parse jigsaw definitions (including `start_pool` and `size`) and
+  return `StructureError::UnsupportedJigsaw` from `generate_start`. The error
+  names the structure and start pool and states that expansion is not
+  implemented. Never return an empty start for a jigsaw structure.
+- Why: An empty start is indistinguishable from a valid structure that happened
+  not to generate, which would silently break structure parity.
+- Consequences: `structure_at_chunk` can still select a jigsaw structure at a
+  placement chunk; generation is the loud failure point. Jigsaw support adds a
+  new `StructureKind` implementation rather than changing the error path.
+
+## 2026-11-06 - Structure data markers are returned, not materialized
+
+- Context: `TemplateStructurePiece.postProcess` turns structure-block
+  `mode: DATA` markers into chests/loot tables, and `place_into` in the
+  template slice already returns block-entity NBT rather than creating block
+  entities. Loot tables are not ported.
+- Decision: Template pieces skip `minecraft:structure_block` entries
+  (`BlockIgnoreProcessor.STRUCTURE_BLOCK`) and return every marker in
+  `PiecePlacement::data_markers` with its transformed position and NBT. The
+  igloo chest is therefore reported, not given a loot table.
+- Why: Returning the marker preserves the observable position/name without
+  inventing a block entity or loot seed the rest of the server cannot persist.
+- Consequences: The igloo test pins the marker at `(101, 66, 206)` for a fixed
+  origin. A later block-entity/loot slice must consume these markers and place
+  the chest/loot table exactly like `IglooPieces.handleDataMarker`.
+
+## 2026-11-06 - Igloo templates are supplied through a provider
+
+- Context: The slice may not add structure NBT assets. The igloo is the chosen
+  non-jigsaw template structure end to end, and its `top`/`middle`/`bottom`
+  templates live in the decompiled data tree.
+- Decision: Define `TemplateProvider` and pass it through
+  `StructureGenerationContext`. The igloo generator resolves the three
+  template ids eagerly and fails with `UnknownTemplate` rather than writing a
+  partial start. Tests embed byte-for-byte gzip copies of the three shipped
+  templates.
+- Why: The provider is the seam the asset/template-manager slice needs anyway,
+  and eager resolution prevents a missing template from producing a silent
+  empty structure.
+- Consequences: The production generator has no template manager yet; the
+  caller must supply one. Template loading is already tested independently in
+  `tests/structure_template.rs`.

@@ -9,12 +9,10 @@ Last updated: 2026-11-06
 ## Current status
 
 - Current commit (informational only): see `git log` (entity metadata,
-  block-behaviour, P2.4/P2.5 gaps, and P2.12 surface merged).
+  block-behaviour, feature gaps, surface, and structure foundation merged).
 - Working tree: clean; these slices are merged.
-- Tests: **426 passing** on the last full gate; focused entity-metadata
-  (6 lib + 12 integration), block-behaviour (4 integration), feature-gap
-  (74 lib + 18 vegetation), and surface (1 lib + 3 integration + 1 config)
-  suites are green. Parity: 98.71% block-class / 92.01% exact-name.
+- Tests: **426 passing** on the last full gate; structure adds 13 focused
+  integration tests. Parity: 98.71% block-class / 91.98% exact-name.
 - P1.4 focused gate: 25 item-component tests passing (8 unit + 17
   integration), plus inventory, player, and the captured-world join test.
 - Formatting: `cargo fmt --check` clean.
@@ -202,6 +200,28 @@ Last updated: 2026-11-06
   pools, jigsaw expansion, random palette selection, and exact per-block state
   derivatives (stairs shape, door hinge, …) are still unported.
 
+- The structure start/piece/set foundation is now in
+  `worldgen/structure/{set,piece,start}.rs`. `set.rs` parses the 20 shipped
+  `worldgen/structure_set` JSON documents and ports
+  `RandomSpreadStructurePlacement` (spacing/separation/salt, linear and
+  triangular spread, all four legacy frequency reducers, exclusion zones),
+  `ChunkGenerator.createStructures` weighted selection, and
+  `StructureSetRegistry::structure_at_chunk`. `piece.rs` ports `BoundingBox`,
+  `StructurePiece`, the template piece, Java's rotation pivot/mirror bounds,
+  chunk-box clipping, block-ignore filtering, and data-marker reporting.
+  `start.rs` ports `StructureStart` (piece bounds, terrain-adaptation
+  inflation, reference limit 1, deterministic generation context), the igloo
+  structure end to end (`IglooStructure` + `IglooPieces`), and explicit
+  `UnsupportedJigsaw` errors. A 13-test `tests/structure_starts.rs` slice pins
+  the shipped set counts, fixed-seed placement chunk sets for linear,
+  triangular, and all legacy reducers, weighted picks, igloo start bounds for
+  two rotations, fixed-origin template placement, an igloo placement at a
+  fixed surface height, and the jigsaw failure. Remaining: biome/dimension
+  filtering for registry-level selection, processor lists, template pools,
+  jigsaw expansion, random multi-palette selection, structure NBT
+  serialization, entity spawning, loot-table/chest block entities, and
+  waterlogging/shape updates.
+
 - Vegetation is partial: supported trees now place layered spruce/pine, dark
   oak/acacia/fancy/cherry foliage, mega-spruce/pine crown foliage, leaf litter,
   beehives with stored bee occupants, hanging/trunk vines, cocoa, altered
@@ -284,6 +304,12 @@ Last updated: 2026-11-06
   generator and add a two-registry selector resolver.
 - P2.8 structure starts/pieces are in progress; template loading and
   placement are already tested.
+- The P2.5 aquatic/vine/mushroom features are in place. Next: wire the tree
+  `pale_moss` decorator, port `simple_random_selector` for the dripleaf
+  pools, add `simple_block.schedule_tick`, and add beehive occupants.
+- P2.8 structure starts/pieces/sets are in place for the igloo and shipped
+  random-spread placement. Next: biome/dimension filtering in structure-set
+  selection, processor lists, template pools, and jigsaw expansion.
 
 ## Next queue
 
@@ -307,6 +333,12 @@ Last updated: 2026-11-06
   dirty-only packets, health/damage/death, attributes, eight equipment slots;
   remaining serializers, session/entity wiring, armor calculation, and a Java
   fixture open)
+- [~] P2.4 Tree features (oak/birch/jungle/swamp/spruce/pine/dark oak/acacia/fancy/cherry/mega spruce-pine/mega jungle/jungle bush/azalea/mangrove/fallen + litter/beehive/vine/cocoa/alter-ground/attached-to-leaves/attached-to-logs/creaking-heart done; pale moss decorator, beehive occupants, and a Java tree fixture remain)
+- [~] P2.5 Vegetation and ground cover (`random_patch`/`flower`, `simple_block`, `block_pile`, `block_column`, `multiface_growth`, `vegetation_patch`, `waterlogged_vegetation_patch`, seagrass, kelp, sea pickle, coral, bamboo, underwater magma, vines, twisting/weeping vines, huge mushrooms/fungi, glowstone, forest rock, fill layer, nether forest vegetation, and the mushroom-island boolean selector done; `schedule_tick`, `simple_random_selector`, kelp/nether placement modifiers, pale moss, and structures remain)
+- [~] P2.8 Structure templates and starts (template load/placement, random-spread
+  placement, sets, weighted selection, starts, pieces, bounds, references, and
+  igloo end to end done; biome/dimension filtering, processors, pools, jigsaw,
+  structure NBT, and entity/block-entity creation remain)
 - [x] P3.5 Real light storage
 - [~] P3.6 Sky-light engine (single-chunk + one-block neighbour border)
 - [~] P3.7 Block-light engine (generated block-behaviour emission/opacity)
@@ -344,6 +376,14 @@ Last updated: 2026-11-06
   glass/water sky attenuation, glass-shaft overhang, ice/slime/blue-ice friction
   plus water/plant passability) and the existing light/physics/packet suites
   stay green; the captured `world_chunk_packet` body is unchanged.
+- 2026-11-06: Structure start/piece/set foundation — `set.rs` parses all 20
+  shipped structure-set documents (34 weighted entries) and implements
+  random-spread placement, all four frequency reducers, exclusion zones,
+  weighted selection, and `structure_at_chunk`; `piece.rs` adds `BoundingBox`,
+  `StructurePiece`, template pieces, chunk-box clipping, block filters, and
+  data markers; `start.rs` adds deterministic starts, references, terrain
+  inflation, the igloo structure, and explicit jigsaw failures. 13 focused
+  integration tests. Full workspace gate is the coordinator's merge run.
 - 2026-11-06: Core item data components — `item_components.rs` replaces the
   `{item, count}` stack with an insertion-ordered component patch, typed values
   for names/lore/damage/enchantments/attributes/container/potion/food/tool/

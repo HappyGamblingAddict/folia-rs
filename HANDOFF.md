@@ -37,19 +37,21 @@ are still missing.
 The working tree is clean and work is committed in coherent slices on `main`.
 Do not branch, reset, or push unless the user asks. The latest local commits
 cover the baseline, tag registries, dynamic registry tables, real lighting,
-player physics, ground-cover vegetation, placement modifiers, and structure
-template loading.
+player physics, ground-cover vegetation, placement modifiers, structure
+template loading, and the structure start/piece/set foundation.
 
 
 The tree contains the biome/RTree/chunk-biome work, the surface-rules port,
 carvers, generation speedups, the optional-JVM plugin host, the full 1.21.11
 registry/tag tables, real light storage, server-side player physics,
-ground-cover vegetation features, and the structure-template foundation.
+ground-cover vegetation features, and the structure-template/start/set
+foundation.
 
 Verified state (2026-11-06, merged workspace):
 
 ```text
-426 tests (last full workspace gate)
+426 tests (last full workspace gate); this slice adds 13 focused
+structure tests
 0 failed
 + 6 lib + 12 integration focused tests in the entity metadata slice
 cargo fmt --check: clean
@@ -417,14 +419,22 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
 - Ore and scattered-ore features are ported but not wired into generation;
   `OreVeinifier` is not ported.
 - The P2.5 ground-cover types are ported, but most aquatic plants (seagrass,
-  kelp, sea pickle, coral), vines, mushrooms/huge fungi, bamboo, structures, and
-  special features are not. Selector branches that reference *placed* features
-  (`pale_garden_vegetation`, `warm_ocean_vegetation`) still need a two-registry
+- The P2.5 ground-cover and aquatic/vine/mushroom types are ported;
+  remaining aquatic plants, structures, and special features are still
+  missing. Selector branches that reference *placed* features
+  (`pale_garden_vegetation`, `warm_ocean_vegetation`) need a two-registry
   resolver.
-- `simple_block.schedule_tick: true` and `simple_random_selector` now execute;
-  the generator does not yet persist the ticks/block entities produced in
-  `WorldGenRegion`, so pale forest flowers tick only once the caller drains the
-  region. Vegetation noise providers use Xoroshiro-backed `NormalNoise`
+- Structure template loading, all 20 shipped structure sets, random-spread
+  placement, frequency reducers, exclusion zones, starts, pieces, bounds,
+  references, and igloo generation are ported. Biome/dimension filtering,
+  processor lists, template pools, jigsaw expansion, concentric rings,
+  structure NBT, entity spawning, loot-table block entities, and generator
+  wiring remain; jigsaw structures fail loudly.
+- `simple_block.schedule_tick: true` and `simple_random_selector` now
+  execute; the generator does not yet persist the ticks/block entities
+  produced in `WorldGenRegion`. Vegetation noise providers still use the
+  Xoroshiro-backed `NormalNoise` path rather than Java's legacy-seeded
+  stream (see `DECISIONS.md`).
   instead of Java's Legacy-seeded stream (see `DECISIONS.md`).
 - Surface rules now use `BiomeManager`'s fuzzy zoomer for both the
   pre-extension biome and per-block `isBiome`/temperature checks when the

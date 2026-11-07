@@ -2778,3 +2778,12 @@ Format:
   changes queued by a ticker in the same tick and makes the order deterministic.
 - The ticker uses `RecipeCatalog::global()` rather than allocating a catalog per
   world, and it only sees block entities that have been loaded into storage.
+
+## 2026-11-07 - Hopper transfer is a pure slot core
+
+- `move_one_item` takes source and target slot slices, so container automation can
+  be tested without live world access. It merges into compatible stacks first,
+  then uses an empty slot, moves exactly one item, and respects the item
+  prototype's `max_stack_size`.
+- `HopperBlockEntity` persists its five slots and `TransferCooldown`; world-level
+  pull/push wiring (block above/below container lookup) remains a later slice.

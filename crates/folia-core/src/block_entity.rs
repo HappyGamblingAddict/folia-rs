@@ -73,6 +73,7 @@ pub type BlockEntityMap = BTreeMap<BlockEntityPos, BlockEntity>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockEntity {
     Chest(ChestBlockEntity),
+    Hopper(HopperBlockEntity),
     Furnace(FurnaceBlockEntity),
     /// Boxed because the four-line front/back text arrays make this variant
     /// much larger than the others.
@@ -87,6 +88,7 @@ impl BlockEntity {
     pub fn id(&self) -> &str {
         match self {
             Self::Chest(chest) => &chest.block_id,
+            Self::Hopper(hopper) => &hopper.block_id,
             Self::Furnace(furnace) => furnace.block_id(),
             Self::Sign(sign) => &sign.block_id,
             Self::Spawner(spawner) => &spawner.block_id,
@@ -97,6 +99,7 @@ impl BlockEntity {
     pub fn pos(&self) -> BlockEntityPos {
         match self {
             Self::Chest(chest) => chest.pos,
+            Self::Hopper(hopper) => hopper.pos,
             Self::Furnace(furnace) => furnace.pos,
             Self::Sign(sign) => sign.pos,
             Self::Spawner(spawner) => spawner.pos,
@@ -121,6 +124,7 @@ impl BlockEntity {
             "minecraft:chest" | "minecraft:trapped_chest" => {
                 Self::Chest(ChestBlockEntity::from_fields(pos, id, extras)?)
             }
+            "minecraft:hopper" => Self::Hopper(HopperBlockEntity::from_fields(pos, extras)?),
             "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
                 Self::Furnace(FurnaceBlockEntity::from_fields(pos, id, extras)?)
             }
@@ -140,6 +144,7 @@ impl BlockEntity {
     pub fn to_nbt(&self) -> io::Result<Tag> {
         match self {
             Self::Chest(chest) => chest.to_nbt(),
+            Self::Hopper(hopper) => hopper.to_nbt(),
             Self::Furnace(furnace) => furnace.to_nbt(),
             Self::Sign(sign) => sign.to_nbt(),
             Self::Spawner(spawner) => spawner.to_nbt(),
@@ -236,6 +241,120 @@ impl ChestBlockEntity {
         }
         Ok(Tag::Compound(fields))
     }
+}
+
+/// Number of slots in a hopper (`HopperBlockEntity.CONTAINER_SIZE`).
+pub const HOPPER_SLOTS: usize = 5;
+
+/// A hopper with its five slots and transfer cooldown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HopperBlockEntity {
+    pub pos: BlockEntityPos,
+    pub block_id: String,
+    pub items: Vec<ItemStack>,
+    pub transfer_cooldown: i32,
+    extras: Vec<(String, Tag)>,
+}
+
+impl HopperBlockEntity {
+    pub fn new(pos: BlockEntityPos) -> Self {
+        Self {
+            pos,
+            block_id: "minecraft:hopper".to_owned(),
+            items: vec![ItemStack::empty(); HOPPER_SLOTS],
+            transfer_cooldown: 0,
+            extras: Vec::new(),
+        }
+    }
+
+    pub fn slot(&self, index: usize) -> Option<&ItemStack> {
+        self.items.get(index)
+    }
+
+    pub fn set_slot(&mut self, index: usize, stack: ItemStack) -> bool {
+        let Some(slot) = self.items.get_mut(index) else {
+            return false;
+        };
+        *slot = stack;
+        true
+    }
+
+    /// Advances the cooldown one tick and returns whether a transfer is ready.
+    pub fn tick(&mut self) -> bool {
+        if self.transfer_cooldown > 0 {
+            self.transfer_cooldown -= 1;
+        }
+        self.transfer_cooldown == 0
+    }
+
+    fn from_fields(pos: BlockEntityPos, extras: Vec<(String, Tag)>) -> io::Result<Self> {
+        Ok(Self {
+            pos,
+            block_id: "minecraft:hopper".to_owned(),
+            items: decode_items(&extras, HOPPER_SLOTS)?,
+            transfer_cooldown: optional_int(&extras, "TransferCooldown", 0)?,
+            extras,
+        })
+    }
+
+    fn to_nbt(&self) -> io::Result<Tag> {
+        let mut fields = self.extras.clone();
+        write_identity(&mut fields, &self.block_id, self.pos);
+        set_field(&mut fields, "Items", encode_items(&self.items));
+        if self.transfer_cooldown == 0 {
+            remove_field(&mut fields, "TransferCooldown");
+        } else {
+            set_field(
+                &mut fields,
+                "TransferCooldown",
+                Tag::Int(self.transfer_cooldown),
+            );
+        }
+        Ok(Tag::Compound(fields))
+    }
+}
+
+/// Moves exactly one item from `source` into `target`, merging into a
+/// compatible stack first and then using an empty slot. Returns whether an
+/// item moved. This is the slot-transfer core of `HopperBlockEntity`.
+pub fn move_one_item(source: &mut [ItemStack], target: &mut [ItemStack]) -> bool {
+    for source_stack in source.iter_mut() {
+        if source_stack.is_empty() {
+            continue;
+        }
+        let max_stack = crate::item_prototypes::prototype_or_default(&source_stack.item)
+            .max_stack_size
+            .max(1);
+        let item = source_stack.item.clone();
+        let components = source_stack.components.clone();
+        let mut moved = false;
+        for target_stack in target.iter_mut() {
+            if target_stack.item == item
+                && target_stack.components == components
+                && target_stack.count < max_stack
+            {
+                target_stack.count += 1;
+                moved = true;
+                break;
+            }
+        }
+        if !moved && let Some(empty) = target.iter_mut().find(|slot| slot.is_empty()) {
+            *empty = ItemStack {
+                item: item.clone(),
+                count: 1,
+                components: components.clone(),
+            };
+            moved = true;
+        }
+        if moved {
+            source_stack.count -= 1;
+            if source_stack.count <= 0 {
+                *source_stack = ItemStack::empty();
+            }
+            return true;
+        }
+    }
+    false
 }
 
 /// A furnace, blast furnace, or smoker.
@@ -780,6 +899,9 @@ impl BlockEntityTicker for SimpleBlockEntityTicker<'_> {
                 }
             }
             BlockEntity::Spawner(spawner) => spawner.tick(),
+            BlockEntity::Hopper(hopper) => {
+                hopper.tick();
+            }
             BlockEntity::Chest(_) | BlockEntity::Sign(_) | BlockEntity::Unknown(_) => {}
         }
     }

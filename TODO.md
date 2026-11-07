@@ -52,6 +52,10 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P6 hopper container slice - `block_entity.rs` adds persisted
+  five-slot hoppers (`Items`, `TransferCooldown`), slot-transfer merging/empty-slot
+  semantics with component preservation and prototype stack limits, and ticker
+  cooldown advancement. 5 `tests/hoppers.rs` tests.
 - 2026-11-07: P6 live block-entity tickers - `tick_world` now drives the
   persisted furnace/spawner ticker with the shipped recipe catalog; furnace
   cooking/fuel survives the world tick loop. 2 `tests/block_tickers.rs` tests.

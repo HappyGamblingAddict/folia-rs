@@ -909,3 +909,10 @@ These are expected gaps, not reasons to stop:
   block state updates, and spawner entity creation are not wired.
 - Block entities only tick once their chunk is loaded; no chunk-ticket-driven
   ticking exists.
+
+## 2026-11-07 - Hopper wiring boundaries
+
+- Hopper pull/push is not connected to the block above/below; no hopper minecart,
+  inventory menu, or block-entity NBT tick persistence on a live tick.
+- Hoppers do not lock, do not skip empty containers with a cooldown, and do not
+  emit container-update packets.

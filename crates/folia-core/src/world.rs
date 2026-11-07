@@ -1,9 +1,10 @@
 use crate::anvil::{Compression, RegionFile};
 use crate::block_entity::{
-    BlockEntity, BlockEntityMap, BlockEntityPos, BlockEntityTicker, decode_block_entities,
-    store_block_entities,
+    BlockEntity, BlockEntityMap, BlockEntityPos, BlockEntityTicker, HopperBlockEntity,
+    decode_block_entities, store_block_entities,
 };
 use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
+use crate::item_components::ItemStack;
 use crate::nbt::Tag;
 use crate::tick::TickState;
 use std::collections::{HashMap, VecDeque};
@@ -292,6 +293,104 @@ impl WorldStorage {
                 ticker.tick(entity);
             }
         }
+    }
+
+    /// The item slots of a chest, hopper, or furnace at `position`, if one is
+    /// loaded. Other block-entity types return `None`.
+    pub fn container_items(
+        &mut self,
+        position: BlockEntityPos,
+    ) -> io::Result<Option<Vec<ItemStack>>> {
+        let Some(entity) = self.block_entity(position)?.cloned() else {
+            return Ok(None);
+        };
+        Ok(match entity {
+            BlockEntity::Chest(chest) => Some(chest.items),
+            BlockEntity::Hopper(hopper) => Some(hopper.items),
+            BlockEntity::Furnace(furnace) => Some(furnace.items),
+            _ => None,
+        })
+    }
+
+    /// Replaces item slots on a supported container. Returns `false` when the
+    /// block entity is absent or its slot count differs.
+    pub fn set_container_items(
+        &mut self,
+        position: BlockEntityPos,
+        items: Vec<ItemStack>,
+    ) -> io::Result<bool> {
+        let Some(mut entity) = self.remove_block_entity(position)? else {
+            return Ok(false);
+        };
+        let applied = match &mut entity {
+            BlockEntity::Chest(chest) if chest.items.len() == items.len() => {
+                chest.items = items;
+                true
+            }
+            BlockEntity::Hopper(hopper) if hopper.items.len() == items.len() => {
+                hopper.items = items;
+                true
+            }
+            BlockEntity::Furnace(furnace) if furnace.items.len() == items.len() => {
+                furnace.items = items;
+                true
+            }
+            _ => false,
+        };
+        self.insert_block_entity(entity)?;
+        Ok(applied)
+    }
+
+    /// Runs one hopper transfer pass: each ready hopper pulls one item from the
+    /// container above it, then pushes one item into the container below it.
+    /// Transfers use the 8-tick vanilla cooldown.
+    pub fn tick_hoppers(&mut self) -> io::Result<usize> {
+        let positions: Vec<BlockEntityPos> = self
+            .block_entities
+            .values()
+            .flat_map(|entities| entities.keys().copied())
+            .collect();
+        let mut moved = 0;
+        for position in positions {
+            let Some(BlockEntity::Hopper(hopper)) = self.block_entity(position)?.cloned() else {
+                continue;
+            };
+            if hopper.transfer_cooldown > 0 {
+                continue;
+            }
+            let mut hopper_items = hopper.items.clone();
+            let mut changed = false;
+
+            let above = BlockEntityPos::new(position.x, position.y + 1, position.z);
+            if let Some(mut source) = self.container_items(above)?
+                && crate::block_entity::move_one_item(&mut source, &mut hopper_items)
+            {
+                self.set_container_items(above, source)?;
+                changed = true;
+            }
+
+            let below = BlockEntityPos::new(position.x, position.y - 1, position.z);
+            if let Some(mut target) = self.container_items(below)?
+                && crate::block_entity::move_one_item(&mut hopper_items, &mut target)
+            {
+                self.set_container_items(below, target)?;
+                changed = true;
+            }
+
+            if changed {
+                if let BlockEntity::Hopper(stored) = self
+                    .remove_block_entity(position)?
+                    .unwrap_or(BlockEntity::Hopper(HopperBlockEntity::new(position)))
+                {
+                    let mut stored = stored;
+                    stored.items = hopper_items;
+                    stored.transfer_cooldown = 8;
+                    self.insert_block_entity(BlockEntity::Hopper(stored))?;
+                }
+                moved += 1;
+            }
+        }
+        Ok(moved)
     }
 
     fn ensure_block_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {

@@ -1101,3 +1101,10 @@ These are expected gaps, not reasons to stop:
 - Slot placement is first-fit, not vanilla's random empty-slot order.
 - Loot is not triggered by chest opening/menu code, and `entity_properties`/
   `location_check` still fail closed; no Java chest-loot fixture yet.
+
+## 2026-11-07 - Player hunger boundaries
+
+- No live food tick call yet; sprinting, jumping, mining, and regeneration
+  exhaustion sources are not connected.
+- Difficulty-based starvation damage, peaceful regeneration, hunger effect, and
+  food item use remain open.

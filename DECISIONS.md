@@ -3014,3 +3014,11 @@ Format:
   approximation until a Java fixture pins the placement.
 - The loot id and seed are cleared after a successful fill, so opening the chest
   again does not reroll it.
+
+## 2026-11-07 - Hunger ticks are a model, not yet wired to the session loop
+
+- `tick_food` uses the vanilla 10-tick saturated regen / 80-tick unsaturated
+  regen / 80-tick starvation cadence and burns exhaustion in 4-point units.
+- It is not called by `join.rs` yet; eating item use still needs the bridge/
+  session wiring. Sprint/jump exhaustion sources and difficulty scaling remain
+  open.

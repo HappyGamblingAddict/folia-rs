@@ -1351,6 +1351,63 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Result of one hunger tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoodTick {
+    Nothing,
+    Heal,
+    Starve,
+}
+
+impl PlayerSession {
+    /// Adds exhaustion, then burns saturation and food in whole 4-point units.
+    pub fn add_exhaustion(&mut self, amount: f32) {
+        self.food_exhaustion += amount.max(0.0);
+        self.burn_exhaustion();
+    }
+
+    fn burn_exhaustion(&mut self) {
+        while self.food_exhaustion >= 4.0 {
+            self.food_exhaustion -= 4.0;
+            if self.food_saturation > 0.0 {
+                self.food_saturation = (self.food_saturation - 1.0).max(0.0);
+            } else {
+                self.food_level = (self.food_level - 1).max(0);
+            }
+        }
+    }
+
+    /// `FoodData.eat`: nutrition raises food and saturation, capped by the new
+    /// food level.
+    pub fn eat(&mut self, nutrition: i32, saturation_modifier: f32) {
+        self.food_level = (self.food_level + nutrition.max(0)).clamp(0, 20);
+        self.food_saturation = (self.food_saturation
+            + nutrition as f32 * saturation_modifier.max(0.0) * 2.0)
+            .min(self.food_level as f32);
+    }
+
+    /// Vanilla natural regeneration and starvation subset. `tick` is the game
+    /// tick counter; player food ticks at 10/80-tick intervals.
+    pub fn tick_food(&mut self, tick: u64) -> FoodTick {
+        if self.food_level >= 18 {
+            if self.food_saturation > 0.0 && tick.is_multiple_of(10) {
+                self.health = (self.health + 1.0).min(20.0);
+                self.add_exhaustion(6.0);
+                return FoodTick::Heal;
+            }
+            if self.food_saturation <= 0.0 && tick.is_multiple_of(80) {
+                self.health = (self.health + 1.0).min(20.0);
+                self.add_exhaustion(6.0);
+                return FoodTick::Heal;
+            }
+        } else if self.food_level == 0 && tick.is_multiple_of(80) {
+            self.health = (self.health - 1.0).max(0.0);
+            return FoodTick::Starve;
+        }
+        FoodTick::Nothing
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

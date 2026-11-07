@@ -82,6 +82,8 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: player hunger — saturation-first exhaustion, eating caps,
+  natural regeneration and starvation; 5 integration tests.
 - 2026-11-07: chest loot roll — shipped tables fill chests once and clear the
   table id; 5 integration tests.
 - 2026-11-07: crop growth — wheat/carrots/potatoes/beetroots age with a

@@ -1100,7 +1100,7 @@ fn shuffled_jigsaw_blocks(
         }
     };
     shuffle(&mut jigsaws, random);
-    jigsaws.sort_by(|left, right| right.selection_priority.cmp(&left.selection_priority));
+    jigsaws.sort_by_key(|left| std::cmp::Reverse(left.selection_priority));
     Ok(jigsaws)
 }
 

@@ -1555,10 +1555,7 @@ pub(crate) fn on_block_change(
 pub(crate) fn process_pending_updates(storage: &mut WorldStorage) -> io::Result<Vec<BlockChange>> {
     let mut changes = Vec::new();
     let mut processed = 0usize;
-    loop {
-        let Some(update) = storage.tick_state_mut().neighbors.pop() else {
-            break;
-        };
+    while let Some(update) = storage.tick_state_mut().neighbors.pop() {
         if processed >= MAX_CHAINED_NEIGHBOR_UPDATES {
             storage.tick_state_mut().overflowed = true;
             eprintln!(

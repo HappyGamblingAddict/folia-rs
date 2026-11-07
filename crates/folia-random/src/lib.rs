@@ -1,3 +1,5 @@
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 //! Folia-RS random number sources.
 //!
 //! Ports of the random sources used by Minecraft/Folia:

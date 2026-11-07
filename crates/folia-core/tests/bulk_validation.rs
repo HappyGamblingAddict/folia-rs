@@ -1323,10 +1323,8 @@ fn runs_on_tick(delay: u32, period: u32, tick: u32) -> bool {
 fn expected_runs(delay: u32, period: u32, ticks: u32) -> usize {
     if delay >= ticks {
         0
-    } else if period == 0 {
-        1
     } else {
-        1 + ((ticks - 1 - delay) / period) as usize
+        1 + (ticks - 1 - delay).checked_div(period).unwrap_or(0) as usize
     }
 }
 

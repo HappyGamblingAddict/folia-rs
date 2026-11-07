@@ -1,3 +1,5 @@
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use folia_core::protocol::{
     NextState, PacketReader, build_handshake, build_login_start, build_ping, build_status_request,
     parse_ping, parse_status_response, read_packet, write_packet,

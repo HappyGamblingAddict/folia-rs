@@ -1324,9 +1324,8 @@ fn der_read<'a>(data: &mut &'a [u8], expected_tag: u8) -> Result<&'a [u8], Crypt
         return Err(CryptoError::InvalidDer);
     }
     let (&first, mut rest) = rest.split_first().ok_or(CryptoError::InvalidDer)?;
-    let length;
-    if first & 0x80 == 0 {
-        length = usize::from(first);
+    let length = if first & 0x80 == 0 {
+        usize::from(first)
     } else {
         let count = usize::from(first & 0x7F);
         if count == 0 || count > 4 || rest.len() < count {
@@ -1337,8 +1336,8 @@ fn der_read<'a>(data: &mut &'a [u8], expected_tag: u8) -> Result<&'a [u8], Crypt
             value = (value << 8) | usize::from(rest[0]);
             rest = &rest[1..];
         }
-        length = value;
-    }
+        value
+    };
     if rest.len() < length {
         return Err(CryptoError::InvalidDer);
     }

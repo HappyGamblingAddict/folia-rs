@@ -92,7 +92,7 @@ pub fn md5(input: &[u8]) -> [u8; 16] {
     }
     padded.extend_from_slice(&bit_length.to_le_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.chunks(64) {
         let mut words = [0u32; 16];
         for (index, word) in words.iter_mut().enumerate() {
             *word = u32::from_le_bytes([

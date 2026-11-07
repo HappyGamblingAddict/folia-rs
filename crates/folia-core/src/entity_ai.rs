@@ -544,6 +544,7 @@ pub enum PathFailure {
     InvalidTarget,
     Unreachable,
     TooLarge,
+    Stuck,
 }
 
 impl fmt::Display for PathFailure {
@@ -553,6 +554,7 @@ impl fmt::Display for PathFailure {
             Self::InvalidTarget => formatter.write_str("path target is not walkable"),
             Self::Unreachable => formatter.write_str("path target is unreachable"),
             Self::TooLarge => formatter.write_str("path search exceeded its node budget"),
+            Self::Stuck => formatter.write_str("navigation made no progress and was aborted"),
         }
     }
 }
@@ -589,13 +591,38 @@ impl Path {
     }
 }
 
-/// Bounds and mobility for one path search.
+/// Bounds, mobility, and node costs for one path search.
+///
+/// Defaults follow the vanilla walk evaluator: four-way walking plus diagonal
+/// moves, a one-block step-up, a three-block fall, water at malus `8`, and no
+/// light penalty. `allow_doors` and `allow_climb` enable the slice's door/gate
+/// and climbable node types.
 #[derive(Clone, Copy, Debug)]
 pub struct PathOptions {
     pub max_nodes: usize,
+    /// Straight-line search radius (`PathNavigation.getMaxPathLength`).
     pub max_range: f64,
+    /// Maximum accumulated walked distance.
+    pub max_path_length: f64,
     pub max_fall_distance: i32,
     pub allow_water: bool,
+    /// Walk through wooden doors and fence gates as `WALKABLE_DOOR` nodes.
+    pub allow_doors: bool,
+    /// Treat ladders, vines, and scaffolding as climbable nodes.
+    pub allow_climb: bool,
+    /// Use [`PathOptions::sprint_cost`] for walkable steps.
+    pub sprinting: bool,
+    pub walk_cost: f64,
+    pub sprint_cost: f64,
+    pub water_cost: f64,
+    pub water_border_cost: f64,
+    pub damage_cost: f64,
+    pub fire_damage_cost: f64,
+    pub door_cost: f64,
+    pub climb_cost: f64,
+    /// Extra malus per light level below [`PathOptions::min_light`].
+    pub light_malus: f64,
+    pub min_light: u8,
 }
 
 impl Default for PathOptions {
@@ -603,44 +630,421 @@ impl Default for PathOptions {
         Self {
             max_nodes: 4096,
             max_range: 64.0,
+            max_path_length: 64.0,
             max_fall_distance: 3,
             allow_water: false,
+            allow_doors: true,
+            allow_climb: true,
+            sprinting: false,
+            walk_cost: 1.0,
+            sprint_cost: 0.8,
+            water_cost: 8.0,
+            water_border_cost: 8.0,
+            damage_cost: 8.0,
+            fire_damage_cost: 16.0,
+            door_cost: 0.0,
+            climb_cost: 1.5,
+            light_malus: 0.0,
+            min_light: 0,
         }
     }
 }
 
-/// Returns true when a mob can stand with its feet at `pos`.
-pub fn is_standable(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) -> bool {
-    let (Some(feet), Some(head), Some(below)) = (
-        world.block(pos),
-        world.block(pos.above()),
-        world.block(pos.below()),
-    ) else {
-        return false;
-    };
+/// Vanilla `PathType` classification used by the node evaluator.
+///
+/// `vanilla_malus` mirrors `PathType.getMalus()`; negative values are not
+/// traversable. Per-search costs can override the maluses in [`PathOptions`].
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PathType {
+    Blocked,
+    Walkable,
+    WalkableDoor,
+    Water,
+    WaterBorder,
+    DoorOpen,
+    DoorWoodClosed,
+    DoorIronClosed,
+    Fence,
+    Leaves,
+    Lava,
+    DamageFire,
+    DangerFire,
+    DamageOther,
+    DangerOther,
+    StickyHoney,
+    Trapdoor,
+}
+
+impl PathType {
+    /// Vanilla `PathType.getMalus()`, before [`PathOptions`] overrides.
+    pub const fn vanilla_malus(self) -> f64 {
+        match self {
+            Self::Water | Self::WaterBorder | Self::DangerFire | Self::DangerOther
+            | Self::StickyHoney => 8.0,
+            Self::DamageFire => 16.0,
+            Self::Blocked
+            | Self::Fence
+            | Self::Leaves
+            | Self::Lava
+            | Self::DamageOther => -1.0,
+            Self::Walkable
+            | Self::WalkableDoor
+            | Self::DoorOpen
+            | Self::DoorWoodClosed
+            | Self::DoorIronClosed
+            | Self::Trapdoor => 0.0,
+        }
+    }
+}
+
+/// Result of evaluating one path node.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NodeEvaluation {
+    pub path_type: PathType,
+    /// Per-node cost malus. Negative means the node is not traversable.
+    pub malus: f64,
+    pub climbable: bool,
+    pub swimmable: bool,
+}
+
+impl NodeEvaluation {
+    fn blocked(path_type: PathType) -> Self {
+        Self {
+            path_type,
+            malus: -1.0,
+            climbable: false,
+            swimmable: false,
+        }
+    }
+
+    pub fn is_walkable(&self) -> bool {
+        self.malus >= 0.0
+    }
+}
+
+fn state_property<'a>(state: &'a BlockState, key: &str) -> Option<&'a str> {
+    state
+        .properties
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+fn state_bool(state: &BlockState, key: &str) -> Option<bool> {
+    if let Some(value) = state_property(state, key) {
+        return Some(value == "true");
+    }
+    let default = crate::registry::default_block_state(&state.name)?;
+    state_property(&default, key).map(|value| value == "true")
+}
+
+fn is_door(state: &BlockState) -> bool {
+    state.name.ends_with("_door") && !state.name.ends_with("_trapdoor")
+}
+
+fn is_fence_gate(state: &BlockState) -> bool {
+    state.name.ends_with("_fence_gate")
+}
+
+fn is_trapdoor(state: &BlockState) -> bool {
+    state.name.ends_with("_trapdoor")
+}
+
+fn is_leaves(state: &BlockState) -> bool {
+    state.name.ends_with("_leaves")
+}
+
+fn is_fence_like(state: &BlockState) -> bool {
+    state.name.ends_with("_fence") || state.name.ends_with("_wall")
+}
+
+fn is_climbable_state(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:ladder"
+            | "minecraft:vine"
+            | "minecraft:scaffolding"
+            | "minecraft:twisting_vines"
+            | "minecraft:twisting_vines_plant"
+            | "minecraft:weeping_vines"
+            | "minecraft:weeping_vines_plant"
+            | "minecraft:cave_vines"
+            | "minecraft:cave_vines_plant"
+    )
+}
+
+fn is_damage_other(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:cactus"
+            | "minecraft:sweet_berry_bush"
+            | "minecraft:pointed_dripstone"
+            | "minecraft:wither_rose"
+            | "minecraft:powder_snow"
+    )
+}
+
+fn is_burning_state(state: &BlockState) -> bool {
+    match state.name.as_str() {
+        "minecraft:fire" | "minecraft:soul_fire" => true,
+        "minecraft:magma_block" | "minecraft:lava_cauldron" => true,
+        "minecraft:campfire" | "minecraft:soul_campfire" => {
+            state_bool(state, "lit").unwrap_or(true)
+        }
+        _ => false,
+    }
+}
+
+fn evaluate_door(
+    feet: &BlockState,
+    head: &BlockState,
+    below: &BlockState,
+    options: &PathOptions,
+) -> NodeEvaluation {
+    let door = if is_door(feet) { feet } else { head };
+    let open = state_bool(door, "open").unwrap_or(false);
+    let iron = door.name == "minecraft:iron_door";
+    let supported = block_behaviour::has_collision(below);
+
+    if open {
+        if !options.allow_doors
+            || !supported
+            || block_behaviour::has_collision(feet)
+            || block_behaviour::has_collision(head)
+        {
+            return NodeEvaluation::blocked(PathType::DoorOpen);
+        }
+        return NodeEvaluation {
+            path_type: PathType::DoorOpen,
+            malus: options.door_cost,
+            climbable: false,
+            swimmable: false,
+        };
+    }
+
+    if iron {
+        return NodeEvaluation::blocked(PathType::DoorIronClosed);
+    }
+    if !options.allow_doors {
+        return NodeEvaluation::blocked(PathType::DoorWoodClosed);
+    }
+    let paired = is_door(feet) && is_door(head) && feet.name == head.name && supported;
+    if !paired {
+        return NodeEvaluation::blocked(PathType::DoorWoodClosed);
+    }
+    NodeEvaluation {
+        path_type: PathType::WalkableDoor,
+        malus: options.door_cost,
+        climbable: false,
+        swimmable: false,
+    }
+}
+
+fn evaluate_gate(
+    feet: &BlockState,
+    head: &BlockState,
+    below: &BlockState,
+    options: &PathOptions,
+) -> NodeEvaluation {
+    let open = state_bool(feet, "open").unwrap_or(false);
+    if block_behaviour::has_collision(head)
+        || !block_behaviour::has_collision(below)
+        || !options.allow_doors
+    {
+        return NodeEvaluation::blocked(if open {
+            PathType::DoorOpen
+        } else {
+            PathType::Fence
+        });
+    }
+    if open {
+        if block_behaviour::has_collision(feet) {
+            return NodeEvaluation::blocked(PathType::DoorOpen);
+        }
+        return NodeEvaluation {
+            path_type: PathType::DoorOpen,
+            malus: options.door_cost,
+            climbable: false,
+            swimmable: false,
+        };
+    }
+    NodeEvaluation {
+        path_type: PathType::WalkableDoor,
+        malus: options.door_cost,
+        climbable: false,
+        swimmable: false,
+    }
+}
+
+fn classify_node(
+    world: &dyn WorldView,
+    pos: BlockPos,
+    options: &PathOptions,
+) -> Option<NodeEvaluation> {
+    let feet = world.block(pos)?;
+    let head = world.block(pos.above())?;
+    let below = world.block(pos.below())?;
+
+    // Lava anywhere in the standing column is fatal, even when swimming.
+    if is_lava(feet) || is_lava(head) || is_lava(below) {
+        return Some(NodeEvaluation::blocked(PathType::Lava));
+    }
+
+    // Closed doors and gates still have collision shapes, so they are
+    // classified before the generic collision checks.
+    if is_door(feet) || is_door(head) {
+        return Some(evaluate_door(feet, head, below, options));
+    }
+    if is_fence_gate(feet) {
+        return Some(evaluate_gate(feet, head, below, options));
+    }
+
+    let feet_climbable = is_climbable_state(feet);
+    let head_climbable = is_climbable_state(head);
+    let below_climbable = is_climbable_state(below);
+    if feet_climbable || head_climbable {
+        if !options.allow_climb {
+            return Some(NodeEvaluation::blocked(PathType::Blocked));
+        }
+        if !block_behaviour::has_collision(feet)
+            && !block_behaviour::has_collision(head)
+            && (feet_climbable || below_climbable)
+        {
+            return Some(NodeEvaluation {
+                path_type: PathType::Walkable,
+                malus: 0.0,
+                climbable: true,
+                swimmable: false,
+            });
+        }
+        return Some(NodeEvaluation::blocked(PathType::Blocked));
+    }
+
+    let feet_water = is_water(feet);
+    let head_water = is_water(head);
+    if feet_water || head_water {
+        if !options.allow_water
+            || !feet_water
+            || block_behaviour::has_collision(head)
+            || !(is_water(below) || block_behaviour::has_collision(below))
+        {
+            return Some(NodeEvaluation::blocked(PathType::Water));
+        }
+        return Some(NodeEvaluation {
+            path_type: PathType::Water,
+            malus: options.water_cost,
+            climbable: false,
+            swimmable: true,
+        });
+    }
 
     if block_behaviour::has_collision(feet) || block_behaviour::has_collision(head) {
-        return false;
+        let path_type = if is_leaves(feet) || is_leaves(head) {
+            PathType::Leaves
+        } else if is_fence_like(feet) || is_fence_like(head) {
+            PathType::Fence
+        } else if is_trapdoor(feet) {
+            PathType::Trapdoor
+        } else {
+            PathType::Blocked
+        };
+        return Some(NodeEvaluation::blocked(path_type));
     }
+
     if !block_behaviour::has_collision(below) {
-        return false;
+        return Some(NodeEvaluation::blocked(PathType::Blocked));
     }
-    if is_liquid(feet) || is_liquid(head) {
-        return false;
+
+    let mut path_type = PathType::Walkable;
+    let mut malus = 0.0;
+    if is_burning_state(feet) || is_burning_state(below) {
+        path_type = PathType::DamageFire;
+        malus = options.fire_damage_cost;
+    } else {
+        let mut danger_fire = false;
+        let mut danger_other = false;
+        let mut water_border = false;
+        for dy in -1_i32..=1 {
+            for dx in -1_i32..=1 {
+                for dz in -1_i32..=1 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let Some(neighbor) = world.block(pos.offset(dx, dy, dz)) else {
+                        continue;
+                    };
+                    if is_burning_state(neighbor) || is_lava(neighbor) {
+                        danger_fire = true;
+                    }
+                    if is_damage_other(neighbor) {
+                        danger_other = true;
+                    }
+                    if is_water(neighbor) {
+                        water_border = true;
+                    }
+                }
+            }
+        }
+        if danger_fire {
+            path_type = PathType::DangerFire;
+            malus = options.damage_cost;
+        } else if danger_other {
+            path_type = PathType::DangerOther;
+            malus = options.damage_cost;
+        } else if water_border {
+            path_type = PathType::WaterBorder;
+            malus = options.water_border_cost;
+        }
     }
-    if is_lava(below) {
-        return false;
+
+    Some(NodeEvaluation {
+        path_type,
+        malus,
+        climbable: false,
+        swimmable: false,
+    })
+}
+
+/// Classify a standing node using vanilla path-type rules and the cost options.
+///
+/// `None` means the position is outside the loaded/bounded world. A returned
+/// evaluation with a negative [`NodeEvaluation::malus`] is not traversable.
+pub fn evaluate_node(
+    world: &dyn WorldView,
+    pos: BlockPos,
+    options: &PathOptions,
+) -> Option<NodeEvaluation> {
+    let mut evaluation = classify_node(world, pos, options)?;
+    if evaluation.is_walkable()
+        && let Some(light) = world
+            .sky_light(pos)
+            .into_iter()
+            .chain(world.block_light(pos))
+            .max()
+        && light < options.min_light
+    {
+        evaluation.malus += options.light_malus * f64::from(options.min_light - light);
     }
-    if !options.allow_water && is_water(below) {
-        return false;
-    }
-    true
+    Some(evaluation)
+}
+
+/// Returns true when a mob can stand with its feet at `pos`.
+///
+/// Swimming and climbable-only nodes are traversable by the pathfinder but not
+/// considered stable standing destinations for goals such as random stroll.
+pub fn is_standable(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) -> bool {
+    evaluate_node(world, pos, options)
+        .is_some_and(|node| node.is_walkable() && !node.swimmable && !node.climbable)
+}
+
+fn is_traversable(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) -> bool {
+    evaluate_node(world, pos, options).is_some_and(|node| node.is_walkable())
 }
 
 fn resolve_start(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) -> Option<BlockPos> {
     for dy in [0, -1, 1, -2, 2, -3, 3] {
         let candidate = pos.offset(0, dy, 0);
-        if is_standable(world, candidate, options) {
+        if is_traversable(world, candidate, options) {
             return Some(candidate);
         }
     }
@@ -648,20 +1052,13 @@ fn resolve_start(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) ->
 }
 
 fn resolve_target(world: &dyn WorldView, pos: BlockPos, options: &PathOptions) -> Option<BlockPos> {
-    for dy in [0, 1, -1, 2, -2] {
+    for dy in [0, 1, -1, 2, -2, -3, 3] {
         let candidate = pos.offset(0, dy, 0);
-        if is_standable(world, candidate, options) {
+        if is_traversable(world, candidate, options) {
             return Some(candidate);
         }
     }
     None
-}
-
-fn heuristic(from: BlockPos, to: BlockPos) -> f64 {
-    let dx = (from.x() - to.x()).unsigned_abs();
-    let dy = (from.y() - to.y()).unsigned_abs();
-    let dz = (from.z() - to.z()).unsigned_abs();
-    f64::from(dx + dy + dz)
 }
 
 fn node_key(pos: BlockPos) -> (i32, i32, i32) {
@@ -681,46 +1078,213 @@ fn clear_vertical(world: &dyn WorldView, x: i32, z: i32, low: i32, high: i32) ->
     true
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Neighbor {
+    pos: BlockPos,
+    evaluation: NodeEvaluation,
+    distance: f64,
+    drop: i32,
+}
+
+fn find_fall_neighbor(
+    world: &dyn WorldView,
+    from: BlockPos,
+    dx: i32,
+    dz: i32,
+    options: &PathOptions,
+) -> Option<Neighbor> {
+    for drop in 1..=options.max_fall_distance {
+        let candidate = from.offset(dx, -drop, dz);
+        let feet = world.block(candidate)?;
+        let head = world.block(candidate.above())?;
+        if block_behaviour::has_collision(feet) || block_behaviour::has_collision(head) {
+            return None;
+        }
+        if is_lava(feet) || is_lava(head) {
+            return None;
+        }
+        let evaluation = evaluate_node(world, candidate, options)?;
+        if evaluation.is_walkable() {
+            if !clear_vertical(world, candidate.x(), candidate.z(), candidate.y(), from.y()) {
+                return None;
+            }
+            return Some(Neighbor {
+                pos: candidate,
+                evaluation,
+                distance: 1.0,
+                drop,
+            });
+        }
+        if is_liquid(feet) || is_liquid(head) {
+            return None;
+        }
+    }
+    None
+}
+
+fn orthogonal_neighbor(
+    world: &dyn WorldView,
+    from: BlockPos,
+    dx: i32,
+    dz: i32,
+    options: &PathOptions,
+) -> Option<Neighbor> {
+    let level = from.offset(dx, 0, dz);
+    if let Some(evaluation) = evaluate_node(world, level, options)
+        && evaluation.is_walkable()
+    {
+        return Some(Neighbor {
+            pos: level,
+            evaluation,
+            distance: 1.0,
+            drop: 0,
+        });
+    }
+
+    let up = from.offset(dx, 1, dz);
+    if let Some(evaluation) = evaluate_node(world, up, options)
+        && evaluation.is_walkable()
+    {
+        return Some(Neighbor {
+            pos: up,
+            evaluation,
+            distance: std::f64::consts::SQRT_2,
+            drop: 0,
+        });
+    }
+
+    find_fall_neighbor(world, from, dx, dz, options)
+}
+
+fn diagonal_neighbor(
+    world: &dyn WorldView,
+    from: BlockPos,
+    dx: i32,
+    dz: i32,
+    options: &PathOptions,
+) -> Option<Neighbor> {
+    // Corner-cut prevention: both orthogonal nodes must exist and must not be
+    // above the root node. Vanilla also forbids diagonal moves through doors.
+    let side_x = orthogonal_neighbor(world, from, dx, 0, options)?;
+    let side_z = orthogonal_neighbor(world, from, 0, dz, options)?;
+    if side_x.pos.y() > from.y() || side_z.pos.y() > from.y() {
+        return None;
+    }
+    if side_x.evaluation.path_type == PathType::WalkableDoor
+        || side_z.evaluation.path_type == PathType::WalkableDoor
+    {
+        return None;
+    }
+
+    let dest = from.offset(dx, 0, dz);
+    if let Some(evaluation) = evaluate_node(world, dest, options)
+        && evaluation.is_walkable()
+        && evaluation.path_type != PathType::WalkableDoor
+    {
+        return Some(Neighbor {
+            pos: dest,
+            evaluation,
+            distance: std::f64::consts::SQRT_2,
+            drop: 0,
+        });
+    }
+
+    let fall = find_fall_neighbor(world, from, dx, dz, options)?;
+    if fall.pos.y() >= from.y() || fall.evaluation.path_type == PathType::WalkableDoor {
+        return None;
+    }
+    Some(Neighbor {
+        distance: std::f64::consts::SQRT_2,
+        ..fall
+    })
+}
+
 fn path_neighbors(
     world: &dyn WorldView,
     from: BlockPos,
     options: &PathOptions,
-) -> Vec<(BlockPos, f64)> {
+) -> Vec<Neighbor> {
     const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
-    let mut result = Vec::with_capacity(8);
+    const DIAGONALS: [(i32, i32); 4] = [(1, -1), (1, 1), (-1, 1), (-1, -1)];
+    let mut result = Vec::with_capacity(12);
 
     for (dx, dz) in DIRECTIONS {
-        let level = from.offset(dx, 0, dz);
-        if is_standable(world, level, options) {
-            result.push((level, 1.0));
+        if let Some(neighbor) = orthogonal_neighbor(world, from, dx, dz, options) {
+            result.push(neighbor);
         }
+    }
 
-        let up = from.offset(dx, 1, dz);
-        if is_standable(world, up, options) {
-            result.push((up, 1.5));
+    for (dx, dz) in DIAGONALS {
+        if let Some(neighbor) = diagonal_neighbor(world, from, dx, dz, options) {
+            result.push(neighbor);
         }
+    }
 
-        for drop in 1..=options.max_fall_distance {
-            let down = from.offset(dx, -drop, dz);
-            if !is_standable(world, down, options) {
-                continue;
+    // Vertical swim/climb moves are not part of the horizontal walk
+    // directions, but water columns and ladders need them to progress.
+    if options.allow_water || options.allow_climb {
+        for dy in [1, -1] {
+            let candidate = from.offset(0, dy, 0);
+            if let Some(evaluation) = evaluate_node(world, candidate, options)
+                && evaluation.is_walkable()
+                && ((evaluation.swimmable && options.allow_water)
+                    || (evaluation.climbable && options.allow_climb))
+            {
+                result.push(Neighbor {
+                    pos: candidate,
+                    evaluation,
+                    distance: 1.0,
+                    drop: i32::from(dy < 0),
+                });
             }
-            if !clear_vertical(world, down.x(), down.z(), down.y(), from.y() + 1) {
-                continue;
-            }
-            result.push((down, 1.0 + f64::from(drop) * 0.25));
-            break;
         }
     }
 
     result
 }
 
+fn movement_cost(options: &PathOptions, evaluation: &NodeEvaluation) -> f64 {
+    if evaluation.swimmable {
+        options.walk_cost
+    } else if evaluation.climbable {
+        options.climb_cost
+    } else if options.sprinting {
+        options.sprint_cost
+    } else {
+        options.walk_cost
+    }
+}
+
+fn neighbor_cost(options: &PathOptions, neighbor: &Neighbor) -> f64 {
+    let mut cost = neighbor.distance * movement_cost(options, &neighbor.evaluation).max(0.0);
+    if neighbor.drop > 0 {
+        cost += f64::from(neighbor.drop) * 0.25;
+    }
+    cost + neighbor.evaluation.malus.max(0.0)
+}
+
+fn heuristic(from: BlockPos, to: BlockPos, options: &PathOptions) -> f64 {
+    let dx = f64::from((from.x() - to.x()).unsigned_abs());
+    let dy = f64::from((from.y() - to.y()).unsigned_abs());
+    let dz = f64::from((from.z() - to.z()).unsigned_abs());
+    let diagonal = dx.min(dz);
+    let horizontal = dx.max(dz) - diagonal + diagonal * std::f64::consts::SQRT_2;
+    let minimum_movement = if options.sprinting {
+        options.sprint_cost.min(options.walk_cost)
+    } else {
+        options.walk_cost
+    }
+    .min(options.climb_cost)
+    .max(0.0);
+    (horizontal + dy) * minimum_movement
+}
+
 /// Deterministic bounded A* over block collision metadata.
 ///
-/// The search walks four horizontal directions, steps up exactly one block,
-/// and drops at most [`PathOptions::max_fall_distance`] blocks. Liquids and
-/// lava are rejected. Ties are broken by `(x, y, z)` so the same world and
+/// The search walks eight horizontal directions with corner-cut prevention,
+/// steps up exactly one block, drops at most [`PathOptions::max_fall_distance`]
+/// blocks, and can swim or climb when the options allow it. Lava is always
+/// rejected. Ties are broken by `(f, h, x, y, z)` so the same world and
 /// endpoints always produce the same path.
 pub fn find_path(
     world: &dyn WorldView,
@@ -734,7 +1298,8 @@ pub fn find_path(
     let dx = f64::from(start.x() - target.x());
     let dy = f64::from(start.y() - target.y());
     let dz = f64::from(start.z() - target.z());
-    if (dx * dx + dy * dy + dz * dz).sqrt() > options.max_range {
+    let direct = (dx * dx + dy * dy + dz * dz).sqrt();
+    if direct > options.max_range || direct > options.max_path_length {
         return Err(PathFailure::TooLarge);
     }
     if start == target {
@@ -747,21 +1312,32 @@ pub fn find_path(
     let mut open: Vec<BlockPos> = vec![start];
     let mut best_cost: HashMap<BlockPos, f64> = HashMap::new();
     best_cost.insert(start, 0.0);
+    let mut walked: HashMap<BlockPos, f64> = HashMap::new();
+    walked.insert(start, 0.0);
     let mut parents: HashMap<BlockPos, BlockPos> = HashMap::new();
     let mut closed: HashSet<BlockPos> = HashSet::new();
     let mut expansions = 0usize;
+    let mut length_limited = false;
 
     while !open.is_empty() {
         let mut best_index = 0usize;
         let mut best_score = f64::INFINITY;
+        let mut best_estimate = f64::INFINITY;
+        let mut best_key = (i32::MAX, i32::MAX, i32::MAX);
         for (index, candidate) in open.iter().enumerate() {
             let cost = best_cost.get(candidate).copied().unwrap_or(f64::INFINITY);
-            let score = cost + heuristic(*candidate, target);
+            let estimate = heuristic(*candidate, target, options);
+            let score = cost + estimate;
+            let key = node_key(*candidate);
             let better = score < best_score
-                || (score == best_score && node_key(*candidate) < node_key(open[best_index]));
+                || (score == best_score
+                    && (estimate < best_estimate
+                        || (estimate == best_estimate && key < best_key)));
             if better {
                 best_index = index;
                 best_score = score;
+                best_estimate = estimate;
+                best_key = key;
             }
         }
 
@@ -789,26 +1365,41 @@ pub fn find_path(
         }
 
         let current_cost = best_cost.get(&current).copied().unwrap_or(0.0);
-        for (neighbor, step_cost) in path_neighbors(world, current, options) {
-            if closed.contains(&neighbor) {
+        let current_walked = walked.get(&current).copied().unwrap_or(0.0);
+        for neighbor in path_neighbors(world, current, options) {
+            if closed.contains(&neighbor.pos) {
                 continue;
             }
-            let candidate_cost = current_cost + step_cost;
-            let previous = best_cost.get(&neighbor).copied().unwrap_or(f64::INFINITY);
+            let neighbor_walked = current_walked + neighbor.distance;
+            if neighbor_walked > options.max_path_length + 1.0e-9 {
+                length_limited = true;
+                continue;
+            }
+            let candidate_cost = current_cost + neighbor_cost(options, &neighbor);
+            let previous = best_cost
+                .get(&neighbor.pos)
+                .copied()
+                .unwrap_or(f64::INFINITY);
             if candidate_cost + 1.0e-9 < previous {
-                best_cost.insert(neighbor, candidate_cost);
-                parents.insert(neighbor, current);
-                if !open.contains(&neighbor) {
-                    open.push(neighbor);
+                best_cost.insert(neighbor.pos, candidate_cost);
+                walked.insert(neighbor.pos, neighbor_walked);
+                parents.insert(neighbor.pos, current);
+                if !open.contains(&neighbor.pos) {
+                    open.push(neighbor.pos);
                 }
             }
         }
     }
 
-    Err(PathFailure::Unreachable)
+    if length_limited {
+        Err(PathFailure::TooLarge)
+    } else {
+        Err(PathFailure::Unreachable)
+    }
 }
 
-/// Port of the movement half of `PathNavigation`.
+/// Port of the movement half of `PathNavigation`, plus stuck detection, path
+/// invalidation, and automatic repath/abort.
 #[derive(Clone, Debug)]
 pub struct Navigation {
     path: Option<Path>,
@@ -818,6 +1409,18 @@ pub struct Navigation {
     options: PathOptions,
     last_failure: Option<PathFailure>,
     failures: u32,
+    target: Option<BlockPos>,
+    needs_repath: bool,
+    aborts: u32,
+    stuck: bool,
+    tick_count: u32,
+    stuck_check_interval: u32,
+    stuck_after_ticks: u32,
+    min_progress: f64,
+    last_stuck_check_tick: u32,
+    last_stuck_check_pos: Vec3,
+    stalled_ticks: u32,
+    reset_stuck_baseline: bool,
 }
 
 impl Default for Navigation {
@@ -836,6 +1439,18 @@ impl Navigation {
             options: PathOptions::default(),
             last_failure: None,
             failures: 0,
+            target: None,
+            needs_repath: false,
+            aborts: 0,
+            stuck: false,
+            tick_count: 0,
+            stuck_check_interval: 20,
+            stuck_after_ticks: 100,
+            min_progress: 0.5,
+            last_stuck_check_tick: 0,
+            last_stuck_check_pos: Vec3::new(0.0, 0.0, 0.0),
+            stalled_ticks: 0,
+            reset_stuck_baseline: true,
         }
     }
 
@@ -859,6 +1474,36 @@ impl Navigation {
         self.failures
     }
 
+    /// Number of paths aborted by a failed repath or stuck detection.
+    pub fn aborts(&self) -> u32 {
+        self.aborts
+    }
+
+    /// True after [`Navigation::tick`]/[`Navigation::tick_with_world`] decided
+    /// the mob made no progress for [`Navigation::stuck_after_ticks`].
+    pub fn is_stuck(&self) -> bool {
+        self.stuck
+    }
+
+    pub fn target(&self) -> Option<BlockPos> {
+        self.target
+    }
+
+    /// Tune stuck detection. `abort_after_ticks` is a total budget of stalled
+    /// time; `min_progress` is the movement below which a check window counts
+    /// as stalled.
+    pub fn set_stuck_limits(
+        &mut self,
+        check_interval: u32,
+        abort_after_ticks: u32,
+        min_progress: f64,
+    ) {
+        self.stuck_check_interval = check_interval.max(1);
+        self.stuck_after_ticks = abort_after_ticks;
+        self.min_progress = min_progress.max(0.0);
+        self.reset_stuck_baseline = true;
+    }
+
     pub fn is_done(&self) -> bool {
         self.done
             || self
@@ -871,6 +1516,22 @@ impl Navigation {
         self.path = None;
         self.index = 0;
         self.done = true;
+        self.needs_repath = false;
+        self.stuck = false;
+        self.stalled_ticks = 0;
+    }
+
+    fn abort(&mut self, failure: Option<PathFailure>) {
+        self.path = None;
+        self.index = 0;
+        self.done = true;
+        self.needs_repath = false;
+        self.target = None;
+        self.stalled_ticks = 0;
+        self.aborts = self.aborts.saturating_add(1);
+        if failure.is_some() {
+            self.last_failure = failure;
+        }
     }
 
     pub fn move_to(&mut self, world: &dyn WorldView, from: BlockPos, target: BlockPos) -> bool {
@@ -890,6 +1551,8 @@ impl Navigation {
                 self.path = None;
                 self.index = 0;
                 self.done = true;
+                self.target = None;
+                self.needs_repath = false;
                 self.last_failure = Some(failure);
                 self.failures = self.failures.saturating_add(1);
                 false
@@ -906,12 +1569,100 @@ impl Navigation {
         self.index = usize::from(path.node_count() > 1);
         self.done = false;
         self.last_failure = None;
+        self.target = Some(path.target());
+        self.needs_repath = false;
+        self.stuck = false;
+        self.stalled_ticks = 0;
+        self.reset_stuck_baseline = true;
         self.path = Some(path);
         true
     }
 
-    /// Advances the owner along the current path by one tick.
-    pub fn tick(&mut self, pos: &mut Vec3) -> bool {
+    /// Invalidates the path when a changed block lies on or beside any
+    /// remaining node. The stored target is kept so `tick_with_world` or
+    /// [`Navigation::repath`] can rebuild the route.
+    pub fn on_block_changed(&mut self, pos: BlockPos) -> bool {
+        let Some(path) = self.path.as_ref() else {
+            return false;
+        };
+        if self.index >= path.node_count() {
+            return false;
+        }
+        let touches = path.points()[self.index..].iter().any(|node| {
+            (node.x() - pos.x()).abs() <= 1
+                && (node.y() - pos.y()).abs() <= 1
+                && (node.z() - pos.z()).abs() <= 1
+        });
+        if !touches {
+            return false;
+        }
+
+        self.path = None;
+        self.index = 0;
+        self.done = true;
+        self.needs_repath = true;
+        self.stalled_ticks = 0;
+        self.reset_stuck_baseline = true;
+        true
+    }
+
+    /// Rebuilds the current target from `from`. Returns false when the
+    /// navigation has no target or the route is now unreachable.
+    pub fn repath(&mut self, world: &dyn WorldView, from: BlockPos) -> bool {
+        let Some(target) = self.target else {
+            return false;
+        };
+        self.needs_repath = false;
+        self.move_to_with_speed(world, from, target, self.speed)
+    }
+
+    fn path_is_active(&self) -> bool {
+        !self.done
+            && self
+                .path
+                .as_ref()
+                .is_some_and(|path| self.index < path.node_count())
+    }
+
+    fn next_node_is_valid(&self, world: &dyn WorldView) -> bool {
+        let Some(path) = self.path.as_ref() else {
+            return false;
+        };
+        let Some(node) = path.points().get(self.index) else {
+            return true;
+        };
+        evaluate_node(world, *node, &self.options).is_some_and(|node| node.is_walkable())
+    }
+
+    fn sync_stuck_baseline(&mut self, pos: Vec3) {
+        if self.reset_stuck_baseline {
+            self.last_stuck_check_pos = pos;
+            self.last_stuck_check_tick = self.tick_count;
+            self.stalled_ticks = 0;
+            self.reset_stuck_baseline = false;
+        }
+    }
+
+    fn check_stuck(&mut self, pos: Vec3) {
+        if self.tick_count.saturating_sub(self.last_stuck_check_tick) < self.stuck_check_interval {
+            return;
+        }
+        let moved = self.last_stuck_check_pos.distance_to(pos);
+        if moved < self.min_progress {
+            self.stalled_ticks = self
+                .stalled_ticks
+                .saturating_add(self.stuck_check_interval);
+        } else {
+            self.stalled_ticks = 0;
+        }
+        self.last_stuck_check_tick = self.tick_count;
+        self.last_stuck_check_pos = pos;
+        if self.stuck_after_ticks > 0 && self.stalled_ticks >= self.stuck_after_ticks {
+            self.stuck = true;
+        }
+    }
+
+    fn advance(&mut self, pos: &mut Vec3) -> bool {
         if self.is_done() {
             self.done = true;
             return false;
@@ -946,6 +1697,58 @@ impl Navigation {
             );
         }
         true
+    }
+
+    /// Advances the owner along the current path by one tick and tracks stuck
+    /// progress. This does not read the world; use `tick_with_world` for path
+    /// validation and automatic repathing.
+    pub fn tick(&mut self, pos: &mut Vec3) -> bool {
+        self.tick_count = self.tick_count.saturating_add(1);
+        self.sync_stuck_baseline(*pos);
+        let moved = self.advance(pos);
+        if moved && !self.is_done() {
+            self.check_stuck(*pos);
+            if self.stuck {
+                self.abort(Some(PathFailure::Stuck));
+                return false;
+            }
+        }
+        moved
+    }
+
+    /// Tick against the world: validate the next node, repath once when a
+    /// block change invalidated it, and abort on a failed repath or no
+    /// progress for the configured stuck budget.
+    pub fn tick_with_world(&mut self, world: &dyn WorldView, pos: &mut Vec3) -> bool {
+        self.tick_count = self.tick_count.saturating_add(1);
+        self.sync_stuck_baseline(*pos);
+
+        let from = BlockPos::new(
+            pos.x().floor() as i32,
+            pos.y().floor() as i32,
+            pos.z().floor() as i32,
+        );
+        if self.needs_repath {
+            if !self.repath(world, from) {
+                self.abort(None);
+                return false;
+            }
+        } else if self.path_is_active() && !self.next_node_is_valid(world) {
+            if !self.repath(world, from) {
+                self.abort(None);
+                return false;
+            }
+        }
+
+        let moved = self.advance(pos);
+        if moved && !self.is_done() {
+            self.check_stuck(*pos);
+            if self.stuck {
+                self.abort(Some(PathFailure::Stuck));
+                return false;
+            }
+        }
+        moved
     }
 }
 
@@ -1115,7 +1918,7 @@ impl AiAgent {
         let AiMob {
             navigation, pos, ..
         } = mob;
-        navigation.tick(pos);
+        navigation.tick_with_world(world, pos);
         look.tick();
     }
 }

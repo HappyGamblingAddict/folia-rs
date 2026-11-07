@@ -14,6 +14,36 @@ Format:
 - Workaround / next task:
 ```
 
+## 2026-11-07 — P2.8 shipped structure templates are village-scoped
+
+- Status: Not a hard blocker. `assets/structure_templates.json` ships all 483
+  `minecraft:village/**` templates (776,539 gzip payload bytes; 1,063,517-byte
+  catalog; FNV-1a-64 `0x0dde46f3a7863ed8`; SHA-256
+  `f82d96ddfb284bb757962a5194098c181b40d4f0106eca2d794ba9a6d23448d3`) and
+  `StructureTemplateCatalog` loads them lazily through `TemplateProvider`.
+  `StructureGenerator::from_catalog`/`shipped_catalog` make the village jigsaw
+  path run with real NBT.
+- Not embedded: the remaining 719 non-village templates (bastion, trial
+  chambers, ancient city, ocean ruins, woodland mansion, trail ruins, end city,
+  pillager outpost, shipwreck, ruined portal, fossil/igloo) would push the
+  per-entry gzip+base64 catalog past the 2.5 MB budget. Selecting those
+  structures still fails explicitly with an unknown template until the asset is
+  expanded (or a shared bundle format is chosen).
+- `feature_pool_element` entries selected during recursive expansion are skipped
+  and recorded on `JigsawStart::skipped_feature_elements`; their configured
+  features (village trees/decor/piles) are not placed yet. A feature element
+  chosen as the start element still returns `UnsupportedPoolElement`.
+- Template entities are returned as `PlacedEntity` descriptors, not spawned;
+  block-entity NBT is returned as `PlacedBlock` markers, not instantiated (so
+  chest loot tables, bells, beds, and villager POIs are not live block
+  entities). No Java block-for-block village fixture exists yet.
+- Remaining parity gaps: terrain adaptation/beardifier, random multi-palette
+  selection, exact per-block shape derivatives (stairs/door/rail), cross-chunk
+  height sampling, structure serialization/caching, and texture/entity data.
+- Workaround: use `StructureTemplateCatalog::template` for explicit
+  unknown/corrupt errors and `StructureGenerator::shipped_catalog` for village
+  generation. Do not claim full structure or village parity from this slice.
+
 ## 2026-11-06 — P10 region ownership is task-scoped, not world-scoped
 
 - Status: Not a hard blocker. `region.rs` now enforces ownership on the
@@ -258,8 +288,9 @@ These are expected gaps, not reasons to stop:
 - Some Java oracle data requires starting `java-worldgen`; if the server cannot
   start, use the existing dumps in `crates/folia-core/assets`.
 - Plugin bridge work may require Java 21; native-only work does not.
-- Structure NBT templates are available in the decompiled data tree; structure
-  loot tables and other structure data may still need extraction from the local
+- Village structure NBT templates now ship in `structure_templates.json`; the
+  other structure families remain in the decompiled data tree, and structure
+  loot tables/other structure data may still need extraction from the local
   Folia jar. If an asset is missing, document it and continue with a different
   feature.
 

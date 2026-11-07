@@ -10,6 +10,7 @@ use crate::nbt::Tag;
 use crate::region::ChunkPos;
 use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use crate::worldgen::structure::StructureError;
+use crate::worldgen::structure::assets::StructureTemplateCatalog;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
 use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
@@ -28,6 +29,7 @@ use folia_math::BlockPos;
 use folia_random::{LegacyRandomSource, RandomSource};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, OnceLock};
 
 /// `Structure.TerrainAdjustment`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -287,12 +289,6 @@ impl StructureDefinition {
 /// owning a new asset file.
 pub trait TemplateProvider {
     fn template(&self, name: &str) -> Option<&StructureTemplate>;
-}
-
-impl TemplateProvider for HashMap<String, StructureTemplate> {
-    fn template(&self, name: &str) -> Option<&StructureTemplate> {
-        HashMap::get(self, name)
-    }
 }
 
 /// `Structure.GenerationContext` subset needed by the supported structure.
@@ -1737,11 +1733,69 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
 /// independent and testable; a future region/structure manager should replace
 /// it and own serialization rather than changing this deterministic contract.
 #[derive(Debug, Clone)]
+enum TemplateStore {
+    Map(HashMap<String, StructureTemplate>),
+    Catalog(Arc<StructureTemplateCatalog>),
+}
+
+impl TemplateProvider for TemplateStore {
+    fn template(&self, name: &str) -> Option<&StructureTemplate> {
+        match self {
+            TemplateStore::Map(templates) => templates.template(name),
+            TemplateStore::Catalog(catalog) => {
+                StructureTemplateCatalog::template(catalog, name).ok()
+            }
+        }
+    }
+}
+
+impl TemplateStore {
+    fn as_map(&self) -> &HashMap<String, StructureTemplate> {
+        match self {
+            TemplateStore::Map(templates) => templates,
+            TemplateStore::Catalog(_) => {
+                static EMPTY: OnceLock<HashMap<String, StructureTemplate>> = OnceLock::new();
+                EMPTY.get_or_init(HashMap::new)
+            }
+        }
+    }
+}
+
+impl TemplateProvider for HashMap<String, StructureTemplate> {
+    fn template(&self, name: &str) -> Option<&StructureTemplate> {
+        HashMap::get(self, name)
+    }
+}
+
+/// [`StructureGenerator`] backed by the embedded village template catalog.
 pub struct StructureGenerator {
     sets: StructureSetRegistry,
     definitions: BTreeMap<String, StructureDefinition>,
-    templates: HashMap<String, StructureTemplate>,
+    templates: TemplateStore,
     enabled: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for StructureGenerator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StructureGenerator")
+            .field("sets", &self.sets)
+            .field("definitions", &self.definitions.keys())
+            .field("templates", &self.templates)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
+}
+
+impl Clone for StructureGenerator {
+    fn clone(&self) -> Self {
+        Self {
+            sets: self.sets.clone(),
+            definitions: self.definitions.clone(),
+            templates: self.templates.clone(),
+            enabled: self.enabled.clone(),
+        }
+    }
 }
 
 impl StructureGenerator {
@@ -1762,9 +1816,30 @@ impl StructureGenerator {
         Ok(Self {
             sets,
             definitions,
-            templates,
+            templates: TemplateStore::Map(templates),
             enabled,
         })
+    }
+
+    /// Builds a manager that lazily loads templates from a catalog.
+    pub fn from_catalog(catalog: StructureTemplateCatalog) -> Result<Self, StructureError> {
+        let mut generator = Self::shipped(HashMap::new())?;
+        generator.templates = TemplateStore::Catalog(Arc::new(catalog));
+        Ok(generator)
+    }
+
+    /// Builds a manager backed by the embedded village catalog.
+    pub fn shipped_catalog() -> Result<Self, StructureError> {
+        Ok(
+            Self::from_catalog(StructureTemplateCatalog::shipped().clone())?
+                .with_enabled_structures([
+                    "minecraft:village_plains",
+                    "minecraft:village_desert",
+                    "minecraft:village_savanna",
+                    "minecraft:village_snowy",
+                    "minecraft:village_taiga",
+                ]),
+        )
     }
 
     /// Restricts generation to the named structures. Tests use this to keep a
@@ -1785,8 +1860,19 @@ impl StructureGenerator {
         &self.definitions
     }
 
+    /// Templates supplied directly through [`StructureGenerator::shipped`].
+    /// A catalog-backed manager loads templates lazily instead; this map is
+    /// empty for it and [`StructureGenerator::template_catalog`] is `Some`.
     pub fn templates(&self) -> &HashMap<String, StructureTemplate> {
-        &self.templates
+        self.templates.as_map()
+    }
+
+    /// Embedded catalog backing this manager, when one was supplied.
+    pub fn template_catalog(&self) -> Option<&StructureTemplateCatalog> {
+        match &self.templates {
+            TemplateStore::Map(_) => None,
+            TemplateStore::Catalog(catalog) => Some(catalog),
+        }
     }
 
     pub fn structure_at_chunk(

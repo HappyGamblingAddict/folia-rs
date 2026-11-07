@@ -311,18 +311,18 @@ fn grass_spreads_to_dirt_deterministically() {
 #[test]
 fn unsupported_random_ticks_are_reported_not_silently_dropped() {
     let mut storage = flat_storage("unsupported-random");
-    set_block(&mut storage, 1, -60, 1, state("minecraft:oak_leaves"))
+    set_block(&mut storage, 1, -60, 1, state("minecraft:wheat"))
         .unwrap()
         .unwrap();
     assert!(
         !tick::random_tick_at(&mut storage, 1, BlockPos::new(1, -60, 1)).unwrap(),
-        "leaf decay is not implemented yet"
+        "crop growth is not implemented yet"
     );
     assert!(
         storage
             .tick_state()
             .unsupported_random_ticks
-            .contains("minecraft:oak_leaves"),
+            .contains("minecraft:wheat"),
         "the gap is recorded instead of disappearing"
     );
 }

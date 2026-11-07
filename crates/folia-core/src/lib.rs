@@ -21,6 +21,7 @@ pub mod item_components;
 pub mod item_entity;
 pub mod item_prototypes;
 pub mod join;
+pub mod leaves;
 pub mod level;
 pub mod light;
 pub mod loot;

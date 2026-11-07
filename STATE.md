@@ -54,6 +54,8 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
+  random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power
   sampling (inverted supported); 6 redstone-extra tests total.
 - 2026-11-07: hopper slice — persisted 5-slot hopper state, transfer core with

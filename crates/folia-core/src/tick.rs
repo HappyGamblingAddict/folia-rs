@@ -1104,6 +1104,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::PRESSURE_PLATE_BEHAVIOR
     } else if crate::redstone::is_tripwire(state) {
         &crate::redstone::TRIPWIRE_BEHAVIOR
+    } else if crate::leaves::is_leaves(state) {
+        &crate::leaves::LEAVES_BEHAVIOR
     } else if crate::redstone::is_redstone_lamp(state) {
         &crate::redstone::REDSTONE_LAMP_BEHAVIOR
     } else if crate::redstone::is_daylight_detector(state) {
@@ -1725,6 +1727,7 @@ pub fn tick_world_with_table(
             crate::loot::RecipeCatalog::global(),
         );
         storage.tick_block_entities(&mut ticker);
+        storage.tick_hoppers()?;
     }
 
     let drained = process_pending_updates(storage)?;

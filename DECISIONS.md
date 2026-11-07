@@ -2795,3 +2795,12 @@ Format:
   light) to match the vanilla brightness the player sees.
 - The detector schedules itself every 20 ticks; a block placed above it triggers
   an immediate light recompute via the existing block-update path.
+
+## 2026-11-07 - Leaf distance uses a bounded BFS
+
+- `natural_distance` walks outward through leaves to the nearest log instead of
+  trusting stored `distance` values. This makes placement/neighbor updates
+  correct even when a leaf chain is built out of order.
+- Placement and neighbour updates only recalculate distance; only the random
+  tick may destroy a distance-7 non-persistent leaf, matching vanilla's decay
+  gate.

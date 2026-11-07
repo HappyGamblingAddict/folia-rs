@@ -923,3 +923,10 @@ These are expected gaps, not reasons to stop:
   detector reports raw stored sky light.
 - Inverted detector state is honored but the crafted block id/property split and
   block-entity-less updates still need a Java fixture.
+
+## 2026-11-07 - Leaf decay boundaries
+
+- Leaf decay does not persist `distance` in chunk NBT separately (it is part of
+  the block state) and has no Java differential fixture.
+- Mangrove propagules, azalea/flowering leaves, and waterlogged leaves decay
+  through the same tag rule; special-source support is not differentiated.

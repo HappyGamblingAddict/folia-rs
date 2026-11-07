@@ -55,6 +55,10 @@ where possible, a differential test against the Java oracle.
   five-slot hoppers (`Items`, `TransferCooldown`), slot-transfer merging/empty-slot
   semantics with component preservation and prototype stack limits, and ticker
   cooldown advancement. 5 `tests/hoppers.rs` tests.
+- 2026-11-07: P3.10 leaf decay - new `leaves.rs` ports the `distance`/
+  `persistent` properties, BFS distance from logs, and random-tick decay;
+  registered in the production behaviour table. 4 `tests/leaves.rs` tests and
+  the unsupported-random-tick guard now uses crops.
 - 2026-11-07: P6 live block-entity tickers - `tick_world` now drives the
   persisted furnace/spawner ticker with the shipped recipe catalog; furnace
   cooking/fuel survives the world tick loop. 2 `tests/block_tickers.rs` tests.

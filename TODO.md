@@ -85,6 +85,9 @@ where possible, a differential test against the Java oracle.
   five-slot hoppers (`Items`, `TransferCooldown`), slot-transfer merging/empty-slot
   semantics with component preservation and prototype stack limits, and ticker
   cooldown advancement. 5 `tests/hoppers.rs` tests.
+- 2026-11-07: P1.7 chest loot - `ChestBlockEntity::fill_loot` rolls the
+  shipped catalog table once, preserves existing slots, fills empty slots, and
+  clears `LootTable`/`LootTableSeed`; 5 `tests/chest_loot.rs` tests.
 - 2026-11-07: P3.10 crop growth - new `crops.rs` ports wheat/carrot/potato/
   beetroot age properties, sky-light gate, deterministic random-tick growth, and
   bone-meal-style growth; registered in the production table. 4 `tests/crops.rs`

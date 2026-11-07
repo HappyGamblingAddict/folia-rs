@@ -1095,3 +1095,9 @@ These are expected gaps, not reasons to stop:
   modeled; growth uses a fixed 1-in-4 roll under sufficient sky light.
 - Bone meal is exposed as `grow` but has no item-use path or particles; crop
   drops/harvesting and stem crops (melon/pumpkin) remain open.
+
+## 2026-11-07 - Chest loot boundaries
+
+- Slot placement is first-fit, not vanilla's random empty-slot order.
+- Loot is not triggered by chest opening/menu code, and `entity_properties`/
+  `location_check` still fail closed; no Java chest-loot fixture yet.

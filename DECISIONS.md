@@ -3005,3 +3005,12 @@ Format:
   Because `world.rs` was outside this worker's file set, the inherent impl was
   placed in `worldgen/feature/mod.rs` so the workspace compiles. It performs a
   cached-chunk push/pull pass; move it to `world.rs` when that file is in scope.
+
+## 2026-11-07 - Chest loot uses first-fit slot placement
+
+- `fill_loot` rolls the stored table with a caller-supplied RNG, preserves
+  existing slots, and fills the first empty slots. Vanilla distributes stacks
+  into random empty slots; the deterministic first-fit order is documented as an
+  approximation until a Java fixture pins the placement.
+- The loot id and seed are cleared after a successful fill, so opening the chest
+  again does not reroll it.

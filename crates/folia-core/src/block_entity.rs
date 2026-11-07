@@ -200,6 +200,35 @@ impl ChestBlockEntity {
         self.loot_table_seed = seed;
     }
 
+    /// Rolls the stored loot table once and fills empty slots, then clears the
+    /// loot fields. Returns `false` when there is no table or the id is unknown.
+    ///
+    /// Vanilla distributes stacks into random empty slots; this first-fit order
+    /// is deterministic and documented as an approximation.
+    pub fn fill_loot(
+        &mut self,
+        catalog: &crate::loot::LootCatalog,
+        random: &mut dyn folia_random::RandomSource,
+    ) -> bool {
+        let Some(table_id) = self.loot_table.clone() else {
+            return false;
+        };
+        let Some(table) = catalog.table(&table_id) else {
+            return false;
+        };
+        let context = crate::loot::LootContext::new();
+        let roll = crate::loot::roll_table(catalog, table, random, &context);
+        for stack in roll.stacks {
+            let Some(slot) = self.items.iter_mut().find(|slot| slot.is_empty()) else {
+                break;
+            };
+            *slot = stack;
+        }
+        self.loot_table = None;
+        self.loot_table_seed = 0;
+        true
+    }
+
     pub fn extra_fields(&self) -> &[(String, Tag)] {
         &self.extras
     }

@@ -881,3 +881,13 @@ These are expected gaps, not reasons to stop:
   conduits, or commands, and no `ClientboundUpdateMobEffect` packet is emitted.
 - Damage types are a typed enum, not the full `DamageSources` registry; totems,
   absorption, knockback, death messages, and loot on death remain open.
+
+## 2026-11-07 - Dimension storage and portal boundaries
+
+- Portal frame detection requires an existing frame; portal creation/search
+  (PortalForcer), obsidian platform construction, and entity teleport packets
+  are not wired.
+- Nether/End chunks are generated and stored but sessions still always join the
+  overworld; no dimension switch path or per-dimension level.dat.
+- Nether/End carvers, fortresses, bastions, End cities, gateways, and the dragon
+  arena remain unported.

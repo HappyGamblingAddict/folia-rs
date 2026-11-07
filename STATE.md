@@ -126,6 +126,9 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-07: dimension storage slice — Nether/End region files, generate-on-miss,
+  portal coordinate scaling, End platform arrival, and frame detection; 9
+  integration tests.
 - 2026-11-07: effects/armor slice — `effects.rs` models armor points and the
   vanilla absorb curve, status effects (poison/wither/regen intervals,
   resistance, speed/slowness, strength/weakness, jump boost, fire resistance),

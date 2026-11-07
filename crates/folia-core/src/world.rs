@@ -35,7 +35,7 @@ impl RegionPos {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dimension {
     Overworld,
     Nether,

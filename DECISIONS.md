@@ -2747,3 +2747,15 @@ Format:
 - `LivingEntity::hurt_with` adds the invulnerability bypass used by void damage;
   `hurt` delegates to it with the default rules so existing behavior is
   unchanged.
+
+## 2026-11-07 - Dimension caches are per-instance, not process-wide
+
+- `DimensionStorages` owns one `WorldStorage` per dimension so region files are
+  never shared across dimensions. The overworld still uses the process-wide
+  `shared_overworld` instance elsewhere; this type is the portal/dimension
+  manager and is intentionally not a second overworld singleton.
+- Generate-on-miss persists the generated chunk immediately, mirroring the
+  join path's stamped overworld chunks. Portals are not wired into sessions yet.
+- Coordinate scaling floors toward negative infinity for Overworld -> Nether,
+  matching Java's `Mth.floor`; the End transition always uses the fixed
+  obsidian platform.

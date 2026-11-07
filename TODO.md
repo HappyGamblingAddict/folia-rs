@@ -52,6 +52,11 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P7 dimension storage/portals - `dimension.rs` adds a
+  `DimensionStorages` cache using vanilla `DIM-1`/`DIM1` paths, generate-on-miss
+  through the merged Nether/End generators, Nether 8:1 portal scaling, the End
+  obsidian-platform arrival point, and 2x3 Nether-frame detection. 9
+  `tests/dimension_storage.rs` tests.
 - 2026-11-07: P5 damage/effects slice — `effects.rs` adds the armor table
   (diamond 20 points/8 toughness, iron 15/0, leather 7/0), the Java
   `CombatRules.getDamageAfterAbsorb` curve, Resistance/Speed/Slowness/

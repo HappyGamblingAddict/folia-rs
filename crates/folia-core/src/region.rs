@@ -23,14 +23,18 @@
 //! [`RegionScheduler::tick`], …) is preserved; the new owned-task API
 //! ([`RegionScheduler::schedule_owned_at`],
 //! [`RegionScheduler::tick_region_checked`], …) layers ownership on top.
-//! World/entity/player state is still largely global in the rest of the
-//! server; wiring [`Region`] into the live tick loop is follow-up work
-//! (TODO P10.3-P10.7).
+//! [`RegionTickDriver`] wires the model into the live server loop: it groups
+//! cached chunks by region and runs each region's tasks plus a region-scoped
+//! [`crate::world::WorldStorage::tick_region`] pass. `WorldStorage` itself and
+//! entity/player state are still global, so regions are not yet ticked in
+//! parallel at the world level (TODO P10.3-P10.7).
 
+use crate::world::WorldStorage;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -1030,6 +1034,18 @@ impl RegionScheduler {
         self.regions.len()
     }
 
+    /// Region keys with a queue, in sorted order.
+    pub fn region_keys(&self) -> Vec<RegionKey> {
+        self.regions.keys().copied().collect()
+    }
+
+    /// Creates an empty region queue if `key` does not have one yet. Used by
+    /// [`RegionTickDriver`] so every loaded chunk region gets ticked even when
+    /// it has no plugin/block tasks.
+    pub fn ensure_region(&mut self, key: RegionKey) -> &mut Region {
+        self.region_entry(key)
+    }
+
     pub fn task_count(&self) -> usize {
         self.global.task_count() + self.regions.values().map(Region::task_count).sum::<usize>()
     }
@@ -1306,6 +1322,484 @@ impl RegionScheduler {
         self.last_error = outcome.error.clone();
         outcome
     }
+}
+
+// ---------------------------------------------------------------------------
+// RegionTickDriver: per-region world + task ticks
+// ---------------------------------------------------------------------------
+
+/// Aggregated result of one [`RegionTickDriver`] tick.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RegionTickReport {
+    /// Game tick that was simulated.
+    pub tick: u64,
+    /// Number of region queues ticked (loaded regions plus task-only regions).
+    pub regions: usize,
+    /// Number of those regions that had loaded chunks and ran a world tick.
+    pub world_regions: usize,
+    /// Tasks executed across the global and region queues.
+    pub tasks: usize,
+    /// Due scheduled block ticks that ran.
+    pub scheduled_ticks: usize,
+    /// Random block ticks that changed a block.
+    pub random_ticks: usize,
+    /// Neighbour updates processed for the region's own chunks.
+    pub neighbor_updates: usize,
+    /// Block changes applied by the tick.
+    pub block_changes: usize,
+    /// True when a region exceeded the chained neighbour-update limit.
+    pub overflowed: bool,
+}
+
+/// Error raised by a region tick. World I/O and ownership failures are kept
+/// distinct so callers can log a bad chunk separately from a cross-region
+/// access.
+#[derive(Debug)]
+pub enum RegionTickError {
+    /// A task touched another region's state (or ran without an active region).
+    Ownership(OwnershipError),
+    /// The world tick failed while reading/writing terrain.
+    World(io::Error),
+}
+
+impl RegionTickError {
+    pub fn ownership(&self) -> Option<&OwnershipError> {
+        match self {
+            Self::Ownership(error) => Some(error),
+            Self::World(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for RegionTickError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ownership(error) => write!(f, "{error}"),
+            Self::World(error) => write!(f, "world tick failed: {error}"),
+        }
+    }
+}
+
+impl Error for RegionTickError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Ownership(error) => Some(error),
+            Self::World(error) => Some(error),
+        }
+    }
+}
+
+impl From<OwnershipError> for RegionTickError {
+    fn from(error: OwnershipError) -> Self {
+        Self::Ownership(error)
+    }
+}
+
+impl From<io::Error> for RegionTickError {
+    fn from(error: io::Error) -> Self {
+        Self::World(error)
+    }
+}
+
+/// Result of [`RegionTickDriver::tick_outcome`]: the aggregate report plus the
+/// first error. Regions keep ticking after a failed task so one bad region
+/// cannot silently freeze the others.
+#[derive(Debug)]
+pub struct RegionTickOutcome {
+    pub report: RegionTickReport,
+    pub error: Option<RegionTickError>,
+}
+
+impl RegionTickOutcome {
+    pub fn is_ok(&self) -> bool {
+        self.error.is_none()
+    }
+}
+
+/// Drives the server tick loop through per-region ownership.
+///
+/// Loaded chunks are grouped with [`RegionMap`]'s vanilla 8x8 chunk regions and
+/// ticked in sorted [`RegionKey`] order. For each region the driver:
+///
+/// 1. runs that region's task queue with the region marked current (so owned
+///    tasks and [`RegionOwned`] values are checked), then
+/// 2. runs [`WorldStorage::tick_region`] for exactly that region's chunks
+///    (scheduled/random ticks, block entities, hoppers, neighbour drains).
+///
+/// The global queue always runs first, matching [`RegionScheduler::tick`].
+/// A task or world error is reported once all regions have ticked, so other
+/// regions continue; it is never turned into a panic.
+pub struct RegionTickDriver {
+    map: RegionMap,
+    scheduler: RegionScheduler,
+}
+
+impl RegionTickDriver {
+    pub fn new(grid_size: u32) -> Self {
+        Self {
+            map: RegionMap::new(grid_size),
+            scheduler: RegionScheduler::new(grid_size),
+        }
+    }
+
+    /// The vanilla driver: 8x8 chunk regions.
+    pub fn vanilla() -> Self {
+        Self::new(DEFAULT_REGION_GRID_SIZE)
+    }
+
+    pub fn from_region_map(map: RegionMap) -> Self {
+        Self {
+            map,
+            scheduler: RegionScheduler::from_region_map(map),
+        }
+    }
+
+    pub fn region_map(&self) -> RegionMap {
+        self.map
+    }
+
+    pub fn scheduler(&self) -> &RegionScheduler {
+        &self.scheduler
+    }
+
+    pub fn scheduler_mut(&mut self) -> &mut RegionScheduler {
+        &mut self.scheduler
+    }
+
+    pub fn region_count(&self) -> usize {
+        self.scheduler.region_count()
+    }
+
+    pub fn task_count(&self) -> usize {
+        self.scheduler.task_count()
+    }
+
+    pub fn region_ticks(&self, key: RegionKey) -> Option<u64> {
+        self.scheduler.region_ticks(key)
+    }
+
+    pub fn schedule_at(
+        &mut self,
+        chunk: ChunkPos,
+        delay: u32,
+        period: u32,
+        callback: impl FnMut() + Send + 'static,
+    ) -> TaskId {
+        self.scheduler.schedule_at(chunk, delay, period, callback)
+    }
+
+    pub fn schedule_for_region(
+        &mut self,
+        key: RegionKey,
+        delay: u32,
+        period: u32,
+        callback: impl FnMut() + Send + 'static,
+    ) -> TaskId {
+        self.scheduler
+            .schedule_for_region(key, delay, period, callback)
+    }
+
+    pub fn schedule_owned_at(
+        &mut self,
+        chunk: ChunkPos,
+        delay: u32,
+        period: u32,
+        callback: impl FnMut(&mut OwnedWorld<'_>) -> Result<(), OwnershipError> + Send + 'static,
+    ) -> TaskId {
+        self.scheduler
+            .schedule_owned_at(chunk, delay, period, callback)
+    }
+
+    pub fn schedule_owned_for_region(
+        &mut self,
+        key: RegionKey,
+        delay: u32,
+        period: u32,
+        callback: impl FnMut(&mut OwnedWorld<'_>) -> Result<(), OwnershipError> + Send + 'static,
+    ) -> TaskId {
+        self.scheduler
+            .schedule_owned_for_region(key, delay, period, callback)
+    }
+
+    pub fn schedule_global(
+        &mut self,
+        delay: u32,
+        period: u32,
+        callback: impl FnMut() + Send + 'static,
+    ) -> TaskId {
+        self.scheduler.schedule_global(delay, period, callback)
+    }
+
+    pub fn cancel(&mut self, id: TaskId) -> bool {
+        self.scheduler.cancel(id)
+    }
+
+    /// Loaded chunks grouped by region, in sorted region and chunk order.
+    pub fn grouped_chunks(&self, storage: &WorldStorage) -> BTreeMap<RegionKey, Vec<ChunkPos>> {
+        self.map.group_chunks(
+            storage
+                .loaded_chunk_coords()
+                .into_iter()
+                .map(|(x, z)| ChunkPos::new(x, z)),
+        )
+    }
+
+    /// Ticks the global queue and every loaded/task region in sorted key order.
+    /// Returns the first error after every region has had its tick.
+    pub fn tick(
+        &mut self,
+        storage: &mut WorldStorage,
+        tick: u64,
+    ) -> Result<RegionTickReport, RegionTickError> {
+        let outcome = self.tick_outcome(storage, tick);
+        match outcome.error {
+            Some(error) => Err(error),
+            None => Ok(outcome.report),
+        }
+    }
+
+    /// [`tick`](Self::tick) that returns the partial report together with the
+    /// first error instead of discarding the report.
+    pub fn tick_outcome(&mut self, storage: &mut WorldStorage, tick: u64) -> RegionTickOutcome {
+        let grouped = self.grouped_chunks(storage);
+        let keys = self.region_keys(&grouped);
+        let mut report = RegionTickReport {
+            tick,
+            regions: keys.len(),
+            ..RegionTickReport::default()
+        };
+        let mut first_error = None;
+
+        let global = self.scheduler.tick_global_outcome();
+        report.tasks += global.executed;
+        if first_error.is_none() {
+            first_error = global.error.map(RegionTickError::Ownership);
+        }
+
+        for key in keys {
+            let has_world = grouped.contains_key(&key);
+            let outcome = self.tick_one(storage, key, tick, has_world);
+            merge_report(&mut report, &outcome.report);
+            if first_error.is_none() {
+                first_error = outcome.error;
+            }
+        }
+
+        self.scheduler.last_error = first_error
+            .as_ref()
+            .and_then(RegionTickError::ownership)
+            .cloned();
+        RegionTickOutcome {
+            report,
+            error: first_error,
+        }
+    }
+
+    /// Ticks one region's task queue and (when it has loaded chunks) its world
+    /// slice. Global tasks are not run.
+    pub fn tick_region(
+        &mut self,
+        storage: &mut WorldStorage,
+        key: RegionKey,
+        tick: u64,
+    ) -> Result<RegionTickReport, RegionTickError> {
+        let outcome = self.tick_region_outcome(storage, key, tick);
+        match outcome.error {
+            Some(error) => Err(error),
+            None => Ok(outcome.report),
+        }
+    }
+
+    pub fn tick_region_outcome(
+        &mut self,
+        storage: &mut WorldStorage,
+        key: RegionKey,
+        tick: u64,
+    ) -> RegionTickOutcome {
+        let has_world = self
+            .grouped_chunks(storage)
+            .get(&key)
+            .is_some_and(|chunks| !chunks.is_empty());
+        let outcome = self.tick_one(storage, key, tick, has_world);
+        self.scheduler.last_error = outcome
+            .error
+            .as_ref()
+            .and_then(RegionTickError::ownership)
+            .cloned();
+        outcome
+    }
+
+    /// Test-only parallel tick mode.
+    ///
+    /// Region task queues are dispatched across `workers` scoped threads, so
+    /// each region still ticks with its own current-region marker and any
+    /// cross-region task yields [`OwnershipError`] instead of a panic. The
+    /// world pass remains sequential because [`WorldStorage`] is still one
+    /// global store (P10.3); it runs afterwards in sorted key order, so the
+    /// observable world order is deterministic. This exists to exercise the
+    /// threaded ownership path until per-region world state lands.
+    #[doc(hidden)]
+    pub fn tick_parallel_for_test(
+        &mut self,
+        storage: &mut WorldStorage,
+        tick: u64,
+        workers: usize,
+    ) -> Result<RegionTickReport, RegionTickError> {
+        let outcome = self.tick_parallel_outcome_for_test(storage, tick, workers);
+        match outcome.error {
+            Some(error) => Err(error),
+            None => Ok(outcome.report),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn tick_parallel_outcome_for_test(
+        &mut self,
+        storage: &mut WorldStorage,
+        tick: u64,
+        workers: usize,
+    ) -> RegionTickOutcome {
+        let grouped = self.grouped_chunks(storage);
+        let keys = self.region_keys(&grouped);
+        let mut report = RegionTickReport {
+            tick,
+            regions: keys.len(),
+            ..RegionTickReport::default()
+        };
+        let mut first_error = None;
+
+        let global = self.scheduler.tick_global_outcome();
+        report.tasks += global.executed;
+        if first_error.is_none() {
+            first_error = global.error.map(RegionTickError::Ownership);
+        }
+
+        for key in &keys {
+            self.scheduler.ensure_region(*key);
+        }
+
+        let mut entries: Vec<(RegionKey, Region)> = std::mem::take(&mut self.scheduler.regions)
+            .into_iter()
+            .collect();
+        let workers = workers.max(1);
+        let executed = AtomicUsize::new(0);
+        if workers == 1 || entries.len() <= 1 {
+            let mut local = 0;
+            for (_, region) in entries.iter_mut() {
+                local += tick_region_inner(region).executed;
+            }
+            executed.store(local, Ordering::Relaxed);
+        } else {
+            let chunk_size = entries.len().div_ceil(workers);
+            std::thread::scope(|scope| {
+                for chunk in entries.chunks_mut(chunk_size) {
+                    let executed = &executed;
+                    scope.spawn(move || {
+                        let mut local = 0;
+                        for (_, region) in chunk.iter_mut() {
+                            local += tick_region_inner(region).executed;
+                        }
+                        executed.fetch_add(local, Ordering::Relaxed);
+                    });
+                }
+            });
+        }
+        report.tasks += executed.load(Ordering::Relaxed);
+
+        // Reports are read back in sorted key order, so the first error is
+        // deterministic even though regions ticked in parallel.
+        if first_error.is_none() {
+            first_error = entries
+                .iter()
+                .find_map(|(_, region)| region.last_error())
+                .map(RegionTickError::Ownership);
+        }
+        self.scheduler.regions = entries.into_iter().collect();
+
+        for key in keys {
+            if !grouped.contains_key(&key) {
+                continue;
+            }
+            match storage.tick_region(&self.map, key, tick) {
+                Ok(world) => {
+                    report.world_regions += 1;
+                    merge_world_report(&mut report, &world);
+                }
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(RegionTickError::World(error));
+                    }
+                }
+            }
+        }
+
+        self.scheduler.last_error = first_error
+            .as_ref()
+            .and_then(RegionTickError::ownership)
+            .cloned();
+        RegionTickOutcome {
+            report,
+            error: first_error,
+        }
+    }
+
+    fn region_keys(&mut self, grouped: &BTreeMap<RegionKey, Vec<ChunkPos>>) -> Vec<RegionKey> {
+        let mut keys: BTreeSet<RegionKey> = grouped.keys().copied().collect();
+        keys.extend(self.scheduler.region_keys());
+        keys.into_iter().collect()
+    }
+
+    fn tick_one(
+        &mut self,
+        storage: &mut WorldStorage,
+        key: RegionKey,
+        tick: u64,
+        has_world: bool,
+    ) -> RegionTickOutcome {
+        self.scheduler.ensure_region(key);
+        let task_outcome = self.scheduler.tick_region_outcome(key);
+        let mut report = RegionTickReport {
+            tick,
+            regions: 1,
+            tasks: task_outcome.executed,
+            ..RegionTickReport::default()
+        };
+        let mut error = task_outcome.error.map(RegionTickError::Ownership);
+
+        if has_world {
+            match storage.tick_region(&self.map, key, tick) {
+                Ok(world) => {
+                    report.world_regions = 1;
+                    merge_world_report(&mut report, &world);
+                }
+                Err(world_error) => {
+                    if error.is_none() {
+                        error = Some(RegionTickError::World(world_error));
+                    }
+                }
+            }
+        }
+
+        RegionTickOutcome { report, error }
+    }
+}
+
+fn merge_report(target: &mut RegionTickReport, source: &RegionTickReport) {
+    target.tasks += source.tasks;
+    target.world_regions += source.world_regions;
+    target.scheduled_ticks += source.scheduled_ticks;
+    target.random_ticks += source.random_ticks;
+    target.neighbor_updates += source.neighbor_updates;
+    target.block_changes += source.block_changes;
+    target.overflowed |= source.overflowed;
+}
+
+fn merge_world_report(target: &mut RegionTickReport, world: &crate::tick::TickReport) {
+    target.scheduled_ticks += world.scheduled_ticks;
+    target.random_ticks += world.random_ticks;
+    target.neighbor_updates += world.neighbor_updates;
+    target.block_changes += world.block_changes;
+    target.overflowed |= world.overflowed;
 }
 
 #[cfg(test)]

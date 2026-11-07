@@ -218,11 +218,16 @@ Item entities/XP orbs from the table-driven block drops are now modeled
   not write directly into arbitrary chunks.
 - Design per-region ownership before spreading gameplay state across global
   statics. Folia threading is not a bolt-on.
-- Region ownership is enforced in `region.rs` for tasks: `Region` owns its
-  queue, world-slice token, and tick counter; `RegionOwned<T>`/`OwnedWorld`
-  reject cross-region access with `OwnershipError`; `RegionMap` uses vanilla
-  8x8 chunk / 4x4 section regions. World/entity/player state is not yet
-  region-owned, so do not claim region isolation for it (see `BLOCKERS.md`).
+- Region ownership is enforced in `region.rs` for tasks and the block tick
+  loop: `Region` owns its queue, world-slice token, and tick counter;
+  `RegionOwned<T>`/`OwnedWorld` reject cross-region access with
+  `OwnershipError`; `RegionMap` uses vanilla 8x8 chunk / 4x4 section regions.
+  `RegionTickDriver` groups cached chunks by region, ticks regions in sorted
+  key order, and calls `WorldStorage::tick_region` so scheduled/random ticks,
+  block entities, hoppers, and neighbour drains only see that region's chunks.
+  Entity/player/POI state and `WorldStorage` itself are still global (one
+  storage lock), so do not claim parallel-region world isolation (see
+  `BLOCKERS.md`).
 
 ## Recovery
 

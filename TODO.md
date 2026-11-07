@@ -2627,8 +2627,13 @@ current `region.rs` has task queues and parallel tick calls, but world, entity,
 and player state are still global statics. True Folia parity requires ownership
 and scheduling at the region level.
 
-**Current state:** `tick_parallel(4)` runs independent region queues, but no
-world data is isolated per region and no cross-region safety exists.
+**Current state:** `RegionTickDriver` ticks the global queue first, then every
+loaded/task region in sorted key order. Each region runs its task queue and a
+region-scoped `WorldStorage::tick_region` pass (scheduled/random ticks, block
+entities, hoppers, neighbour drains) using the existing `tick_world` logic.
+`WorldStorage` is still one global lock, so the world pass is sequential; the
+test-only parallel mode dispatches region task queues across threads. True
+per-region world state is P10.3.
 
 > **Start early:** P10.1 should be designed before P4/P5 store lots of mutable
 > gameplay state. Ideally introduce ownership handles during P5/P6 even if the
@@ -2673,14 +2678,33 @@ world data is isolated per region and no cross-region safety exists.
 - **Why:** Shared global state cannot be ticked in parallel.
 - **Done when:** Two regions can tick simultaneously without sharing mutable
   gameplay state.
+- **Progress (2026-11-07):** Block-level work is now *scoped* by
+  `WorldStorage::tick_region`: other regions' chunks/block entities, due
+  scheduled ticks, and neighbour updates are hidden for the tick and restored
+  after. The storage itself is still one value behind one lock, so this is
+  isolation for correctness, not yet parallel world ownership.
 
-### P10.4 Region tick loop `[ ]` `L`
+### P10.4 Region tick loop `[~]` `L`
 
 - **What:** Tick regions on worker threads with 20 TPS, per-region budgets,
   catch-up/backlog policy, and safe shutdown.
 - **Why:** This is Folia’s core execution model.
 - **Done when:** Multiple regions tick in parallel under load while preserving
   per-region ordering.
+- **Progress (2026-11-07):** `RegionTickDriver` groups cached chunks into
+  vanilla 8x8 regions, ticks the global queue then every loaded/task region in
+  sorted key order, and runs each region's task queue before its world slice.
+  `WorldStorage::tick_region_with_table` temporarily hides other regions'
+  chunks/block entities, moves only that region's due scheduled ticks and
+  neighbour updates through the existing `tick_world` path, and restores them;
+  cross-region neighbour updates are requeued for the owner tick. This scopes
+  scheduled/random ticks, block-entity tickers, hoppers, and neighbour drains
+  without duplicating game logic. `main.rs` ticks through the driver and keeps
+  the shutdown flush. A test-only `tick_parallel_for_test` dispatches region
+  task queues on scoped threads and returns ownership errors (no panic), but
+  the world pass is still sequential behind the global `WorldStorage` lock.
+  Remaining: per-region world storage (P10.3), worker-thread world ticks,
+  budgets/catch-up, and watchdog/crash isolation (P10.8).
 
 ### P10.5 Cross-region tasks and teleports `[ ]` `L`
 
@@ -2719,6 +2743,11 @@ world data is isolated per region and no cross-region safety exists.
 - **Why:** A stuck region must not silently freeze the whole server.
 - **Done when:** A simulated stuck region is reported and the server can shut
   down cleanly.
+- **Progress (2026-11-07):** Ownership failures are reported per driver tick
+  and other regions keep running; a cross-region parallel task returns an
+  error instead of panicking, and `main.rs` still calls `flush_shared` after
+  `shutdown_sessions`. Watchdogs, per-region budgets, and crash isolation
+  remain.
 
 ### P10.9 Concurrency testing `[ ]` `L`
 

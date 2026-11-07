@@ -18,10 +18,13 @@ Last updated: 2026-11-07
   spikes/gateways/chorus, dimension storage and portal math.
 - Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
   leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
-  tickers, region ownership, and live bridge chat/time/weather/sound/particles.
+  tickers, region ownership, region tick driver, and live bridge
+  chat/time/weather/sound/particles.
 - Major gaps: feature-pool placement and non-village structure templates;
   live session dimension switching; effect/menu packets; shared per-viewer
-  entity tracking and live AI goals; full plugin API; real region tick threading.
+  entity tracking and live AI goals; full plugin API; true parallel
+  per-region world state (the region driver scopes chunk work, but
+  `WorldStorage` is still one global lock).
 
 ## Current focus
 
@@ -49,10 +52,26 @@ Last updated: 2026-11-07
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1 online/chat-signing core (TLS and login wiring).
 - [~] P9.2/P9.3 bridge proxies/events/live effects (API depth).
-- [~] P10 region ownership (per-region tasks/ownership; world not split).
+- [~] P10 region ownership (per-region tasks/world tick slices; world
+  storage still one global lock).
 
 ## Recently completed
 - 2026-11-07: Unbreaking durability rolls; 4 integration tests.
+- 2026-11-07: P10.4 region tick loop (first slice) — `RegionTickDriver` groups
+  cached chunks into vanilla 8x8 regions, ticks the global queue first and each
+  loaded/task region in sorted key order, and runs region tasks before that
+  region's world slice. `WorldStorage::tick_region_with_table` hides other
+  regions' chunks/block entities, moves only that region's due scheduled ticks
+  and neighbour updates into the existing `tick_world` path, then restores
+  them; cross-region neighbour updates are requeued instead of dropped.
+  Scheduled/random ticks, block entities, hoppers, and neighbour drains are
+  scoped per region. `main.rs` now ticks through the driver; the test-only
+  parallel mode dispatches region task queues on scoped threads (world pass
+  stays sequential) and returns ownership errors. Focused: 5
+  `tests/region_tick_loop.rs`; `region_ownership`, lib `region`,
+  `bulk_validation`, and `folia-server` stay green. Gaps: `WorldStorage` is
+  still one global lock, so no parallel world tick; cross-region hopper
+  transfers and border block edits remain queue/handoff work (P10.3/P10.5).
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

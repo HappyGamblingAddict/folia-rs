@@ -16,8 +16,9 @@ pub struct StatusConfig {
     pub max_players: i32,
     pub online_players: i32,
     /// When true, login attempts are handed to the captured 1.21.11 join flow.
-    /// This is only valid for offline mode; online-mode encryption is not ported.
     pub accept_logins: bool,
+    /// Advertised as `enforcesSecureChat` in the status JSON.
+    pub enforces_secure_chat: bool,
 }
 
 impl Default for StatusConfig {
@@ -29,6 +30,7 @@ impl Default for StatusConfig {
             max_players: 20,
             online_players: 0,
             accept_logins: false,
+            enforces_secure_chat: false,
         }
     }
 }
@@ -47,7 +49,7 @@ pub fn status_json(config: &StatusConfig) -> String {
         "description": {
             "text": config.motd,
         },
-        "enforcesSecureChat": false,
+        "enforcesSecureChat": config.enforces_secure_chat,
         "previewsChat": false,
     })
     .to_string()

@@ -32,6 +32,7 @@ fn main() -> Result<()> {
     folia_core::join::configure_world_dir(root.join(&level_name));
     folia_core::join::configure_view_distance(properties.view_distance);
     folia_core::join::configure_online_mode(properties.online_mode);
+    let _ = folia_core::config::secure_chat_startup_audit();
     folia_core::join::configure_game_mode(
         match properties.gamemode.to_ascii_lowercase().as_str() {
             "creative" => 1,
@@ -241,6 +242,7 @@ fn start_status_server(properties: &ServerProperties) -> Result<()> {
         max_players: properties.max_players,
         online_players: 0,
         accept_logins: true,
+        enforces_secure_chat: folia_core::config::enforces_secure_chat(),
         ..StatusConfig::default()
     });
 

@@ -4,7 +4,7 @@ use folia_core::protocol::{
     NextState, PacketReader, build_handshake, build_login_start, build_ping, build_status_request,
     parse_ping, parse_status_response, read_packet, write_packet,
 };
-use folia_core::status::{StatusConfig, serve};
+use folia_core::status::{StatusConfig, serve, status_json};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -81,6 +81,18 @@ fn status_server_supports_legacy_ping() {
     assert!(text.starts_with('\u{00a7}'));
     assert!(text.contains("1.21.11"));
     assert!(text.contains("Folia-RS"));
+}
+
+#[test]
+fn status_advertises_secure_chat_from_config() {
+    let mut config = StatusConfig::default();
+    assert!(!config.enforces_secure_chat);
+    config.enforces_secure_chat = true;
+    let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+    assert_eq!(
+        value.get("enforcesSecureChat").and_then(|v| v.as_bool()),
+        Some(true)
+    );
 }
 
 #[test]

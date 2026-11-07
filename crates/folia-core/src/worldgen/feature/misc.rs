@@ -12,9 +12,19 @@ use super::{FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
 use crate::tags;
+use crate::worldgen::structure::piece::{BoundingBox, template_bounding_box};
+use crate::worldgen::structure::processor::{
+    ProcessedBlock, ProcessorApplyContext, RawBlockInfo, StructureProcessor,
+    StructureProcessorCatalog,
+};
+use crate::worldgen::structure::template::{
+    Mirror, Rotation, StructurePlaceSettings, StructureTemplate, transform, transform_state,
+};
 use crate::worldgen::surface::height_adjusted_temperature;
 use folia_math::{BlockPos, Direction};
 use folia_random::RandomSource;
+use serde_json::{Map, Value};
+use std::io;
 
 fn horizontal() -> [Direction; 4] {
     [
@@ -443,6 +453,402 @@ fn spawner_nbt(pos: BlockPos, mob: &str) -> Tag {
         ),
         ("SpawnPotentials".to_owned(), Tag::List(Vec::new())),
     ])
+}
+
+/// `minecraft:fossil`.
+///
+/// Ports `FossilFeature`: one random rotation, one weighted template index
+/// shared by the base and overlay structures, the 15–24 block underground
+/// depth draw, the empty-corner rejection, and the two processor passes. The
+/// base and overlay templates are resolved through
+/// [`FeatureLevel::template`]; a level without them fails explicitly instead of
+/// pretending the fossil placed nothing.
+#[derive(Debug, Clone)]
+pub struct FossilFeature {
+    fossil_structures: Vec<String>,
+    overlay_structures: Vec<String>,
+    fossil_processors: Vec<StructureProcessor>,
+    overlay_processors: Vec<StructureProcessor>,
+    max_empty_corners_allowed: i32,
+}
+
+impl FossilFeature {
+    /// Shipped base fossil template ids in config order.
+    pub fn fossil_structures(&self) -> &[String] {
+        &self.fossil_structures
+    }
+
+    /// Shipped overlay fossil template ids in config order.
+    pub fn overlay_structures(&self) -> &[String] {
+        &self.overlay_structures
+    }
+
+    /// `max_empty_corners_allowed` from the configured feature.
+    pub fn max_empty_corners_allowed(&self) -> i32 {
+        self.max_empty_corners_allowed
+    }
+
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> Result<bool, String> {
+        let rotation = random_rotation(random);
+        let index = random.next_int_bound(self.fossil_structures.len() as i32) as usize;
+        let fossil_id = &self.fossil_structures[index];
+        let overlay_id = &self.overlay_structures[index];
+        // Resolve both templates before touching the world so a missing
+        // provider entry cannot leave a half-placed fossil behind.
+        let fossil = level
+            .template(fossil_id)
+            .cloned()
+            .ok_or_else(|| missing_template(fossil_id))?;
+        let overlay = level
+            .template(overlay_id)
+            .cloned()
+            .ok_or_else(|| missing_template(overlay_id))?;
+
+        let rotated = fossil.rotated_size(rotation);
+        let footprint_x = rotated[0];
+        let footprint_z = rotated[2];
+        let base_x = origin.x() - footprint_x / 2;
+        let base_z = origin.z() - footprint_z / 2;
+        let mut surface = origin.y();
+        for x in 0..footprint_x {
+            for z in 0..footprint_z {
+                if let Some(height) =
+                    level.heightmap(Heightmap::OceanFloorWg, base_x + x, base_z + z)
+                {
+                    surface = surface.min(height);
+                }
+            }
+        }
+        let depth = random.next_int_bound(10);
+        let y = (surface - 15 - depth).max(level.min_y() + 10);
+        let target = BlockPos::new(base_x, y, base_z);
+        let zero = zero_position_with_transform(&fossil, target, rotation);
+        let template_box =
+            template_bounding_box(&fossil, zero, rotation, BlockPos::ZERO, Mirror::None);
+        if count_empty_corners(level, template_box) > self.max_empty_corners_allowed {
+            return Ok(false);
+        }
+
+        let chunk_x = origin.x().div_euclid(16);
+        let chunk_z = origin.z().div_euclid(16);
+        let chunk_box = BoundingBox::new(
+            chunk_x * 16 - 16,
+            level.min_y(),
+            chunk_z * 16 - 16,
+            chunk_x * 16 + 31,
+            level.min_y() + level.height() - 1,
+            chunk_z * 16 + 31,
+        );
+
+        let settings = StructurePlaceSettings::new().with_rotation(rotation);
+        let context = ProcessorApplyContext::new(level.seed(), zero, zero);
+
+        let base_blocks = fossil_block_infos(&fossil, &settings, zero, random);
+        let processed = apply_fossil_processors(
+            &self.fossil_processors,
+            level,
+            &context,
+            &base_blocks,
+            random,
+        );
+        write_processed(level, &processed, rotation, chunk_box);
+
+        // The overlay processors run against the world after the base write,
+        // exactly like the second `placeInWorld` call in Java.
+        let overlay_blocks = fossil_block_infos(&overlay, &settings, zero, random);
+        let processed = apply_fossil_processors(
+            &self.overlay_processors,
+            level,
+            &context,
+            &overlay_blocks,
+            random,
+        );
+        write_processed(level, &processed, rotation, chunk_box);
+        Ok(true)
+    }
+}
+
+/// Parses `FossilFeatureConfiguration`.
+pub(crate) fn parse_fossil_config(config: &Value) -> io::Result<FossilFeature> {
+    let object = config
+        .as_object()
+        .ok_or_else(|| invalid("fossil config must be an object"))?;
+    let fossil_structures = parse_template_list(object, "fossil_structures")?;
+    let overlay_structures = parse_template_list(object, "overlay_structures")?;
+    if fossil_structures.is_empty() {
+        return Err(invalid("fossil config needs at least one fossil structure"));
+    }
+    if fossil_structures.len() != overlay_structures.len() {
+        return Err(invalid(format!(
+            "fossil config has {} fossil structures but {} overlay structures",
+            fossil_structures.len(),
+            overlay_structures.len()
+        )));
+    }
+    let fossil_processors = parse_processor_list(object, "fossil_processors")?;
+    let overlay_processors = parse_processor_list(object, "overlay_processors")?;
+    let max_empty_corners_allowed = object
+        .get("max_empty_corners_allowed")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| invalid("fossil config is missing an integer `max_empty_corners_allowed`"))?;
+    let max_empty_corners_allowed = i32::try_from(max_empty_corners_allowed)
+        .map_err(|_| invalid("fossil `max_empty_corners_allowed` is outside the i32 range"))?;
+
+    Ok(FossilFeature {
+        fossil_structures,
+        overlay_structures,
+        fossil_processors,
+        overlay_processors,
+        max_empty_corners_allowed,
+    })
+}
+
+fn parse_template_list(
+    object: &Map<String, Value>,
+    key: &str,
+) -> io::Result<Vec<String>> {
+    object
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid(format!("fossil config is missing the `{key}` list")))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(normalize_id)
+                .ok_or_else(|| invalid(format!("fossil `{key}` entries must be template ids")))
+        })
+        .collect()
+}
+
+fn parse_processor_list(
+    object: &Map<String, Value>,
+    key: &str,
+) -> io::Result<Vec<StructureProcessor>> {
+    let name = object
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("fossil config is missing the `{key}` processor list")))?;
+    let name = normalize_id(name);
+    StructureProcessorCatalog::shipped()
+        .list(&name)
+        .map(|list| list.processors().to_vec())
+        .ok_or_else(|| {
+            invalid(format!(
+                "fossil processor list `{name}` is not in the shipped processor catalog"
+            ))
+        })
+}
+
+fn normalize_id(name: &str) -> String {
+    if name.contains(':') {
+        name.to_owned()
+    } else {
+        format!("minecraft:{name}")
+    }
+}
+
+fn missing_template(id: &str) -> String {
+    format!(
+        "requires structure template `{id}` via FeatureLevel::template, but the level has no \
+         template provider entry"
+    )
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// `Util.getRandom(Rotation.values(), random)`.
+fn random_rotation(random: &mut dyn RandomSource) -> Rotation {
+    match random.next_int_bound(4) {
+        0 => Rotation::None,
+        1 => Rotation::Clockwise90,
+        2 => Rotation::Clockwise180,
+        _ => Rotation::CounterClockwise90,
+    }
+}
+
+/// `StructureTemplate.getZeroPositionWithTransform(pos, Mirror.NONE, rotation)`.
+///
+/// Java uses the template's *unrotated* x/z extents for this shift even when
+/// the footprint used for the origin and height scan is rotated.
+fn zero_position_with_transform(
+    template: &StructureTemplate,
+    pos: BlockPos,
+    rotation: Rotation,
+) -> BlockPos {
+    let size_x = template.size_x() - 1;
+    let size_z = template.size_z() - 1;
+    match rotation {
+        Rotation::CounterClockwise90 => pos.offset(0, 0, size_x),
+        Rotation::Clockwise90 => pos.offset(size_z, 0, 0),
+        Rotation::Clockwise180 => pos.offset(size_x, 0, size_z),
+        Rotation::None => pos,
+    }
+}
+
+/// `BoundingBox.forAllCorners` plus the air/lava/water predicate.
+///
+/// A missing block is outside this port's single-chunk write region, not an
+/// observed air block; it is treated as non-empty so the port does not reject
+/// fossils at chunk borders purely because the neighbour is unreadable.
+fn count_empty_corners(level: &dyn FeatureLevel, bounds: BoundingBox) -> i32 {
+    let xs = [bounds.min_x(), bounds.max_x()];
+    let ys = [bounds.min_y(), bounds.max_y()];
+    let zs = [bounds.min_z(), bounds.max_z()];
+    let mut empty = 0;
+    for x in xs {
+        for y in ys {
+            for z in zs {
+                if let Some(state) = level.get_block(BlockPos::new(x, y, z))
+                    && (is_air_name(&state.name) || is_lava_or_water(&state.name))
+                {
+                    empty += 1;
+                }
+            }
+        }
+    }
+    empty
+}
+
+fn is_lava_or_water(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:water" | "minecraft:lava" | "minecraft:flowing_water" | "minecraft:flowing_lava"
+    )
+}
+
+/// `StructurePlaceSettings.getRandomPalette(palettes, pos)` plus
+/// `StructureTemplate.processBlockInfos` position math.
+///
+/// The palette draw happens once per `placeInWorld` call and must stay in the
+/// feature RNG stream even when there is only one palette.
+fn fossil_block_infos(
+    template: &StructureTemplate,
+    settings: &StructurePlaceSettings,
+    origin: BlockPos,
+    random: &mut dyn RandomSource,
+) -> Vec<RawBlockInfo> {
+    let palette_count = template.palette_count();
+    // Java draws `nextInt(palettes.size())` even when there is only one
+    // palette, which consumes the legacy RNG stream.
+    let palette_index = random.next_int_bound(palette_count as i32) as usize;
+    let Some(palette) = template.palette(palette_index) else {
+        return Vec::new();
+    };
+    template
+        .blocks()
+        .iter()
+        .filter_map(|block| {
+            let state = palette.get(block.state)?.clone();
+            if settings.ignore_air() && is_air_name(&state.name) {
+                return None;
+            }
+            Some(RawBlockInfo {
+                local_pos: block.pos,
+                pos: origin.offset_by(transform(
+                    block.pos,
+                    settings.mirror(),
+                    settings.rotation(),
+                    settings.rotation_pivot(),
+                )),
+                state,
+                nbt: block.nbt.clone(),
+            })
+        })
+        .collect()
+}
+
+/// `StructureTemplate.processBlockInfos` with Java's feature RNG.
+///
+/// `block_rot` reads `StructurePlaceSettings.getRandom(pos)`, which is the
+/// feature's random source for fossils. The shipped processor lists are still
+/// parsed from [`StructureProcessorCatalog`]; only the random source differs
+/// from the generic structure-pool pass.
+fn apply_fossil_processors(
+    processors: &[StructureProcessor],
+    level: &dyn FeatureLevel,
+    context: &ProcessorApplyContext,
+    blocks: &[RawBlockInfo],
+    random: &mut dyn RandomSource,
+) -> Vec<ProcessedBlock> {
+    let mut originals = Vec::new();
+    let mut processed = Vec::new();
+    for block in blocks {
+        let mut current = Some(ProcessedBlock {
+            pos: block.pos,
+            state: block.state.clone(),
+            nbt: block.nbt.clone(),
+        });
+        for processor in processors {
+            let Some(value) = current.take() else {
+                break;
+            };
+            current = match processor {
+                StructureProcessor::BlockRot {
+                    integrity,
+                    rottable_blocks,
+                } => {
+                    let rottable = rottable_blocks
+                        .as_ref()
+                        .is_none_or(|set| set.matches(&block.state));
+                    if rottable && random.next_float() > *integrity {
+                        None
+                    } else {
+                        Some(value)
+                    }
+                }
+                other => other.process_block(level, context, block, &value),
+            };
+        }
+        if let Some(value) = current {
+            originals.push(block.clone());
+            processed.push(value);
+        }
+    }
+    for processor in processors {
+        processed = processor.finalize_processing(level, context, &originals, processed);
+    }
+    processed
+}
+
+/// Writes the processed template blocks with the placement rotation and the
+/// chunk±16 bounding box that `FossilFeature` passes to `placeInWorld`.
+///
+/// `minecraft:structure_void` is a template marker, not a world block; the
+/// fossil path drops it instead of leaking it into the chunk.
+fn write_processed(
+    level: &mut dyn FeatureLevel,
+    processed: &[ProcessedBlock],
+    rotation: Rotation,
+    chunk_box: BoundingBox,
+) {
+    for block in processed {
+        if !inside(block.pos, chunk_box) || block.state.name == "minecraft:structure_void" {
+            continue;
+        }
+        let state = transform_state(&block.state, Mirror::None, rotation);
+        if level.set_block(block.pos, state)
+            && let Some(nbt) = &block.nbt
+        {
+            level.set_block_entity(block.pos, nbt.clone());
+        }
+    }
+}
+
+fn inside(pos: BlockPos, bounds: BoundingBox) -> bool {
+    pos.x() >= bounds.min_x()
+        && pos.x() <= bounds.max_x()
+        && pos.y() >= bounds.min_y()
+        && pos.y() <= bounds.max_y()
+        && pos.z() >= bounds.min_z()
+        && pos.z() <= bounds.max_z()
 }
 
 /// `SnowAndFreezeFeature` (`minecraft:freeze_top_layer`).

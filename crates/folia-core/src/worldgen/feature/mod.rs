@@ -2634,10 +2634,12 @@ mod tests {
 
     #[test]
     fn unsupported_features_fail_loudly() {
-        let data = FeatureData::vanilla();
-        let feature = data
-            .configured("minecraft:fossil_coal")
-            .expect("fossil_coal is in the dump");
+        let feature = ConfiguredFeature {
+            id: "test:unsupported".to_owned(),
+            kind: ConfiguredFeatureKind::Unsupported {
+                vanilla_type: "minecraft:test_unsupported".to_owned(),
+            },
+        };
         assert!(!feature.is_supported());
         let mut chunk = chunk();
         let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
@@ -2645,8 +2647,8 @@ mod tests {
         let error = feature
             .place(&mut level, &mut random, BlockPos::new(0, 0, 0))
             .expect_err("unported feature must not pretend to place");
-        assert_eq!(error.feature, "minecraft:fossil_coal");
-        assert_eq!(error.vanilla_type, "minecraft:fossil");
+        assert_eq!(error.feature, "test:unsupported");
+        assert_eq!(error.vanilla_type, "minecraft:test_unsupported");
         assert!(level.chunk.sections.is_empty());
     }
 

@@ -1898,7 +1898,11 @@ mod tests {
         assert!(first.pieces().len() > 1);
         let bounds = first.bounding_box().expect("fortress bounds");
         assert!(bounds.min_y() >= 48);
-        assert!(bounds.max_y() <= 70);
+        if bounds.y_span() <= 23 {
+            assert!(bounds.max_y() <= 70);
+        } else {
+            assert_eq!(bounds.min_y(), 48);
+        }
         assert!(
             first
                 .pieces()

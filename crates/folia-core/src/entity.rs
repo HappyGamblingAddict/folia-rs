@@ -5,7 +5,7 @@ use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
 use crate::math::Vec3;
 use crate::protocol::PacketWriter;
 use crate::world::WorldStorage;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
@@ -363,6 +363,285 @@ pub struct SessionEntityTick {
     pub removed: Vec<i32>,
 }
 
+/// Last position packet payload sent to one viewer for one entity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EntitySnapshot {
+    x: f64,
+    y: f64,
+    z: f64,
+    yaw: f32,
+    pitch: f32,
+    on_ground: bool,
+}
+
+impl EntitySnapshot {
+    fn of(entity: &Entity) -> Self {
+        Self {
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            yaw: entity.yaw,
+            pitch: entity.pitch,
+            on_ground: entity.on_ground,
+        }
+    }
+
+    fn matches(self, entity: &Entity) -> bool {
+        self == Self::of(entity)
+    }
+}
+
+/// One viewer's range set: ids currently visible and the last position synced.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewerView {
+    position: (f64, f64, f64),
+    range: f64,
+    tracked: BTreeSet<i32>,
+    last_sent: BTreeMap<i32, EntitySnapshot>,
+    pending: Vec<Vec<u8>>,
+}
+
+impl ViewerView {
+    pub fn position(&self) -> (f64, f64, f64) {
+        self.position
+    }
+
+    pub fn range(&self) -> f64 {
+        self.range
+    }
+
+    /// Ids currently inside this viewer's range set, ascending.
+    pub fn tracked_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.tracked.iter().copied()
+    }
+
+    pub fn tracks(&self, entity_id: i32) -> bool {
+        self.tracked.contains(&entity_id)
+    }
+}
+
+/// Shared entity tracking state keyed by network entity id.
+///
+/// Entity state lives here once; viewers keep only their range set and last
+/// synced snapshot. `SessionEntityTracker` embeds this tracker as its entity
+/// storage, so live sessions and multi-viewer tracking share the same records.
+#[derive(Debug, Default)]
+pub struct EntityTracker {
+    entities: BTreeMap<i32, TrackedEntity>,
+    viewers: BTreeMap<i32, ViewerView>,
+}
+
+impl EntityTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
+    pub fn insert(&mut self, tracked: TrackedEntity) -> Option<TrackedEntity> {
+        self.entities.insert(tracked.entity.id, tracked)
+    }
+
+    /// Remove an entity. Every viewer that currently tracks it receives a
+    /// remove-entities packet on its next [`Self::update_viewer`].
+    pub fn remove_entity(&mut self, entity_id: i32) -> Option<TrackedEntity> {
+        let removed = self.entities.remove(&entity_id)?;
+        for viewer in self.viewers.values_mut() {
+            if viewer.tracked.remove(&entity_id) {
+                viewer.pending.push(remove_entities_packet(&[entity_id]));
+            }
+            viewer.last_sent.remove(&entity_id);
+        }
+        Some(removed)
+    }
+
+    pub fn get(&self, entity_id: i32) -> Option<&TrackedEntity> {
+        self.entities.get(&entity_id)
+    }
+
+    pub fn get_mut(&mut self, entity_id: i32) -> Option<&mut TrackedEntity> {
+        self.entities.get_mut(&entity_id)
+    }
+
+    pub fn contains(&self, entity_id: i32) -> bool {
+        self.entities.contains_key(&entity_id)
+    }
+
+    /// Deterministic entity iteration (ascending network id).
+    pub fn iter(&self) -> impl Iterator<Item = &TrackedEntity> + '_ {
+        self.entities.values()
+    }
+
+    /// Deterministic entity ids (ascending network id).
+    pub fn ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.entities.keys().copied()
+    }
+
+    pub fn clear(&mut self) {
+        self.entities.clear();
+        self.viewers.clear();
+    }
+
+    pub fn viewer_count(&self) -> usize {
+        self.viewers.len()
+    }
+
+    /// Deterministic viewer ids (ascending viewer id).
+    pub fn viewer_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.viewers.keys().copied()
+    }
+
+    pub fn viewer(&self, viewer_id: i32) -> Option<&ViewerView> {
+        self.viewers.get(&viewer_id)
+    }
+
+    pub fn add_viewer(&mut self, viewer_id: i32, position: (f64, f64, f64), range: f64) -> bool {
+        self.viewers
+            .insert(
+                viewer_id,
+                ViewerView {
+                    position,
+                    range: range.max(0.0),
+                    ..ViewerView::default()
+                },
+            )
+            .is_none()
+    }
+
+    pub fn remove_viewer(&mut self, viewer_id: i32) -> bool {
+        self.viewers.remove(&viewer_id).is_some()
+    }
+
+    pub fn set_viewer_position(&mut self, viewer_id: i32, position: (f64, f64, f64)) -> bool {
+        let Some(viewer) = self.viewers.get_mut(&viewer_id) else {
+            return false;
+        };
+        if viewer.position == position {
+            return false;
+        }
+        viewer.position = position;
+        true
+    }
+
+    pub fn set_viewer_range(&mut self, viewer_id: i32, range: f64) -> bool {
+        let Some(viewer) = self.viewers.get_mut(&viewer_id) else {
+            return false;
+        };
+        let range = range.max(0.0);
+        if viewer.range == range {
+            return false;
+        }
+        viewer.range = range;
+        true
+    }
+
+    pub fn is_tracked_by(&self, viewer_id: i32, entity_id: i32) -> bool {
+        self.viewers
+            .get(&viewer_id)
+            .is_some_and(|viewer| viewer.tracks(entity_id))
+    }
+
+    /// Pairing packets for one entity: Add Entity, all metadata, equipment,
+    /// then one `ClientboundUpdateMobEffect` per active effect.
+    pub fn enter_packets(&self, entity_id: i32) -> Vec<Vec<u8>> {
+        let Some(tracked) = self.entities.get(&entity_id) else {
+            return Vec::new();
+        };
+        let mut packets = vec![
+            add_entity_packet(&tracked.entity),
+            tracked.living.all_metadata_packet(),
+            tracked.living.equipment_packet(),
+        ];
+        packets.extend(tracked.living.active_effect_packets());
+        packets
+    }
+
+    /// Recompute one viewer's range set. Returns, in order: pending removals,
+    /// one batched removal for ids that left the range, pairing packets for
+    /// entering ids (ascending), and position syncs for tracked ids whose
+    /// position/yaw/pitch changed (ascending).
+    pub fn update_viewer(&mut self, viewer_id: i32) -> Vec<Vec<u8>> {
+        let Some(viewer) = self.viewers.get(&viewer_id) else {
+            return Vec::new();
+        };
+        let position = viewer.position;
+        let range = viewer.range;
+        let range_sq = range * range;
+        let visible: BTreeSet<i32> = self
+            .entities
+            .iter()
+            .filter(|(_, tracked)| {
+                let dx = tracked.entity.x - position.0;
+                let dy = tracked.entity.y - position.1;
+                let dz = tracked.entity.z - position.2;
+                dx * dx + dy * dy + dz * dz <= range_sq
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let left: Vec<i32> = viewer.tracked.difference(&visible).copied().collect();
+        let entered: Vec<i32> = visible.difference(&viewer.tracked).copied().collect();
+        let updated: Vec<i32> = visible.intersection(&viewer.tracked).copied().collect();
+
+        let viewer = self
+            .viewers
+            .get_mut(&viewer_id)
+            .expect("viewer was read above");
+        let mut packets = std::mem::take(&mut viewer.pending);
+        if !left.is_empty() {
+            packets.push(remove_entities_packet(&left));
+            for id in &left {
+                viewer.last_sent.remove(id);
+            }
+        }
+        for id in &entered {
+            if let Some(tracked) = self.entities.get(id) {
+                packets.push(add_entity_packet(&tracked.entity));
+                packets.push(tracked.living.all_metadata_packet());
+                packets.push(tracked.living.equipment_packet());
+                packets.extend(tracked.living.active_effect_packets());
+                viewer
+                    .last_sent
+                    .insert(*id, EntitySnapshot::of(&tracked.entity));
+            }
+        }
+        for id in &updated {
+            if let Some(tracked) = self.entities.get(id)
+                && viewer
+                    .last_sent
+                    .get(id)
+                    .is_none_or(|snapshot| !snapshot.matches(&tracked.entity))
+            {
+                packets.push(entity_position_sync_packet(&tracked.entity));
+                viewer
+                    .last_sent
+                    .insert(*id, EntitySnapshot::of(&tracked.entity));
+            }
+        }
+        viewer.tracked = visible;
+        packets
+    }
+
+    /// Update every viewer in ascending viewer-id order. Only viewers with
+    /// packets are returned, preserving per-viewer packet order.
+    pub fn update_all_viewers(&mut self) -> Vec<(i32, Vec<Vec<u8>>)> {
+        let viewers: Vec<i32> = self.viewers.keys().copied().collect();
+        let mut updates = Vec::new();
+        for viewer in viewers {
+            let packets = self.update_viewer(viewer);
+            if !packets.is_empty() {
+                updates.push((viewer, packets));
+            }
+        }
+        updates
+    }
+}
+
 /// Per-session entity view: deterministic mobs near the player plus their
 /// metadata, health, equipment, and removal lifecycle.
 ///
@@ -370,7 +649,7 @@ pub struct SessionEntityTick {
 /// process-wide [`crate::entity_metadata::living_entities`] store. That keeps
 /// two players from sharing one cow and makes disconnect cleanup a plain drop.
 pub struct SessionEntityTracker {
-    entities: Vec<TrackedEntity>,
+    entities: EntityTracker,
     ai_world: MemoryWorld,
     game_time: i64,
 }
@@ -410,7 +689,7 @@ impl SessionEntityTracker {
 
     fn build(player: (f64, f64, f64), seed: i64, mut ground: impl FnMut(f64, f64) -> f64) -> Self {
         let base_id = NEXT_SESSION_ENTITY_ID.fetch_add(8, Ordering::Relaxed);
-        let mut entities = Vec::with_capacity(SESSION_MOB_SPAWNS.len());
+        let mut entities = EntityTracker::new();
         for (index, spawn) in SESSION_MOB_SPAWNS.iter().enumerate() {
             let x = player.0.floor() + spawn.dx + 0.5;
             let z = player.2.floor() + spawn.dz + 0.5;
@@ -450,7 +729,7 @@ impl SessionEntityTracker {
                 )
             });
 
-            entities.push(TrackedEntity { entity, living, ai });
+            entities.insert(TrackedEntity { entity, living, ai });
         }
 
         Self {
@@ -468,29 +747,35 @@ impl SessionEntityTracker {
         self.entities.is_empty()
     }
 
+    /// Shared entity records without cloning. Callers that need per-viewer
+    /// tracking can drive [`EntityTracker`] directly instead of maintaining a
+    /// second entity list.
+    pub fn shared(&self) -> &EntityTracker {
+        &self.entities
+    }
+
+    pub fn shared_mut(&mut self) -> &mut EntityTracker {
+        &mut self.entities
+    }
+
     pub fn tracked_ids(&self) -> Vec<i32> {
-        self.entities
-            .iter()
-            .map(|tracked| tracked.entity.id)
-            .collect()
+        self.entities.ids().collect()
     }
 
     pub fn tracks(&self, id: i32) -> bool {
-        self.entities.iter().any(|tracked| tracked.entity.id == id)
+        self.entities.contains(id)
     }
 
     pub fn entity(&self, id: i32) -> Option<&TrackedEntity> {
-        self.entities.iter().find(|tracked| tracked.entity.id == id)
+        self.entities.get(id)
     }
 
-    /// Add Entity, initial metadata (including health), and equipment for every
-    /// tracked mob, in spawn order.
+    /// Add Entity, initial metadata (including health), equipment, and active
+    /// effects for every tracked mob, in ascending network-id order.
     pub fn join_packets(&self) -> Vec<Vec<u8>> {
         let mut packets = Vec::with_capacity(self.entities.len() * 3);
-        for tracked in &self.entities {
-            packets.push(add_entity_packet(&tracked.entity));
-            packets.push(tracked.living.all_metadata_packet());
-            packets.push(tracked.living.equipment_packet());
+        for id in self.entities.ids() {
+            packets.extend(self.entities.enter_packets(id));
         }
         packets
     }
@@ -506,21 +791,21 @@ impl SessionEntityTracker {
         let mut out = SessionEntityTick::default();
         let range_sq = SESSION_TRACKING_RANGE * SESSION_TRACKING_RANGE;
         let ai_world = &self.ai_world;
-        let mut index = 0;
-        while index < self.entities.len() {
-            let tracked = &mut self.entities[index];
+        let ids: Vec<i32> = self.entities.ids().collect();
+        for id in ids {
+            let Some(tracked) = self.entities.get_mut(id) else {
+                continue;
+            };
             let dx = tracked.entity.x - player.0;
             let dy = tracked.entity.y - player.1;
             let dz = tracked.entity.z - player.2;
             if dx * dx + dy * dy + dz * dz > range_sq {
-                let id = tracked.entity.id;
                 out.packets.push(remove_entities_packet(&[id]));
                 out.removed.push(id);
-                self.entities.remove(index);
+                self.entities.remove_entity(id);
                 continue;
             }
 
-            let id = tracked.entity.id;
             let moved = tracked.entity.tick_physics(collider);
             if let Some(ai) = &mut tracked.ai {
                 ai.health = tracked.living.health;
@@ -538,10 +823,8 @@ impl SessionEntityTracker {
             if tracked.living.removed {
                 out.packets.push(remove_entities_packet(&[id]));
                 out.removed.push(id);
-                self.entities.remove(index);
-                continue;
+                self.entities.remove_entity(id);
             }
-            index += 1;
         }
         out
     }
@@ -549,10 +832,7 @@ impl SessionEntityTracker {
     /// Apply damage to one tracked mob. The returned packets are the vanilla
     /// death event, metadata health/pose update, and (for players) SetHealth.
     pub fn damage(&mut self, id: i32, amount: f32) -> Option<HurtResult> {
-        let tracked = self
-            .entities
-            .iter_mut()
-            .find(|tracked| tracked.entity.id == id)?;
+        let tracked = self.entities.get_mut(id)?;
         let result = tracked.living.hurt(amount);
         let health = tracked.living.health;
         if let Some(ai) = &mut tracked.ai {
@@ -566,29 +846,27 @@ impl SessionEntityTracker {
 
     /// Remove one tracked id and return its remove-entities packet.
     pub fn remove(&mut self, id: i32) -> Option<Vec<u8>> {
-        let index = self
-            .entities
-            .iter()
-            .position(|tracked| tracked.entity.id == id)?;
-        self.entities.remove(index);
+        self.entities.remove_entity(id)?;
         Some(remove_entities_packet(&[id]))
     }
 
     /// Drop tracked mobs whose chunk is no longer in the session's sent set.
     pub fn retain_in_chunks(&mut self, chunks: &HashSet<(i32, i32)>) -> Vec<Vec<u8>> {
         let mut packets = Vec::new();
-        self.entities.retain(|tracked| {
+        let ids: Vec<i32> = self.entities.ids().collect();
+        for id in ids {
+            let Some(tracked) = self.entities.get(id) else {
+                continue;
+            };
             let chunk = (
                 (tracked.entity.x.floor() as i32).div_euclid(16),
                 (tracked.entity.z.floor() as i32).div_euclid(16),
             );
-            if chunks.contains(&chunk) {
-                true
-            } else {
-                packets.push(remove_entities_packet(&[tracked.entity.id]));
-                false
+            if !chunks.contains(&chunk) {
+                packets.push(remove_entities_packet(&[id]));
+                self.entities.remove_entity(id);
             }
-        });
+        }
         packets
     }
 

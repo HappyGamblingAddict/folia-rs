@@ -16,7 +16,11 @@
 //! the current model are implemented; an unknown serializer is an explicit
 //! error rather than a guessed payload length.
 
-use crate::item_components::{ItemStack, read_item_stack, write_item_stack};
+use crate::effects::{
+    EffectApplyResult, EffectTick, EffectUpdate, StatusEffect, StatusEffectKind, StatusEffectSet,
+    potion_contents_effects, remove_mob_effect_packet, update_mob_effect_packet,
+};
+use crate::item_components::{ItemStack, PotionContents, read_item_stack, write_item_stack};
 use crate::nbt::Tag;
 use crate::protocol::{PacketReader, PacketWriter};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1139,6 +1143,10 @@ pub struct LivingEntity {
     pub attributes: AttributeMap,
     pub equipment: Equipment,
     pub metadata: EntityMetadata,
+    /// Active status effects in add order.
+    pub effects: StatusEffectSet,
+    /// Entity age used by status-effect tick intervals.
+    pub tick_count: i64,
 }
 
 impl LivingEntity {
@@ -1170,6 +1178,8 @@ impl LivingEntity {
             attributes,
             equipment: Equipment::new(),
             metadata: EntityMetadata::new_living_with_health(entity_id, health),
+            effects: StatusEffectSet::new(),
+            tick_count: 0,
         }
     }
 
@@ -1208,6 +1218,140 @@ impl LivingEntity {
             self.set_health(self.max_health());
         }
         changed
+    }
+
+    /// `LivingEntity.heal`: adds health up to the maximum and syncs
+    /// `DATA_HEALTH`.
+    pub fn heal(&mut self, amount: f32) -> bool {
+        if amount <= 0.0 || self.removed || self.dead {
+            return false;
+        }
+        let health = (self.health + amount).min(self.max_health());
+        self.set_health(health)
+    }
+
+    /// Apply one effect. Instant health/damage is applied exactly once and is
+    /// never stored; other effects merge into the active set and emit one
+    /// `ClientboundUpdateMobEffect` packet when added or refreshed.
+    pub fn apply_effect(&mut self, effect: StatusEffect) -> EffectApplyResult {
+        self.apply_effect_inner(effect, false)
+    }
+
+    /// `LivingEntity.forceAddEffect`: replace an existing effect instead of
+    /// merging it. Instant effects still apply immediately.
+    pub fn replace_effect(&mut self, effect: StatusEffect) -> EffectApplyResult {
+        self.apply_effect_inner(effect, true)
+    }
+
+    fn apply_effect_inner(&mut self, effect: StatusEffect, replace: bool) -> EffectApplyResult {
+        if !self.is_alive() {
+            return EffectApplyResult {
+                update: EffectUpdate::Unchanged,
+                packets: Vec::new(),
+            };
+        }
+        if effect.kind.is_instant() {
+            return EffectApplyResult {
+                update: EffectUpdate::Instant,
+                packets: self.apply_instant_effect(effect.kind, effect.amplifier),
+            };
+        }
+        let kind = effect.kind;
+        let update = if replace {
+            self.effects.replace(effect)
+        } else {
+            self.effects.apply(effect)
+        };
+        let packets = match update {
+            EffectUpdate::Added | EffectUpdate::Updated => self
+                .effects
+                .get(kind)
+                .map(|effect| update_mob_effect_packet(self.entity_id, effect, self.is_player))
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
+        EffectApplyResult { update, packets }
+    }
+
+    fn apply_instant_effect(&mut self, kind: StatusEffectKind, amplifier: u8) -> Vec<Vec<u8>> {
+        match kind {
+            StatusEffectKind::InstantHealth => {
+                let amount = 4i32.checked_shl(u32::from(amplifier)).unwrap_or(i32::MAX);
+                if self.heal(amount as f32) {
+                    self.metadata.dirty_packet().into_iter().collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            StatusEffectKind::InstantDamage => {
+                let amount = 6i32.checked_shl(u32::from(amplifier)).unwrap_or(i32::MAX);
+                self.hurt_with(amount as f32, false).packets
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Apply every effect in a potion component in Java order. Instant effects
+    /// apply once per call; active effects merge.
+    pub fn apply_potion_contents(&mut self, contents: &PotionContents) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        for effect in potion_contents_effects(contents) {
+            packets.extend(self.apply_effect(effect).packets);
+        }
+        packets
+    }
+
+    /// Remove one active effect and return its remove packet.
+    pub fn remove_effect(&mut self, kind: StatusEffectKind) -> Option<Vec<u8>> {
+        self.effects
+            .remove(kind)
+            .then(|| remove_mob_effect_packet(self.entity_id, kind))
+    }
+
+    /// `LivingEntity.removeAllEffects`: one remove packet per active effect in
+    /// add order.
+    pub fn clear_effects(&mut self) -> Vec<Vec<u8>> {
+        let packets = self
+            .effects
+            .iter()
+            .map(|effect| remove_mob_effect_packet(self.entity_id, effect.kind))
+            .collect();
+        self.effects.clear();
+        packets
+    }
+
+    /// Update packets for every active effect, used when an entity enters a
+    /// viewer's tracking range.
+    pub fn active_effect_packets(&self) -> Vec<Vec<u8>> {
+        self.effects.update_packets(self.entity_id)
+    }
+
+    /// One effect tick. Expiry emits `ClientboundRemoveMobEffect`; poison and
+    /// wither damage, and regeneration healing, run through the living-entity
+    /// damage/heal pipeline so metadata packets stay in sync.
+    pub fn tick_effects(&mut self) -> Vec<Vec<u8>> {
+        let events = self.effects.tick(self.tick_count.max(0) as u64);
+        let mut packets = Vec::new();
+        for event in events {
+            match event {
+                EffectTick::Expired(kind) => {
+                    packets.push(remove_mob_effect_packet(self.entity_id, kind));
+                }
+                EffectTick::Damage { amount, .. } => {
+                    packets.extend(self.hurt_with(amount as f32, false).packets);
+                }
+                EffectTick::Heal { amount, .. } => {
+                    if self.heal(amount as f32)
+                        && let Some(packet) = self.metadata.dirty_packet()
+                    {
+                        packets.push(packet);
+                    }
+                }
+                EffectTick::None => {}
+            }
+        }
+        packets
     }
 
     /// `LivingEntity.hurtServer` subset: dead/removed entities ignore damage,
@@ -1278,6 +1422,7 @@ impl LivingEntity {
     /// server player, so a player flag preserves that behavior.
     pub fn tick(&mut self) -> Vec<Vec<u8>> {
         let mut packets = Vec::new();
+        self.tick_count = self.tick_count.saturating_add(1);
         if self.hurt_time > 0 {
             self.hurt_time -= 1;
         }
@@ -1297,6 +1442,7 @@ impl LivingEntity {
         } else {
             self.death_broadcasted = false;
         }
+        packets.extend(self.tick_effects());
         packets
     }
 

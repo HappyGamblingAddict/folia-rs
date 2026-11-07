@@ -27,12 +27,20 @@ Last updated: 2026-11-07
   entity tracking and live AI goals; full plugin API; true parallel
   per-region world state (the region driver scopes chunk work, but
   `WorldStorage` is still one global lock).
+- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects,
+  status-effect packets, shared per-viewer tracking, crops, leaf decay, chest
+  loot, item/XP entities, hoppers, pistons, block-entity tickers, region
+  ownership, and live bridge chat/time/weather/sound/particles.
+- Major gaps: feature-pool placement and non-village structure templates;
+  live session dimension switching; container menu packets; live per-viewer
+  tracking wiring and live AI goals; full plugin API; real region tick
+  threading.
 
 ## Current focus
 
 1. P2.8 feature-pool placement and the remaining six configured feature types.
 2. P7 portal-driven dimension switching and non-village structure templates.
-3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
+3. P5 live AI goals and wiring the shared tracker into live session visibility.
 4. P6 container menus/packets and deeper redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
 6. P2.3 ore parity — `NoiseChunk` vein interpolation is landed; remaining gaps
@@ -52,7 +60,8 @@ Last updated: 2026-11-07
 - [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
 - [~] P4.1-P4.4 physics/breaking/item entities (live hunger and special movement).
 - [~] P4.8 crafting/brewing (menus, packets, recipe book).
-- [~] P5.1/P5.2 metadata/AI/effects (live AI, effect packets, shared tracking).
+- [~] P5.1/P5.2 metadata/AI/effects (effect packets + shared tracker core
+  landed; live AI goals and live-session tracker wiring remain).
 - [~] P6 block entities (chest/furnace/brewing/sign/spawner/hopper).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1 online/chat-signing core (TLS and login wiring).
@@ -87,6 +96,16 @@ Last updated: 2026-11-07
   corners, trilinear values, 170 changed vein-edge positions, determinism, and
   the 16-column parity floor. Exact-name rose 5886 -> 5891/6144 (95.80% ->
   95.88%), matched ore blocks 26 -> 28/33; block-class stays 6067/6144.
+- 2026-11-07: status-effect packets and shared tracking - `effects.rs` adds
+  the 1.21.11 `ClientboundUpdateMobEffect` (130) / `ClientboundRemoveMobEffect`
+  (76) bodies with registry ids 0-39, amplifier/duration/flags, merge/replace,
+  and unknown-id decode errors. `LivingEntity` stores/tick effects, applies
+  potions and instant health/damage once, and emits metadata/effect/remove
+  packets. `entity.rs` adds a shared `EntityTracker` (id-keyed records,
+  per-viewer range sets, enter/leave/update packets, deterministic order);
+  `SessionEntityTracker` now uses it as its only entity storage. Focused: 15
+  `effect_packets` + 8 `shared_tracking` tests; `entity_metadata`, `effects`,
+  and `join_entities` stay green; fmt/clippy clean.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

@@ -1879,6 +1879,12 @@ instantly on start-destroy and places on use-item-on.
 
 ### P4.15 Multiplayer visibility and tracking `[ ]` `L`
 
+- **Progress (2026-11-07):** `entity::EntityTracker` owns id-keyed entity
+  records and per-viewer range sets with deterministic enter/leave/update
+  packets; `SessionEntityTracker` consumes the same records. Live `join.rs`
+  still forwards global broadcasts and has not switched to per-viewer viewer
+  ids yet.
+
 - **What:** Track which players can see which entities/chunks; send spawn,
   metadata, equipment, animation, and removal packets per viewer.
 - **Why:** Entity tracking is currently global broadcast, which does not scale
@@ -1941,6 +1947,22 @@ are still open.
   damage through the living store and filters broadcast entity packets to
   tracked ids. Remaining: armor calculation, effects, goal-driven AI movement,
   persistence, and a Java packet fixture.
+  **Effect packets and shared tracking (2026-11-07):** `effects.rs` implements
+  `ClientboundUpdateMobEffect` (id 130) and `ClientboundRemoveMobEffect` (id
+  76) with the 1.21.11 `MobEffects` registry ids (0-39), amplifier, duration,
+  ambient/visible/show-icon/blend flags, merge and force-replace rules, and
+  errors on unknown registry ids. `LivingEntity` now owns the active effect
+  set: applying a potion/effect emits update packets, instant health/damage
+  applies once through health metadata, poison/wither/regeneration tick in
+  `LivingEntity::tick`, and expiry/removal emits remove packets.
+  `entity.rs` adds a shared `EntityTracker` keyed by entity id with per-viewer
+  range sets, enter/leave/update packets, active-effect pairing on enter, and
+  deterministic id/viewer order; `SessionEntityTracker` stores its entities in
+  that tracker (`shared`/`shared_mut`) instead of a second list. Focused: 15
+  `tests/effect_packets.rs` + 8 `tests/shared_tracking.rs`; `entity_metadata`,
+  `effects`, and `join_entities` stay green. Remaining: live `join.rs` wiring
+  for per-viewer visibility, effect metadata particles/ambience, hidden
+  effects, and a Java packet fixture.
 
 ### P5.2 Entity lifecycle and per-chunk storage `[ ]` `L`
 

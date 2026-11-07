@@ -207,6 +207,13 @@ The current active queue is:
 Item entities/XP orbs from the table-driven block drops are now modeled
 (`item_entity.rs`, `spawn_drops_at` + `DigState::stop_with_entities`, 16
 `tests/item_entities.rs` + 6 lib tests; `join.rs` wiring remains open).
+
+Status-effect packets (update id 130, remove id 76) and the shared
+`EntityTracker`/per-viewer range sets are now modeled (`effects.rs`,
+`entity.rs`, 15 `tests/effect_packets.rs` + 8 `tests/shared_tracking.rs`).
+`SessionEntityTracker` consumes the shared records through `shared`/
+`shared_mut`; the remaining P5 task is wiring live viewer ids and AI goals into
+`join.rs`, not adding a second tracker.
 `TODO.md` is authoritative if this list is stale.
 
 ## Architecture reminders

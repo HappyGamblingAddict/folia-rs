@@ -819,17 +819,25 @@ These are expected gaps, not reasons to stop:
     not wander or attack yet.
   - Health uses the generic `LivingEntity` 20 HP default except for the pinned
     cow/pig (10) and zombie (20) max-health values; drops, XP, knockback,
-    armor, damage types, effects, and absorption are absent.
-  - Tracking range is a fixed 80 blocks. Vanilla per-entity-type ranges, chunk
-    tickets, velocity/teleport packet variants, animation/effect/passenger/leash
-    packets, and per-viewer metadata dirtying are not modeled.
+    armor, damage types, and absorption are absent. Status effects now live on
+    `LivingEntity`, but session mobs are not given any.
+  - Tracking range is a fixed 80 blocks. `EntityTracker` now has per-viewer
+    range sets and enter/leave/update packets, but `join.rs` still uses the
+    session tracker's single fixed-range pass instead of viewer ids. Vanilla
+    per-entity-type ranges, chunk tickets, velocity/teleport variants,
+    animation/passenger/leash packets, and per-viewer metadata dirtying remain
+    unmodeled.
   - Join mob packets are sent before the chunk batch so the captured-world join
     test stays byte-compatible. A real client holds the entities until their
     columns arrive; vanilla normally sends them after chunk tracking starts.
   - There is no Java-captured join entity packet fixture; the six focused tests
     pin packet ids and bodies against the decompiled layouts.
 - Workaround / next task: keep the explicit `SessionEntityTracker` boundary and
-  extend it for P5.13/P5.2 rather than reintroducing global broadcasts.
+  extend it for P5.13/P5.2 rather than reintroducing global broadcasts. The
+  shared `EntityTracker` core is now in `entity.rs`; the remaining work is
+  assigning live viewer ids, feeding player positions/ranges into
+  `update_viewer`/`update_all_viewers`, and routing the returned packets to
+  each session instead of the global broadcast filter.
 
 ## 2026-11-06 - P4.3/P5.4 item entities + XP orbs are a behaviour slice
 
@@ -1034,8 +1042,11 @@ These are expected gaps, not reasons to stop:
 - No absorption, health boost, hunger, levitation, slow falling, conduit,
   dolphin, bad omen, or darkness gameplay; only the listed effect flags and
   modifiers are exposed.
-- Effect application/removal is not wired to consuming potions, beacons,
-  conduits, or commands, and no `ClientboundUpdateMobEffect` packet is emitted.
+- Effect packets are modeled and `LivingEntity` applies/tick/removes effects,
+  but consuming a potion still stops at `item_prototypes::consume`; it does not
+  call `LivingEntity::apply_potion_contents`, emit packets, or consume the
+  bottle through the live session. Beacons, conduits, commands, effect
+  particles/ambience metadata, and hidden effects are not wired.
 - Damage types are a typed enum, not the full `DamageSources` registry; totems,
   absorption, knockback, death messages, and loot on death remain open.
 

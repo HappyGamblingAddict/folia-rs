@@ -13,7 +13,39 @@ Format:
 - Consequences:
 ```
 
-## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
+## 2026-11-07 - Status-effect packets use registry ids and one shared tracker
+
+- Context: 1.21.11 sends `ClientboundUpdateMobEffectPacket` (play id 130) and
+  `ClientboundRemoveMobEffectPacket` (id 76) with a `MobEffect` holder registry
+  id, not a name. Entity visibility was still split between a global broadcast
+  map and `SessionEntityTracker`'s private vector.
+- Decision: pin both packet ids to the decompiled `GameProtocols
+  .CLIENTBOUND_TEMPLATE` order (`CLIENTBOUND_BUNDLE` is id 0) and pin effect
+  ids 0-39 to the `MobEffects` static registration order. Effect decoders
+  return an explicit error for unknown ids instead of guessing. The update
+  body is entity id, effect registry id, amplifier, duration, then the
+  ambient/visible/show-icon/blend flag byte.
+- Decision: `LivingEntity` owns its `StatusEffectSet`. `apply_effect` merges
+  by vanilla `MobEffectInstance.update` rules, `replace_effect` is the
+  force-add path, instant health/damage applies once through the health
+  metadata pipeline, and `tick` emits remove packets on expiry. Poison, wither,
+  and regeneration damage/heal through `LivingEntity` so `DATA_HEALTH` stays
+  synchronized.
+- Decision: `entity::EntityTracker` stores each `TrackedEntity` once in a
+  `BTreeMap<i32, _>`. Viewers hold only an ascending id `BTreeSet`, last-synced
+  position snapshots, and pending removals. `update_viewer` emits batched
+  removals, add+metadata+equipment+active-effect pairing, then position syncs,
+  all in ascending id order; `update_all_viewers` iterates viewers ascending.
+  `SessionEntityTracker` embeds this tracker as its only entity storage and
+  exposes `shared`/`shared_mut`.
+- Why: keeps packet bytes and ordering deterministic without a second entity
+  list, and makes range sets testable before `join.rs` switches from global
+  broadcasts to viewer ids.
+- Consequences: effect particles/ambience metadata, hidden effects, per-type
+  tracking ranges, and live `join.rs` viewer wiring remain open. Entity
+  equipment is still sent as a full eight-slot snapshot on enter.
+
+## 2026-11-07 - Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a
   256-byte `MessageSignature`. The task also requires a SHA-256 content hash,

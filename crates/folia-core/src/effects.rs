@@ -1,13 +1,28 @@
-//! Status effects, armor calculation, and typed damage.
+//! Status effects, armor calculation, typed damage, and effect packets.
 //!
-//! This is the P5 damage slice: it models the subset of
+//! This is the P5 damage/effect slice: it models the subset of
 //! `net/minecraft/world/effect/MobEffectInstance`, `LivingEntity` armor
 //! reduction, and vanilla `DamageType` flags that the server already tracks.
-//! Effects are stored beside a [`LivingEntity`] by callers; this module owns
-//! the tick math and the damage pipeline, not entity storage.
+//! Effects are stored on a [`LivingEntity`]; this module owns the tick math,
+//! the merge rules, and the `ClientboundUpdateMobEffect` /
+//! `ClientboundRemoveMobEffect` wire format.
 
 use crate::entity_metadata::{Equipment, EquipmentSlot, HurtResult, LivingEntity};
 use crate::item_components::{ItemStack, MobEffectInstance, PotionContents, normalize_key};
+use crate::protocol::{PacketReader, PacketWriter};
+use std::io;
+
+/// `GameProtocols.CLIENTBOUND_TEMPLATE` registration order in 1.21.11.
+/// `CLIENTBOUND_BUNDLE` occupies id 0; `REMOVE_MOB_EFFECT` is the 76th packet
+/// after the bundle delimiter and `UPDATE_MOB_EFFECT` the 130th.
+pub const CLIENTBOUND_REMOVE_MOB_EFFECT: i32 = 76;
+pub const CLIENTBOUND_UPDATE_MOB_EFFECT: i32 = 130;
+
+/// `ClientboundUpdateMobEffectPacket` flag bits.
+pub const EFFECT_FLAG_AMBIENT: u8 = 1;
+pub const EFFECT_FLAG_VISIBLE: u8 = 2;
+pub const EFFECT_FLAG_SHOW_ICON: u8 = 4;
+pub const EFFECT_FLAG_BLEND: u8 = 8;
 
 /// The status effects the server models explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -55,6 +70,50 @@ pub enum StatusEffectKind {
 }
 
 impl StatusEffectKind {
+    /// Every effect in `MobEffects` registration order.
+    pub const ALL: [Self; 40] = [
+        Self::Speed,
+        Self::Slowness,
+        Self::Haste,
+        Self::MiningFatigue,
+        Self::Strength,
+        Self::InstantHealth,
+        Self::InstantDamage,
+        Self::JumpBoost,
+        Self::Nausea,
+        Self::Regeneration,
+        Self::Resistance,
+        Self::FireResistance,
+        Self::WaterBreathing,
+        Self::Invisibility,
+        Self::Blindness,
+        Self::NightVision,
+        Self::Hunger,
+        Self::Weakness,
+        Self::Poison,
+        Self::Wither,
+        Self::HealthBoost,
+        Self::Absorption,
+        Self::Saturation,
+        Self::Glowing,
+        Self::Levitation,
+        Self::Luck,
+        Self::Unluck,
+        Self::SlowFalling,
+        Self::ConduitPower,
+        Self::DolphinsGrace,
+        Self::BadOmen,
+        Self::HeroOfTheVillage,
+        Self::Darkness,
+        Self::TrialOmen,
+        Self::RaidOmen,
+        Self::WindCharged,
+        Self::Weaving,
+        Self::Oozing,
+        Self::Infested,
+        Self::BreathOfTheNautilus,
+    ];
+
     /// Whether this effect applies its instant payload when added.
     pub fn is_instant(self) -> bool {
         matches!(self, Self::InstantHealth | Self::InstantDamage)
@@ -90,6 +149,103 @@ impl StatusEffectKind {
                 | Self::HeroOfTheVillage
                 | Self::BreathOfTheNautilus
         )
+    }
+
+    /// `BuiltInRegistries.MOB_EFFECT` id from the 1.21.11 `MobEffects`
+    /// registration order. These ids are written directly by
+    /// `MobEffect.STREAM_CODEC` (`ByteBufCodecs.holderRegistry`).
+    pub const fn registry_id(self) -> i32 {
+        match self {
+            Self::Speed => 0,
+            Self::Slowness => 1,
+            Self::Haste => 2,
+            Self::MiningFatigue => 3,
+            Self::Strength => 4,
+            Self::InstantHealth => 5,
+            Self::InstantDamage => 6,
+            Self::JumpBoost => 7,
+            Self::Nausea => 8,
+            Self::Regeneration => 9,
+            Self::Resistance => 10,
+            Self::FireResistance => 11,
+            Self::WaterBreathing => 12,
+            Self::Invisibility => 13,
+            Self::Blindness => 14,
+            Self::NightVision => 15,
+            Self::Hunger => 16,
+            Self::Weakness => 17,
+            Self::Poison => 18,
+            Self::Wither => 19,
+            Self::HealthBoost => 20,
+            Self::Absorption => 21,
+            Self::Saturation => 22,
+            Self::Glowing => 23,
+            Self::Levitation => 24,
+            Self::Luck => 25,
+            Self::Unluck => 26,
+            Self::SlowFalling => 27,
+            Self::ConduitPower => 28,
+            Self::DolphinsGrace => 29,
+            Self::BadOmen => 30,
+            Self::HeroOfTheVillage => 31,
+            Self::Darkness => 32,
+            Self::TrialOmen => 33,
+            Self::RaidOmen => 34,
+            Self::WindCharged => 35,
+            Self::Weaving => 36,
+            Self::Oozing => 37,
+            Self::Infested => 38,
+            Self::BreathOfTheNautilus => 39,
+        }
+    }
+
+    /// Resolve an effect registry id. Unknown ids return `None`; packet
+    /// decoders turn that into an explicit invalid-data error instead of
+    /// guessing an effect.
+    pub fn from_registry_id(id: i32) -> Option<Self> {
+        Some(match id {
+            0 => Self::Speed,
+            1 => Self::Slowness,
+            2 => Self::Haste,
+            3 => Self::MiningFatigue,
+            4 => Self::Strength,
+            5 => Self::InstantHealth,
+            6 => Self::InstantDamage,
+            7 => Self::JumpBoost,
+            8 => Self::Nausea,
+            9 => Self::Regeneration,
+            10 => Self::Resistance,
+            11 => Self::FireResistance,
+            12 => Self::WaterBreathing,
+            13 => Self::Invisibility,
+            14 => Self::Blindness,
+            15 => Self::NightVision,
+            16 => Self::Hunger,
+            17 => Self::Weakness,
+            18 => Self::Poison,
+            19 => Self::Wither,
+            20 => Self::HealthBoost,
+            21 => Self::Absorption,
+            22 => Self::Saturation,
+            23 => Self::Glowing,
+            24 => Self::Levitation,
+            25 => Self::Luck,
+            26 => Self::Unluck,
+            27 => Self::SlowFalling,
+            28 => Self::ConduitPower,
+            29 => Self::DolphinsGrace,
+            30 => Self::BadOmen,
+            31 => Self::HeroOfTheVillage,
+            32 => Self::Darkness,
+            33 => Self::TrialOmen,
+            34 => Self::RaidOmen,
+            35 => Self::WindCharged,
+            36 => Self::Weaving,
+            37 => Self::Oozing,
+            38 => Self::Infested,
+            39 => Self::BreathOfTheNautilus,
+            _ => return None,
+        })
     }
 
     /// Resolve a vanilla `MobEffect` registry id. Both `minecraft:speed` and
@@ -151,6 +307,9 @@ pub struct StatusEffect {
     pub duration: i32,
     pub ambient: bool,
     pub visible: bool,
+    /// `MobEffectInstance.showIcon()`, serialized as bit 2 of the update
+    /// packet flags.
+    pub show_icon: bool,
 }
 
 impl StatusEffect {
@@ -161,7 +320,33 @@ impl StatusEffect {
             duration,
             ambient: false,
             visible: true,
+            show_icon: true,
         }
+    }
+
+    /// Set the three client-visible flags at once (`ambient`, `visible`,
+    /// `show_icon`).
+    pub const fn with_flags(mut self, ambient: bool, visible: bool, show_icon: bool) -> Self {
+        self.ambient = ambient;
+        self.visible = visible;
+        self.show_icon = show_icon;
+        self
+    }
+
+    /// Flags byte used by `ClientboundUpdateMobEffectPacket`. The blend bit is
+    /// supplied per packet because it is not stored on the instance.
+    pub const fn flags(&self) -> u8 {
+        let mut flags = 0;
+        if self.ambient {
+            flags |= EFFECT_FLAG_AMBIENT;
+        }
+        if self.visible {
+            flags |= EFFECT_FLAG_VISIBLE;
+        }
+        if self.show_icon {
+            flags |= EFFECT_FLAG_SHOW_ICON;
+        }
+        flags
     }
 
     /// Convert a `minecraft:custom_effects` entry into the runtime effect. The
@@ -174,22 +359,73 @@ impl StatusEffect {
             duration: effect.duration,
             ambient: effect.ambient,
             visible: effect.show_particles,
+            show_icon: effect.show_icon,
         })
     }
 
-    /// `MobEffectInstance.update`: refresh to the stronger/longer values and
-    /// return whether the effect remains active.
+    /// `MobEffectInstance.update`: adopt a stronger amplifier or, at equal
+    /// strength, the longer duration. Flag changes are copied regardless, and
+    /// a new non-ambient instance clears the ambient bit. Returns true when any
+    /// field changed.
     pub fn merge(&mut self, other: &StatusEffect) -> bool {
-        if other.amplifier > self.amplifier
-            || (other.amplifier == self.amplifier && other.duration > self.duration)
-        {
+        let mut changed = false;
+        let other_infinite = other.duration == -1;
+        let self_infinite = self.duration == -1;
+        if other.amplifier > self.amplifier {
             self.amplifier = other.amplifier;
             self.duration = other.duration;
-            self.ambient = other.ambient;
-            self.visible = other.visible;
+            changed = true;
+        } else if other.amplifier == self.amplifier
+            && (other_infinite && !self_infinite || other.duration > self.duration)
+        {
+            self.duration = other.duration;
+            changed = true;
         }
-        self.duration > 0
+        if !other.ambient && self.ambient {
+            self.ambient = false;
+            changed = true;
+        }
+        if other.visible != self.visible {
+            self.visible = other.visible;
+            changed = true;
+        }
+        if other.show_icon != self.show_icon {
+            self.show_icon = other.show_icon;
+            changed = true;
+        }
+        changed
     }
+
+    /// `LivingEntity.forceAddEffect`: replace every field without merging.
+    pub fn replace_with(&mut self, other: &StatusEffect) -> bool {
+        if self == other {
+            return false;
+        }
+        *self = other.clone();
+        true
+    }
+}
+
+/// Result of adding one effect to a set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectUpdate {
+    /// A new active effect was inserted.
+    Added,
+    /// The existing effect was refreshed or had its flags changed.
+    Updated,
+    /// Nothing changed (weaker and shorter, identical, or zero duration).
+    Unchanged,
+    /// Instant health/damage was applied immediately and never stored.
+    Instant,
+}
+
+/// Observable result of [`LivingEntity::apply_effect`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectApplyResult {
+    pub update: EffectUpdate,
+    /// Ready-to-send update packets. Instant effects emit health metadata
+    /// packets instead of a `ClientboundUpdateMobEffect` packet.
+    pub packets: Vec<Vec<u8>>,
 }
 
 /// What happened during one effect tick.
@@ -216,6 +452,14 @@ impl StatusEffectSet {
         self.effects.iter()
     }
 
+    pub fn len(&self) -> usize {
+        self.effects.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+
     pub fn get(&self, kind: StatusEffectKind) -> Option<&StatusEffect> {
         self.effects.iter().find(|effect| effect.kind == kind)
     }
@@ -228,26 +472,63 @@ impl StatusEffectSet {
         self.get(kind).map(|effect| effect.amplifier)
     }
 
-    /// Adds or refreshes an effect. Instant effects are returned to the caller
-    /// so it can apply their payload exactly once; they never enter the active
-    /// effect list (vanilla applies them immediately and does not store them).
-    pub fn add(&mut self, effect: StatusEffect) -> Option<EffectTick> {
+    /// Adds or refreshes an effect, following `MobEffectInstance.update`.
+    /// Instant effects are reported as [`EffectUpdate::Instant`] and never
+    /// enter the active list (vanilla applies them immediately and does not
+    /// store them).
+    pub fn apply(&mut self, effect: StatusEffect) -> EffectUpdate {
         if effect.kind.is_instant() {
-            return Some(EffectTick::None);
+            return EffectUpdate::Instant;
         }
-        if effect.duration <= 0 {
-            return None;
+        if effect.duration == 0 || effect.duration < -1 {
+            return EffectUpdate::Unchanged;
         }
         if let Some(existing) = self
             .effects
             .iter_mut()
             .find(|existing| existing.kind == effect.kind)
         {
-            existing.merge(&effect);
-            return None;
+            return if existing.merge(&effect) {
+                EffectUpdate::Updated
+            } else {
+                EffectUpdate::Unchanged
+            };
         }
         self.effects.push(effect);
-        None
+        EffectUpdate::Added
+    }
+
+    /// `LivingEntity.forceAddEffect`: replace an existing instance instead of
+    /// merging. A new kind is inserted normally.
+    pub fn replace(&mut self, effect: StatusEffect) -> EffectUpdate {
+        if effect.kind.is_instant() {
+            return EffectUpdate::Instant;
+        }
+        if effect.duration == 0 || effect.duration < -1 {
+            return EffectUpdate::Unchanged;
+        }
+        if let Some(existing) = self
+            .effects
+            .iter_mut()
+            .find(|existing| existing.kind == effect.kind)
+        {
+            return if existing.replace_with(&effect) {
+                EffectUpdate::Updated
+            } else {
+                EffectUpdate::Unchanged
+            };
+        }
+        self.effects.push(effect);
+        EffectUpdate::Added
+    }
+
+    /// Backwards-compatible add used by potion consumption callers: returns
+    /// the instant payload marker exactly once.
+    pub fn add(&mut self, effect: StatusEffect) -> Option<EffectTick> {
+        match self.apply(effect) {
+            EffectUpdate::Instant => Some(EffectTick::None),
+            _ => None,
+        }
     }
 
     pub fn remove(&mut self, kind: StatusEffectKind) -> bool {
@@ -273,10 +554,12 @@ impl StatusEffectSet {
             if effect.kind.is_instant() {
                 continue;
             }
-            effect.duration -= 1;
-            if effect.duration <= 0 {
-                events.push(EffectTick::Expired(effect.kind));
-                continue;
+            if effect.duration != -1 {
+                effect.duration -= 1;
+                if effect.duration <= 0 {
+                    events.push(EffectTick::Expired(effect.kind));
+                    continue;
+                }
             }
             let interval = match effect.kind {
                 StatusEffectKind::Poison => (25u64 >> effect.amplifier.min(7)).max(1),
@@ -346,6 +629,132 @@ impl StatusEffectSet {
     pub fn has_fire_resistance(&self) -> bool {
         self.has(StatusEffectKind::FireResistance)
     }
+
+    /// One update packet per active effect, in add order. Used when an entity
+    /// enters a viewer's tracking range (`PlayerList.sendActiveEffects`).
+    pub fn update_packets(&self, entity_id: i32) -> Vec<Vec<u8>> {
+        self.effects
+            .iter()
+            .map(|effect| update_mob_effect_packet(entity_id, effect, false))
+            .collect()
+    }
+}
+
+/// `ClientboundUpdateMobEffectPacket` body (packet id included).
+pub fn update_mob_effect_packet(entity_id: i32, effect: &StatusEffect, blend: bool) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer
+        .write_varint(CLIENTBOUND_UPDATE_MOB_EFFECT)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(entity_id)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(effect.kind.registry_id())
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(i32::from(effect.amplifier))
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(effect.duration)
+        .expect("writing to Vec cannot fail");
+    let flags = effect.flags() | if blend { EFFECT_FLAG_BLEND } else { 0 };
+    writer.write_u8(flags).expect("writing to Vec cannot fail");
+    writer.into_inner()
+}
+
+/// Decode a complete `ClientboundUpdateMobEffectPacket`. Unknown registry ids
+/// are an error so a packet from a different protocol version cannot be
+/// silently misinterpreted.
+pub fn read_update_mob_effect(packet: &[u8]) -> io::Result<(i32, StatusEffect, bool)> {
+    let mut reader = PacketReader::new(packet);
+    let packet_id = reader.read_varint()?;
+    if packet_id != CLIENTBOUND_UPDATE_MOB_EFFECT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "expected update_mob_effect id {CLIENTBOUND_UPDATE_MOB_EFFECT}, got {packet_id}"
+            ),
+        ));
+    }
+    let entity_id = reader.read_varint()?;
+    let effect_id = reader.read_varint()?;
+    let kind = StatusEffectKind::from_registry_id(effect_id).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown mob effect registry id {effect_id}"),
+        )
+    })?;
+    let amplifier = reader.read_varint()?;
+    let amplifier = u8::try_from(amplifier).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("mob effect amplifier {amplifier} is out of range"),
+        )
+    })?;
+    let duration = reader.read_varint()?;
+    let flags = reader.read_u8()?;
+    if !reader.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing bytes after update_mob_effect",
+        ));
+    }
+    Ok((
+        entity_id,
+        StatusEffect {
+            kind,
+            amplifier,
+            duration,
+            ambient: flags & EFFECT_FLAG_AMBIENT != 0,
+            visible: flags & EFFECT_FLAG_VISIBLE != 0,
+            show_icon: flags & EFFECT_FLAG_SHOW_ICON != 0,
+        },
+        flags & EFFECT_FLAG_BLEND != 0,
+    ))
+}
+
+/// `ClientboundRemoveMobEffectPacket` body (packet id included).
+pub fn remove_mob_effect_packet(entity_id: i32, kind: StatusEffectKind) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer
+        .write_varint(CLIENTBOUND_REMOVE_MOB_EFFECT)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(entity_id)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(kind.registry_id())
+        .expect("writing to Vec cannot fail");
+    writer.into_inner()
+}
+
+pub fn read_remove_mob_effect(packet: &[u8]) -> io::Result<(i32, StatusEffectKind)> {
+    let mut reader = PacketReader::new(packet);
+    let packet_id = reader.read_varint()?;
+    if packet_id != CLIENTBOUND_REMOVE_MOB_EFFECT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "expected remove_mob_effect id {CLIENTBOUND_REMOVE_MOB_EFFECT}, got {packet_id}"
+            ),
+        ));
+    }
+    let entity_id = reader.read_varint()?;
+    let effect_id = reader.read_varint()?;
+    let kind = StatusEffectKind::from_registry_id(effect_id).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown mob effect registry id {effect_id}"),
+        )
+    })?;
+    if !reader.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing bytes after remove_mob_effect",
+        ));
+    }
+    Ok((entity_id, kind))
 }
 
 /// A named potion's base effect list, matching `net.minecraft.world.item.alchemy.Potions`.

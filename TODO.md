@@ -30,6 +30,7 @@ where possible, a differential test against the Java oracle.
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~78% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage |
 | Full worldgen | ~72% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw; shipped structure templates and feature-pool placement are missing |
+| Full worldgen | ~72% | 207/224 configured feature types, 888/888 placement modifiers, recursive jigsaw with shipped village templates; feature-pool placement and non-village template families are missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java light fixtures and exact occlusion flags missing |
 | Player simulation | ~38% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
 | Entities | ~30% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, deterministic join mobs with tracking/cleanup; sensors/brains, armor, shared per-viewer tracking missing |
@@ -771,8 +772,18 @@ stacks only carry `item + count`.
   662,482 B) and `assets/recipes.json` (1,470 recipes; 356,848 B), each with a
   total and per-type index. `src/loot.rs` embeds typed catalogs, and
   `tests/loot.rs` plus `tests/assets.rs` pin their behavior and hashes. Still
-  open: structure NBT templates, advancements, trim/enchantment payloads, and
-  the remaining worldgen JSON.
+  open: advancements, trim/enchantment payloads, and the remaining worldgen
+  JSON.
+- **Progress (2026-11-07, structure templates):**
+  `scripts/extract_structure_templates.ps1` writes the deterministic
+  `assets/structure_templates.json` catalog: 483 `minecraft:village/**`
+  templates, 776,539 gzip payload bytes, 1,063,517 catalog bytes, FNV-1a-64
+  `0x0dde46f3a7863ed8`, SHA-256 `f82d96ddfb284bb757962a5194098c181b40d4f0106eca2d794ba9a6d23448d3`.
+  `worldgen/structure/assets.rs` lazily base64-decodes, gunzips, parses, and
+  caches templates (`StructureTemplateCatalog`) and implements `TemplateProvider`.
+  The catalog is intentionally village-scoped to stay under the 2.5 MB asset
+  budget; running the extractor twice produces byte-identical output and
+  `tests/structure_assets.rs` runs `-Check`.
 
 ### P1.8 Registry/asset version guard `[ ]` `S`
 
@@ -1129,6 +1140,20 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   placement, terrain adaptation, structure serialization, block-entity
   persistence/entity spawning, start caching, and Java-exact cross-chunk height
   sampling/desert random streams.
+- **Progress (2026-11-07, shipped village templates):** `assets.rs` loads the
+  embedded `structure_templates.json` (483 village templates; lazy
+  base64->gzip->NBT parse with a cache and explicit `UnknownTemplate` /
+  `CorruptPayload` errors) and implements `TemplateProvider`.
+  `StructureGenerator::from_catalog`/`shipped_catalog` pass it into the jigsaw
+  path. `tests/structure_assets.rs` parses
+  `minecraft:village/plains/town_centers/plains_meeting_point_1` (size 10x7x10,
+  153 blocks, 1 palette), then generates a fixed-seed 48-piece village with
+  deterministic bounds and places it through `StructureGenerator` twice.
+  `feature_pool_element` entries selected during expansion are skipped and
+  recorded on `JigsawStart::skipped_feature_elements` instead of failing the
+  whole structure. Still open: actual feature placement for those elements,
+  tree/texture/entity gaps, terrain adaptation, and non-village template
+  families.
 
 ### P2.9 Jigsaw structures `[~]` `XL`
 
@@ -1149,9 +1174,9 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   junction records, and priority ordering; `StructureGenerator` attaches
   biome/dimension-filtered starts at surface-structure placement chunks and
   `WorldGenerator` places their pieces before decoration features. Village
-  starts run through the recursive expander, but the shipped village NBT
-  templates are not embedded yet, so a real village fails loudly with a missing
-  template instead of returning an empty start. See P2.8 for the exact gaps.
+  starts now run through the recursive expander with shipped village templates;
+  the 2026-11-07 template-asset slice loads them through
+  `StructureTemplateCatalog`. See P2.8 for the exact gaps.
 - **Done when:** At least one jigsaw structure matches Java start position and
   piece layout on a fixture seed.
 
@@ -1160,7 +1185,9 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
 Implement in dependency order, each with loot/tags and a parity fixture:
 
 - [ ] Mineshafts and strongholds.
-- [ ] Villages, pillager outposts, woodland mansions.
+- [~] Villages (village template NBTs, recursive plains generation, pools,
+  processors, and deterministic placement; feature-pool decor, loot/chest block
+  entities, entity spawning, and Java block-for-block fixture remain).
 - [ ] Ocean ruins, shipwrecks, buried treasure, ocean monuments.
 - [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
   branch, rotation, bounds, and surface snap done; loot-table block entities,

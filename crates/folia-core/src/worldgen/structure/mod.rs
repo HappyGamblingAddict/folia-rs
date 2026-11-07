@@ -33,6 +33,7 @@
 //! entities, and template entities are returned rather than spawned. Those
 //! remain explicit later slices.
 
+pub mod assets;
 pub mod jigsaw;
 pub mod piece;
 pub mod pool;
@@ -176,6 +177,9 @@ impl fmt::Display for StructureError {
 
 impl std::error::Error for StructureError {}
 
+pub use assets::{
+    CatalogError, EMBEDDED_STRUCTURE_TEMPLATES, StructureTemplateCatalog, normalize_structure_id,
+};
 pub use jigsaw::{
     JigsawBlockInfo, JigsawConfig, JigsawJunction, JigsawPiece, JigsawPlacement, JigsawStart,
     JointType, SequencedPriorityQueue, element_bounds, front_facing, shuffle, top_facing,

@@ -222,6 +222,10 @@ pub struct JigsawStart {
     references: i32,
     terrain_adaptation: TerrainAdjustment,
     pieces: Vec<JigsawPiece>,
+    /// `feature_pool_element` entries selected during expansion. Their
+    /// configured-feature placement is not ported yet, so they are skipped and
+    /// recorded here instead of silently vanishing.
+    skipped_feature_elements: Vec<String>,
 }
 
 impl JigsawStart {
@@ -238,6 +242,7 @@ impl JigsawStart {
             references,
             terrain_adaptation,
             pieces,
+            skipped_feature_elements: Vec::new(),
         }
     }
 
@@ -263,6 +268,11 @@ impl JigsawStart {
 
     pub fn pieces_mut(&mut self) -> &mut [JigsawPiece] {
         &mut self.pieces
+    }
+
+    /// Feature pool elements skipped during expansion (not ported yet).
+    pub fn skipped_feature_elements(&self) -> &[String] {
+        &self.skipped_feature_elements
     }
 
     pub fn is_valid(&self) -> bool {
@@ -501,6 +511,7 @@ impl<'a> JigsawPlacement<'a> {
         };
 
         let mut pieces = vec![start_piece];
+        let mut skipped_feature_elements = Vec::new();
         if self.config.max_depth > 0 {
             let min_y = level.min_y() + self.config.dimension_padding_bottom;
             let max_y = level.min_y() + level.height() - 1 - self.config.dimension_padding_top;
@@ -523,6 +534,7 @@ impl<'a> JigsawPlacement<'a> {
                 occupied: &mut occupied,
                 allowed,
                 placing: SequencedPriorityQueue::new(),
+                skipped_feature_elements: &mut skipped_feature_elements,
             };
             placer.try_placing_children(0, 0)?;
             while let Some((piece_index, depth)) = placer.placing.pop() {
@@ -530,13 +542,15 @@ impl<'a> JigsawPlacement<'a> {
             }
         }
 
-        Ok(Some(JigsawStart::new(
+        let mut start = JigsawStart::new(
             structure_id,
             context.chunk_pos,
             context.references,
             terrain_adaptation,
             pieces,
-        )))
+        );
+        start.skipped_feature_elements = skipped_feature_elements;
+        Ok(Some(start))
     }
 
     fn start_too_close_to_world_limits(
@@ -563,6 +577,7 @@ struct Placer<'a> {
     occupied: &'a mut Vec<BoundingBox>,
     allowed: BoundingBox,
     placing: SequencedPriorityQueue<(usize, usize)>,
+    skipped_feature_elements: &'a mut Vec<String>,
 }
 
 impl Placer<'_> {
@@ -649,11 +664,12 @@ impl Placer<'_> {
                     // Java `break`s the whole element list, not just this item.
                     break;
                 }
-                if matches!(candidate, PoolElement::Feature { .. }) {
-                    return Err(StructureError::UnsupportedPoolElement {
-                        pool: pool.name().to_owned(),
-                        element_type: candidate.element_type().to_owned(),
-                    });
+                if let PoolElement::Feature { feature, .. } = &candidate {
+                    // Feature-level placement needs the configured/placed
+                    // feature pipeline. Record the skip instead of failing the
+                    // whole structure or pretending the feature ran.
+                    self.skipped_feature_elements.push(feature.clone());
+                    continue;
                 }
                 for child_rotation in shuffled_rotations(self.random) {
                     // `getShuffledJigsawBlocks` is called even when the child

@@ -91,6 +91,59 @@ Format:
 - Consequences: End cities, natural gateway placement, crystal entities, and
   the dragon fight still need separate slices; a future registry wiring should
   call this dispatch rather than duplicate the algorithms.
+## 2026-11-07 — Structure-template asset is village-scoped and lazy
+- Context: the decompiled `data/minecraft/structure` tree holds 1,202 gzip NBT
+  files (~3.7 MB, ~40.7 MB raw NBT). Per-entry gzip+base64 across the whole tree
+  is ~4.9 MB, over the 2.5 MB asset budget, and a solid gzip still exceeds it
+  after base64.
+- Decision: embed every `minecraft:village/**` template (483 files, 776,539
+  gzip bytes, 1,063,517-byte JSON) as base64-of-gzip NBT, keyed by normalized
+  structure id. `StructureTemplateCatalog` keeps payloads encoded and parses +
+  caches each template on first `template()` call; `StructureGenerator` stores
+  the catalog behind an `Arc` and exposes `from_catalog`/`shipped_catalog`.
+  Non-village families are an explicit later asset expansion.
+- Why: this is the smallest asset that makes the actual village jigsaw
+  pipeline run end to end, and lazy parsing avoids paying the raw-NBT parse
+  cost for templates a seed never touches. The extractor refuses catalogs over
+  2.5 MB so a future all-structures run cannot silently blow the budget.
+- Consequences: `assets/ASSETS.md` (out of scope for this slice) does not list
+  the new file yet; `tests/structure_assets.rs` pins its bytes, FNV hash, and
+  SHA-256. Selecting a non-village structure still fails with an explicit
+  missing-template error.
+
+## 2026-11-07 — Jigsaw feature pool elements are recorded skips
+- Context: village pools contain `feature_pool_element` entries (trees, decor,
+  piles). The configured/placed feature context needed to place them is not
+  available inside jigsaw expansion, and failing the whole village made real
+  generation fragile.
+- Decision: during recursive child selection, record the feature id on
+  `JigsawStart::skipped_feature_elements` and move to the next candidate. Keep
+  the explicit `UnsupportedPoolElement` error for a feature element chosen as
+  the start element.
+- Why: a village without optional tree/decor features is still a valid
+  structure, and the skip is observable rather than silent. Start elements must
+  remain real templates.
+- Consequences: generated villages currently omit their feature-pool decor
+  until a later feature-context slice wires it in.
+
+## 2026-11-07 — Stale `tick_hoppers` call removed to restore the build
+- Context: `tick_world_with_table` called `WorldStorage::tick_hoppers`, but no
+  such method exists anywhere in the tree; the call was added by the leaf-decay
+  commit and made the baseline uncompilable. `SimpleBlockEntityTicker` already
+  ticks hopper cooldowns in `tick_block_entities`.
+- Decision: remove the stale call. This is a one-line build repair outside the
+  structure slice; it does not add or remove hopper behavior.
+- Consequences: hopper ticking continues through the existing block-entity
+  ticker. A future dedicated hopper transfer tick should be added with its own
+  `WorldStorage` method and tests rather than reintroducing this call.
+
+## 2026-11-07 — `structure::assets` is a new public module
+- Context: the task scope lists the new `assets.rs` but not `mod.rs`; Rust
+  cannot compile a new child module without a declaration.
+- Decision: add `pub mod assets;` and catalog re-exports to
+  `worldgen/structure/mod.rs`.
+- Consequences: `mod.rs` carries a few small lines outside the slice's file
+  list; no behavior changes beyond exposing the catalog.
 
 ## 2026-11-06 — Item entities use a 4-block magnet and 3-block merge
 - Context: vanilla `ItemEntity` has no in-tick magnet (pickup is a player-box

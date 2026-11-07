@@ -104,6 +104,7 @@ namespaced, whitespace-free JSON with a `counts` index.
 | `item_prototypes.json` | 1,504 non-air items; 423 with overrides | 1,504 | 79,369 | `0xf179dfed29cdcdad` |
 | `structure_processors.json` | 40 lists, 52 processors (block_rot 6, capped 4, protected_blocks 7, rule 35) | 40 | 46,334 | `0x446c0e7b069e66c4` |
 | `template_pools.json` | 188 pools, 1,198 entries, 1,204 element nodes | 188 | 252,745 | `0xaa6434676fdae64c` |
+| `structure_templates.json` | 483 village templates, base64+gzip NBT payloads | 483 | 1,063,517 | `0x0dde46f3a7863ed8` |
 
 ## Worldgen and math
 

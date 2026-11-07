@@ -57,6 +57,7 @@ $assets = @(
     "crates/folia-core/assets/mth_sin.bin",
     "crates/folia-core/assets/recipes.json",
     "crates/folia-core/assets/structure_processors.json",
+    "crates/folia-core/assets/structure_templates.json",
     "crates/folia-core/assets/template_pools.json",
     "crates/folia-core/assets/tags/block.tsv",
     "crates/folia-core/assets/tags/damage_type.tsv",

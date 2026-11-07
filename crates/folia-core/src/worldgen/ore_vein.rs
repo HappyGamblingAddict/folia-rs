@@ -28,6 +28,18 @@ pub enum VeinType {
     Iron,
 }
 
+/// How the vein density functions are sampled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VeinSampling {
+    /// Java `NoiseChunk` behaviour: `vein_toggle`/`vein_ridged` are wrapped in
+    /// `interpolated`, so their arguments are evaluated on the 4x8x4 cell grid
+    /// and trilinearly interpolated per block.
+    Interpolated,
+    /// Per-block evaluation of the unwrapped functions. This is the old
+    /// behaviour and exists to measure the interpolation delta in tests.
+    Direct,
+}
+
 impl VeinType {
     pub fn min_y(self) -> i32 {
         match self {
@@ -98,10 +110,32 @@ impl OreVeinifier {
         })
     }
 
-    /// Returns the block the vein pass would write at `(x, y, z)`, or `None`
-    /// when it leaves the existing block unchanged.
+    /// Returns the block the vein pass would write at `(x, y, z)` using
+    /// `NoiseChunk` interpolation, or `None` when it leaves the existing block
+    /// unchanged.
     pub fn block_at(&self, x: i32, y: i32, z: i32) -> Option<BlockState> {
-        let toggle = self.vein_toggle.compute(x, y, z);
+        self.block_at_with(x, y, z, VeinSampling::Interpolated)
+    }
+
+    /// Returns the block the vein pass would write with an explicit sampling
+    /// mode. `Direct` reproduces the pre-`NoiseChunk` per-block evaluation.
+    pub fn block_at_with(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        sampling: VeinSampling,
+    ) -> Option<BlockState> {
+        let sample_toggle = |x, y, z| match sampling {
+            VeinSampling::Interpolated => self.vein_toggle.compute_interpolated(x, y, z),
+            VeinSampling::Direct => self.vein_toggle.compute(x, y, z),
+        };
+        let sample_ridged = |x, y, z| match sampling {
+            VeinSampling::Interpolated => self.vein_ridged.compute_interpolated(x, y, z),
+            VeinSampling::Direct => self.vein_ridged.compute(x, y, z),
+        };
+
+        let toggle = sample_toggle(x, y, z);
         let vein_type = if toggle > 0.0 {
             VeinType::Copper
         } else {
@@ -124,7 +158,7 @@ impl OreVeinifier {
         if random.next_float() > VEIN_SOLIDNESS {
             return None;
         }
-        if self.vein_ridged.compute(x, y, z) >= 0.0 {
+        if sample_ridged(x, y, z) >= 0.0 {
             return None;
         }
 

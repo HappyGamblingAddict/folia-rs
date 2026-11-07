@@ -47,6 +47,35 @@ Format:
   while hidden are dropped rather than transferred; queue/handoff support is
   P10.3/P10.5. `RegionScheduler`'s legacy `tick`/`tick_parallel` APIs are
   unchanged.
+## 2026-11-07 — Interpolated density markers have direct and NoiseChunk modes
+- Context: `NoiseChunk.wrap` turns every
+  `DensityFunctions.Marker.Type.Interpolated` node into a `NoiseInterpolator`:
+  the wrapped argument is evaluated on the 4x8x4 cell grid and `Mth.lerp3`
+  interpolated per block. `OreVeinifier` receives those wrapped router
+  functions, so Java never evaluates `vein_toggle` or the two noise arguments
+  inside `vein_ridged` per block. Direct `DensityFunction.compute` (used by the
+  `java-density-grid.txt` oracle and the pinned router dump) must stay
+  unwrapped, because the oracle captures corner values through the direct API.
+- Decision: `density::DensityFunction` gains an `Interpolated { id, origin_y,
+  argument }` node and two entry points. `compute` keeps Java's direct
+  semantics (marker pass-through); `compute_interpolated` samples the argument
+  at the enclosing 4x8x4 cell corners, with the y grid anchored at the noise
+  settings `min_y`, and trilinearly interpolates in Java's `Mth.lerp3` argument
+  order. Corner values are cached per function id in a thread-local one-cell
+  cache. `OreVeinifier::block_at` uses `compute_interpolated` for `vein_toggle`
+  and the interpolated arguments inside `vein_ridged`; `vein_gap` stays direct
+  because the shipped router does not mark it interpolated.
+  `block_at_with(VeinSampling::Direct)` preserves the old per-block path for
+  differential tests.
+- Why: this is the smallest faithful port of `NoiseChunk` without moving the
+  generator's existing 4x8x4 final-density grid, and it keeps the direct router
+  oracle tests meaningful (corner values are identical in both modes).
+- Consequences: the vein pass evaluates eight corners per cell instead of every
+  block, and moves 170 positions in chunk `(0,-1)` relative to the old direct
+  path (119 added, 51 removed, 0 type replacements). Exact-name fixture parity
+  rises 5886 -> 5891/6144; block-class is unchanged. The remaining ore gaps are
+  the 3x3-chunk feature write region, ellipsoid edges, and
+  `disk_*`/`underwater_magma` in the `underground_ores` step.
 
 ## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a

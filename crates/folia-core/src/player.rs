@@ -1406,6 +1406,48 @@ impl PlayerSession {
         }
         FoodTick::Nothing
     }
+
+    /// `Player.getXpNeededForNextLevel`: points required to go from `level` to
+    /// `level + 1`.
+    pub fn xp_needed_for_next_level(level: i32) -> i32 {
+        if level >= 30 {
+            112 + (level - 30) * 9
+        } else if level >= 15 {
+            37 + (level - 15) * 5
+        } else {
+            7 + level * 2
+        }
+    }
+
+    /// Total experience points required to reach `level` from zero.
+    pub fn total_xp_for_level(level: i32) -> i32 {
+        let mut total = 0;
+        for current in 0..level.max(0) {
+            total += Self::xp_needed_for_next_level(current);
+        }
+        total
+    }
+
+    /// Adds experience points, carrying progress across level-ups. Negative
+    /// amounts are ignored; the level is capped like vanilla's practical limit.
+    pub fn add_experience(&mut self, amount: i32) {
+        if amount <= 0 {
+            return;
+        }
+        self.xp_total = self.xp_total.saturating_add(amount);
+        let mut remaining =
+            self.xp_progress * Self::xp_needed_for_next_level(self.xp_level) as f32 + amount as f32;
+        while self.xp_level < 21_863 {
+            let needed = Self::xp_needed_for_next_level(self.xp_level) as f32;
+            if remaining < needed {
+                break;
+            }
+            remaining -= needed;
+            self.xp_level += 1;
+        }
+        let needed = Self::xp_needed_for_next_level(self.xp_level) as f32;
+        self.xp_progress = (remaining / needed).clamp(0.0, 0.999_999);
+    }
 }
 
 #[cfg(test)]

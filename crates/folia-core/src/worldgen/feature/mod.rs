@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::io;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 mod aquatic;
 mod caves;
@@ -1397,6 +1397,237 @@ impl FeatureData {
             }
         }
         counts
+    }
+}
+
+/// The 3x3 chunk biome window vanilla uses for one decoration pass.
+///
+/// `ChunkGenerator.addVanillaDecorations` walks the nine chunks around the
+/// chunk being decorated, collects every biome from their section palettes,
+/// retains the biome source's possible biomes, and then unions each biome's
+/// placed features for the current step. A feature listed only by a bordering
+/// biome therefore still runs at this chunk's border, which the centre chunk's
+/// own biome list alone would miss.
+///
+/// Chunk palettes are filled from the same multi-noise sampler, so the region
+/// can be reproduced without generating the neighbour chunks first. The region
+/// is read-only: feature writes still go through [`WorldGenRegion`], which clips
+/// them to the centre chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureBiomeRegion {
+    center_x: i32,
+    center_z: i32,
+    min_y: i32,
+    height: i32,
+    /// Biome entry indices for the nine chunks in `dx`-major order, each laid
+    /// out `(quart_y, quart_z, quart_x)` exactly like a chunk's biome palette.
+    cells: Vec<Arc<[u16]>>,
+    /// Union of the nine chunk biome lists in first-encounter order.
+    active: Vec<String>,
+}
+
+impl FeatureBiomeRegion {
+    /// Samples one chunk's quart biome cells in `(quart_y, quart_z, quart_x)`
+    /// order, matching a chunk's biome palette layout.
+    pub fn sample_chunk_cells(
+        biomes: &BiomeSampler,
+        chunk_x: i32,
+        chunk_z: i32,
+        min_y: i32,
+        height: i32,
+    ) -> Vec<u16> {
+        let quart_layers = (height >> 2).max(0) as usize;
+        let quart_y_start = min_y >> 2;
+        let mut columns = Vec::with_capacity(16);
+        for qz in 0..4 {
+            for qx in 0..4 {
+                columns.push(biomes.sample_quart_column(
+                    chunk_x * 4 + qx,
+                    chunk_z * 4 + qz,
+                    quart_y_start,
+                    quart_layers,
+                ));
+            }
+        }
+        let mut cells = vec![0u16; quart_layers * 16];
+        for layer in 0..quart_layers {
+            for (column, entries) in columns.iter().enumerate() {
+                let entry = entries[layer];
+                debug_assert!(
+                    u16::try_from(entry).is_ok(),
+                    "biome entry index must fit the packed region cells"
+                );
+                cells[layer * 16 + column] = entry as u16;
+            }
+        }
+        cells
+    }
+
+    /// Builds a region from pre-sampled chunk cells in `dx`-major order.
+    ///
+    /// The generator caches [`Self::sample_chunk_cells`] across neighbouring
+    /// chunk generations, so the nine chunks of this window are normally
+    /// sampled only once each instead of once per decoration pass.
+    pub fn from_chunks(
+        biomes: &BiomeSampler,
+        chunk_x: i32,
+        chunk_z: i32,
+        min_y: i32,
+        height: i32,
+        cells: Vec<Arc<[u16]>>,
+    ) -> Self {
+        assert_eq!(
+            cells.len(),
+            9,
+            "a feature biome region needs exactly nine chunk cells"
+        );
+        let mut active: Vec<String> = Vec::new();
+        let mut active_seen: BTreeSet<String> = BTreeSet::new();
+        // `ChunkPos.rangeClosed(center, 1)` iterates x before z.
+        for chunk in &cells {
+            for &entry in chunk.iter() {
+                let name = biomes.biome_name(entry as usize);
+                if !active_seen.contains(name) {
+                    active_seen.insert(name.to_owned());
+                    active.push(name.to_owned());
+                }
+            }
+        }
+        Self {
+            center_x: chunk_x,
+            center_z: chunk_z,
+            min_y,
+            height,
+            cells,
+            active,
+        }
+    }
+
+    /// Samples the 3x3 chunk window around `(chunk_x, chunk_z)`.
+    pub fn sample(
+        biomes: &BiomeSampler,
+        chunk_x: i32,
+        chunk_z: i32,
+        min_y: i32,
+        height: i32,
+    ) -> Self {
+        let mut cells = Vec::with_capacity(9);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                cells.push(Arc::from(Self::sample_chunk_cells(
+                    biomes,
+                    chunk_x + dx,
+                    chunk_z + dz,
+                    min_y,
+                    height,
+                )));
+            }
+        }
+        Self::from_chunks(biomes, chunk_x, chunk_z, min_y, height, cells)
+    }
+
+    /// Centre chunk coordinate the region was sampled for.
+    pub fn center(&self) -> (i32, i32) {
+        (self.center_x, self.center_z)
+    }
+
+    /// Packed biome entry indices for one chunk, offset `-1..=1` from centre.
+    pub fn chunk_cells(&self, dx: i32, dz: i32) -> Option<&[u16]> {
+        if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dz) {
+            return None;
+        }
+        self.cells
+            .get(((dx + 1) * 3 + (dz + 1)) as usize)
+            .map(|cells| cells.as_ref())
+    }
+
+    /// Packed biome entry indices for the centre chunk, in palette order.
+    pub fn center_cells(&self) -> &[u16] {
+        self.chunk_cells(0, 0)
+            .expect("a sampled region always contains its centre chunk")
+    }
+
+    /// Unique biome names of one chunk in first-encounter order.
+    pub fn chunk_biomes<'a>(
+        &self,
+        biomes: &'a BiomeSampler,
+        dx: i32,
+        dz: i32,
+    ) -> Option<Vec<&'a str>> {
+        let cells = self.chunk_cells(dx, dz)?;
+        let mut seen = BTreeSet::new();
+        let mut names = Vec::new();
+        for &entry in cells {
+            let name = biomes.biome_name(entry as usize);
+            if seen.insert(name) {
+                names.push(name);
+            }
+        }
+        Some(names)
+    }
+
+    /// Union of the nine chunk biome lists in first-encounter order.
+    pub fn active_biomes(&self) -> &[String] {
+        &self.active
+    }
+
+    /// Resolves the stored palette biome for any block position in the 3x3
+    /// window, or `None` outside it.
+    pub fn biome_at<'a>(&self, biomes: &'a BiomeSampler, pos: BlockPos) -> Option<&'a str> {
+        let dx = pos.x().div_euclid(16) - self.center_x;
+        let dz = pos.z().div_euclid(16) - self.center_z;
+        if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dz) {
+            return None;
+        }
+        if pos.y() < self.min_y || pos.y() >= self.min_y.saturating_add(self.height) {
+            return None;
+        }
+        let local_x = pos.x().rem_euclid(16) as usize;
+        let local_z = pos.z().rem_euclid(16) as usize;
+        let layer = ((pos.y() - self.min_y) >> 2) as usize;
+        let cell = (layer * 4 + (local_z >> 2)) * 4 + (local_x >> 2);
+        let entry = *self.chunk_cells(dx, dz)?.get(cell)? as usize;
+        Some(biomes.biome_name(entry))
+    }
+
+    /// Indices into `step_order` for the features decoration runs in `step`,
+    /// ascending in `FeatureSorter` order.
+    ///
+    /// This is the union of the active biomes' placed-feature lists filtered
+    /// through the global per-step order, matching `ChunkGenerator`'s sorted
+    /// `IntSet` of feature indices.
+    pub fn active_feature_indices(
+        &self,
+        data: &FeatureData,
+        step: Decoration,
+        step_order: &[String],
+    ) -> Vec<usize> {
+        let mut listed: BTreeSet<&str> = BTreeSet::new();
+        for biome in &self.active {
+            if let Some(steps) = data.biome_features(biome)
+                && let Some(features) = steps.get(step.index())
+            {
+                listed.extend(features.iter().map(String::as_str));
+            }
+        }
+        step_order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, id)| listed.contains(id.as_str()).then_some(index))
+            .collect()
+    }
+
+    /// Feature ids selected for `step`, in `FeatureSorter` order.
+    pub fn active_features<'a>(
+        &self,
+        data: &FeatureData,
+        step: Decoration,
+        step_order: &'a [String],
+    ) -> Vec<&'a str> {
+        self.active_feature_indices(data, step, step_order)
+            .into_iter()
+            .map(|index| step_order[index].as_str())
+            .collect()
     }
 }
 

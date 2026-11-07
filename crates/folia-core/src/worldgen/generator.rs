@@ -15,8 +15,8 @@ use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
 use crate::worldgen::feature::{
-    ConfiguredFeature, Decoration, FeatureData, FeatureLevel, Heightmap, PlacedFeature,
-    PlacementWorld, WorldGenRegion,
+    ConfiguredFeature, Decoration, FeatureBiomeRegion, FeatureData, FeatureLevel, Heightmap,
+    PlacedFeature, PlacementWorld, WorldGenRegion,
 };
 use crate::worldgen::ore_vein::OreVeinifier;
 use crate::worldgen::structure::StructureDimension;
@@ -29,7 +29,7 @@ use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const CELL_WIDTH: i32 = 4;
 const CELL_HEIGHT: i32 = 8;
@@ -169,6 +169,9 @@ pub struct WorldGenerator {
     aquifer_factory: XoroshiroPositionalRandomFactory,
     ore_veins: OreVeinifier,
     structures: Option<StructureGenerator>,
+    /// Quart biome cells per chunk, shared by the decoration windows of
+    /// neighbouring chunk generations.
+    biome_cells: Mutex<HashMap<(i32, i32), Arc<[u16]>>>,
     seed: i64,
     min_y: i32,
     height: i32,
@@ -209,6 +212,7 @@ impl WorldGenerator {
             aquifer_factory,
             ore_veins,
             structures: None,
+            biome_cells: Mutex::new(HashMap::new()),
             seed,
             min_y,
             height,
@@ -428,9 +432,15 @@ impl WorldGenerator {
             }
         }
 
-        // Sample every quart biome cell once: the surface rules and the chunk
-        // biome palettes both use this array.
-        let biome_indices = self.sample_biome_indices(chunk_x, chunk_z);
+        // Sample the 3x3 decoration biome window once. The centre chunk's
+        // cells feed the chunk palette and surface rules; the full region feeds
+        // vanilla's active-biome feature set during decoration.
+        let biome_region = self.feature_biome_region(chunk_x, chunk_z);
+        let biome_indices: Vec<usize> = biome_region
+            .center_cells()
+            .iter()
+            .map(|&entry| entry as usize)
+            .collect();
         let preliminary_surface = self.router.function("preliminary_surface_level")?;
         surface::build_surface(
             &self.surface,
@@ -477,13 +487,13 @@ impl WorldGenerator {
 
         // Biomes are now stored in the chunk, which the biome placement filter
         // reads through `FeaturePlacementWorld`.
-        self.apply_decorations(&mut chunk, &biome_indices, steps)?;
+        self.apply_decorations(&mut chunk, &biome_region, steps)?;
 
         Ok(chunk)
     }
 
-    /// Runs the decoration steps this port implements for every biome that
-    /// appears in this chunk.
+    /// Runs the decoration steps this port implements for every biome in the
+    /// 3x3 chunk window vanilla uses for feature selection.
     ///
     /// Vanilla seeds each placed feature independently:
     /// `WorldgenRandom.setFeatureSeed(decorationSeed, featureIndex, step)`.
@@ -492,15 +502,10 @@ impl WorldGenerator {
     fn apply_decorations(
         &self,
         chunk: &mut Chunk,
-        biome_indices: &[usize],
+        biome_region: &FeatureBiomeRegion,
         steps: &[Decoration],
     ) -> io::Result<()> {
         let data = FeatureData::vanilla();
-        let mut chunk_biomes = std::collections::HashSet::new();
-        for entry in biome_indices {
-            chunk_biomes.insert(self.biomes.biome_name(*entry));
-        }
-
         let step_order = data.step_feature_order();
         let mut worldgen_random = WorldgenRandom::new(0);
         let decoration_seed = worldgen_random.set_decoration_seed(
@@ -527,23 +532,14 @@ impl WorldGenerator {
                 self.apply_structures(chunk, Decoration::SurfaceStructures)?;
                 structures_placed = true;
             }
-            let mut active = std::collections::HashSet::new();
-            for biome in &chunk_biomes {
-                let Some(steps) = data.biome_features(biome) else {
-                    continue;
-                };
-                for feature in &steps[step.index()] {
-                    active.insert(feature.as_str());
-                }
-            }
+            let active =
+                biome_region.active_feature_indices(data, step, &step_order[step.index()]);
             if active.is_empty() {
                 continue;
             }
 
-            for (index, id) in step_order[step.index()].iter().enumerate() {
-                if !active.contains(id.as_str()) {
-                    continue;
-                }
+            for &index in &active {
+                let id = &step_order[step.index()][index];
                 let Some(placed) = data.placed(id) else {
                     continue;
                 };
@@ -571,7 +567,14 @@ impl WorldGenerator {
                     index as i32,
                     step.index() as i32,
                 );
-                self.place_placed_feature(placed, configured, chunk, &mut worldgen_random, origin)?;
+                self.place_placed_feature(
+                    placed,
+                    configured,
+                    chunk,
+                    biome_region,
+                    &mut worldgen_random,
+                    origin,
+                )?;
             }
         }
         Ok(())
@@ -617,22 +620,34 @@ impl WorldGenerator {
     /// first (as `PlacedFeature::placement_positions` does for inspection)
     /// desynchronises every attempt after the first for multi-placement
     /// features such as ores.
+    #[allow(clippy::too_many_arguments)]
     fn place_placed_feature(
         &self,
         placed: &PlacedFeature,
         configured: &ConfiguredFeature,
         chunk: &mut Chunk,
+        biome_region: &FeatureBiomeRegion,
         random: &mut WorldgenRandom,
         origin: BlockPos,
     ) -> io::Result<()> {
-        self.place_modifier_step(placed, configured, chunk, random, origin, 0)
+        self.place_modifier_step(
+            placed,
+            configured,
+            chunk,
+            biome_region,
+            random,
+            origin,
+            0,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn place_modifier_step(
         &self,
         placed: &PlacedFeature,
         configured: &ConfiguredFeature,
         chunk: &mut Chunk,
+        biome_region: &FeatureBiomeRegion,
         random: &mut WorldgenRandom,
         pos: BlockPos,
         index: usize,
@@ -650,6 +665,8 @@ impl WorldGenerator {
             let world = FeaturePlacementWorld {
                 chunk: &*chunk,
                 data: FeatureData::vanilla(),
+                biome_region,
+                biomes: &self.biomes,
                 min_y: self.min_y,
                 height: self.height,
             };
@@ -660,31 +677,65 @@ impl WorldGenerator {
                 })?
         };
         for next in positions {
-            self.place_modifier_step(placed, configured, chunk, random, next, index + 1)?;
+            self.place_modifier_step(
+                placed,
+                configured,
+                chunk,
+                biome_region,
+                random,
+                next,
+                index + 1,
+            )?;
         }
         Ok(())
     }
 
-    /// Samples the chunk's 1536 quart biome cells in
-    /// `(quart_y, quart_z, quart_x)` order, matching the biome palette layout.
-    fn sample_biome_indices(&self, chunk_x: i32, chunk_z: i32) -> Vec<usize> {
-        let quart_layers = (self.height >> 2) as usize;
-        let quart_y_start = self.min_y >> 2;
-        let mut indices = vec![0usize; quart_layers * 16];
-        for qz in 0..4usize {
-            for qx in 0..4usize {
-                let column = self.biomes.sample_quart_column(
-                    chunk_x * 4 + qx as i32,
-                    chunk_z * 4 + qz as i32,
-                    quart_y_start,
-                    quart_layers,
-                );
-                for (layer, entry) in column.into_iter().enumerate() {
-                    indices[(layer * 4 + qz) * 4 + qx] = entry;
-                }
+    /// Returns one chunk's quart biome cells, reusing cells sampled for a
+    /// neighbouring chunk's decoration window. The cache is bounded; clearing
+    /// it only costs a resample.
+    fn chunk_biome_cells(&self, chunk_x: i32, chunk_z: i32) -> Arc<[u16]> {
+        let key = (chunk_x, chunk_z);
+        if let Some(cells) = self
+            .biome_cells
+            .lock()
+            .expect("biome cell cache poisoned")
+            .get(&key)
+        {
+            return Arc::clone(cells);
+        }
+        let cells: Arc<[u16]> = FeatureBiomeRegion::sample_chunk_cells(
+            &self.biomes,
+            chunk_x,
+            chunk_z,
+            self.min_y,
+            self.height,
+        )
+        .into();
+        let mut cache = self.biome_cells.lock().expect("biome cell cache poisoned");
+        if cache.len() >= 512 {
+            cache.clear();
+        }
+        cache.insert(key, Arc::clone(&cells));
+        cells
+    }
+
+    /// Samples the 3x3 chunk decoration window around a chunk.
+    fn feature_biome_region(&self, chunk_x: i32, chunk_z: i32) -> FeatureBiomeRegion {
+        let mut cells = Vec::with_capacity(9);
+        // `ChunkPos.rangeClosed(center, 1)` iterates x before z.
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                cells.push(self.chunk_biome_cells(chunk_x + dx, chunk_z + dz));
             }
         }
-        indices
+        FeatureBiomeRegion::from_chunks(
+            &self.biomes,
+            chunk_x,
+            chunk_z,
+            self.min_y,
+            self.height,
+            cells,
+        )
     }
 }
 
@@ -742,6 +793,8 @@ impl StructureBiomeLookup for GeneratorBiomeLookup<'_> {
 struct FeaturePlacementWorld<'a> {
     chunk: &'a Chunk,
     data: &'a FeatureData,
+    biome_region: &'a FeatureBiomeRegion,
+    biomes: &'a BiomeSampler,
     min_y: i32,
     height: i32,
 }
@@ -766,6 +819,13 @@ impl PlacementWorld for FeaturePlacementWorld<'_> {
             if let Some(biome) = self.chunk.biome(x, y, z) {
                 return biome;
             }
+        }
+        // Placement modifiers stay inside the centre chunk in practice, but
+        // vanilla's `WorldGenRegion.getBiome` can answer for the whole 3x3
+        // decoration window. Read the stored neighbour palette instead of
+        // falling back to the centre chunk's origin biome.
+        if let Some(biome) = self.biome_region.biome_at(self.biomes, pos) {
+            return biome;
         }
         self.chunk
             .biome(0, self.min_y, 0)

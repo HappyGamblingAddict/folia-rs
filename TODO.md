@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1179 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1186 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -33,7 +33,7 @@ where possible, a differential test against the Java oracle.
 | Player simulation | ~42% | Movement/collision/fall damage, break/tools/drops, hunger, air/drowning, XP curve; live food/air ticks and special movement missing |
 | Entities | ~35% | Metadata, attributes, equipment, effects, damage/death, goals/pathfinding/spawn, join tracking, item/XP entities, shared viewer tracker; live AI and per-type ranges missing |
 | Blocks/redstone/fluids | ~40% | Ticks, fluids/fire, wire/diodes/observers/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities, menus; automation depth/targets missing |
-| Networking | ~50% offline / ~50% online core | Offline+encrypted login, chat signing, container menus, bridge chat/time/weather/sound/particles; TLS, login secure-chat wiring, full coverage |
+| Networking | ~52% offline / ~52% online core | Offline+encrypted login, signed + unsigned live player chat with last-seen validation, chat signing, container menus, bridge chat/time/weather/sound/particles; TLS, Mojang profile-key trust roots, full coverage |
 | Plugin compatibility | ~25% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block/player/inventory/item meta, menus, live chat/effects; gameplay API depth missing |
 | Folia regionization | ~20% | Per-region queues/world slices/ownership + region-scoped world tick driver; global lock and no merge/split/transfer |
 | Overall rewrite | **~30%** | Foundation-heavy, content-light |
@@ -42,6 +42,16 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: live player chat - `protocol.rs` adds `ServerboundChatSessionUpdate`
+  codecs, `ClientboundPlayerChat` (63) / `ClientboundDisguisedChat` (33)
+  builders, and `LastSeenValidator` (20-entry window, acknowledgement bits,
+  checksum). `join.rs` stores the remote session key per connection, verifies
+  signed bodies and sequence numbers, rejects unsigned chat when
+  `enforces-secure-chat` is on, and broadcasts signed messages as Player Chat
+  and unsigned messages as Disguised Chat to every live session. 7 focused
+  tests (session update, packet layouts, validator, signed/unsigned dispatch).
+  The join path now polls shutdown during the column scan and chunk generation,
+  and generation workers are detached so an in-flight chunk cannot delay save.
 - 2026-11-07: salvage wave - fossil features now use the shipped catalog
   (`feature/misc.rs`); `structure_templates_trial.json` ships 191 trial-chamber
   templates (`assets.rs`, `tests/trial_catalog.rs`, 1,202 templates total);

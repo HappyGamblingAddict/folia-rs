@@ -11,7 +11,7 @@ Last updated: 2026-11-07
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green on `6d18821` (Ubuntu + Windows: fmt, clippy, 1,179 tests,
   release build).
-- Tests: **1179 passing** on the full merged gate (0 failed, 1 ignored
+- Tests: **1186 passing** on the full merged gate (0 failed, 1 ignored
   benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -25,13 +25,15 @@ Last updated: 2026-11-07
   pistons, target blocks, dispenser/dropper automation, block entities,
   portal-driven live dimension switching, region-scoped ticking, and live
   bridge chat/effects.
-- Major gaps: secure-chat login wiring, live AI goals and per-type ranges,
-  real multi-region world parallelism, dragon entity fight, automation depth,
-  and terrain adaptation for structures.
+- Legacy note: check `git log` for the current CI-green HEAD.
+- Major gaps: Mojang profile-key trust roots and signed-command validation,
+  plugin `AsyncChatEvent` dispatch, live AI goals and per-type ranges, real
+  multi-region world parallelism, dragon entity fight, and terrain adaptation
+  for structures.
 
 ## Current focus
 
-1. P8.2 secure-chat join/status wiring and clientbound Player Chat packets.
+1. P8.2 signed-command validation, Mojang trust roots, and plugin chat events.
 2. P5 live AI goals, per-viewer ranges, and entity ticking in live sessions.
 3. P2.8 structure terrain adaptation and cross-chunk height/start caching.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -58,6 +60,11 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-08: live player chat — serverbound chat/session-update codecs,
+  last-seen validator, remote signature/sequence verification, and
+  clientbound Player Chat/Disguised Chat broadcast to every session. 7 focused
+  tests. Join streaming now polls shutdown during the column scan and chunk
+  wait, and generation workers are detached so shutdown saves immediately.
 - 2026-11-07: salvage wave — fossils from the shipped catalogs; 191 trial
   templates (1,202 total); portal-driven dimension switching with per-dimension
   playerdata; target blocks and dispenser/dropper automation (block entity

@@ -26,19 +26,30 @@
 //! * pressure plates and tripwire: an entity-occupancy input API, pressed state,
 //!   and scheduled release; wooden, stone, and weighted pressure plates;
 //! * redstone lamps, powered doors/trapdoors/fence gates, daylight-detector
-//!   signal math, and note-block pitch math.
+//!   signal math, and note-block pitch math;
+//! * target blocks: the vanilla hit-position strength (core 15, mid/outer
+//!   tiers), 8/20-tick scheduled reset, and signal output through
+//!   [`SignalReader`];
+//! * dispensers and droppers: `triggered` pulse scheduling, deterministic slot
+//!   selection, projectile/shears/bone-meal behaviors, and dropper transfer into
+//!   the container in front. Entity-producing behaviors stay explicit
+//!   [`io::ErrorKind::Unsupported`] errors.
 //!
-//! Not implemented: pistons, tripwire-hook signal chains, target blocks, analog
-//! block outputs other than registered containers (item frames, lecterns, ...),
-//! and NBT persistence for comparator outputs or scheduled ticks. Those stay
-//! explicit gaps in `BLOCKERS.md`.
+//! Not implemented: pistons, tripwire-hook signal chains, analog block outputs
+//! other than registered containers (item frames, lecterns, ...), dispenser
+//! item-entity/boat/minecart/bucket spawning, shears on entities, and NBT
+//! persistence for comparator outputs or scheduled ticks. Those stay explicit
+//! gaps in `BLOCKERS.md`.
 
 use crate::block_behaviour;
+use crate::block_entity::{BlockEntityPos, DispenserBlockEntity};
 use crate::block_update;
 use crate::chunk::BlockState;
+use crate::item_components::ItemStack;
 use crate::math::{BlockPos, Direction};
 use crate::tick::{BlockBehavior, TickPriority, TickWorld, UpdateFlags};
 use crate::world::WorldStorage;
+use folia_random::RandomSource;
 use std::io;
 
 pub use crate::tick::ContainerSignalSource;
@@ -281,6 +292,8 @@ impl<'a> SignalReader<'a> {
             }
         } else if is_power_source(state) {
             if is_powered(state) { 15 } else { 0 }
+        } else if is_target_block(state) {
+            target_power(state)
         } else if state.name == REDSTONE_BLOCK {
             15
         } else {
@@ -657,6 +670,7 @@ pub fn is_signal_source(state: &BlockState) -> bool {
         || is_diode(state)
         || is_observer(state)
         || is_pressure_plate(state)
+        || is_target_block(state)
         || state.name == REDSTONE_BLOCK
 }
 
@@ -2131,6 +2145,607 @@ impl BlockBehavior for PoweredOpenableBehavior {
         _old: Option<&BlockState>,
     ) -> io::Result<()> {
         update_powered_openable(world, pos, state)
+    }
+}
+
+/// `minecraft:target`.
+pub const TARGET: &str = "minecraft:target";
+/// `minecraft:dispenser`.
+pub const DISPENSER: &str = "minecraft:dispenser";
+/// `minecraft:dropper`.
+pub const DROPPER: &str = "minecraft:dropper";
+
+/// `TargetBlock.ACTIVATION_TICKS_OTHER`.
+pub const TARGET_ACTIVATION_TICKS: u64 = 8;
+/// `TargetBlock.ACTIVATION_TICKS_ARROWS`.
+pub const TARGET_ARROW_ACTIVATION_TICKS: u64 = 20;
+/// `DispenserBlock.TRIGGER_DURATION`.
+pub const DISPENSER_TRIGGER_TICKS: u64 = 4;
+
+/// The projectile kind a target block was hit by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetProjectile {
+    /// `AbstractArrow`, which holds the output for 20 ticks.
+    Arrow,
+    /// Every other projectile, which holds the output for 8 ticks.
+    Other,
+}
+
+impl TargetProjectile {
+    pub const fn activation_ticks(self) -> u64 {
+        match self {
+            Self::Arrow => TARGET_ARROW_ACTIVATION_TICKS,
+            Self::Other => TARGET_ACTIVATION_TICKS,
+        }
+    }
+}
+
+/// `true` for `minecraft:target`.
+pub fn is_target_block(state: &BlockState) -> bool {
+    state.name == TARGET
+}
+
+/// The target block's current `power` property (`0..=15`).
+pub fn target_power(state: &BlockState) -> i32 {
+    if !is_target_block(state) {
+        return 0;
+    }
+    property(state, "power")
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0)
+        .clamp(0, 15)
+}
+
+/// `TargetBlock.getRedstoneStrength` for a hit location and face.
+///
+/// The hit coordinate is a world-space position; only the fractional part of
+/// each axis is used, matching `Mth.frac`. The face axis selects the two
+/// in-face components whose maximum distance from the centre drives the
+/// strength. The core is 15 and the outer ring falls to 1; typical mid and
+/// outer test positions produce 10 and 5.
+pub fn target_output_power(face: Direction, hit: [f64; 3]) -> i32 {
+    let x = mth_frac(hit[0]) - 0.5;
+    let y = mth_frac(hit[1]) - 0.5;
+    let z = mth_frac(hit[2]) - 0.5;
+    let (x, y, z) = (x.abs(), y.abs(), z.abs());
+    let max = match face.axis() {
+        crate::math::Axis::Y => x.max(z),
+        crate::math::Axis::Z => x.max(y),
+        crate::math::Axis::X => y.max(z),
+    };
+    let scaled = ((0.5 - max) / 0.5).clamp(0.0, 1.0);
+    ((15.0 * scaled).ceil() as i32).max(1).clamp(1, 15)
+}
+
+fn mth_frac(value: f64) -> f64 {
+    value - value.floor()
+}
+
+/// `TargetBlock.updateRedstoneOutput` plus the scheduled reset.
+///
+/// `tick` is the current game tick. The target only re-arms when it has no
+/// pending reset tick, exactly like vanilla. Returns the computed strength.
+pub fn target_hit(
+    storage: &mut WorldStorage,
+    tick: u64,
+    pos: BlockPos,
+    face: Direction,
+    hit: [f64; 3],
+    projectile: TargetProjectile,
+) -> io::Result<i32> {
+    let state = storage
+        .block_state_at(pos.x(), pos.y(), pos.z())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("target hit at {pos:?} is outside the loaded chunks"),
+            )
+        })?;
+    if !is_target_block(&state) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{pos:?} is `{}`, not `{TARGET}`", state.name),
+        ));
+    }
+    let mut world = crate::tick::TickWorld::new(storage, tick);
+    target_hit_world(&mut world, pos, &state, face, hit, projectile)
+}
+
+fn target_hit_world(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    state: &BlockState,
+    face: Direction,
+    hit: [f64; 3],
+    projectile: TargetProjectile,
+) -> io::Result<i32> {
+    let power = target_output_power(face, hit);
+    if !world
+        .storage()
+        .tick_state()
+        .scheduled
+        .has_scheduled_tick(pos, TARGET)
+    {
+        world.set_block(pos, with_property(state, "power", &power.to_string()))?;
+        world.schedule(pos, TARGET, projectile.activation_ticks());
+    }
+    Ok(power)
+}
+
+/// `TargetBlock`: stores the hit strength in `power` and clears it on the
+/// scheduled activation tick.
+pub struct TargetBlockBehavior;
+
+pub static TARGET_BLOCK_BEHAVIOR: TargetBlockBehavior = TargetBlockBehavior;
+
+impl BlockBehavior for TargetBlockBehavior {
+    fn scheduled_tick(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        if is_target_block(state) && target_power(state) != 0 {
+            world.set_block(pos, with_property(state, "power", "0"))?;
+        }
+        Ok(())
+    }
+
+    fn on_place(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        if !is_target_block(state) || target_power(state) == 0 {
+            return Ok(());
+        }
+        // Vanilla only clears a stale output when the block type changed (or
+        // when a target is placed with a non-zero power property). Property
+        // updates on the same block must keep the freshly computed strength.
+        if old.is_some_and(|old| old.name == state.name) {
+            return Ok(());
+        }
+        if !world
+            .storage()
+            .tick_state()
+            .scheduled
+            .has_scheduled_tick(pos, TARGET)
+        {
+            world.set_block(pos, with_property(state, "power", "0"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Projectile kinds with a vanilla dispenser behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DispensedProjectile {
+    Arrow,
+    Egg,
+    Snowball,
+}
+
+impl DispensedProjectile {
+    pub const fn item_id(self) -> &'static str {
+        match self {
+            Self::Arrow => "minecraft:arrow",
+            Self::Egg => "minecraft:egg",
+            Self::Snowball => "minecraft:snowball",
+        }
+    }
+}
+
+/// The entity-free sink a dispenser uses to launch projectiles.
+///
+/// `position` is the vanilla dispense position (block centre plus `0.7` along
+/// the facing axis and `0.1` up); `velocity` is the facing unit vector scaled
+/// by the vanilla `1.1` projectile power. Implementations own entity creation.
+pub trait ProjectileSink {
+    fn shoot(
+        &mut self,
+        projectile: DispensedProjectile,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        stack: &ItemStack,
+    ) -> io::Result<()>;
+}
+
+/// The vanilla behavior selected for a dispenser item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DispenseKind {
+    Projectile(DispensedProjectile),
+    Shears,
+    BoneMeal,
+    /// Fluid/fish/solid buckets need `DispensibleContainerItem` and fluids.
+    Bucket,
+    /// Boats/rafts need an `AbstractBoat` entity.
+    Boat,
+    /// Minecarts need an `AbstractMinecart` entity.
+    Minecart,
+    /// Everything else falls back to `DefaultDispenseItemBehavior` (an item
+    /// entity), which this slice does not model.
+    Default,
+}
+
+/// Classifies an item id into the dispenser behavior table shipped by
+/// `DispenseItemBehavior.bootStrap`.
+pub fn dispense_kind(item: &str) -> DispenseKind {
+    match item {
+        "minecraft:arrow" | "minecraft:tipped_arrow" | "minecraft:spectral_arrow" => {
+            DispenseKind::Projectile(DispensedProjectile::Arrow)
+        }
+        "minecraft:egg" | "minecraft:blue_egg" | "minecraft:brown_egg" => {
+            DispenseKind::Projectile(DispensedProjectile::Egg)
+        }
+        "minecraft:snowball" => DispenseKind::Projectile(DispensedProjectile::Snowball),
+        "minecraft:shears" => DispenseKind::Shears,
+        "minecraft:bone_meal" => DispenseKind::BoneMeal,
+        _ if item == "minecraft:bucket" || item.ends_with("_bucket") => DispenseKind::Bucket,
+        _ if item.ends_with("_boat") || item.ends_with("_raft") => DispenseKind::Boat,
+        _ if item == "minecraft:minecart" || item.ends_with("_minecart") => DispenseKind::Minecart,
+        _ => DispenseKind::Default,
+    }
+}
+
+/// One dispense/drop action.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispenseOutcome {
+    /// The randomly selected slot, or `None` when the container was empty.
+    pub slot: Option<usize>,
+    /// The item id taken from the selected slot (empty when nothing happened).
+    pub item: String,
+    /// False for optional behaviors that had no valid target (shears without a
+    /// full beehive, bone meal on a full crop, a full destination container).
+    pub success: bool,
+}
+
+/// `DispenserBlock.dispenseFrom` / `DropperBlock.dispenseFrom`.
+///
+/// The wrapper exists so callers and tests can inject a [`ProjectileSink`]
+/// without constructing a [`crate::tick::TickWorld`].
+pub fn dispense_from(
+    storage: &mut WorldStorage,
+    tick: u64,
+    pos: BlockPos,
+    sink: Option<&mut dyn ProjectileSink>,
+) -> io::Result<Option<DispenseOutcome>> {
+    let mut world = crate::tick::TickWorld::new(storage, tick);
+    dispense(&mut world, pos, None, sink)
+}
+
+fn dispense(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    state: Option<&BlockState>,
+    sink: Option<&mut dyn ProjectileSink>,
+) -> io::Result<Option<DispenseOutcome>> {
+    let state = match state {
+        Some(state) => state.clone(),
+        None => world.block_state(pos)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("dispenser at {pos:?} is outside the loaded chunks"),
+            )
+        })?,
+    };
+    if !is_dispenser_like(&state) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{pos:?} is `{}`, not a dispenser or dropper", state.name),
+        ));
+    }
+
+    let entity_pos = BlockEntityPos::new(pos.x(), pos.y(), pos.z());
+    let Some(mut entity) = world.block_entity(entity_pos)? else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("dispenser at {pos:?} has no block entity"),
+        ));
+    };
+    let Some(mut dispenser) = entity.as_dispenser() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("block entity at {pos:?} is not a dispenser"),
+        ));
+    };
+    dispenser.sync_state(&state);
+
+    let mut random = world.random(pos);
+    let Some(slot) = dispenser.get_random_slot(&mut random) else {
+        return Ok(Some(DispenseOutcome {
+            slot: None,
+            item: String::new(),
+            success: false,
+        }));
+    };
+    let stack = dispenser.items[slot].clone();
+
+    let outcome = if is_dropper(&state) {
+        drop_from_dispenser(world, pos, &mut dispenser, slot, &stack)?
+    } else {
+        dispense_item(world, pos, &mut dispenser, slot, &stack, sink)?
+    };
+
+    entity.set_dispenser(&dispenser);
+    world.insert_block_entity(entity)?;
+    Ok(Some(outcome))
+}
+
+fn drop_from_dispenser(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    dispenser: &mut DispenserBlockEntity,
+    slot: usize,
+    stack: &ItemStack,
+) -> io::Result<DispenseOutcome> {
+    let target_pos = pos.relative(dispenser.facing);
+    let target_entity_pos = BlockEntityPos::new(target_pos.x(), target_pos.y(), target_pos.z());
+    let Some(mut target_entity) = world.block_entity(target_entity_pos)? else {
+        return Err(unsupported(
+            "dropper without a container in front needs an item-entity sink",
+        ));
+    };
+    let Some(mut target_items) = target_entity.container_items() else {
+        return Err(unsupported(
+            "dropper without a container in front needs an item-entity sink",
+        ));
+    };
+
+    let mut single = [stack.clone()];
+    let moved = crate::block_entity::move_one_item(&mut single, &mut target_items);
+    if !moved {
+        return Ok(DispenseOutcome {
+            slot: Some(slot),
+            item: stack.item.clone(),
+            success: false,
+        });
+    }
+    if !target_entity.set_container_items(&target_items) {
+        return Err(unsupported(
+            "dropper destination rejected the transferred slot layout",
+        ));
+    }
+    world.insert_block_entity(target_entity)?;
+    dispenser.items[slot] = single[0].clone();
+    Ok(DispenseOutcome {
+        slot: Some(slot),
+        item: stack.item.clone(),
+        success: true,
+    })
+}
+
+fn dispense_item(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    dispenser: &mut DispenserBlockEntity,
+    slot: usize,
+    stack: &ItemStack,
+    sink: Option<&mut dyn ProjectileSink>,
+) -> io::Result<DispenseOutcome> {
+    let kind = dispense_kind(&stack.item);
+    match kind {
+        DispenseKind::Projectile(projectile) => {
+            let Some(sink) = sink else {
+                return Err(unsupported(format!(
+                    "dispenser projectile `{}` needs an injected ProjectileSink",
+                    stack.item
+                )));
+            };
+            let mut remaining = stack.clone();
+            let single = remaining.split(1);
+            let facing = dispenser.facing;
+            let center = [
+                f64::from(pos.x()) + 0.5,
+                f64::from(pos.y()) + 0.5,
+                f64::from(pos.z()) + 0.5,
+            ];
+            let position = [
+                center[0] + 0.7 * f64::from(facing.step_x()),
+                center[1] + 0.7 * f64::from(facing.step_y()) + 0.1,
+                center[2] + 0.7 * f64::from(facing.step_z()),
+            ];
+            let velocity = [
+                1.1 * f64::from(facing.step_x()),
+                1.1 * f64::from(facing.step_y()),
+                1.1 * f64::from(facing.step_z()),
+            ];
+            sink.shoot(projectile, position, velocity, &single)?;
+            dispenser.items[slot] = remaining;
+            Ok(DispenseOutcome {
+                slot: Some(slot),
+                item: single.item,
+                success: true,
+            })
+        }
+        DispenseKind::Shears => dispense_shears(world, pos, dispenser, slot, stack),
+        DispenseKind::BoneMeal => dispense_bone_meal(world, pos, dispenser, slot, stack),
+        DispenseKind::Bucket => Err(unsupported(
+            "dispenser bucket behavior needs fluid placement and an item-entity sink",
+        )),
+        DispenseKind::Boat => Err(unsupported(
+            "dispenser boat behavior needs an AbstractBoat entity",
+        )),
+        DispenseKind::Minecart => Err(unsupported(
+            "dispenser minecart behavior needs an AbstractMinecart entity",
+        )),
+        DispenseKind::Default => Err(unsupported(format!(
+            "default dispenser behavior for `{}` needs an item-entity sink",
+            stack.item
+        ))),
+    }
+}
+
+fn dispense_shears(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    dispenser: &mut DispenserBlockEntity,
+    slot: usize,
+    stack: &ItemStack,
+) -> io::Result<DispenseOutcome> {
+    let target_pos = pos.relative(dispenser.facing);
+    let Some(target_state) = world.block_state(target_pos)? else {
+        return Ok(optional_miss(slot, stack));
+    };
+    let honey = property(&target_state, "honey_level")
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    if !is_beehive(&target_state) || honey < 5 {
+        return Ok(optional_miss(slot, stack));
+    }
+
+    let mut next = dispenser.clone();
+    let leftover = next.insert_item(ItemStack::new("minecraft:honeycomb", 1));
+    if !leftover.is_empty() {
+        return Err(unsupported(
+            "dispenser shears found no room for the honeycomb drop",
+        ));
+    }
+    damage_shears(&mut next.items[slot]);
+    world.set_block(target_pos, with_property(&target_state, "honey_level", "0"))?;
+    *dispenser = next;
+    Ok(DispenseOutcome {
+        slot: Some(slot),
+        item: stack.item.clone(),
+        success: true,
+    })
+}
+
+fn dispense_bone_meal(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    dispenser: &mut DispenserBlockEntity,
+    slot: usize,
+    stack: &ItemStack,
+) -> io::Result<DispenseOutcome> {
+    let target_pos = pos.relative(dispenser.facing);
+    let Some(target_state) = world.block_state(target_pos)? else {
+        return Ok(optional_miss(slot, stack));
+    };
+    if !crate::crops::is_crop(&target_state)
+        || crate::crops::age(&target_state) >= crate::crops::max_age(&target_state)
+    {
+        return Ok(optional_miss(slot, stack));
+    }
+    let amount = world
+        .random(target_pos)
+        .next_int_between_inclusive(2, 5)
+        .clamp(1, i32::from(u8::MAX)) as u8;
+    world.set_block(target_pos, crate::crops::grow(&target_state, amount))?;
+    dispenser.items[slot].shrink(1);
+    Ok(DispenseOutcome {
+        slot: Some(slot),
+        item: stack.item.clone(),
+        success: true,
+    })
+}
+
+fn optional_miss(slot: usize, stack: &ItemStack) -> DispenseOutcome {
+    DispenseOutcome {
+        slot: Some(slot),
+        item: stack.item.clone(),
+        success: false,
+    }
+}
+
+fn damage_shears(stack: &mut ItemStack) {
+    let prototype = crate::item_prototypes::prototype_or_default(&stack.item);
+    let Some(max_damage) = prototype.max_damage else {
+        return;
+    };
+    if stack.get_component("minecraft:unbreakable").is_some() {
+        return;
+    }
+    let damage = stack.damage() + 1;
+    if damage >= max_damage {
+        *stack = ItemStack::empty();
+    } else {
+        stack.set_component(crate::item_components::ComponentValue::Damage(damage));
+    }
+}
+
+fn is_beehive(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:beehive" | "minecraft:bee_nest"
+    )
+}
+
+fn unsupported(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, message.into())
+}
+
+/// `true` for `minecraft:dispenser`.
+pub fn is_dispenser(state: &BlockState) -> bool {
+    state.name == DISPENSER
+}
+
+/// `true` for `minecraft:dropper`.
+pub fn is_dropper(state: &BlockState) -> bool {
+    state.name == DROPPER
+}
+
+/// `true` for both dispenser-like blocks.
+pub fn is_dispenser_like(state: &BlockState) -> bool {
+    is_dispenser(state) || is_dropper(state)
+}
+
+/// `DispenserBlock.TRIGGERED`.
+pub fn is_triggered(state: &BlockState) -> bool {
+    property(state, "triggered") == Some("true")
+}
+
+fn with_triggered(state: &BlockState, triggered: bool) -> BlockState {
+    with_property(
+        state,
+        "triggered",
+        if triggered { "true" } else { "false" },
+    )
+}
+
+/// `DispenserBlock`: schedule one dispense on each rising edge of a neighbour
+/// signal, and clear `triggered` on the falling edge. The scheduled tick is the
+/// vanilla four-tick re-arm cooldown.
+pub struct DispenserBehavior;
+
+pub static DISPENSER_BEHAVIOR: DispenserBehavior = DispenserBehavior;
+
+impl BlockBehavior for DispenserBehavior {
+    fn neighbor_changed(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _source: BlockPos,
+    ) -> io::Result<()> {
+        if !is_dispenser_like(state) {
+            return Ok(());
+        }
+        let powered = {
+            let reader = SignalReader::world(world.storage());
+            reader.has_neighbor_signal(pos) || reader.has_neighbor_signal(pos.above())
+        };
+        let triggered = is_triggered(state);
+        if powered && !triggered {
+            world.schedule(pos, state.name.clone(), DISPENSER_TRIGGER_TICKS);
+            world.set_block(pos, with_triggered(state, true))?;
+        } else if !powered && triggered {
+            world.set_block(pos, with_triggered(state, false))?;
+        }
+        Ok(())
+    }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        if is_dispenser_like(state) {
+            dispense(world, pos, Some(state), None)?;
+        }
+        Ok(())
     }
 }
 

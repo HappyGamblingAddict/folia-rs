@@ -27,7 +27,9 @@ use crate::crafting::{
 use crate::crafting::{FurnaceKind, FurnaceState};
 use crate::item_components::{ItemStack, item_stack_from_nbt, item_stack_to_nbt};
 use crate::loot::RecipeCatalog;
+use crate::math::Direction;
 use crate::nbt::Tag;
+use folia_random::RandomSource;
 use std::collections::BTreeMap;
 use std::io;
 
@@ -38,6 +40,8 @@ pub const LEGACY_BLOCK_ENTITIES_KEY: &str = "BlockEntities";
 
 pub const CHEST_SLOTS: usize = 27;
 pub const FURNACE_SLOTS: usize = 3;
+/// `DispenserBlockEntity.CONTAINER_SIZE`.
+pub const DISPENSER_SLOTS: usize = 9;
 
 /// Absolute block position of a block entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -121,7 +125,8 @@ impl BlockEntity {
             Self::Hopper(hopper) => Some(hopper.items.clone()),
             Self::BrewingStand(stand) => Some(stand.state.slots().to_vec()),
             Self::Furnace(furnace) => Some(furnace.items.clone()),
-            Self::Sign(_) | Self::Spawner(_) | Self::Unknown(_) => None,
+            Self::Unknown(unknown) => Some(unknown.as_dispenser()?.items),
+            Self::Sign(_) | Self::Spawner(_) => None,
         }
     }
 
@@ -148,8 +153,46 @@ impl BlockEntity {
                 furnace.items = items.to_vec();
                 true
             }
+            Self::Unknown(unknown) => {
+                let Some(mut dispenser) = unknown.as_dispenser() else {
+                    return false;
+                };
+                if dispenser.items.len() != items.len() {
+                    return false;
+                }
+                dispenser.items = items.to_vec();
+                unknown.set_dispenser(&dispenser)
+            }
             _ => false,
         }
+    }
+
+    /// The typed dispenser/dropper state stored in an `Unknown` entry.
+    ///
+    /// Dispensers are decoded on demand rather than given a dedicated enum
+    /// variant because `join.rs` deliberately matches every block-entity
+    /// variant exhaustively and is outside this worker's file set. The
+    /// persisted compound is the same one vanilla writes, so the decode is
+    /// lossless and unknown fields are preserved.
+    pub fn as_dispenser(&self) -> Option<DispenserBlockEntity> {
+        match self {
+            Self::Unknown(unknown) => unknown.as_dispenser(),
+            _ => None,
+        }
+    }
+
+    /// Replace the persisted dispenser/dropper state. Returns `false` when this
+    /// entity is not a dispenser-like `Unknown` entry or encoding fails.
+    pub fn set_dispenser(&mut self, dispenser: &DispenserBlockEntity) -> bool {
+        match self {
+            Self::Unknown(unknown) => unknown.set_dispenser(dispenser),
+            _ => false,
+        }
+    }
+
+    /// Wrap a dispenser/dropper state as an `Unknown` block entity.
+    pub fn dispenser(dispenser: DispenserBlockEntity) -> io::Result<Self> {
+        dispenser.into_block_entity()
     }
 
     /// Decode one entry of the chunk's `block_entities` list.
@@ -389,6 +432,147 @@ impl HopperBlockEntity {
             );
         }
         Ok(Tag::Compound(fields))
+    }
+}
+
+/// A dispenser or dropper with its nine item slots.
+///
+/// Vanilla stores `FACING` and `TRIGGERED` on the block state, not in block
+/// entity NBT. The runtime mirrors are kept here so callers that hold only the
+/// entity can still report the orientation that was active when it was
+/// decoded; [`DispenserBlockEntity::sync_state`] refreshes them from the world.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DispenserBlockEntity {
+    pub pos: BlockEntityPos,
+    /// `minecraft:dispenser` or `minecraft:dropper`.
+    pub block_id: String,
+    pub items: Vec<ItemStack>,
+    /// Runtime mirror of `DispenserBlock.FACING`.
+    pub facing: Direction,
+    /// Runtime mirror of `DispenserBlock.TRIGGERED`.
+    pub triggered: bool,
+    extras: Vec<(String, Tag)>,
+}
+
+impl DispenserBlockEntity {
+    pub fn new(pos: BlockEntityPos) -> Self {
+        Self::with_id(pos, "minecraft:dispenser")
+    }
+
+    pub fn with_id(pos: BlockEntityPos, block_id: impl Into<String>) -> Self {
+        Self {
+            pos,
+            block_id: normalize_key(&block_id.into()),
+            items: vec![ItemStack::empty(); DISPENSER_SLOTS],
+            facing: Direction::North,
+            triggered: false,
+            extras: Vec::new(),
+        }
+    }
+
+    /// Build a dispenser state and mirror the block-state `facing`/`triggered`
+    /// properties.
+    pub fn with_state(
+        pos: BlockEntityPos,
+        block_id: impl Into<String>,
+        facing: Direction,
+        triggered: bool,
+    ) -> Self {
+        let mut entity = Self::with_id(pos, block_id);
+        entity.facing = facing;
+        entity.triggered = triggered;
+        entity
+    }
+
+    /// Refresh the runtime `facing`/`triggered` mirrors from a block state.
+    pub fn sync_state(&mut self, state: &crate::chunk::BlockState) {
+        self.facing = crate::redstone::facing(state);
+        self.triggered = crate::redstone::is_triggered(state);
+    }
+
+    pub fn slot(&self, index: usize) -> Option<&ItemStack> {
+        self.items.get(index)
+    }
+
+    pub fn set_slot(&mut self, index: usize, stack: ItemStack) -> bool {
+        let Some(slot) = self.items.get_mut(index) else {
+            return false;
+        };
+        *slot = stack;
+        true
+    }
+
+    /// Vanilla `DispenserBlockEntity.getRandomSlot`: weight each non-empty slot
+    /// by its 1-based non-empty index and pick one uniformly.
+    pub fn get_random_slot(&self, random: &mut dyn RandomSource) -> Option<usize> {
+        let mut chosen = None;
+        let mut count = 1;
+        for (index, stack) in self.items.iter().enumerate() {
+            if !stack.is_empty() && random.next_int_bound(count) == 0 {
+                chosen = Some(index);
+            }
+            if !stack.is_empty() {
+                count += 1;
+            }
+        }
+        chosen
+    }
+
+    /// Vanilla `DispenserBlockEntity.insertItem`: merge into compatible slots
+    /// first, then use empty slots. Returns the leftover stack.
+    pub fn insert_item(&mut self, mut stack: ItemStack) -> ItemStack {
+        let max_stack = crate::item_prototypes::prototype_or_default(&stack.item)
+            .max_stack_size
+            .max(1);
+        for slot in &mut self.items {
+            if stack.is_empty() {
+                break;
+            }
+            if slot.is_empty() {
+                let amount = stack.count.min(max_stack);
+                *slot = stack.split(amount);
+            } else if slot.item == stack.item && slot.components == stack.components {
+                let room = (max_stack - slot.count).max(0);
+                let amount = stack.count.min(room);
+                if amount > 0 {
+                    slot.count += amount;
+                    stack.shrink(amount);
+                }
+            }
+        }
+        stack
+    }
+
+    pub fn extra_fields(&self) -> &[(String, Tag)] {
+        &self.extras
+    }
+
+    fn from_fields(pos: BlockEntityPos, block_id: String, extras: Vec<(String, Tag)>) -> io::Result<Self> {
+        Ok(Self {
+            pos,
+            block_id,
+            items: decode_items(&extras, DISPENSER_SLOTS)?,
+            facing: Direction::North,
+            triggered: false,
+            extras,
+        })
+    }
+
+    fn to_nbt(&self) -> io::Result<Tag> {
+        let mut fields = self.extras.clone();
+        write_identity(&mut fields, &self.block_id, self.pos);
+        set_field(&mut fields, "Items", encode_items(&self.items));
+        Ok(Tag::Compound(fields))
+    }
+
+    /// Persist this dispenser as an opaque `Unknown` block entity entry.
+    pub fn into_block_entity(self) -> io::Result<BlockEntity> {
+        let data = self.to_nbt()?;
+        Ok(BlockEntity::Unknown(UnknownBlockEntity {
+            pos: self.pos,
+            id: self.block_id,
+            data,
+        }))
     }
 }
 
@@ -994,6 +1178,12 @@ impl SpawnerBlockEntity {
 }
 
 /// Opaque storage for a block-entity type this port does not model.
+///
+/// Dispensers and droppers are recognized by id through the
+/// [`DispenserBlockEntity`] helpers below; every other type keeps its complete
+/// original compound. This is intentionally not a dedicated enum variant so
+/// exhaustive `BlockEntity` matches in files outside the block-entity owner stay
+/// valid.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnknownBlockEntity {
     pub pos: BlockEntityPos,
@@ -1001,6 +1191,39 @@ pub struct UnknownBlockEntity {
     /// The complete original compound, including `id`, coordinates, and any
     /// fields this port does not understand.
     pub data: Tag,
+}
+
+impl UnknownBlockEntity {
+    /// Decode this entry as a dispenser/dropper when its id matches.
+    pub fn as_dispenser(&self) -> Option<DispenserBlockEntity> {
+        if !is_dispenser_id(&self.id) {
+            return None;
+        }
+        DispenserBlockEntity::from_fields(self.pos, self.id.clone(), self.compound_fields()?).ok()
+    }
+
+    /// Write a dispenser/dropper state back into this entry.
+    pub fn set_dispenser(&mut self, dispenser: &DispenserBlockEntity) -> bool {
+        if self.id != dispenser.block_id || !is_dispenser_id(&self.id) {
+            return false;
+        }
+        match dispenser.to_nbt() {
+            Ok(data) => {
+                self.data = data;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn compound_fields(&self) -> Option<Vec<(String, Tag)>> {
+        self.data.as_compound().map(|fields| fields.to_vec())
+    }
+}
+
+/// `true` for the two dispenser-like block-entity ids.
+pub fn is_dispenser_id(id: &str) -> bool {
+    matches!(id, "minecraft:dispenser" | "minecraft:dropper")
 }
 
 fn set_nested_entity_id(data: &mut Tag, entity_id: String) {

@@ -874,7 +874,7 @@ pub struct TickWorld<'a> {
 }
 
 impl<'a> TickWorld<'a> {
-    fn new(storage: &'a mut WorldStorage, tick: u64) -> Self {
+    pub(crate) fn new(storage: &'a mut WorldStorage, tick: u64) -> Self {
         Self {
             storage,
             tick,
@@ -895,6 +895,30 @@ impl<'a> TickWorld<'a> {
     /// Read-only storage view for signal/fluid queries.
     pub fn storage(&self) -> &WorldStorage {
         self.storage
+    }
+
+    /// Clone the block entity at `pos`, if one is loaded.
+    pub fn block_entity(
+        &mut self,
+        pos: crate::block_entity::BlockEntityPos,
+    ) -> io::Result<Option<crate::block_entity::BlockEntity>> {
+        Ok(self.storage.block_entity(pos)?.cloned())
+    }
+
+    /// Insert or replace a block entity.
+    pub fn insert_block_entity(
+        &mut self,
+        entity: crate::block_entity::BlockEntity,
+    ) -> io::Result<Option<crate::block_entity::BlockEntity>> {
+        self.storage.insert_block_entity(entity)
+    }
+
+    /// Remove the block entity at `pos`.
+    pub fn remove_block_entity(
+        &mut self,
+        pos: crate::block_entity::BlockEntityPos,
+    ) -> io::Result<Option<crate::block_entity::BlockEntity>> {
+        self.storage.remove_block_entity(pos)
     }
 
     /// Applies a block change and returns whether it changed anything.
@@ -1104,6 +1128,10 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::PRESSURE_PLATE_BEHAVIOR
     } else if crate::redstone::is_tripwire(state) {
         &crate::redstone::TRIPWIRE_BEHAVIOR
+    } else if crate::redstone::is_target_block(state) {
+        &crate::redstone::TARGET_BLOCK_BEHAVIOR
+    } else if crate::redstone::is_dispenser_like(state) {
+        &crate::redstone::DISPENSER_BEHAVIOR
     } else if crate::leaves::is_leaves(state) {
         &crate::leaves::LEAVES_BEHAVIOR
     } else if crate::crops::is_crop(state) {
@@ -1159,7 +1187,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     } else if name == "minecraft:tripwire_hook" {
         Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
-        Some("doors, rails, and non-redstone torch support are not ported")
+        Some("hoppers, doors, rails, and non-redstone torch support are not ported")
     } else {
         None
     }
@@ -1168,9 +1196,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
 fn is_known_unsupported_neighbor(name: &str) -> bool {
     matches!(
         name,
-        "minecraft:dispenser"
-            | "minecraft:dropper"
-            | "minecraft:hopper"
+        "minecraft:hopper"
             | "minecraft:rail"
             | "minecraft:powered_rail"
             | "minecraft:detector_rail"

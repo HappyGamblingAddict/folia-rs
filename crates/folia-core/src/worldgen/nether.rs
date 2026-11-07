@@ -14,22 +14,35 @@
 //!   `BlendedNoise::create` / `NormalNoise::create_legacy_seed`. Terrain is
 //!   deterministic and structurally correct, but not block-identical to Java.
 //! - Only the surface rules needed by the shipped Nether biomes are executed.
-//!   Structures, nether fortresses, bastions, and portal logic are out of
-//!   scope for this slice.
+//! - `nether_cave` carvers are replayed from the 17x17 neighbourhood exactly
+//!   like `NoiseBasedChunkGenerator.applyCarvers`, but without an aquifer:
+//!   carved blocks below the lava sea become lava, everything above becomes
+//!   cave air, and the top seven layers stay untouched below the roof.
+//! - Nether structure *selection* (fortress/bastion) runs through the merged
+//!   structure-set foundation. Start generation fails loudly because the
+//!   project has no shipped fortress/bastion template assets yet; the error is
+//!   the API contract, not a silent skip.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
+use crate::worldgen::carver::{mth_cos, mth_sin};
 use crate::worldgen::density::{DensityFunction, WorldgenData};
 use crate::worldgen::feature::{
-    ConfiguredFeature, DECORATION_STEPS, Decoration, FeatureData, Heightmap, PlacedFeature,
-    PlacementWorld, WorldGenRegion,
+    ConfiguredFeature, DECORATION_STEPS, Decoration, FeatureData, FeatureLevel, Heightmap,
+    PlacedFeature, PlacementWorld, WorldGenRegion,
 };
 use crate::worldgen::generator::sample_grid;
 use crate::worldgen::noise::{BlendedNoise, NormalNoise};
+use crate::worldgen::structure::{
+    SelectedStructure, StructureBiomeLookup, StructureDefinition, StructureDimension,
+    StructureError, StructureGenerationContext, StructureSetRegistry, StructureStart,
+    StructureTemplate,
+};
 use folia_math::BlockPos;
 use folia_random::{
-    RandomSource, WorldgenRandom, XoroshiroPositionalRandomFactory, XoroshiroRandomSource,
+    LegacyRandomSource, RandomSource, WorldgenRandom, XoroshiroPositionalRandomFactory,
+    XoroshiroRandomSource,
 };
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 
@@ -42,6 +55,24 @@ pub const SEA_LEVEL: i32 = 32;
 
 const CELL_WIDTH: i32 = 4;
 const CELL_HEIGHT: i32 = 8;
+
+/// `nether_cave.json` probability and radius values.
+const NETHER_CAVE_PROBABILITY: f32 = 0.2;
+const NETHER_CAVE_Y_MIN: i32 = 0;
+const NETHER_CAVE_Y_MAX: i32 = 126;
+const NETHER_CAVE_Y_SCALE: f64 = 0.5;
+const NETHER_CAVE_FLOOR_LEVEL: f64 = -0.7;
+/// `NetherWorldCarver.getYScale`.
+const NETHER_CAVE_VERTICAL_RATIO: f64 = 5.0;
+/// `NetherWorldCarver.getCaveBound`.
+const NETHER_CAVE_BOUND: i32 = 10;
+/// `NetherWorldCarver` never lowers the 4-block carver range (7 sections).
+const NETHER_CAVE_BRANCH_COORD: i32 = 7 * 16;
+/// Carved blocks at or below this Y become lava (`minGenY + 31`).
+const NETHER_LAVA_LEVEL: i32 = 31;
+/// Structure selection samples the biome at this Y; every Nether biome carries
+/// the fortress tag and four of five carry the bastion tag.
+const NETHER_STRUCTURE_BIOME_Y: i32 = 64;
 
 const NETHERRACK: &str = "minecraft:netherrack";
 const BEDROCK: &str = "minecraft:bedrock";
@@ -105,6 +136,7 @@ pub struct NetherGenerator {
     bedrock_roof: XoroshiroPositionalRandomFactory,
     feature_data: &'static FeatureData,
     step_order: Vec<Vec<String>>,
+    structures: StructureSetRegistry,
 }
 
 impl NetherGenerator {
@@ -156,6 +188,12 @@ impl NetherGenerator {
         let feature_data = FeatureData::vanilla();
         let step_order =
             nether_step_feature_order(feature_data, &NETHER_BIOMES.map(|entry| entry.name));
+        let structures = StructureSetRegistry::shipped().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("shipped structure sets: {error}"),
+            )
+        })?;
 
         Ok(Self {
             seed,
@@ -176,6 +214,7 @@ impl NetherGenerator {
             bedrock_roof: random_factory(&factory, "minecraft:bedrock_roof"),
             feature_data,
             step_order,
+            structures,
         })
     }
 
@@ -317,8 +356,97 @@ impl NetherGenerator {
         }
 
         let biome_indices = self.fill_biomes(&mut chunk, chunk_x, chunk_z);
+        self.carve_chunk(&mut chunk);
         self.apply_features(&mut chunk, &biome_indices)?;
         Ok(chunk)
+    }
+
+    /// Replays every `minecraft:nether_cave` start from the 17x17 chunk
+    /// neighbourhood into this chunk, matching
+    /// `NoiseBasedChunkGenerator.applyCarvers`. This slice runs the pass after
+    /// the surface sequence (see `DECISIONS.md`), and it never touches the
+    /// bedrock floor or the seven protected layers below the roof.
+    pub fn carve_chunk(&self, chunk: &mut Chunk) {
+        let mut mask = CarvingMask::new(MIN_Y, HEIGHT);
+        let target_x = chunk.x;
+        let target_z = chunk.z;
+        for offset_x in -8..=8 {
+            for offset_z in -8..=8 {
+                let chunk_x = target_x + offset_x;
+                let chunk_z = target_z + offset_z;
+                let mut random = LegacyRandomSource::new(0);
+                set_large_feature_seed(&mut random, self.seed, chunk_x, chunk_z);
+                if random.next_float() <= NETHER_CAVE_PROBABILITY {
+                    carve_nether_cave(
+                        chunk,
+                        &mut mask,
+                        &mut random,
+                        ChunkOrigin {
+                            x: chunk_x,
+                            z: chunk_z,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Nether structure placement selection for `minecraft:nether_complexes`.
+    ///
+    /// This is the same `RandomSpreadStructurePlacement` + weighted selection +
+    /// dimension/biome filter used by the Overworld structure manager. The
+    /// selected start itself cannot be generated until fortress/bastion
+    /// templates are shipped; [`Self::structure_start`] returns the explicit
+    /// error instead of pretending an empty structure was placed.
+    pub fn structure_at_chunk(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<SelectedStructure>> {
+        self.structures
+            .structure_at_chunk_filtered(
+                chunk_x,
+                chunk_z,
+                self.seed,
+                StructureDimension::Nether,
+                NETHER_STRUCTURE_BIOME_Y,
+                self,
+            )
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("nether structure selection: {error}"),
+                )
+            })
+    }
+
+    /// Generates the selected fortress/bastion start from the shipped
+    /// definition JSON.
+    ///
+    /// Fortresses have no procedural piece port, and bastions are jigsaw starts
+    /// that require the unshipped template/pool assets. Both paths fail loudly
+    /// with [`StructureError`]; the caller can surface the message to logs or
+    /// tests. When templates are added, replace the empty map with the loaded
+    /// catalog without touching the selection contract.
+    pub fn structure_start(
+        &self,
+        selection: &SelectedStructure,
+    ) -> Result<StructureStart, StructureError> {
+        let json = match selection.structure.as_str() {
+            "minecraft:fortress" => NETHER_FORTRESS_JSON,
+            "minecraft:bastion_remnant" => NETHER_BASTION_JSON,
+            other => {
+                return Err(StructureError::UnsupportedStructureType {
+                    structure: other.to_owned(),
+                    type_name: "selected set is not a nether complex".to_owned(),
+                });
+            }
+        };
+        let definition = StructureDefinition::from_json(&selection.structure, json)?;
+        let templates: HashMap<String, StructureTemplate> = HashMap::new();
+        let context = StructureGenerationContext::new(self.seed, selection.chunk, 0, &templates)
+            .with_level(&EMPTY_NETHER_LEVEL);
+        definition.generate_start(&context)
     }
 
     fn fill_biomes(&self, chunk: &mut Chunk, chunk_x: i32, chunk_z: i32) -> Vec<usize> {
@@ -599,6 +727,8 @@ impl NetherGenerator {
         );
         let origin = BlockPos::new(chunk.x.wrapping_mul(16), MIN_Y, chunk.z.wrapping_mul(16));
         for step in [
+            Decoration::LocalModifications,
+            Decoration::SurfaceStructures,
             Decoration::UndergroundOres,
             Decoration::UndergroundDecoration,
             Decoration::VegetalDecoration,
@@ -685,6 +815,404 @@ impl NetherGenerator {
         }
         Ok(())
     }
+}
+
+impl StructureBiomeLookup for NetherGenerator {
+    fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
+        self.biome_at_block(x, y, z)
+    }
+}
+
+/// Height source used only to reach the template lookup in a jigsaw start.
+/// Terrain-matching placement still fails at the first missing template.
+struct EmptyNetherLevel;
+
+static EMPTY_NETHER_LEVEL: EmptyNetherLevel = EmptyNetherLevel;
+
+impl FeatureLevel for EmptyNetherLevel {
+    fn min_y(&self) -> i32 {
+        MIN_Y
+    }
+
+    fn height(&self) -> i32 {
+        HEIGHT
+    }
+
+    fn get_block(&self, _pos: BlockPos) -> Option<&BlockState> {
+        None
+    }
+
+    fn set_block(&mut self, _pos: BlockPos, _state: BlockState) -> bool {
+        false
+    }
+}
+
+/// `minecraft:fortress` definition used by the structure-selection contract.
+const NETHER_FORTRESS_JSON: &str = r##"{ "type": "minecraft:fortress", "biomes": "#minecraft:has_structure/nether_fortress", "spawn_overrides": {}, "step": "underground_decoration" }"##;
+/// `minecraft:bastion_remnant` definition used by the structure-selection
+/// contract.
+const NETHER_BASTION_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/bastion_remnant", "max_distance_from_center": 80, "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 33 }, "start_pool": "minecraft:bastion/starts", "step": "surface_structures", "use_expansion_hack": false }"##;
+
+#[derive(Debug, Clone, Copy)]
+struct ChunkOrigin {
+    x: i32,
+    z: i32,
+}
+
+/// `CarvingMask` for one target chunk.
+struct CarvingMask {
+    min_y: i32,
+    height: i32,
+    bits: Vec<u64>,
+}
+
+impl CarvingMask {
+    fn new(min_y: i32, height: i32) -> Self {
+        let blocks = 16 * 16 * height as usize;
+        Self {
+            min_y,
+            height,
+            bits: vec![0; blocks.div_ceil(64)],
+        }
+    }
+
+    fn index(&self, x: usize, y: i32, z: usize) -> Option<usize> {
+        let local_y = y - self.min_y;
+        if local_y < 0 || local_y >= self.height {
+            return None;
+        }
+        Some((x & 15) | ((z & 15) << 4) | ((local_y as usize) << 8))
+    }
+
+    fn get(&self, x: usize, y: i32, z: usize) -> bool {
+        let Some(index) = self.index(x, y, z) else {
+            return false;
+        };
+        let word = self.bits.get(index >> 6).copied().unwrap_or(0);
+        word & (1u64 << (index & 63)) != 0
+    }
+
+    fn set(&mut self, x: usize, y: i32, z: usize) {
+        let Some(index) = self.index(x, y, z) else {
+            return;
+        };
+        if let Some(word) = self.bits.get_mut(index >> 6) {
+            *word |= 1u64 << (index & 63);
+        }
+    }
+}
+
+/// `net.minecraft.world.level.levelgen.carver.CaveWorldCarver.carve` reduced to
+/// the single `minecraft:nether_cave` configuration.
+fn carve_nether_cave(
+    chunk: &mut Chunk,
+    mask: &mut CarvingMask,
+    random: &mut impl RandomSource,
+    origin: ChunkOrigin,
+) {
+    let inner_bound = random.next_int_bound(NETHER_CAVE_BOUND) + 1;
+    let middle_bound = random.next_int_bound(inner_bound) + 1;
+    let count = random.next_int_bound(middle_bound);
+
+    for _ in 0..count {
+        let x = f64::from(origin.x * 16 + random.next_int_bound(16));
+        let y = f64::from(random.next_int_between_inclusive(NETHER_CAVE_Y_MIN, NETHER_CAVE_Y_MAX));
+        let z = f64::from(origin.z * 16 + random.next_int_bound(16));
+        let horizontal_multiplier = 1.0;
+        let vertical_multiplier = 1.0;
+        let skip = CaveSkip {
+            floor_level: NETHER_CAVE_FLOOR_LEVEL,
+        };
+
+        let mut branches = 1;
+        if random.next_int_bound(4) == 0 {
+            let radius = 1.0 + random.next_float() * 6.0;
+            let ratio = NETHER_CAVE_Y_SCALE;
+            create_room(chunk, mask, x, y, z, radius, ratio, &skip);
+            branches += random.next_int_bound(4);
+        }
+
+        for _ in 0..branches {
+            let yaw = random.next_float() * TWO_PI_F32;
+            let pitch = (random.next_float() - 0.5) / 4.0;
+            let thickness = (random.next_float() * 2.0 + random.next_float()) * 2.0;
+            let branch_count =
+                NETHER_CAVE_BRANCH_COORD - random.next_int_bound(NETHER_CAVE_BRANCH_COORD / 4);
+            let seed = random.next_long();
+            create_tunnel(
+                chunk,
+                mask,
+                seed,
+                x,
+                y,
+                z,
+                horizontal_multiplier,
+                vertical_multiplier,
+                thickness,
+                yaw,
+                pitch,
+                0,
+                branch_count,
+                NETHER_CAVE_VERTICAL_RATIO,
+                &skip,
+            );
+        }
+    }
+}
+
+const PI_F32: f32 = std::f32::consts::PI;
+const HALF_PI_F32: f32 = std::f32::consts::FRAC_PI_2;
+const TWO_PI_F32: f32 = std::f32::consts::TAU;
+
+#[allow(clippy::too_many_arguments)]
+fn create_room(
+    chunk: &mut Chunk,
+    mask: &mut CarvingMask,
+    x: f64,
+    y: f64,
+    z: f64,
+    radius: f32,
+    ratio: f64,
+    skip: &CaveSkip,
+) {
+    let horizontal = 1.5 + f64::from(mth_sin(f64::from(HALF_PI_F32)) * radius);
+    let vertical = horizontal * ratio;
+    carve_ellipsoid(
+        chunk,
+        mask,
+        x + 1.0,
+        y,
+        z,
+        horizontal,
+        vertical,
+        |rx, ry, rz| skip.should_skip(rx, ry, rz),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_tunnel(
+    chunk: &mut Chunk,
+    mask: &mut CarvingMask,
+    seed: i64,
+    mut x: f64,
+    mut y: f64,
+    mut z: f64,
+    horizontal_multiplier: f64,
+    vertical_multiplier: f64,
+    thickness: f32,
+    mut yaw: f32,
+    mut pitch: f32,
+    branch_index: i32,
+    branch_count: i32,
+    ratio: f64,
+    skip: &CaveSkip,
+) {
+    let mut random = LegacyRandomSource::new(seed);
+    let split = random.next_int_bound(branch_count / 2) + branch_count / 4;
+    let steep = random.next_int_bound(6) == 0;
+    let mut yaw_drift = 0.0f32;
+    let mut pitch_drift = 0.0f32;
+
+    for branch in branch_index..branch_count {
+        let horizontal = 1.5
+            + f64::from(
+                mth_sin(f64::from((PI_F32 * branch as f32) / branch_count as f32)) * thickness,
+            );
+        let vertical = horizontal * ratio;
+        let cos_pitch = mth_cos(f64::from(pitch));
+        x += f64::from(mth_cos(f64::from(yaw)) * cos_pitch);
+        y += f64::from(mth_sin(f64::from(pitch)));
+        z += f64::from(mth_sin(f64::from(yaw)) * cos_pitch);
+        pitch *= if steep { 0.92 } else { 0.7 };
+        pitch += pitch_drift * 0.1;
+        yaw += yaw_drift * 0.1;
+        pitch_drift *= 0.9;
+        yaw_drift *= 0.75;
+        pitch_drift += (random.next_float() - random.next_float()) * random.next_float() * 2.0;
+        yaw_drift += (random.next_float() - random.next_float()) * random.next_float() * 4.0;
+
+        if branch == split && thickness > 1.0 {
+            let first_seed = random.next_long();
+            let first_thickness = random.next_float() * 0.5 + 0.5;
+            create_tunnel(
+                chunk,
+                mask,
+                first_seed,
+                x,
+                y,
+                z,
+                horizontal_multiplier,
+                vertical_multiplier,
+                first_thickness,
+                yaw - HALF_PI_F32,
+                pitch / 3.0,
+                branch,
+                branch_count,
+                1.0,
+                skip,
+            );
+            let second_seed = random.next_long();
+            let second_thickness = random.next_float() * 0.5 + 0.5;
+            create_tunnel(
+                chunk,
+                mask,
+                second_seed,
+                x,
+                y,
+                z,
+                horizontal_multiplier,
+                vertical_multiplier,
+                second_thickness,
+                yaw + HALF_PI_F32,
+                pitch / 3.0,
+                branch,
+                branch_count,
+                1.0,
+                skip,
+            );
+            return;
+        }
+
+        if random.next_int_bound(4) != 0 {
+            if !can_reach(chunk, x, z, branch, branch_count, thickness) {
+                return;
+            }
+            carve_ellipsoid(
+                chunk,
+                mask,
+                x,
+                y,
+                z,
+                horizontal * horizontal_multiplier,
+                vertical * vertical_multiplier,
+                |rx, ry, rz| skip.should_skip(rx, ry, rz),
+            );
+        }
+    }
+}
+
+struct CaveSkip {
+    floor_level: f64,
+}
+
+impl CaveSkip {
+    fn should_skip(&self, relative_x: f64, relative_y: f64, relative_z: f64) -> bool {
+        relative_y <= self.floor_level
+            || relative_x * relative_x + relative_y * relative_y + relative_z * relative_z >= 1.0
+    }
+}
+
+/// `WorldCarver.canReach`.
+fn can_reach(
+    chunk: &Chunk,
+    x: f64,
+    z: f64,
+    branch_index: i32,
+    branch_count: i32,
+    width: f32,
+) -> bool {
+    let middle_x = f64::from(chunk.x * 16 + 8);
+    let middle_z = f64::from(chunk.z * 16 + 8);
+    let dx = x - middle_x;
+    let dz = z - middle_z;
+    let remaining = f64::from(branch_count - branch_index);
+    let reach = f64::from(width + 2.0 + 16.0);
+    dx * dx + dz * dz - remaining * remaining <= reach * reach
+}
+
+/// `WorldCarver.carveEllipsoid` for the Nether: no aquifer, lava through
+/// `minGenY + 31`, cave air above, and the top seven layers protected.
+#[allow(clippy::too_many_arguments)]
+fn carve_ellipsoid(
+    chunk: &mut Chunk,
+    mask: &mut CarvingMask,
+    x: f64,
+    y: f64,
+    z: f64,
+    horizontal_radius: f64,
+    vertical_radius: f64,
+    should_skip: impl Fn(f64, f64, f64) -> bool,
+) {
+    let middle_x = f64::from(chunk.x * 16 + 8);
+    let middle_z = f64::from(chunk.z * 16 + 8);
+    let extent = 16.0 + horizontal_radius * 2.0;
+    if (x - middle_x).abs() > extent || (z - middle_z).abs() > extent {
+        return;
+    }
+
+    let min_block_x = chunk.x * 16;
+    let min_block_z = chunk.z * 16;
+    let min_x = (mth_floor(x - horizontal_radius) - min_block_x - 1).max(0);
+    let max_x = (mth_floor(x + horizontal_radius) - min_block_x).min(15);
+    let min_z = (mth_floor(z - horizontal_radius) - min_block_z - 1).max(0);
+    let max_z = (mth_floor(z + horizontal_radius) - min_block_z).min(15);
+    let min_y = (mth_floor(y - vertical_radius) - 1).max(MIN_Y + 1);
+    let max_y = (mth_floor(y + vertical_radius) + 1).min(MIN_Y + HEIGHT - 1 - 7);
+
+    for local_x in min_x..=max_x {
+        let block_x = min_block_x + local_x;
+        let relative_x = (f64::from(block_x) + 0.5 - x) / horizontal_radius;
+        for local_z in min_z..=max_z {
+            let block_z = min_block_z + local_z;
+            let relative_z = (f64::from(block_z) + 0.5 - z) / horizontal_radius;
+            if relative_x * relative_x + relative_z * relative_z >= 1.0 {
+                continue;
+            }
+            for block_y in ((min_y + 1)..=max_y).rev() {
+                let relative_y = (f64::from(block_y) - 0.5 - y) / vertical_radius;
+                if should_skip(relative_x, relative_y, relative_z)
+                    || mask.get(local_x as usize, block_y, local_z as usize)
+                {
+                    continue;
+                }
+                mask.set(local_x as usize, block_y, local_z as usize);
+                carve_nether_block(chunk, local_x as usize, block_y, local_z as usize);
+            }
+        }
+    }
+}
+
+fn carve_nether_block(chunk: &mut Chunk, local_x: usize, y: i32, local_z: usize) {
+    let Some(state) = chunk.block_state(local_x, y, local_z) else {
+        return;
+    };
+    if !crate::tags::block_has("minecraft:nether_carver_replaceables", &state.name) {
+        return;
+    }
+    let carved = if y <= NETHER_LAVA_LEVEL {
+        BlockState {
+            name: LAVA.into(),
+            properties: vec![("level".into(), "0".into())],
+        }
+    } else {
+        air()
+    };
+    chunk.set_block_state(local_x, y, local_z, carved);
+}
+
+fn mth_floor(value: f64) -> i32 {
+    let truncated = value as i32;
+    if value < f64::from(truncated) {
+        truncated - 1
+    } else {
+        truncated
+    }
+}
+
+/// Reproduces `WorldgenRandom.setLargeFeatureSeed`.
+fn set_large_feature_seed(
+    random: &mut LegacyRandomSource,
+    base_seed: i64,
+    chunk_x: i32,
+    chunk_z: i32,
+) {
+    random.set_seed(base_seed);
+    let first = random.next_long();
+    let second = random.next_long();
+    let seed = i64::from(chunk_x).wrapping_mul(first)
+        ^ i64::from(chunk_z).wrapping_mul(second)
+        ^ base_seed;
+    random.set_seed(seed);
 }
 
 struct NetherPlacementWorld<'a> {

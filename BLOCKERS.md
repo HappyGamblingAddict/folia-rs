@@ -63,6 +63,55 @@ Format:
   focused tests and clippy, then reverted before committing. Do not merge this
   slice until the base build is fixed; the chat-signing changes themselves do
   not touch the failing path.
+## 2026-11-07 — P7.2/P7.3 Nether and End structure templates are not shipped
+
+- Blocker: `minecraft:fortress`, `minecraft:bastion_remnant`, and
+  `minecraft:end_city` placement selects correctly, but the repository has no
+  structure-template NBT assets or full piece ports for them. Bastions are
+  jigsaw starts and need `minecraft:bastion/*` templates; fortresses and End
+  cities have no procedural piece implementation in Rust.
+- What was tried: Parsed the shipped structure definitions, ran the jigsaw
+  starter with an empty template provider, and pinned the exact failure
+  (`UnknownTemplate { structure: "minecraft:bastion/starts", template:
+  "minecraft:bastion/treasure/big_air_full" }` for seed 12345 chunk `(12,20)`).
+  Fortresses report `UnsupportedStructureType`.
+- What is needed: Extract/copy the 1.21.11 structure NBT and template pools into
+  the asset pipeline, port `FortressPieces`/`EndCityPieces`, then call the
+  existing `JigsawPlacement` path.
+- Workaround / next task: `NetherGenerator::structure_at_chunk` and
+  `structure_start` are the stable selection/error contract; add templates and
+  pieces behind them without changing callers. End cities and the dragon fight
+  remain blocked on the same asset/entity work.
+
+## 2026-11-07 — Nether carver/surface ordering differs from vanilla
+
+- Blocker: vanilla runs carvers before `SurfaceSystem.buildSurface`; this
+  slice runs them after the existing surface pass because the surface pass is
+  driven by a pre-carve solid-column map.
+- What was tried: Keeping the carver after the surface pass avoids writing
+  soul-sand/basalt/nylium into air just carved open, and keeps the existing
+  Nether terrain/features stable without a second column scan.
+- What is needed: A surface pass that reads the post-carve chunk (or a
+  post-carve solidity recomputation) plus a Java block-for-block fixture to
+  measure exposed-cave-wall differences.
+- Workaround / next task: Carver output is deterministic and confined below
+  the roof; document the ordering delta and revisit when P2.12/P7.2 surface
+  parity work resumes.
+
+## 2026-11-07 — Pre-existing `tick_hoppers` call made the merged gate unbuildable
+
+- Blocker: the merged leaf-decay slice added `storage.tick_hoppers()?` in
+  `tick.rs`, but no `WorldStorage::tick_hoppers` method exists on this branch,
+  so `cargo check`/`cargo clippy`/every test failed before this slice compiled.
+- What was tried: Searched every branch and commit for a `tick_hoppers`
+  implementation; none exists. The hopper slice only ships the persisted
+  5-slot state and the `move_one_item` core, not live container transfer.
+- What is needed: A proper hopper transfer tick (source/destination container
+  discovery and `move_one_item` dispatch) in `world.rs`/`tick.rs`.
+- Workaround / next task: This slice removes the dangling call so the gate can
+  build; hopper cooldowns still tick through `tick_block_entities`, and live
+  pull/push remains the documented P6 gap. Do not treat the removal as hopper
+  parity.
 
 ## 2026-11-06 — P10 region ownership is task-scoped, not world-scoped
 

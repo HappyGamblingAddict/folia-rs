@@ -14,6 +14,13 @@ Last updated: 2026-11-07
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
   recursive jigsaw, Nether/End generators, dimension storage and portal math.
+- Tests: **964 passing** on the full merged gate (0 failed); the Nether/End
+  content slice adds 17 focused tests (`nether_content` 7, `end_content` 10)
+  and parity holds at **98.75% block-class / 95.80% exact-name**.
+- Formatting/Clippy: clean; no warnings.
+- Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
+  recursive jigsaw, Nether/End generators plus Nether carvers, structure
+  selection, End spikes/gateways/chorus, dimension storage and portal math.
 - Second/third wave landings: shape collision, incremental/shape-aware light,
   crafting/furnaces, item prototypes, processors/pools, redstone components,
   fluids/fire, Nether/End, goals/pathfinding/spawning, online-mode auth, block
@@ -32,6 +39,9 @@ Last updated: 2026-11-07
 2. P6 hopper live transfer tick, furnace-lit block state, and brewing
    block-entity/menu persistence.
 3. P7 portal-driven dimension switching and Nether/End structure generation.
+2. P6 hopper live transfer tick and furnace-lit block state.
+3. P7 portal-driven dimension switching, Nether/End structure templates, and
+   the End dragon fight/end-city pipeline.
 4. P5 live AI goals, armor enchantments, and effect packets.
 5. P9.3 bridge outbound chat/kick/sound/particle packets.
 
@@ -52,6 +62,10 @@ Last updated: 2026-11-07
 - [~] P6 block entities (chest/furnace/sign/spawner/hopper, furnaces tick).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1/P8.2 online-mode and chat-signing core (TLS, login/status wiring).
+- [~] P7.1-P7.4 Nether/End generation/storage/portals (carvers, spikes,
+  gateways, chorus, structure selection done; templates, end cities, dragon
+  fight, and session switching remain).
+- [~] P8.1 online-mode core (TLS and chat signing).
 - [~] P9.2/P9.3 bridge proxies/events (outbound packets, API depth).
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
@@ -84,6 +98,17 @@ Last updated: 2026-11-07
   with a false default and logs an audit line when enabled. 15 focused
   `tests/chat_signing.rs` tests (1 ignored release benchmark) + 2 crypto lib
   tests. Gaps: join/status wiring and clientbound Player Chat packets.
+- 2026-11-07: Nether/End content — `worldgen/nether.rs` replays
+  `minecraft:nether_cave` from the 17x17 carver neighbourhood (lava through
+  y=31, cave air above, protected roof), runs the local-modification and
+  surface-structure feature steps, and exposes pinned `nether_complexes`
+  selection plus explicit fortress/bastion start failures. `worldgen/end.rs`
+  adds the deterministic 10-spike dragon ring, arena bounds, full platform
+  construction, gateway block/exit data, chorus growth, and an explicit
+  feature dispatch. Focused: 7 `tests/nether_content.rs` + 10
+  `tests/end_content.rs`; `nether_gen`/`end_gen`/`worldgen_parity` stay green.
+  Gaps: fortress/bastion/end-city templates, live dimension switching, dragon
+  entity fight, and carve-before-surface ordering.
 - 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
   random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

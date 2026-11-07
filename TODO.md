@@ -197,6 +197,21 @@ where possible, a differential test against the Java oracle.
   neighbour-scheduled source-conversion test. Fire blocks still need a
   one-line `tick::behavior_for` registration for production aging; see
   `BLOCKERS.md`.
+- 2026-11-07: P7.2/P7.3 Nether/End content — `worldgen/nether.rs` replays the
+  `minecraft:nether_cave` carver from the 17x17 neighbourhood (lava at or below
+  y=31, cave air above, seven protected roof layers), runs the previously
+  missing local-modification and surface-structure feature steps, and exposes
+  the shipped `nether_complexes` placement selection. Fortress starts fail with
+  `UnsupportedStructureType`; bastion jigsaw starts fail with the exact missing
+  template id because the template assets are not shipped. `worldgen/end.rs`
+  adds the deterministic 10-spike `SpikeFeature` ring, dragon-arena bounds,
+  full end-platform construction, `EndGateway` block/exit data, chorus growth,
+  and an id-keyed explicit feature dispatch (unsupported types error). Focused:
+  7 `tests/nether_content.rs` + 10 `tests/end_content.rs`; `nether_gen`,
+  `end_gen`, and `worldgen_parity` stay green. Parity is unchanged at 98.75%
+  block-class / 95.80% exact-name. Remaining: structure templates, end cities,
+  dragon entity fight, live dimension switching, and carve-before-surface
+  ordering.
 - 2026-11-06: P7.1–P7.3 dimension generation slice — `generator::Dimension`
   models the shipped Overworld/Nether/End type fields (build height, logical
   height, sea level, skylight, ceiling, coordinate scale, ambient light), and
@@ -1152,7 +1167,8 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   biome filtering, and generator wiring remain).
 - [ ] Desert temples, jungle temples, witch huts, ruined portals.
 - [ ] Ancient cities, trial chambers.
-- [ ] Nether fortresses, bastions, end cities (after P7 dimensions).
+- [~] Nether fortresses, bastions, end cities (placement selection and
+  weighted choice done; real template pieces remain blocked on shipped assets).
 - **Why:** Structures are content-heavy but mostly data-driven once P2.8/P2.9
   exist.
 - **Done when:** Structure starts/bounding boxes and sampled blocks match Java
@@ -2176,13 +2192,19 @@ storage stay Overworld-only. No time/weather/portals.
   rules, carvers, features, structures, lava sea, and bedrock.
 - **Why:** A complete server needs the Nether.
 - **Done when:** Nether chunk parity fixtures pass.
-- **Progress (2026-11-06):** `worldgen/nether.rs` evaluates the Nether router
+- **Progress (2026-11-07):** `worldgen/nether.rs` evaluates the Nether router
   on the 4x8x4 grid, fills netherrack, lava below y=32, bedrock at y=0/127 with
   the vanilla random gradients, applies the shipped soul-sand valley/basalt
   deltas/crimson/warped/nether-wastes surface sequence, samples the five-biome
   nether preset, and runs supported decoration steps with a Nether-specific
-  `FeatureSorter` order (quartz, magma, glowstone, vegetation). No carvers,
-  fortresses, bastions, or Java block-for-block fixture yet.
+  `FeatureSorter` order (local modifications, surface structures, ores,
+  underground/vegetal decoration, top layer). `nether_cave` carvers replay the
+  17x17 neighbourhood with lava through y=31 and cave air above, leaving the
+  top seven layers intact below the roof. `nether_complexes` placement
+  selection and weighted fortress/bastion choice are exposed; start generation
+  fails explicitly until fortress/bastion template assets ship. Remaining: Java
+  block-for-block carver fixture, real fortress/bastion pieces, and
+  carve-before-surface ordering.
 
 ### P7.3 End generation `[~]` `L`
 
@@ -2190,13 +2212,19 @@ storage stay Overworld-only. No time/weather/portals.
   and dragon arena.
 - **Why:** End progression and end-game content.
 - **Done when:** End chunk parity fixtures pass.
-- **Progress (2026-11-06):** `worldgen/end.rs` ports
+- **Progress (2026-11-07):** `worldgen/end.rs` ports
   `EndIslandDensityFunction` exactly (`LegacyRandomSource(seed)`,
   `consumeCount(17292)`), the `end/sloped_cheese` router and slide, the
   `TheEndBiomeSource` section-ring biome choice, central and outer islands, and
-  the `(100, 49, 0)` obsidian platform across chunk borders. End cities,
-  gateways, the dragon fight, and the spike pillar remain open; the blended
-  base noise still uses the positional path instead of the legacy source.
+  the `(100, 49, 0)` obsidian platform across chunk borders. It now also builds
+  the deterministic ten-spike `SpikeFeature` ring (obsidian pillars, guarded
+  iron bars, crystal support/fire, air clearing), exposes `DragonArena` bounds,
+  constructs `end_gateway` blocks with exit data, and grows chorus plants with
+  the vanilla recursive algorithm. `place_configured_feature` dispatches the
+  implemented End features by id and returns an explicit error for the rest.
+  Remaining: end cities, the dragon entity fight, natural gateway placement,
+  and a Java block-for-block fixture; the blended base noise still uses the
+  positional path instead of the legacy source.
 
 ### P7.4 Portals, travel, and respawn `[ ]` `M`
 

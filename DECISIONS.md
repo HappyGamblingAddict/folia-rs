@@ -46,6 +46,51 @@ Format:
   generate off the tick thread or cache a startup key. `join.rs` and `status.rs`
   must call the provisioning/audit APIs before secure chat is user-visible;
   see `BLOCKERS.md`.
+## 2026-11-07 — Nether carvers run after the surface pass
+- Context: vanilla applies carvers before `SurfaceSystem.buildSurface`, but the
+  existing Nether generator materializes surfaces from the pre-carve density
+  column map. Moving the pass would either need a second full column scan or
+  would place surface blocks into freshly carved air.
+- Decision: keep the density fill + surface pass, then replay `nether_cave`
+  carvers over the finished column. The carver replaces the
+  `#minecraft:nether_carver_replaceables` blocks it hits, writes lava through
+  y=31 and cave air above, and never touches the protected top seven layers.
+- Why: deterministic, bounded, and testable without reworking the surface
+  system; it is the smallest honest slice until the surface system can consume
+  post-carve columns.
+- Consequences: cave openings do not receive a second surface-rule pass, so
+  netherrack/nylium walls stay exposed at cave mouths. A Java block-for-block
+  carver fixture must decide whether the ordering delta is visible.
+
+## 2026-11-07 — Nether structure selection succeeds; start generation fails loudly
+- Context: `nether_complexes` is a shipped structure set, but the project has
+  no fortress piece implementation and no bastion template/pool NBT assets.
+- Decision: `NetherGenerator::structure_at_chunk` exposes the merged
+  random-spread + weighted-selection + dimension/biome-filter result.
+  `structure_start` parses the shipped fortress/bastion definition and then
+  returns `UnsupportedStructureType` for fortresses or `UnknownTemplate` with
+  the exact missing template id for bastions.
+- Why: callers and tests can exercise placement selection now, while the
+  failure path is explicit instead of an empty start or a fake block layout.
+- Consequences: the generator does not write fortress/bastion terrain until
+  the template assets and fortress piece port land.
+
+## 2026-11-07 — End content is data-shaped and feature dispatch is id-keyed
+- Context: `FeatureData` still classifies `chorus_plant`, `end_gateway`,
+  `end_platform`, and `end_spike` as unsupported configured features, and End
+  cities/dragon fight state are not implemented.
+- Decision: `worldgen/end.rs` exposes `EndSpike`, `DragonArena`,
+  `EndGateway`/`EndGatewayBlockEntity`, platform/spike/gateway construction,
+  chorus growth, and `place_configured_feature`. The dispatch implements
+  chorus, gateway variants, and the platform; everything else returns
+  `EndFeatureError::Unsupported`. Spike values pin the vanilla seed-derived
+  ring and the arena bounds are explicit constants.
+- Why: block construction and growth are testable without the missing entity
+  fight or shared feature registry support, and unsupported ids cannot be
+  mistaken for a successful placement.
+- Consequences: End cities, natural gateway placement, crystal entities, and
+  the dragon fight still need separate slices; a future registry wiring should
+  call this dispatch rather than duplicate the algorithms.
 
 ## 2026-11-06 — Item entities use a 4-block magnet and 3-block merge
 - Context: vanilla `ItemEntity` has no in-tick magnet (pickup is a player-box

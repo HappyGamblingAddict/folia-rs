@@ -679,14 +679,13 @@ impl PathType {
     /// Vanilla `PathType.getMalus()`, before [`PathOptions`] overrides.
     pub const fn vanilla_malus(self) -> f64 {
         match self {
-            Self::Water | Self::WaterBorder | Self::DangerFire | Self::DangerOther
+            Self::Water
+            | Self::WaterBorder
+            | Self::DangerFire
+            | Self::DangerOther
             | Self::StickyHoney => 8.0,
             Self::DamageFire => 16.0,
-            Self::Blocked
-            | Self::Fence
-            | Self::Leaves
-            | Self::Lava
-            | Self::DamageOther => -1.0,
+            Self::Blocked | Self::Fence | Self::Leaves | Self::Lava | Self::DamageOther => -1.0,
             Self::Walkable
             | Self::WalkableDoor
             | Self::DoorOpen
@@ -1199,11 +1198,7 @@ fn diagonal_neighbor(
     })
 }
 
-fn path_neighbors(
-    world: &dyn WorldView,
-    from: BlockPos,
-    options: &PathOptions,
-) -> Vec<Neighbor> {
+fn path_neighbors(world: &dyn WorldView, from: BlockPos, options: &PathOptions) -> Vec<Neighbor> {
     const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
     const DIAGONALS: [(i32, i32); 4] = [(1, -1), (1, 1), (-1, 1), (-1, -1)];
     let mut result = Vec::with_capacity(12);
@@ -1331,8 +1326,7 @@ pub fn find_path(
             let key = node_key(*candidate);
             let better = score < best_score
                 || (score == best_score
-                    && (estimate < best_estimate
-                        || (estimate == best_estimate && key < best_key)));
+                    && (estimate < best_estimate || (estimate == best_estimate && key < best_key)));
             if better {
                 best_index = index;
                 best_score = score;
@@ -1649,9 +1643,7 @@ impl Navigation {
         }
         let moved = self.last_stuck_check_pos.distance_to(pos);
         if moved < self.min_progress {
-            self.stalled_ticks = self
-                .stalled_ticks
-                .saturating_add(self.stuck_check_interval);
+            self.stalled_ticks = self.stalled_ticks.saturating_add(self.stuck_check_interval);
         } else {
             self.stalled_ticks = 0;
         }
@@ -1728,16 +1720,11 @@ impl Navigation {
             pos.y().floor() as i32,
             pos.z().floor() as i32,
         );
-        if self.needs_repath {
-            if !self.repath(world, from) {
-                self.abort(None);
-                return false;
-            }
-        } else if self.path_is_active() && !self.next_node_is_valid(world) {
-            if !self.repath(world, from) {
-                self.abort(None);
-                return false;
-            }
+        if (self.needs_repath || (self.path_is_active() && !self.next_node_is_valid(world)))
+            && !self.repath(world, from)
+        {
+            self.abort(None);
+            return false;
         }
 
         let moved = self.advance(pos);

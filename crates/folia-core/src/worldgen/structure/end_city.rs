@@ -38,10 +38,7 @@ const CHEST_LOOT: &str = "minecraft:chests/end_city_treasure";
 const TOWER_BRIDGES: [(Rotation, BlockPos); 4] = [
     (Rotation::None, BlockPos::new(1, -1, 0)),
     (Rotation::Clockwise90, BlockPos::new(6, -1, 1)),
-    (
-        Rotation::CounterClockwise90,
-        BlockPos::new(0, -1, 5),
-    ),
+    (Rotation::CounterClockwise90, BlockPos::new(0, -1, 5)),
     (Rotation::Clockwise180, BlockPos::new(5, -1, 6)),
 ];
 
@@ -49,10 +46,7 @@ const TOWER_BRIDGES: [(Rotation, BlockPos); 4] = [
 const FAT_TOWER_BRIDGES: [(Rotation, BlockPos); 4] = [
     (Rotation::None, BlockPos::new(4, -1, 0)),
     (Rotation::Clockwise90, BlockPos::new(12, -1, 4)),
-    (
-        Rotation::CounterClockwise90,
-        BlockPos::new(0, -1, 8),
-    ),
+    (Rotation::CounterClockwise90, BlockPos::new(0, -1, 8)),
     (Rotation::Clockwise180, BlockPos::new(8, -1, 12)),
 ];
 
@@ -128,13 +122,7 @@ impl EndCityPiece {
                     pos,
                     nbt: block.nbt.clone(),
                 });
-                self.handle_data_marker(
-                    name,
-                    pos,
-                    chunk_box,
-                    &mut result,
-                    random,
-                );
+                self.handle_data_marker(name, pos, chunk_box, &mut result, random);
             }
             if block.state.name == "minecraft:structure_block" || !chunk_box.is_inside(pos) {
                 continue;
@@ -218,7 +206,12 @@ impl EndCityStart {
             });
         };
         let mut random = LegacyRandomSource::new(0);
-        set_large_feature_seed(&mut random, context.seed, context.chunk_pos.x, context.chunk_pos.z);
+        set_large_feature_seed(
+            &mut random,
+            context.seed,
+            context.chunk_pos.x,
+            context.chunk_pos.z,
+        );
         let rotation = Rotation::ALL[random.next_int_bound(4) as usize];
         let start_pos = lowest_y_in_5by5(context.chunk_pos, level, rotation);
         if start_pos.y() < MIN_START_Y {
@@ -307,7 +300,14 @@ fn start_house_tower(
     let mut pieces = Vec::new();
     let mut piece = add_helper(
         &mut pieces,
-        new_piece(structure_id, templates, "base_floor", start_pos, rotation, true)?,
+        new_piece(
+            structure_id,
+            templates,
+            "base_floor",
+            start_pos,
+            rotation,
+            true,
+        )?,
     );
     piece = add_helper(
         &mut pieces,
@@ -396,13 +396,12 @@ fn new_piece(
     overwrite: bool,
 ) -> Result<EndCityPiece, StructureError> {
     let template_name = format!("{TEMPLATE_PREFIX}{name}");
-    let template = templates
-        .template(&template_name)
-        .cloned()
-        .ok_or_else(|| StructureError::UnknownTemplate {
+    let template = templates.template(&template_name).cloned().ok_or_else(|| {
+        StructureError::UnknownTemplate {
             structure: structure_id.to_owned(),
             template: template_name.clone(),
-        })?;
+        }
+    })?;
     Ok(EndCityPiece::new(
         template_name,
         template,
@@ -955,10 +954,7 @@ fn data_marker_name(nbt: Option<&Tag>) -> Option<String> {
 fn chest_nbt(seed: i64) -> Tag {
     Tag::Compound(vec![
         ("id".to_owned(), Tag::String("minecraft:chest".to_owned())),
-        (
-            "LootTable".to_owned(),
-            Tag::String(CHEST_LOOT.to_owned()),
-        ),
+        ("LootTable".to_owned(), Tag::String(CHEST_LOOT.to_owned())),
         ("LootTableSeed".to_owned(), Tag::Long(seed)),
     ])
 }
@@ -989,31 +985,20 @@ fn item_frame_descriptor(pos: BlockPos, facing: Direction) -> PlacedEntity {
     };
     let mut nbt = entity_nbt(
         "minecraft:item_frame",
-        Vec3::new(
-            f64::from(pos.x()),
-            f64::from(pos.y()),
-            f64::from(pos.z()),
-        ),
+        Vec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z())),
     );
     if let Tag::Compound(fields) = &mut nbt {
         fields.push(("Facing".to_owned(), Tag::Byte(facing_byte)));
         fields.push((
             "Item".to_owned(),
             Tag::Compound(vec![
-                (
-                    "id".to_owned(),
-                    Tag::String("minecraft:elytra".to_owned()),
-                ),
+                ("id".to_owned(), Tag::String("minecraft:elytra".to_owned())),
                 ("count".to_owned(), Tag::Int(1)),
             ]),
         ));
     }
     PlacedEntity {
-        pos: Vec3::new(
-            f64::from(pos.x()),
-            f64::from(pos.y()),
-            f64::from(pos.z()),
-        ),
+        pos: Vec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z())),
         block_pos: pos,
         nbt: Some(nbt),
     }
@@ -1037,7 +1022,6 @@ fn entity_nbt(id: &str, pos: Vec3) -> Tag {
 mod tests {
     use super::*;
     use crate::worldgen::feature::FeatureLevel;
-    use std::collections::HashMap;
 
     struct MockLevel {
         min_y: i32,

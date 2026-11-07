@@ -239,11 +239,8 @@ impl StructureDefinition {
                 IglooStructure::generate(&self.name, context, self.terrain_adaptation)
             }
             StructureKind::Fortress => {
-                let fortress = FortressStart::generate(
-                    context.seed,
-                    context.chunk_pos.x,
-                    context.chunk_pos.z,
-                );
+                let fortress =
+                    FortressStart::generate(context.seed, context.chunk_pos.x, context.chunk_pos.z);
                 Ok(StructureStart::new_fortress(
                     &self.name,
                     context.chunk_pos,
@@ -632,9 +629,8 @@ impl StructureStart {
         let max_y = level.min_y() + level.height() - 1;
         let chunk_box =
             BoundingBox::new(min_x, level.min_y(), min_z, min_x + 15, max_y, min_z + 15);
-        let mut random = LegacyRandomSource::new(
-            (i64::from(chunk_pos.x) << 32) ^ i64::from(chunk_pos.z),
-        );
+        let mut random =
+            LegacyRandomSource::new((i64::from(chunk_pos.x) << 32) ^ i64::from(chunk_pos.z));
         self.place_in_box_with_random(level, chunk_box, &mut random)
     }
 

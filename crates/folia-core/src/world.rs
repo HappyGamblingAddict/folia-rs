@@ -144,9 +144,8 @@ pub fn shared_dimension(
 ) -> &'static Mutex<WorldStorage> {
     let root = world_root.into();
     match dimension {
-        Dimension::Overworld => SHARED_OVERWORLD.get_or_init(|| {
-            Mutex::new(WorldStorage::for_dimension(root, Dimension::Overworld))
-        }),
+        Dimension::Overworld => SHARED_OVERWORLD
+            .get_or_init(|| Mutex::new(WorldStorage::for_dimension(root, Dimension::Overworld))),
         Dimension::Nether => SHARED_NETHER
             .get_or_init(|| Mutex::new(WorldStorage::for_dimension(root, Dimension::Nether))),
         Dimension::End => {

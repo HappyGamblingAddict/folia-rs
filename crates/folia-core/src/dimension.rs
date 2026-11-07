@@ -226,13 +226,7 @@ pub struct PortalTrigger {
 }
 
 /// Computes a trigger for a portal use without any session state.
-pub fn portal_trigger(
-    kind: PortalKind,
-    from: Dimension,
-    x: f64,
-    y: f64,
-    z: f64,
-) -> PortalTrigger {
+pub fn portal_trigger(kind: PortalKind, from: Dimension, x: f64, y: f64, z: f64) -> PortalTrigger {
     let to = kind.destination(from);
     PortalTrigger {
         kind,
@@ -303,12 +297,7 @@ impl SessionDimensionState {
     }
 
     /// Schedules a portal transition using the portal kind's vanilla delay.
-    pub fn request(
-        &mut self,
-        kind: PortalKind,
-        source: [f64; 3],
-        now: Instant,
-    ) -> PortalRequest {
+    pub fn request(&mut self, kind: PortalKind, source: [f64; 3], now: Instant) -> PortalRequest {
         self.request_with_delay(kind, source, now, ticks_duration(kind.transition_ticks()))
     }
 

@@ -34,9 +34,9 @@
 //! remain explicit later slices.
 
 pub mod assets;
-pub mod jigsaw;
 pub mod end_city;
 pub mod fortress;
+pub mod jigsaw;
 pub mod piece;
 pub mod pool;
 pub mod processor;

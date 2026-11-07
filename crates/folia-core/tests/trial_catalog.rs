@@ -130,7 +130,11 @@ fn trial_catalog_covers_all_parts_and_is_compact() {
         bytes.len() < 2_500_000,
         "the trial-chamber catalog must stay under the 2.5 MB budget"
     );
-    assert_eq!(bytes.len(), TRIAL_ASSET_BYTES, "catalog byte length changed");
+    assert_eq!(
+        bytes.len(),
+        TRIAL_ASSET_BYTES,
+        "catalog byte length changed"
+    );
     assert_eq!(
         fnv1a64(&bytes),
         TRIAL_ASSET_FNV1A64,
@@ -186,10 +190,7 @@ fn shipped_catalog_merges_trial_parts_without_moving_the_primary_pins() {
         catalog.merged_total_bytes(),
         VILLAGE_COMPRESSED_BYTES + MORE_COMPRESSED_BYTES + TRIAL_COMPRESSED_BYTES
     );
-    assert_eq!(
-        catalog.merged_nbt_bytes(),
-        MORE_NBT_BYTES + TRIAL_NBT_BYTES
-    );
+    assert_eq!(catalog.merged_nbt_bytes(), MORE_NBT_BYTES + TRIAL_NBT_BYTES);
     assert_eq!(
         catalog.merged_ids().count(),
         VILLAGE_TEMPLATES + MORE_TEMPLATES + TRIAL_TEMPLATES
@@ -337,7 +338,10 @@ fn representative_chamber_has_bounds_palette_and_block_entities() {
         .iter()
         .find(|block| block.pos.x() == 7 && block.pos.y() == 1 && block.pos.z() == 12)
         .expect("first jigsaw connector");
-    assert_eq!(connector.state, 9, "connector uses the up_north palette entry");
+    assert_eq!(
+        connector.state, 9,
+        "connector uses the up_north palette entry"
+    );
     let nbt = connector.nbt.as_ref().expect("jigsaw block-entity nbt");
     assert_eq!(
         nbt.get("joint").and_then(Tag::as_str),

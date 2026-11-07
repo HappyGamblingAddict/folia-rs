@@ -160,6 +160,8 @@ pub fn configured() -> Option<&'static Arc<WorldGenerator>> {
     GENERATOR.get()
 }
 
+type BiomeCellCache = Mutex<HashMap<(i32, i32), Arc<[u16]>>>;
+
 pub struct WorldGenerator {
     router: NoiseRouter,
     biomes: BiomeSampler,
@@ -171,7 +173,7 @@ pub struct WorldGenerator {
     structures: Option<StructureGenerator>,
     /// Quart biome cells per chunk, shared by the decoration windows of
     /// neighbouring chunk generations.
-    biome_cells: Mutex<HashMap<(i32, i32), Arc<[u16]>>>,
+    biome_cells: BiomeCellCache,
     seed: i64,
     min_y: i32,
     height: i32,
@@ -532,8 +534,7 @@ impl WorldGenerator {
                 self.apply_structures(chunk, Decoration::SurfaceStructures)?;
                 structures_placed = true;
             }
-            let active =
-                biome_region.active_feature_indices(data, step, &step_order[step.index()]);
+            let active = biome_region.active_feature_indices(data, step, &step_order[step.index()]);
             if active.is_empty() {
                 continue;
             }
@@ -630,15 +631,7 @@ impl WorldGenerator {
         random: &mut WorldgenRandom,
         origin: BlockPos,
     ) -> io::Result<()> {
-        self.place_modifier_step(
-            placed,
-            configured,
-            chunk,
-            biome_region,
-            random,
-            origin,
-            0,
-        )
+        self.place_modifier_step(placed, configured, chunk, biome_region, random, origin, 0)
     }
 
     #[allow(clippy::too_many_arguments)]

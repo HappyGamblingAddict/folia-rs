@@ -821,7 +821,7 @@ fn autosave_playerdata(session: &PlayerSession, last_save: &mut Instant) {
     if !autosave_due(*last_save, Instant::now(), PLAYER_SAVE_INTERVAL) {
         return;
     }
-    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
         eprintln!("[join] could not save playerdata: {error}");
     }
     *last_save = Instant::now();
@@ -1474,7 +1474,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         if shutdown_requested() {
             tracked_entities.clear();
             menus.on_disconnect();
-            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+            {
                 eprintln!("[join] could not save playerdata: {error}");
             }
             if let Err(error) = crate::world::lock(current_storage).flush() {
@@ -1515,7 +1517,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
                     tracked_entities.clear();
                     menus.on_disconnect();
-                    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                    {
                         eprintln!("[join] could not save playerdata before kick: {error}");
                     }
                     if let Err(error) = crate::world::lock(current_storage).flush() {
@@ -1558,7 +1562,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             write_packet(&mut stream, &packet)?;
                         }
                     }
-                    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                    {
                         eprintln!("[join] could not save teleport: {error}");
                     }
                     println!(
@@ -1633,9 +1639,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
         }
-        if !awaiting_respawn
-            && let Some(trigger) = dimension_state.ready(Instant::now())
-        {
+        if !awaiting_respawn && let Some(trigger) = dimension_state.ready(Instant::now()) {
             let now = Instant::now();
             let trigger = dimension_state.complete(now).unwrap_or(trigger);
             let new_storage = crate::world::shared_dimension(world.root.clone(), trigger.to);
@@ -1686,7 +1690,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         } else if apply_void_damage(&mut stream, &mut session, &mut last_void_damage)? {
             awaiting_respawn = true;
             death_at = Some(Instant::now());
-            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+            {
                 eprintln!("[join] could not save void death: {error}");
             }
             println!("[join] {} died in the void", start.name);
@@ -1743,7 +1749,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             if dimension_state.current() != crate::world::Dimension::Overworld {
                                 dimension_state
                                     .relocate(crate::world::Dimension::Overworld, Instant::now());
-                                current_storage = crate::world::shared_overworld(world.root.clone());
+                                current_storage =
+                                    crate::world::shared_overworld(world.root.clone());
                             }
                             respawn_player(
                                 &mut stream,
@@ -1822,7 +1829,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         {
                             session.inventory[index] = creative.stack;
                             send_container_content(&mut stream, &session)?;
-                            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                            if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                &session,
+                                playerdata_dir(),
+                            ) {
                                 eprintln!("[join] could not save inventory: {error}");
                             }
                         }
@@ -1856,7 +1866,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     click,
                                 );
                                 send_container_content(&mut stream, &session)?;
-                                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                                if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                    &session,
+                                    playerdata_dir(),
+                                ) {
                                     eprintln!("[join] could not save inventory: {error}");
                                 }
                             }
@@ -1911,7 +1924,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             if died {
                                 awaiting_respawn = true;
                                 death_at = Some(Instant::now());
-                                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                                if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                    &session,
+                                    playerdata_dir(),
+                                ) {
                                     eprintln!("[join] could not save fall death: {error}");
                                 }
                                 println!(
@@ -1942,7 +1958,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 // time; that ends the session, it is not a
                                 // server failure.
                                 Err(error) if is_disconnect(&error) => {
-                                    if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                                    if let Err(save_error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
                                         eprintln!("[join] could not save playerdata: {save_error}");
                                     }
                                     if let Err(flush_error) =
@@ -2013,7 +2034,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             }
             Err(error) => {
                 menus.on_disconnect();
-                if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                if let Err(save_error) =
+                    dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                {
                     eprintln!("[join] could not save playerdata: {save_error}");
                 }
                 if let Err(flush_error) = crate::world::lock(current_storage).flush() {
@@ -2389,7 +2412,7 @@ fn apply_game_mode(
         &game_event_packet(GAME_EVENT_CHANGE_GAME_MODE, mode as f32),
     )?;
     write_packet(stream, &abilities_packet(mode))?;
-    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
         eprintln!("[join] could not save game mode: {error}");
     }
     println!(
@@ -2801,11 +2824,9 @@ fn switch_dimension(
     teleport_id: &mut i32,
 ) -> io::Result<()> {
     // 1. Persist the old position in the old dimension.
-    if let Err(error) = dimension::save_playerdata_with_dimension(
-        session,
-        playerdata_dir(),
-        trigger.from,
-    ) {
+    if let Err(error) =
+        dimension::save_playerdata_with_dimension(session, playerdata_dir(), trigger.from)
+    {
         eprintln!("[join] could not save the old dimension position: {error}");
     }
 
@@ -2843,11 +2864,9 @@ fn switch_dimension(
     write_packet(stream, &abilities_packet(session.game_mode))?;
 
     // 5. Persist the new position and dimension.
-    if let Err(error) = dimension::save_playerdata_with_dimension(
-        session,
-        playerdata_dir(),
-        trigger.to,
-    ) {
+    if let Err(error) =
+        dimension::save_playerdata_with_dimension(session, playerdata_dir(), trigger.to)
+    {
         eprintln!("[join] could not save the new dimension position: {error}");
     }
 
@@ -3301,7 +3320,9 @@ fn finish_disconnected(
     name: &str,
     error: &io::Error,
 ) {
-    if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+    if let Err(save_error) =
+        dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+    {
         eprintln!("[join] could not save playerdata: {save_error}");
     }
     if let Err(flush_error) = crate::world::lock(storage).flush() {
@@ -3724,7 +3745,9 @@ fn handle_menu_click(
                     }
                     return Ok(());
                 }
-                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                {
                     eprintln!("[join] could not save inventory: {error}");
                 }
             }
@@ -3964,7 +3987,9 @@ fn handle_block_action(
                     session.consume_selected();
                 }
                 send_container_content(stream, session)?;
-                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                {
                     eprintln!("[join] could not save inventory: {error}");
                 }
             }
@@ -4111,7 +4136,7 @@ fn tick_delayed_destroy(
 }
 
 fn save_after_break(session: &PlayerSession) {
-    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
         eprintln!("[join] could not save inventory after a block break: {error}");
     }
 }
@@ -4157,7 +4182,9 @@ fn handle_set_carried(
     if (0..inventory::HOTBAR_SLOTS as i32).contains(&slot) {
         session.selected_slot = slot;
         write_packet(stream, &inventory::held_slot_packet(slot))?;
-        if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
+        if let Err(error) =
+            dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+        {
             eprintln!("[join] could not save inventory: {error}");
         }
         println!("[join] selected hotbar slot {slot}");
@@ -4277,7 +4304,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(source, ChunkSource::Generated);
 
         // A world without `level.dat` still trusts terrain this server wrote.
@@ -4288,7 +4316,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(
             crate::chunk::surface_y(&reloaded, 0, 0),
@@ -4317,7 +4346,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         let surface = crate::chunk::surface_y(&chunk, 0, 0);
 
         let air = crate::chunk::BlockState {
@@ -4341,7 +4371,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(
             reloaded
@@ -4378,7 +4409,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(stored, flat_chunk(0, 0), "forced reads serve stored chunks");
 
@@ -4389,7 +4421,8 @@ mod tests {
             0,
             0,
             4242,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(source, ChunkSource::Generated, "leftover chunk is ignored");
         assert!(
             chunk
@@ -4502,8 +4535,8 @@ mod tests {
 
     #[test]
     fn join_game_rewrites_the_captured_world_state() {
-        let packet = join_game_packet(crate::world::Dimension::Overworld, 0, 8, 7)
-            .expect("join packet");
+        let packet =
+            join_game_packet(crate::world::Dimension::Overworld, 0, 8, 7).expect("join packet");
         let mut reader = PacketReader::new(&packet);
         assert_eq!(reader.read_varint().unwrap(), PLAY_JOIN_GAME);
         let _ = reader.read_i32().unwrap();

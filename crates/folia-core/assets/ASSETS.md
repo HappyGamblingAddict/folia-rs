@@ -106,6 +106,7 @@ namespaced, whitespace-free JSON with a `counts` index.
 | `template_pools.json` | 188 pools, 1,198 entries, 1,204 element nodes | 188 | 252,745 | `0xaa6434676fdae64c` |
 | `structure_templates.json` | 483 village templates, base64+gzip NBT payloads | 483 | 1,063,517 | `0x0dde46f3a7863ed8` |
 | `structure_templates_more.json` | 528 non-village templates across 13 families | 528 | 2,358,479 | `0xb45acf2143b063bc` |
+| `structure_templates_trial.json` | 191 trial-chamber templates | 191 | 996,296 | `0xe88ca768c8c41c9a` |
 
 ## Worldgen and math
 

@@ -2697,11 +2697,7 @@ pub fn is_triggered(state: &BlockState) -> bool {
 }
 
 fn with_triggered(state: &BlockState, triggered: bool) -> BlockState {
-    with_property(
-        state,
-        "triggered",
-        if triggered { "true" } else { "false" },
-    )
+    with_property(state, "triggered", if triggered { "true" } else { "false" })
 }
 
 /// `DispenserBlock`: schedule one dispense on each rising edge of a neighbour

@@ -595,7 +595,9 @@ pub(crate) fn parse_fossil_config(config: &Value) -> io::Result<FossilFeature> {
     let max_empty_corners_allowed = object
         .get("max_empty_corners_allowed")
         .and_then(Value::as_i64)
-        .ok_or_else(|| invalid("fossil config is missing an integer `max_empty_corners_allowed`"))?;
+        .ok_or_else(|| {
+            invalid("fossil config is missing an integer `max_empty_corners_allowed`")
+        })?;
     let max_empty_corners_allowed = i32::try_from(max_empty_corners_allowed)
         .map_err(|_| invalid("fossil `max_empty_corners_allowed` is outside the i32 range"))?;
 
@@ -608,10 +610,7 @@ pub(crate) fn parse_fossil_config(config: &Value) -> io::Result<FossilFeature> {
     })
 }
 
-fn parse_template_list(
-    object: &Map<String, Value>,
-    key: &str,
-) -> io::Result<Vec<String>> {
+fn parse_template_list(object: &Map<String, Value>, key: &str) -> io::Result<Vec<String>> {
     object
         .get(key)
         .and_then(Value::as_array)
@@ -630,10 +629,11 @@ fn parse_processor_list(
     object: &Map<String, Value>,
     key: &str,
 ) -> io::Result<Vec<StructureProcessor>> {
-    let name = object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid(format!("fossil config is missing the `{key}` processor list")))?;
+    let name = object.get(key).and_then(Value::as_str).ok_or_else(|| {
+        invalid(format!(
+            "fossil config is missing the `{key}` processor list"
+        ))
+    })?;
     let name = normalize_id(name);
     StructureProcessorCatalog::shipped()
         .list(&name)

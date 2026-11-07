@@ -45,8 +45,7 @@ fn find_differences() {
             let region = FeatureBiomeRegion::sample(&sampler, cx, cz, -64, 384);
             for step in steps {
                 let region_features = region.active_features(data, step, &order[step.index()]);
-                let base =
-                    center_only(&sampler, data, &region, step, &order[step.index()]);
+                let base = center_only(&sampler, data, &region, step, &order[step.index()]);
                 let region_owned: Vec<String> =
                     region_features.iter().map(|id| (*id).to_owned()).collect();
                 if region_owned != base {
@@ -65,7 +64,10 @@ fn find_differences() {
             }
         }
     }
-    assert!(shown > 0, "expected a chunk where the 3x3 window changes selection");
+    assert!(
+        shown > 0,
+        "expected a chunk where the 3x3 window changes selection"
+    );
 }
 
 fn diff(a: &[String], b: &[String]) -> Vec<String> {

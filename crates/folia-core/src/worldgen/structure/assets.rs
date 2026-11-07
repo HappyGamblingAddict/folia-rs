@@ -265,12 +265,9 @@ impl StructureTemplateCatalog {
             catalog.merge(more).unwrap_or_else(|error| {
                 panic!("embedded structure-template catalogs conflict: {error}")
             });
-            let trial =
-                Self::from_indexed_json(EMBEDDED_STRUCTURE_TEMPLATES_TRIAL).unwrap_or_else(
-                    |error| {
-                        panic!("embedded structure_templates_trial.json is invalid: {error}")
-                    },
-                );
+            let trial = Self::from_indexed_json(EMBEDDED_STRUCTURE_TEMPLATES_TRIAL).unwrap_or_else(
+                |error| panic!("embedded structure_templates_trial.json is invalid: {error}"),
+            );
             catalog.merge_additional(trial).unwrap_or_else(|error| {
                 panic!("embedded trial-chamber catalog conflicts: {error}")
             });

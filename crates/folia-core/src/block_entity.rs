@@ -547,7 +547,11 @@ impl DispenserBlockEntity {
         &self.extras
     }
 
-    fn from_fields(pos: BlockEntityPos, block_id: String, extras: Vec<(String, Tag)>) -> io::Result<Self> {
+    fn from_fields(
+        pos: BlockEntityPos,
+        block_id: String,
+        extras: Vec<(String, Tag)>,
+    ) -> io::Result<Self> {
         Ok(Self {
             pos,
             block_id,

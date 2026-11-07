@@ -15,9 +15,7 @@ use crate::chunk::BlockState;
 use crate::nbt::Tag;
 use crate::worldgen::feature::FeatureLevel;
 use crate::worldgen::structure::StructureError;
-use crate::worldgen::structure::piece::{
-    BoundingBox, StructureDataMarker, make_bounding_box,
-};
+use crate::worldgen::structure::piece::{BoundingBox, StructureDataMarker, make_bounding_box};
 use crate::worldgen::structure::set::set_large_feature_seed;
 use crate::worldgen::structure::start::StartPlacement;
 use crate::worldgen::structure::template::PlacedBlock;
@@ -251,15 +249,8 @@ impl FortressBuilder {
         let orientation = directions[random.next_int_bound(4) as usize];
         let start_x = chunk_x * 16 + 2;
         let start_z = chunk_z * 16 + 2;
-        self.start_box = make_bounding_box(
-            start_x,
-            MAGIC_START_Y,
-            start_z,
-            orientation,
-            19,
-            10,
-            19,
-        );
+        self.start_box =
+            make_bounding_box(start_x, MAGIC_START_Y, start_z, orientation, 19, 10, 19);
         self.pieces.push(FortressPiece::new(
             FortressPieceKind::Start,
             self.start_box,
@@ -276,8 +267,9 @@ impl FortressBuilder {
     }
 
     fn finish(mut self, random: &mut dyn RandomSource) -> FortressStart {
-        let bounds = BoundingBox::encapsulating(self.pieces.iter().map(FortressPiece::bounding_box))
-            .unwrap_or(self.start_box);
+        let bounds =
+            BoundingBox::encapsulating(self.pieces.iter().map(FortressPiece::bounding_box))
+                .unwrap_or(self.start_box);
         let available = 70 - 48 + 1 - bounds.y_span();
         let min_y = if available > 1 {
             48 + random.next_int_bound(available)
@@ -416,26 +408,10 @@ impl FortressBuilder {
         random: &mut dyn RandomSource,
     ) -> Option<usize> {
         let (x, z, direction) = match orientation {
-            Direction::North => (
-                box_.min_x() - 1,
-                box_.min_z() + offset_x,
-                Direction::West,
-            ),
-            Direction::South => (
-                box_.min_x() - 1,
-                box_.min_z() + offset_x,
-                Direction::West,
-            ),
-            Direction::West => (
-                box_.min_x() + offset_x,
-                box_.min_z() - 1,
-                Direction::North,
-            ),
-            Direction::East => (
-                box_.min_x() + offset_x,
-                box_.min_z() - 1,
-                Direction::North,
-            ),
+            Direction::North => (box_.min_x() - 1, box_.min_z() + offset_x, Direction::West),
+            Direction::South => (box_.min_x() - 1, box_.min_z() + offset_x, Direction::West),
+            Direction::West => (box_.min_x() + offset_x, box_.min_z() - 1, Direction::North),
+            Direction::East => (box_.min_x() + offset_x, box_.min_z() - 1, Direction::North),
             _ => return None,
         };
         self.generate_and_add(
@@ -461,26 +437,10 @@ impl FortressBuilder {
         random: &mut dyn RandomSource,
     ) -> Option<usize> {
         let (x, z, direction) = match orientation {
-            Direction::North => (
-                box_.max_x() + 1,
-                box_.min_z() + offset_x,
-                Direction::East,
-            ),
-            Direction::South => (
-                box_.max_x() + 1,
-                box_.min_z() + offset_x,
-                Direction::East,
-            ),
-            Direction::West => (
-                box_.min_x() + offset_x,
-                box_.max_z() + 1,
-                Direction::South,
-            ),
-            Direction::East => (
-                box_.min_x() + offset_x,
-                box_.max_z() + 1,
-                Direction::South,
-            ),
+            Direction::North => (box_.max_x() + 1, box_.min_z() + offset_x, Direction::East),
+            Direction::South => (box_.max_x() + 1, box_.min_z() + offset_x, Direction::East),
+            Direction::West => (box_.min_x() + offset_x, box_.max_z() + 1, Direction::South),
+            Direction::East => (box_.min_x() + offset_x, box_.max_z() + 1, Direction::South),
             _ => return None,
         };
         self.generate_and_add(
@@ -522,8 +482,7 @@ impl FortressBuilder {
             }
             None
         } else {
-            let piece =
-                self.create_bridge_end_filler(x, y, z, orientation, gen_depth, random)?;
+            let piece = self.create_bridge_end_filler(x, y, z, orientation, gen_depth, random)?;
             let _ = piece;
             None
         }
@@ -570,9 +529,7 @@ impl FortressBuilder {
                 continue;
             };
             let class = weights[index].class;
-            if let Some(piece) =
-                self.create_piece(class, x, y, z, orientation, gen_depth, random)
-            {
+            if let Some(piece) = self.create_piece(class, x, y, z, orientation, gen_depth, random) {
                 weights[index].place_count += 1;
                 let count = weights[index].place_count;
                 let max = weights[index].max_place_count;
@@ -1313,7 +1270,17 @@ impl FortressWriter<'_> {
         self.generate_box(8, 5, 0, 10, 12, 1, &bricks, &bricks, false);
         self.generate_box(5, 9, 0, 7, 12, 1, &bricks, &bricks, false);
         self.generate_box(2, 11, 2, 10, 12, 10, &bricks, &bricks, false);
-        self.generate_box(5, 8, 0, 7, 8, 0, &state("minecraft:nether_brick_fence"), &state("minecraft:nether_brick_fence"), false);
+        self.generate_box(
+            5,
+            8,
+            0,
+            7,
+            8,
+            0,
+            &state("minecraft:nether_brick_fence"),
+            &state("minecraft:nether_brick_fence"),
+            false,
+        );
         let east_west = nether_fence(true, false, false, true);
         let north_south = nether_fence(false, true, false, false);
         for i in (1..=11).step_by(2) {
@@ -1371,12 +1338,52 @@ impl FortressWriter<'_> {
         self.generate_box(0, 2, 0, 4, 5, 4, &air, &air, false);
         if left_turn {
             self.generate_box(4, 2, 0, 4, 5, 4, &bricks, &bricks, false);
-            self.generate_box(4, 3, 1, 4, 4, 1, &nether_fence(false, true, false, false), &nether_fence(false, true, false, false), false);
-            self.generate_box(4, 3, 3, 4, 4, 3, &nether_fence(false, true, false, false), &nether_fence(false, true, false, false), false);
+            self.generate_box(
+                4,
+                3,
+                1,
+                4,
+                4,
+                1,
+                &nether_fence(false, true, false, false),
+                &nether_fence(false, true, false, false),
+                false,
+            );
+            self.generate_box(
+                4,
+                3,
+                3,
+                4,
+                4,
+                3,
+                &nether_fence(false, true, false, false),
+                &nether_fence(false, true, false, false),
+                false,
+            );
             self.generate_box(0, 2, 0, 0, 5, 0, &bricks, &bricks, false);
             self.generate_box(0, 2, 4, 3, 5, 4, &bricks, &bricks, false);
-            self.generate_box(1, 3, 4, 1, 4, 4, &nether_fence(true, false, false, true), &nether_fence(true, false, false, true), false);
-            self.generate_box(3, 3, 4, 3, 4, 4, &nether_fence(true, false, false, true), &nether_fence(true, false, false, true), false);
+            self.generate_box(
+                1,
+                3,
+                4,
+                1,
+                4,
+                4,
+                &nether_fence(true, false, false, true),
+                &nether_fence(true, false, false, true),
+                false,
+            );
+            self.generate_box(
+                3,
+                3,
+                4,
+                3,
+                4,
+                4,
+                &nether_fence(true, false, false, true),
+                &nether_fence(true, false, false, true),
+                false,
+            );
             if self.piece.needs_chest {
                 let pos = self.world_pos(3, 2, 3);
                 if self.chunk_box.is_inside(pos) {
@@ -1456,8 +1463,28 @@ impl FortressWriter<'_> {
             self.generate_box(0, max + 1, i, 0, min - 1, i, &bricks, &bricks, false);
             self.generate_box(4, max + 1, i, 4, min - 1, i, &bricks, &bricks, false);
             if (i & 1) == 0 {
-                self.generate_box(0, max + 2, i, 0, max + 3, i, &north_south, &north_south, false);
-                self.generate_box(4, max + 2, i, 4, max + 3, i, &north_south, &north_south, false);
+                self.generate_box(
+                    0,
+                    max + 2,
+                    i,
+                    0,
+                    max + 3,
+                    i,
+                    &north_south,
+                    &north_south,
+                    false,
+                );
+                self.generate_box(
+                    4,
+                    max + 2,
+                    i,
+                    4,
+                    max + 3,
+                    i,
+                    &north_south,
+                    &north_south,
+                    false,
+                );
             }
             for x in 0..=4 {
                 self.fill_column_down(&bricks, x, -1, i);
@@ -1537,8 +1564,28 @@ impl FortressWriter<'_> {
         self.place_block(&nether_fence(false, false, true, true), 12, 13, 12);
         self.place_block(&nether_fence(false, true, false, true), 12, 13, 0);
         for i in (3..=9).step_by(2) {
-            self.generate_box(1, 7, i, 1, 8, i, &north_south_west, &north_south_west, false);
-            self.generate_box(11, 7, i, 11, 8, i, &north_south_east, &north_south_east, false);
+            self.generate_box(
+                1,
+                7,
+                i,
+                1,
+                8,
+                i,
+                &north_south_west,
+                &north_south_west,
+                false,
+            );
+            self.generate_box(
+                11,
+                7,
+                i,
+                11,
+                8,
+                i,
+                &north_south_east,
+                &north_south_east,
+                false,
+            );
         }
         let stairs_north = stairs(Direction::North);
         for i in 0..=6 {
@@ -1558,8 +1605,28 @@ impl FortressWriter<'_> {
         for x in 5..=7 {
             self.place_block(&stairs_north, x, 12, 11);
         }
-        self.generate_box(5, 6, 7, 5, 7, 7, &north_south_east, &north_south_east, false);
-        self.generate_box(7, 6, 7, 7, 7, 7, &north_south_west, &north_south_west, false);
+        self.generate_box(
+            5,
+            6,
+            7,
+            5,
+            7,
+            7,
+            &north_south_east,
+            &north_south_east,
+            false,
+        );
+        self.generate_box(
+            7,
+            6,
+            7,
+            7,
+            7,
+            7,
+            &north_south_west,
+            &north_south_west,
+            false,
+        );
         self.generate_box(5, 13, 12, 7, 13, 12, &air, &air, false);
         self.generate_box(2, 5, 2, 3, 5, 3, &bricks, &bricks, false);
         self.generate_box(2, 5, 9, 3, 5, 10, &bricks, &bricks, false);
@@ -1577,10 +1644,50 @@ impl FortressWriter<'_> {
         self.place_block(&stairs_east, 8, 5, 3);
         self.place_block(&stairs_east, 8, 5, 9);
         self.place_block(&stairs_east, 8, 5, 10);
-        self.generate_box(3, 4, 4, 4, 4, 8, &state("minecraft:soul_sand"), &state("minecraft:soul_sand"), false);
-        self.generate_box(8, 4, 4, 9, 4, 8, &state("minecraft:soul_sand"), &state("minecraft:soul_sand"), false);
-        self.generate_box(3, 5, 4, 4, 5, 8, &state("minecraft:nether_wart"), &state("minecraft:nether_wart"), false);
-        self.generate_box(8, 5, 4, 9, 5, 8, &state("minecraft:nether_wart"), &state("minecraft:nether_wart"), false);
+        self.generate_box(
+            3,
+            4,
+            4,
+            4,
+            4,
+            8,
+            &state("minecraft:soul_sand"),
+            &state("minecraft:soul_sand"),
+            false,
+        );
+        self.generate_box(
+            8,
+            4,
+            4,
+            9,
+            4,
+            8,
+            &state("minecraft:soul_sand"),
+            &state("minecraft:soul_sand"),
+            false,
+        );
+        self.generate_box(
+            3,
+            5,
+            4,
+            4,
+            5,
+            8,
+            &state("minecraft:nether_wart"),
+            &state("minecraft:nether_wart"),
+            false,
+        );
+        self.generate_box(
+            8,
+            5,
+            4,
+            9,
+            5,
+            8,
+            &state("minecraft:nether_wart"),
+            &state("minecraft:nether_wart"),
+            false,
+        );
         self.generate_box(4, 2, 0, 8, 2, 12, &bricks, &bricks, false);
         self.generate_box(0, 2, 4, 12, 2, 8, &bricks, &bricks, false);
         self.generate_box(4, 0, 0, 8, 1, 3, &bricks, &bricks, false);
@@ -1731,10 +1838,7 @@ fn direction_name(direction: Direction) -> &'static str {
 fn chest_nbt(loot_table: &str, seed: i64) -> Tag {
     Tag::Compound(vec![
         ("id".to_owned(), Tag::String("minecraft:chest".to_owned())),
-        (
-            "LootTable".to_owned(),
-            Tag::String(loot_table.to_owned()),
-        ),
+        ("LootTable".to_owned(), Tag::String(loot_table.to_owned())),
         ("LootTableSeed".to_owned(), Tag::Long(seed)),
     ])
 }

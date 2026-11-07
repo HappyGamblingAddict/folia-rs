@@ -90,17 +90,18 @@ One-command verification:
 
 ## Test budget (avoid useless runs)
 
-Do not run the whole suite after every edit. Use this budget:
+Local work is **check-only** by default. CI owns the test matrix.
 
-1. During a slice, run only the focused target(s): `cargo test -p folia-core
-   --lib <module>` and/or `cargo test -p folia-core --test <slice>`.
-2. Run `cargo fmt --all` and one `cargo clippy --workspace --all-targets -- -D
-   warnings` before handing the slice back.
-3. Run the full `cargo test --workspace` and `worldgen_parity` exactly once
-   when merging the slice into the integration branch.
-4. Run `worldgen_join`, `view_distance_join`, and `scripts/verify.ps1 -Full`
-   only for changes that touch generation, join streaming, or shutdown. They
-   take tens of seconds and are not needed for unrelated edits.
+1. During a slice, run `cargo check -p <crate>` (or `cargo check --workspace`)
+   and write focused tests, but do not run the full test suite locally.
+2. Run `cargo fmt --all` before handing the slice back. Run clippy only when the
+   change touches lint-sensitive code; CI runs the canonical
+   `cargo clippy --workspace --all-targets -- -D warnings`.
+3. The pushed branch/PR lets GitHub Actions run formatting, clippy, the full
+   workspace tests, and the release build on Windows and Ubuntu.
+4. A focused test (`cargo test -p folia-core --test <slice>`) is optional for a
+   high-risk change or when debugging a specific failure; it is not required for
+   every slice.
 5. Never run two `cargo` commands against the same target directory
    concurrently; it only serializes behind the lock and can confuse timing
    tests.

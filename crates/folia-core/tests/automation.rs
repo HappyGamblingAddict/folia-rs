@@ -35,7 +35,9 @@ fn temp_dir(name: &str) -> PathBuf {
 fn flat_storage(name: &str) -> WorldStorage {
     let root = temp_dir(name);
     let mut storage = WorldStorage::new(root.join("region"));
-    storage.save_chunk(&flat_chunk(0, 0), Compression::Zlib).unwrap();
+    storage
+        .save_chunk(&flat_chunk(0, 0), Compression::Zlib)
+        .unwrap();
     storage.flush().unwrap();
     storage
 }
@@ -162,7 +164,10 @@ fn target_hit_decays_after_eight_redstone_ticks() {
     let mut storage = flat_storage("target-decay");
     let pos = BlockPos::new(0, -60, 0);
     place(&mut storage, pos, state("minecraft:target"));
-    assert_eq!(SignalReader::world(&storage).signal(pos, Direction::South), 0);
+    assert_eq!(
+        SignalReader::world(&storage).signal(pos, Direction::South),
+        0
+    );
 
     let strength = redstone::target_hit(
         &mut storage,
@@ -187,7 +192,10 @@ fn target_hit_decays_after_eight_redstone_ticks() {
     }
     tick::tick_world(&mut storage, 8).unwrap();
     assert_eq!(redstone::target_power(&block(&storage, pos)), 0);
-    assert_eq!(SignalReader::world(&storage).signal(pos, Direction::South), 0);
+    assert_eq!(
+        SignalReader::world(&storage).signal(pos, Direction::South),
+        0
+    );
 }
 
 #[test]
@@ -261,10 +269,17 @@ fn dispenser_fires_once_per_rising_edge() {
         tick::tick_world(&mut storage, tick_number).unwrap();
     }
     assert_eq!(dispenser(&mut storage, pos).slot(0).unwrap().count, 3);
-    assert_eq!(folia_core::crops::age(&block(&storage, crop_pos)), age_after_first);
+    assert_eq!(
+        folia_core::crops::age(&block(&storage, crop_pos)),
+        age_after_first
+    );
 
     // Falling edge clears `triggered`; a new rising edge fires exactly once more.
-    place(&mut storage, BlockPos::new(1, -60, 0), state("minecraft:air"));
+    place(
+        &mut storage,
+        BlockPos::new(1, -60, 0),
+        state("minecraft:air"),
+    );
     for _ in 0..2 {
         tick_number += 1;
         tick::tick_world(&mut storage, tick_number).unwrap();
@@ -295,7 +310,9 @@ fn dropper_moves_one_item_into_the_container_in_front() {
     place(&mut storage, chest_pos, state("minecraft:chest"));
 
     let mut components = ComponentMap::new();
-    components.set(ComponentValue::CustomName(Tag::String("marked ingot".into())));
+    components.set(ComponentValue::CustomName(Tag::String(
+        "marked ingot".into(),
+    )));
     let mut marked = ItemStack::new("minecraft:iron_ingot", 3);
     marked.components = components.clone();
     insert_dispenser(
@@ -317,7 +334,10 @@ fn dropper_moves_one_item_into_the_container_in_front() {
     assert_eq!(moved[0].item, "minecraft:iron_ingot");
     assert_eq!(moved[0].count, 1);
     assert_eq!(moved[0].components, components, "components were lost");
-    assert_eq!(dispenser(&mut storage, dropper_pos).slot(0).unwrap().count, 2);
+    assert_eq!(
+        dispenser(&mut storage, dropper_pos).slot(0).unwrap().count,
+        2
+    );
 
     // Still the same pulse: no second item transfer.
     for _ in 0..6 {
@@ -430,7 +450,9 @@ fn projectile_dispense_uses_the_injected_sink_and_preserves_components() {
     );
     let mut arrow = ItemStack::new("minecraft:arrow", 2);
     let mut components = ComponentMap::new();
-    components.set(ComponentValue::CustomName(Tag::String("signal arrow".into())));
+    components.set(ComponentValue::CustomName(Tag::String(
+        "signal arrow".into(),
+    )));
     arrow.components = components.clone();
     insert_dispenser(
         &mut storage,

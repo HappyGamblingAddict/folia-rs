@@ -13,6 +13,35 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-07 - Non-village templates ship as per-family gzip streams
+
+- Context: the decompiled tree has 1,202 structure NBT files. The village
+  catalog covers 483; the remaining 719 would be a 3.88 MB base64+gzip file if
+  each template kept its own payload, over the 2.5 MB asset budget. The largest
+  family, `trial_chambers` (191 templates), is ~1.0 MB in that form by itself.
+- Decision: `structure_templates_more.json` stores one base64+gzip stream per
+  top-level family and an id -> `{blob, offset, length}` index. Every slice is a
+  complete gzip-decoded NBT document. All families except `trial_chambers` are
+  included: ancient cities, bastions, End cities, fossils, nether fossils,
+  igloos, pillager outposts, ruined portals, shipwrecks, trail ruins,
+  underwater ruins, woodland mansions, and `empty` (528 templates). Payloads
+  are recompressed with Java zlib level 9 to fit the budget (2,358,479 bytes;
+  1,729,270 compressed payload bytes).
+- Decision: `StructureTemplateCatalog::shipped()` parses the village catalog
+  and the indexed catalog and merges them. `len()`, `total_bytes()`, and
+  `ids()` keep describing the primary village slice for the existing asset
+  pin; `all_len()`, `all_total_bytes()`, and `all_ids()` report the merged
+  view. `is_loaded` is a per-thread diagnostic so parallel tests cannot observe
+  another thread's lazy load.
+- Why: family streams preserve exact NBT payloads while exploiting cross-file
+  redundancy that per-template gzip cannot reach. The Java level-9 recompression
+  removes ~8% versus .NET's level-6 writer and avoids dropping another family.
+- Consequences: the extractor now requires `java` for the second catalog (the
+  village catalog stays pure PowerShell). `trial_chambers` remains a documented
+  gap; adding it needs either a third asset or a stronger compressor. Bastion
+  and End-city templates are data-ready, but the procedural
+  `FortressPieces`/`EndCityPieces` ports still need to attach them to starts.
+
 ## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a

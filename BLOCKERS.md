@@ -63,25 +63,31 @@ Format:
   focused tests and clippy, then reverted before committing. Do not merge this
   slice until the base build is fixed; the chat-signing changes themselves do
   not touch the failing path.
-## 2026-11-07 — P7.2/P7.3 Nether and End structure templates are not shipped
+## 2026-11-07 — P7.2/P7.3 Nether and End structure pieces are not ported
 
 - Blocker: `minecraft:fortress`, `minecraft:bastion_remnant`, and
-  `minecraft:end_city` placement selects correctly, but the repository has no
-  structure-template NBT assets or full piece ports for them. Bastions are
-  jigsaw starts and need `minecraft:bastion/*` templates; fortresses and End
-  cities have no procedural piece implementation in Rust.
-- What was tried: Parsed the shipped structure definitions, ran the jigsaw
-  starter with an empty template provider, and pinned the exact failure
-  (`UnknownTemplate { structure: "minecraft:bastion/starts", template:
-  "minecraft:bastion/treasure/big_air_full" }` for seed 12345 chunk `(12,20)`).
-  Fortresses report `UnsupportedStructureType`.
-- What is needed: Extract/copy the 1.21.11 structure NBT and template pools into
-  the asset pipeline, port `FortressPieces`/`EndCityPieces`, then call the
-  existing `JigsawPlacement` path.
+  `minecraft:end_city` placement selects correctly. The bastion and End-city
+  template NBTs now ship in `structure_templates_more.json` (167 bastion + 20
+  End-city templates), but fortresses are procedural and have no
+  `FortressPieces` port, and End cities still need `EndCityPieces` and tower
+  recursion. Bastion starts also need their template-pool attachment wired
+  through the shipped catalog instead of the empty test provider.
+- What was tried: Parsed the shipped structure definitions and ran the jigsaw
+  starter with an empty template provider; the old failure was
+  `UnknownTemplate { structure: "minecraft:bastion/starts", template:
+  "minecraft:bastion/treasure/big_air_full" }` for seed 12345 chunk `(12,20)`.
+  That exact template now parses from the new asset. Fortresses still report
+  `UnsupportedStructureType`.
+- What is needed: port `FortressPieces`/`EndCityPieces`, wire
+  `NetherGenerator::structure_start` to `StructureTemplateCatalog::shipped()`
+  (or a passed catalog), and call the existing `JigsawPlacement` path.
 - Workaround / next task: `NetherGenerator::structure_at_chunk` and
-  `structure_start` are the stable selection/error contract; add templates and
-  pieces behind them without changing callers. End cities and the dragon fight
-  remain blocked on the same asset/entity work.
+  `structure_start` remain the stable selection/error contract. The catalog
+  supplies the missing data; the procedural pieces and live dimension wiring
+  are the remaining P7 work.
+- Remaining template family: `trial_chambers` (191 templates) is deliberately
+  omitted from the 2.5 MB non-village asset. Adding it needs a third asset or a
+  stronger compressor.
 
 ## 2026-11-07 — Nether carver/surface ordering differs from vanilla
 

@@ -14,19 +14,21 @@ Last updated: 2026-11-07
   exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
-  483 shipped village templates, recursive jigsaw, Nether carvers, End
-  spikes/gateways/chorus, dimension storage and portal math.
+  1,011 shipped structure templates (483 village + 528 non-village), recursive
+  jigsaw, Nether carvers, End spikes/gateways/chorus, dimension storage and
+  portal math.
 - Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
   leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
   tickers, region ownership, and live bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and non-village structure templates;
+- Major gaps: feature-pool placement and the trial-chamber template family;
   live session dimension switching; effect/menu packets; shared per-viewer
   entity tracking and live AI goals; full plugin API; real region tick threading.
 
 ## Current focus
 
 1. P2.8 feature-pool placement and the remaining six configured feature types.
-2. P7 portal-driven dimension switching and non-village structure templates.
+2. P2.10 trial-chamber templates, fortress/end-city procedural pieces, and
+   P7 portal-driven dimension switching.
 3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
 4. P6 container menus/packets and deeper redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
@@ -52,6 +54,15 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: non-village structure templates — `structure_templates_more.json`
+  ships 528 templates across 13 families (ancient cities, bastions, End cities,
+  fossils/nether fossils, igloos, outposts, portals, shipwrecks, trail ruins,
+  underwater ruins, woodland mansions, empty) as per-family base64+gzip NBT
+  streams with an offset/length index; 2,358,479 bytes, SHA-256
+  `5412f52e…0171c6`, FNV-1a-64 `0xb45acf2143b063bc`. `shipped()` merges both
+  catalogs; `TemplateProvider` resolves either; unknown/corrupt payloads stay
+  explicit. 5 `tests/structure_catalog_more.rs` tests. `trial_chambers` (191
+  templates) is the remaining family and stays unshipped for the 2.5 MB budget.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

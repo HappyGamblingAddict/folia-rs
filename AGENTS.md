@@ -127,6 +127,8 @@ Before starting, verify these exist:
 - `crates/folia-core/assets/mth_sin.bin`
 - `crates/folia-core/assets/worldgen.json`
 - `crates/folia-core/assets/structure_templates.json` (483 village templates)
+- `crates/folia-core/assets/structure_templates_more.json` (528 non-village
+  templates; trial chambers remain unshipped)
 - Java oracle dumps in `assets/` and/or `../java-worldgen`
 
 If an asset is missing, regenerate it from the local jar/decompiled data or the

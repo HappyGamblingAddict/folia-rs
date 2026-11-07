@@ -116,6 +116,11 @@ impl Entity {
 
 pub trait BlockCollider {
     fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool;
+    /// State at `(x, y, z)` when the collider is world-backed. The default
+    /// returns `None`, and callers fall back to their own approximated view.
+    fn block_at(&mut self, _x: i32, _y: i32, _z: i32) -> Option<BlockState> {
+        None
+    }
     /// Every collision box of the block at `(x, y, z)`.
     ///
     /// Simple test colliders only implement [`Self::is_solid`]; the default
@@ -810,7 +815,15 @@ impl SessionEntityTracker {
             if let Some(ai) = &mut tracked.ai {
                 ai.health = tracked.living.health;
                 ai.pos = Vec3::new(tracked.entity.x, tracked.entity.y, tracked.entity.z);
-                ai.update_environment(ai_world);
+                let feet = ai.block_pos();
+                let feet_block = collider.block_at(feet.x(), feet.y(), feet.z());
+                let below = feet.below();
+                let below_block = collider.block_at(below.x(), below.y(), below.z());
+                if feet_block.is_some() || below_block.is_some() {
+                    ai.update_environment_from_blocks(feet_block.as_ref(), below_block.as_ref());
+                } else {
+                    ai.update_environment(ai_world);
+                }
             }
             if moved {
                 out.packets
@@ -944,6 +957,10 @@ impl BlockCollider for WorldCollider<'_> {
             return false;
         };
         crate::block_shapes::has_collision_state(state)
+    }
+
+    fn block_at(&mut self, x: i32, y: i32, z: i32) -> Option<BlockState> {
+        self.block_state(x, y, z).cloned()
     }
 
     fn collision_boxes(&mut self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
@@ -1227,6 +1244,59 @@ mod tests {
         assert!(!packets.is_empty());
         assert_eq!(packet_id(&packets[0]), CLIENTBOUND_ENTITY_POSITION_SYNC);
         remove(9002);
+    }
+
+    struct LiveEnvironmentCollider {
+        feet: crate::math::BlockPos,
+    }
+
+    impl BlockCollider for LiveEnvironmentCollider {
+        fn is_solid(&mut self, _x: i32, y: i32, _z: i32) -> bool {
+            y < self.feet.y()
+        }
+
+        fn block_at(&mut self, x: i32, y: i32, z: i32) -> Option<BlockState> {
+            let state = |name: &str| BlockState {
+                name: name.to_owned(),
+                properties: Vec::new(),
+            };
+            if x == self.feet.x() && y == self.feet.y() && z == self.feet.z() {
+                Some(state("minecraft:water"))
+            } else if y < self.feet.y() {
+                Some(state("minecraft:stone"))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn session_ai_reads_the_real_collider_environment() {
+        let mut tracker = SessionEntityTracker::deterministic((0.0, 63.0, 0.0), 62, 7);
+        let mut zombie = None;
+        for id in tracker.entities.ids() {
+            if tracker
+                .entity(id)
+                .is_some_and(|tracked| tracked.ai.is_some())
+            {
+                zombie = Some(id);
+                break;
+            }
+        }
+        let zombie = zombie.expect("session tracker spawns a zombie");
+        let feet = tracker
+            .entity(zombie)
+            .and_then(|tracked| tracked.ai.as_ref())
+            .expect("zombie AI")
+            .block_pos();
+        let mut collider = LiveEnvironmentCollider { feet };
+        tracker.tick((0.0, 63.0, 0.0), &mut collider);
+        let ai = tracker
+            .entity(zombie)
+            .and_then(|tracked| tracked.ai.as_ref());
+        let ai = ai.expect("zombie AI survives one tick");
+        assert!(ai.in_water, "water at the zombie's feet must be visible");
+        assert!(ai.on_ground, "solid ground below must be visible");
     }
 
     fn packet_id(packet: &[u8]) -> i32 {

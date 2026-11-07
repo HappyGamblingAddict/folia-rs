@@ -1825,6 +1825,20 @@ impl AiMob {
         }
     }
 
+    /// Refresh the environment from two resolved block states. Live sessions
+    /// use this with the real collider; the injected [`WorldView`] variant
+    /// remains the fallback for tests and unloaded chunks.
+    pub fn update_environment_from_blocks(
+        &mut self,
+        feet: Option<&BlockState>,
+        below: Option<&BlockState>,
+    ) {
+        self.in_water = feet.is_some_and(is_water);
+        self.in_lava = feet.is_some_and(is_lava);
+        self.fluid_height = if self.in_water { 1.0 } else { 0.0 };
+        self.on_ground = below.is_some_and(block_behaviour::has_collision);
+    }
+
     pub fn update_environment(&mut self, world: &dyn WorldView) {
         let feet = self.block_pos();
         let below = feet.below();
@@ -2706,5 +2720,29 @@ mod tests {
         );
         assert!(is_air(world.block(BlockPos::new(0, 64, 0)).unwrap()));
         assert!(world.block(BlockPos::new(0, 320, 0)).is_none());
+    }
+
+    #[test]
+    fn environment_from_blocks_uses_water_lava_and_collision() {
+        let state = |name: &str| BlockState {
+            name: name.to_owned(),
+            properties: Vec::new(),
+        };
+        let water = state("minecraft:water");
+        let lava = state("minecraft:lava");
+        let stone = state("minecraft:stone");
+        let mut mob = AiMob::new(1, ActorKind::Zombie, Vec3::new(0.0, 0.0, 0.0), 1);
+
+        mob.update_environment_from_blocks(Some(&water), Some(&stone));
+        assert!(mob.in_water);
+        assert!(!mob.in_lava);
+        assert!(mob.on_ground);
+        assert_eq!(mob.fluid_height, 1.0);
+
+        mob.update_environment_from_blocks(Some(&lava), None);
+        assert!(!mob.in_water);
+        assert!(mob.in_lava);
+        assert!(!mob.on_ground);
+        assert_eq!(mob.fluid_height, 0.0);
     }
 }

@@ -199,6 +199,9 @@ The current active queue is:
 3. `P5` - join-session entity spawning/tracking and AI tick integration.
 4. `P1.5` - shape-aware light occlusion and remaining support/waterlogging.
 5. `P9.3` - bridge live-session state and gameplay event dispatch.
+6. `P8.2` - chat-signing core is landed; wire profile-key provisioning and
+   signed-chat packets into `join.rs`, and read the enforcement flag in
+   `status.rs`.
 
 Item entities/XP orbs from the table-driven block drops are now modeled
 (`item_entity.rs`, `spawn_drops_at` + `DigState::stop_with_entities`, 16

@@ -14,6 +14,56 @@ Format:
 - Workaround / next task:
 ```
 
+## 2026-11-07 — P8.2 chat-signing core is not wired into login/status
+
+- Status: Not a hard blocker for the model/codec slice. `crypto.rs` now has
+  SHA-256 and RSASSA-PKCS1-v1_5/SHA-256 sign/verify; `protocol.rs` has the
+  1.21.11 signed-body/serverbound-chat/last-seen codecs; `player.rs` has local
+  and remote signed-message chains, profile-key generation, and Login Success
+  profile properties; `config.rs` parses `enforces-secure-chat` (false default)
+  and logs an audit line when enabled. 15 focused `tests/chat_signing.rs` tests
+  (1 ignored release benchmark) + 2 crypto lib tests pass.
+- Not wired (outside this slice's allowed files):
+  - `join.rs` still builds Login Success from `profile_properties` only and
+    never calls `PlayerSession::provision_chat_signing` or
+    `PlayerSession::login_profile`, so the server-issued public key is not yet
+    sent to clients and `ServerboundChat`/`ServerboundChatSessionUpdate` are
+    not dispatched.
+  - `status.rs` still hardcodes `"enforcesSecureChat": false`; it needs to read
+    `config::enforces_secure_chat()`.
+  - Clientbound `ClientboundPlayerChatPacket`/`ClientboundDisguisedChatPacket`
+    and `LastSeenMessagesValidator` window application are not implemented, so
+    accepted messages are not displayed yet.
+  - Profile keys are self-signed by this server; Mojang's `Services` profile-key
+    trust root (`profileKeySignatureValidator`) is not available offline. A
+    real client's `ServerboundChatSessionUpdate` key cannot be validated against
+    Mojang without the session service's key set.
+- Key-generation cost: a fresh 2048-bit RSA profile key takes ~1.4 s in a
+  release build and ~49 s in an unoptimized debug build on this machine.
+  `PlayerSession::provision_chat_signing` must therefore not run on the tick
+  thread in production, or the process should generate its profile key once at
+  startup and treat per-login keys as a later optimization.
+- Workaround / next task: call provisioning before Login Success, send
+  `login_profile()`, dispatch chat packets through a `RemoteChatSession`, and
+  flip the status flag. Until then keep `enforces-secure-chat=false`.
+
+## 2026-11-07 — Base branch does not compile without a hopper shim
+
+- Blocker: `crates/folia-core/src/tick.rs:1730` calls
+  `storage.tick_hoppers()?`, but no `tick_hoppers` method exists anywhere in
+  `world.rs` or `block_entity.rs` at commit `d3e2b53`. `cargo check -p
+  folia-core` fails with E0599 before this slice's code is type-checked.
+- What was tried: confirmed the call was added by `d3e2b53` (leaf decay) while
+  the persisted-hopper commit `8bbd0d2` only added `block_entity.rs` state and
+  `tick.rs` calls `tick_block_entities` separately. No branch contains a
+  `tick_hoppers` definition.
+- What is needed: a `WorldStorage::tick_hoppers` implementation (or removal of
+  the call) in `world.rs`/`tick.rs`, both outside this slice's file scope.
+- Workaround / next task: a temporary local `Ok(())` shim was used to run the
+  focused tests and clippy, then reverted before committing. Do not merge this
+  slice until the base build is fixed; the chat-signing changes themselves do
+  not touch the failing path.
+
 ## 2026-11-06 — P10 region ownership is task-scoped, not world-scoped
 
 - Status: Not a hard blocker. `region.rs` now enforces ownership on the

@@ -13,6 +13,40 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
+- Context: 1.21.11 clients sign chat with a profile private key and send a
+  `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a
+  256-byte `MessageSignature`. The task also requires a SHA-256 content hash,
+  sequence tracking, and server-issued profile keys in Login Success.
+- Decision: model `SignedMessageBody` exactly as `SignedMessageBody.Packed`
+  (UTF-8 string, epoch-millisecond `i64`, salt `i64`, VarInt-counted packed
+  signatures with full/`MessageSignatureCache` variants). `SignedMessage` adds
+  a local `content_hash` field (not on the vanilla wire) and signs exactly
+  `PlayerChatMessage.updateSignature`: marker `1`, sender/session UUIDs, link
+  index, salt, epoch **seconds**, content length/bytes, then the last-seen list.
+  Sequences must be contiguous; timestamps must be nondecreasing, no older than
+  five minutes, and no more than two minutes in the future.
+- Decision: production profile keys are fresh 2048-bit RSA keys per login and
+  use `SHA256withRSA`; a 256-byte message signature is mandatory, so a smaller
+  RSA key returns `InsecureAlgorithm` rather than emitting non-wire-compatible
+  bytes. The public key is published in the Login Success GameProfile property
+  `profile_key` as
+  `v1:<algorithm>:<expires_ms>:<key_hex>:<key_signature_hex>`. The server signs
+  its own key record (self-signed), and `RemoteChatSession` can also verify a
+  peer key against a supplied issuer key.
+- Decision: provide an explicitly named `DeterministicTestKey` / `provision_test_chat_signing`
+  for tests and offline captures. It produces deterministic 256-byte
+  signatures but `enforces-secure-chat` rejects it with
+  `InsecureAlgorithm`; production provisioning only uses `generate_secure`.
+- Why: Keeps the wire body byte-compatible with the decompiled Java, makes
+  tampering and replay testable without a live Mojang key service, and fails
+  loudly when only an insecure signer is available.
+- Consequences: 2048-bit generation takes about 1.4 s in a release build and
+  ~49 s in an unoptimized debug build on this machine, so login wiring should
+  generate off the tick thread or cache a startup key. `join.rs` and `status.rs`
+  must call the provisioning/audit APIs before secure chat is user-visible;
+  see `BLOCKERS.md`.
+
 ## 2026-11-06 — Item entities use a 4-block magnet and 3-block merge
 - Context: vanilla `ItemEntity` has no in-tick magnet (pickup is a player-box
   inflate), and its merge radius is the spigot `itemMerge` value (default

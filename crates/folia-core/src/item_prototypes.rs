@@ -22,12 +22,14 @@
 //! ordinal-sorted keys with no insignificant whitespace, so regenerating the
 //! same jar produces byte-identical output.
 
+use crate::effects::{self, EffectTick, StatusEffectSet};
 use crate::item_components::{
     BlockSet, ComponentMap, ComponentValue, DEFAULT_MAX_STACK_SIZE, FoodProperties, ItemStack,
     Rarity, Tool, ToolRule, normalize_key,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::io;
 use std::sync::OnceLock;
 
@@ -141,6 +143,249 @@ impl FoodPrototype {
     pub fn eat_ticks(&self) -> i32 {
         (self.eat_seconds * 20.0) as i32
     }
+}
+
+/// Vanilla `FoodData`: the food and saturation bars on a player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FoodData {
+    pub food_level: i32,
+    pub saturation_level: f32,
+    pub exhaustion_level: f32,
+}
+
+impl Default for FoodData {
+    fn default() -> Self {
+        Self {
+            food_level: 20,
+            saturation_level: 5.0,
+            exhaustion_level: 0.0,
+        }
+    }
+}
+
+impl FoodData {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `FoodData.add`: both values clamp, saturation cannot exceed the current
+    /// food level.
+    pub fn add(&mut self, nutrition: i32, saturation: f32) {
+        self.food_level = (nutrition + self.food_level).clamp(0, 20);
+        self.saturation_level =
+            (saturation + self.saturation_level).clamp(0.0, self.food_level as f32);
+    }
+
+    pub fn eat(&mut self, food: &FoodProperties) {
+        self.add(food.nutrition, food.saturation);
+    }
+
+    pub fn needs_food(&self) -> bool {
+        self.food_level < 20
+    }
+
+    /// `Player.canEat`: creative/invulnerable players may always eat.
+    pub fn can_eat(&self, can_always_eat: bool, invulnerable: bool) -> bool {
+        invulnerable || can_always_eat || self.needs_food()
+    }
+}
+
+/// `ItemUseAnimation` subset used by consumables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumeAnimation {
+    Eat,
+    Drink,
+}
+
+/// A stack's `minecraft:consumable` behavior plus its `minecraft:food` values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsumablePrototype {
+    /// `Consumable.consumeTicks()`.
+    pub consume_ticks: i32,
+    pub animation: ConsumeAnimation,
+    /// Patched `minecraft:food` component, if any.
+    pub food: Option<FoodProperties>,
+    /// `minecraft:use_remainder` (glass bottle, bowl, bucket).
+    pub use_remainder: Option<ItemStack>,
+}
+
+impl ConsumablePrototype {
+    pub fn eat_ticks(&self) -> i32 {
+        self.consume_ticks
+    }
+
+    pub fn can_always_eat(&self) -> bool {
+        self.food.as_ref().is_some_and(|food| food.can_always_eat)
+    }
+}
+
+/// The container left behind by a vanilla consumable or brewing ingredient:
+/// `UseRemainder` for drinking/eating and `craftRemainder` for dragon breath.
+pub fn container_result(item: &str) -> Option<ItemStack> {
+    let item = normalize_key(item);
+    let container = match item.as_str() {
+        "minecraft:potion" | "minecraft:honey_bottle" | "minecraft:dragon_breath" => {
+            "minecraft:glass_bottle"
+        }
+        "minecraft:milk_bucket" => "minecraft:bucket",
+        "minecraft:mushroom_stew"
+        | "minecraft:rabbit_stew"
+        | "minecraft:beetroot_soup"
+        | "minecraft:suspicious_stew" => "minecraft:bowl",
+        _ => return None,
+    };
+    Some(ItemStack::new(container, 1))
+}
+
+fn is_drink(item: &str) -> bool {
+    matches!(
+        item,
+        "minecraft:potion"
+            | "minecraft:honey_bottle"
+            | "minecraft:milk_bucket"
+            | "minecraft:ominous_bottle"
+    )
+}
+
+fn food_properties(stack: &ItemStack) -> Option<FoodProperties> {
+    match stack.get_component("minecraft:food") {
+        Some(ComponentValue::Food(food)) => Some(food.clone()),
+        Some(_) => None,
+        None if stack.components.is_removed("minecraft:food") => None,
+        None => prototype(&stack.item)
+            .and_then(|prototype| prototype.food.as_ref())
+            .map(|food| FoodProperties {
+                nutrition: food.nutrition,
+                saturation: food.saturation,
+                can_always_eat: food.can_always_eat,
+            }),
+    }
+}
+
+/// Resolve a stack's consumable behavior from its patched food component, the
+/// item prototype, and the vanilla drink/container table. `None` means the
+/// stack cannot be eaten or drunk.
+pub fn consumable_for_stack(stack: &ItemStack) -> Option<ConsumablePrototype> {
+    if stack.is_empty() {
+        return None;
+    }
+    let item = stack.item.as_str();
+    let food = food_properties(stack);
+    let drink = is_drink(item);
+    if food.is_none() && !drink {
+        return None;
+    }
+    let animation = if drink {
+        ConsumeAnimation::Drink
+    } else {
+        ConsumeAnimation::Eat
+    };
+    let consume_ticks = match item {
+        "minecraft:potion" | "minecraft:milk_bucket" | "minecraft:ominous_bottle" => 32,
+        "minecraft:honey_bottle" => 40,
+        _ => prototype(item)
+            .and_then(ItemPrototype::eat_ticks)
+            .unwrap_or(32),
+    };
+    Some(ConsumablePrototype {
+        consume_ticks,
+        animation,
+        food,
+        use_remainder: container_result(item),
+    })
+}
+
+/// Resolve consumable behavior for an item id with its prototype defaults.
+pub fn consumable(item: &str) -> Option<ConsumablePrototype> {
+    consumable_for_stack(&ItemStack::new(item, 1))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsumeError {
+    NotConsumable(String),
+    CannotEat,
+}
+
+impl fmt::Display for ConsumeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotConsumable(item) => write!(formatter, "`{item}` is not consumable"),
+            Self::CannotEat => write!(formatter, "the consumer is not hungry"),
+        }
+    }
+}
+
+impl std::error::Error for ConsumeError {}
+
+/// Observable result of one completed consume action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsumeOutcome {
+    pub nutrition: i32,
+    pub saturation: f32,
+    /// Instant-effect payloads produced by the potion component. The caller
+    /// applies these once to the living entity's health.
+    pub effect_events: Vec<EffectTick>,
+    /// A remainder produced while the hand stack still had items; vanilla
+    /// adds it to the inventory or drops it.
+    pub extra_remainder: ItemStack,
+}
+
+/// Complete one vanilla `Consumable.onConsume` action.
+///
+/// The hand stack is mutated in place: one item is consumed unless `creative`
+/// is set (`LivingEntity.hasInfiniteMaterials`), and an empty stack is replaced
+/// by its use remainder (glass bottle, bowl, bucket). Food fills `food`, potion
+/// contents apply through `effects`, and milk clears all active effects.
+pub fn consume(
+    stack: &mut ItemStack,
+    food: &mut FoodData,
+    effects: &mut StatusEffectSet,
+    creative: bool,
+) -> Result<ConsumeOutcome, ConsumeError> {
+    let consumable = consumable_for_stack(stack)
+        .ok_or_else(|| ConsumeError::NotConsumable(stack.item.clone()))?;
+    if let Some(properties) = &consumable.food
+        && !food.can_eat(properties.can_always_eat, creative)
+    {
+        return Err(ConsumeError::CannotEat);
+    }
+
+    let mut outcome = ConsumeOutcome {
+        nutrition: 0,
+        saturation: 0.0,
+        effect_events: Vec::new(),
+        extra_remainder: ItemStack::empty(),
+    };
+    if let Some(properties) = &consumable.food {
+        food.eat(properties);
+        outcome.nutrition = properties.nutrition;
+        outcome.saturation = properties.saturation;
+    }
+
+    if stack.item == "minecraft:milk_bucket" {
+        effects.clear();
+    }
+    let potion_contents = match stack.get_component("minecraft:potion_contents") {
+        Some(ComponentValue::PotionContents(contents)) => Some(contents.clone()),
+        _ => None,
+    };
+    if let Some(contents) = &potion_contents {
+        outcome.effect_events = effects::apply_potion_contents(effects, contents);
+    }
+
+    if creative {
+        return Ok(outcome);
+    }
+
+    stack.shrink(1);
+    if let Some(remainder) = consumable.use_remainder {
+        if stack.is_empty() {
+            *stack = remainder;
+        } else {
+            outcome.extra_remainder = remainder;
+        }
+    }
+    Ok(outcome)
 }
 
 /// The prototype defaults for one item id.

@@ -194,7 +194,8 @@ A task is done only when:
 The current active queue is:
 
 1. `P2.8` - recursive jigsaw connection and structure generator wiring.
-2. `P6` - typed block entities (chest/furnace/sign/spawner) and pistons.
+2. `P6` - typed block entities (chest/furnace/sign/spawner/hopper, brewing
+   stand state/menu) and pistons.
 3. `P5` - join-session entity spawning/tracking and AI tick integration.
 4. `P1.5` - shape-aware light occlusion and remaining support/waterlogging.
 5. `P9.3` - bridge live-session state and gameplay event dispatch.

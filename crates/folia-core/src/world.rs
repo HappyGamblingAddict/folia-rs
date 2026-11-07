@@ -294,6 +294,17 @@ impl WorldStorage {
         }
     }
 
+    /// Reserved world-level hopper hook for the tick loop.
+    ///
+    /// `HopperBlockEntity` cooldowns already advance through
+    /// [`Self::tick_block_entities`] and `SimpleBlockEntityTicker`. Pulling from
+    /// the container above and pushing into the container below requires the
+    /// live block/container lookup that is still an open P6 slice
+    /// (`BLOCKERS.md`); until then this hook deliberately does no work.
+    pub fn tick_hoppers(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
     fn ensure_block_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
         let key = (chunk_x, chunk_z);
         if self.block_entities.contains_key(&key) {

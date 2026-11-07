@@ -7,7 +7,7 @@
 //! the tick math and the damage pipeline, not entity storage.
 
 use crate::entity_metadata::{Equipment, EquipmentSlot, HurtResult, LivingEntity};
-use crate::item_components::ItemStack;
+use crate::item_components::{ItemStack, MobEffectInstance, PotionContents, normalize_key};
 
 /// The status effects the server models explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -20,6 +20,7 @@ pub enum StatusEffectKind {
     InstantHealth,
     InstantDamage,
     JumpBoost,
+    Nausea,
     Regeneration,
     Resistance,
     FireResistance,
@@ -38,6 +39,19 @@ pub enum StatusEffectKind {
     Levitation,
     SlowFalling,
     Darkness,
+    Luck,
+    Unluck,
+    ConduitPower,
+    DolphinsGrace,
+    BadOmen,
+    HeroOfTheVillage,
+    TrialOmen,
+    RaidOmen,
+    WindCharged,
+    Weaving,
+    Oozing,
+    Infested,
+    BreathOfTheNautilus,
 }
 
 impl StatusEffectKind {
@@ -70,7 +84,61 @@ impl StatusEffectKind {
                 | Self::Absorption
                 | Self::Saturation
                 | Self::SlowFalling
+                | Self::Luck
+                | Self::ConduitPower
+                | Self::DolphinsGrace
+                | Self::HeroOfTheVillage
+                | Self::BreathOfTheNautilus
         )
+    }
+
+    /// Resolve a vanilla `MobEffect` registry id. Both `minecraft:speed` and
+    /// `speed` are accepted, matching [`crate::item_components::normalize_key`].
+    pub fn from_id(id: &str) -> Option<Self> {
+        let kind = match id.strip_prefix("minecraft:").unwrap_or(id) {
+            "speed" => Self::Speed,
+            "slowness" => Self::Slowness,
+            "haste" => Self::Haste,
+            "mining_fatigue" => Self::MiningFatigue,
+            "strength" => Self::Strength,
+            "instant_health" => Self::InstantHealth,
+            "instant_damage" => Self::InstantDamage,
+            "jump_boost" => Self::JumpBoost,
+            "nausea" => Self::Nausea,
+            "regeneration" => Self::Regeneration,
+            "resistance" => Self::Resistance,
+            "fire_resistance" => Self::FireResistance,
+            "water_breathing" => Self::WaterBreathing,
+            "invisibility" => Self::Invisibility,
+            "blindness" => Self::Blindness,
+            "night_vision" => Self::NightVision,
+            "hunger" => Self::Hunger,
+            "weakness" => Self::Weakness,
+            "poison" => Self::Poison,
+            "wither" => Self::Wither,
+            "health_boost" => Self::HealthBoost,
+            "absorption" => Self::Absorption,
+            "saturation" => Self::Saturation,
+            "glowing" => Self::Glowing,
+            "levitation" => Self::Levitation,
+            "luck" => Self::Luck,
+            "unluck" => Self::Unluck,
+            "slow_falling" => Self::SlowFalling,
+            "conduit_power" => Self::ConduitPower,
+            "dolphins_grace" => Self::DolphinsGrace,
+            "bad_omen" => Self::BadOmen,
+            "hero_of_the_village" => Self::HeroOfTheVillage,
+            "darkness" => Self::Darkness,
+            "trial_omen" => Self::TrialOmen,
+            "raid_omen" => Self::RaidOmen,
+            "wind_charged" => Self::WindCharged,
+            "weaving" => Self::Weaving,
+            "oozing" => Self::Oozing,
+            "infested" => Self::Infested,
+            "breath_of_the_nautilus" => Self::BreathOfTheNautilus,
+            _ => return None,
+        };
+        Some(kind)
     }
 }
 
@@ -86,7 +154,7 @@ pub struct StatusEffect {
 }
 
 impl StatusEffect {
-    pub fn new(kind: StatusEffectKind, duration: i32, amplifier: u8) -> Self {
+    pub const fn new(kind: StatusEffectKind, duration: i32, amplifier: u8) -> Self {
         Self {
             kind,
             amplifier,
@@ -94,6 +162,19 @@ impl StatusEffect {
             ambient: false,
             visible: true,
         }
+    }
+
+    /// Convert a `minecraft:custom_effects` entry into the runtime effect. The
+    /// component id uses the registry name (`minecraft:speed`), while the
+    /// runtime enum is typed.
+    pub fn from_component(effect: &MobEffectInstance) -> Option<Self> {
+        Some(Self {
+            kind: StatusEffectKind::from_id(&effect.id)?,
+            amplifier: u8::try_from(effect.amplifier.max(0)).unwrap_or(u8::MAX),
+            duration: effect.duration,
+            ambient: effect.ambient,
+            visible: effect.show_particles,
+        })
     }
 
     /// `MobEffectInstance.update`: refresh to the stronger/longer values and
@@ -148,9 +229,13 @@ impl StatusEffectSet {
     }
 
     /// Adds or refreshes an effect. Instant effects are returned to the caller
-    /// so it can apply their payload exactly once.
+    /// so it can apply their payload exactly once; they never enter the active
+    /// effect list (vanilla applies them immediately and does not store them).
     pub fn add(&mut self, effect: StatusEffect) -> Option<EffectTick> {
-        if effect.duration <= 0 && !effect.kind.is_instant() {
+        if effect.kind.is_instant() {
+            return Some(EffectTick::None);
+        }
+        if effect.duration <= 0 {
             return None;
         }
         if let Some(existing) = self
@@ -159,18 +244,10 @@ impl StatusEffectSet {
             .find(|existing| existing.kind == effect.kind)
         {
             existing.merge(&effect);
-            if effect.kind.is_instant() {
-                return Some(EffectTick::None);
-            }
             return None;
         }
-        let kind = effect.kind;
         self.effects.push(effect);
-        if kind.is_instant() {
-            Some(EffectTick::None)
-        } else {
-            None
-        }
+        None
     }
 
     pub fn remove(&mut self, kind: StatusEffectKind) -> bool {
@@ -269,6 +346,259 @@ impl StatusEffectSet {
     pub fn has_fire_resistance(&self) -> bool {
         self.has(StatusEffectKind::FireResistance)
     }
+}
+
+/// A named potion's base effect list, matching `net.minecraft.world.item.alchemy.Potions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PotionDefinition {
+    pub potion: &'static str,
+    pub effects: &'static [StatusEffect],
+}
+
+const fn potion_effect(kind: StatusEffectKind, duration: i32, amplifier: u8) -> StatusEffect {
+    StatusEffect::new(kind, duration, amplifier)
+}
+
+const NO_EFFECTS: &[StatusEffect] = &[];
+
+/// The 1.21.11 potion registry effect table.
+pub const POTION_DEFINITIONS: &[PotionDefinition] = &[
+    PotionDefinition {
+        potion: "minecraft:water",
+        effects: NO_EFFECTS,
+    },
+    PotionDefinition {
+        potion: "minecraft:mundane",
+        effects: NO_EFFECTS,
+    },
+    PotionDefinition {
+        potion: "minecraft:thick",
+        effects: NO_EFFECTS,
+    },
+    PotionDefinition {
+        potion: "minecraft:awkward",
+        effects: NO_EFFECTS,
+    },
+    PotionDefinition {
+        potion: "minecraft:night_vision",
+        effects: &[potion_effect(StatusEffectKind::NightVision, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_night_vision",
+        effects: &[potion_effect(StatusEffectKind::NightVision, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:invisibility",
+        effects: &[potion_effect(StatusEffectKind::Invisibility, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_invisibility",
+        effects: &[potion_effect(StatusEffectKind::Invisibility, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:leaping",
+        effects: &[potion_effect(StatusEffectKind::JumpBoost, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_leaping",
+        effects: &[potion_effect(StatusEffectKind::JumpBoost, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_leaping",
+        effects: &[potion_effect(StatusEffectKind::JumpBoost, 1800, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:fire_resistance",
+        effects: &[potion_effect(StatusEffectKind::FireResistance, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_fire_resistance",
+        effects: &[potion_effect(StatusEffectKind::FireResistance, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:swiftness",
+        effects: &[potion_effect(StatusEffectKind::Speed, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_swiftness",
+        effects: &[potion_effect(StatusEffectKind::Speed, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_swiftness",
+        effects: &[potion_effect(StatusEffectKind::Speed, 1800, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:slowness",
+        effects: &[potion_effect(StatusEffectKind::Slowness, 1800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_slowness",
+        effects: &[potion_effect(StatusEffectKind::Slowness, 4800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_slowness",
+        effects: &[potion_effect(StatusEffectKind::Slowness, 400, 3)],
+    },
+    PotionDefinition {
+        potion: "minecraft:turtle_master",
+        effects: &[
+            potion_effect(StatusEffectKind::Slowness, 400, 3),
+            potion_effect(StatusEffectKind::Resistance, 400, 2),
+        ],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_turtle_master",
+        effects: &[
+            potion_effect(StatusEffectKind::Slowness, 800, 3),
+            potion_effect(StatusEffectKind::Resistance, 800, 2),
+        ],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_turtle_master",
+        effects: &[
+            potion_effect(StatusEffectKind::Slowness, 400, 5),
+            potion_effect(StatusEffectKind::Resistance, 400, 3),
+        ],
+    },
+    PotionDefinition {
+        potion: "minecraft:water_breathing",
+        effects: &[potion_effect(StatusEffectKind::WaterBreathing, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_water_breathing",
+        effects: &[potion_effect(StatusEffectKind::WaterBreathing, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:healing",
+        effects: &[potion_effect(StatusEffectKind::InstantHealth, 1, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_healing",
+        effects: &[potion_effect(StatusEffectKind::InstantHealth, 1, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:harming",
+        effects: &[potion_effect(StatusEffectKind::InstantDamage, 1, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_harming",
+        effects: &[potion_effect(StatusEffectKind::InstantDamage, 1, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:poison",
+        effects: &[potion_effect(StatusEffectKind::Poison, 900, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_poison",
+        effects: &[potion_effect(StatusEffectKind::Poison, 1800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_poison",
+        effects: &[potion_effect(StatusEffectKind::Poison, 432, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:regeneration",
+        effects: &[potion_effect(StatusEffectKind::Regeneration, 900, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_regeneration",
+        effects: &[potion_effect(StatusEffectKind::Regeneration, 1800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_regeneration",
+        effects: &[potion_effect(StatusEffectKind::Regeneration, 450, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strength",
+        effects: &[potion_effect(StatusEffectKind::Strength, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_strength",
+        effects: &[potion_effect(StatusEffectKind::Strength, 9600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:strong_strength",
+        effects: &[potion_effect(StatusEffectKind::Strength, 1800, 1)],
+    },
+    PotionDefinition {
+        potion: "minecraft:weakness",
+        effects: &[potion_effect(StatusEffectKind::Weakness, 1800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_weakness",
+        effects: &[potion_effect(StatusEffectKind::Weakness, 4800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:luck",
+        effects: &[potion_effect(StatusEffectKind::Luck, 6000, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:slow_falling",
+        effects: &[potion_effect(StatusEffectKind::SlowFalling, 1800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:long_slow_falling",
+        effects: &[potion_effect(StatusEffectKind::SlowFalling, 4800, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:wind_charged",
+        effects: &[potion_effect(StatusEffectKind::WindCharged, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:weaving",
+        effects: &[potion_effect(StatusEffectKind::Weaving, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:oozing",
+        effects: &[potion_effect(StatusEffectKind::Oozing, 3600, 0)],
+    },
+    PotionDefinition {
+        potion: "minecraft:infested",
+        effects: &[potion_effect(StatusEffectKind::Infested, 3600, 0)],
+    },
+];
+
+/// Base effects for a potion id. Unknown ids return `None`; the four base
+/// potions with no effects return an empty slice.
+pub fn potion_effects(potion: &str) -> Option<&'static [StatusEffect]> {
+    let potion = normalize_key(potion);
+    POTION_DEFINITIONS
+        .iter()
+        .find(|definition| definition.potion == potion)
+        .map(|definition| definition.effects)
+}
+
+/// Resolve a `PotionContents` component to runtime effects: the base potion's
+/// effects followed by the component's custom effects, in Java order.
+pub fn potion_contents_effects(contents: &PotionContents) -> Vec<StatusEffect> {
+    let mut effects = Vec::new();
+    if let Some(potion) = &contents.potion
+        && let Some(base) = potion_effects(potion)
+    {
+        effects.extend_from_slice(base);
+    }
+    effects.extend(
+        contents
+            .custom_effects
+            .iter()
+            .filter_map(StatusEffect::from_component),
+    );
+    effects
+}
+
+/// Apply a potion component to an entity's active effects, returning instant
+/// payload events for the caller to apply to health.
+pub fn apply_potion_contents(
+    effects: &mut StatusEffectSet,
+    contents: &PotionContents,
+) -> Vec<EffectTick> {
+    let mut events = Vec::new();
+    for effect in potion_contents_effects(contents) {
+        if let Some(event) = effects.add(effect) {
+            events.push(event);
+        }
+    }
+    events
 }
 
 /// Vanilla armor point values for the supported materials, per slot:

@@ -1,4 +1,4 @@
-//! Crafting grid matching, furnace state, stonecutting, and smithing.
+//! Crafting grid matching, furnace state, stonecutting, smithing, and brewing.
 //!
 //! The typed recipe catalog lives in [`crate::loot`]; this module only matches
 //! it against inventories and advances container state. Matching follows the
@@ -22,14 +22,16 @@
 //! when addressed by id.
 //!
 //! This is the state model menus and block entities will drive; it does not
-//! encode packets, consume fuel remainders other than lava buckets, or model
-//! brewing.
+//! encode packets and only models the lava-bucket and brewing-container fuel
+//! remainders.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 
 use crate::inventory::{ItemStack, add_stack};
+use crate::item_components::{ComponentValue, MobEffectInstance, PotionContents, normalize_key};
+use crate::item_prototypes::container_result;
 use crate::loot::{
     CookingKind, Ingredient, Recipe, RecipeCatalog, RecipeKind, ShapedRecipe, ShapelessRecipe,
     TransmuteRecipe,
@@ -1256,6 +1258,622 @@ pub fn smith(
     }
     let recipe = best.ok_or(CraftingError::NoRecipe)?;
     smith_recipe(catalog, &recipe.id, template, base, addition)
+}
+
+// ---------------------------------------------------------------------------
+// Brewing stands
+// ---------------------------------------------------------------------------
+
+/// Brewing stand slots: three bottles, the ingredient, then the fuel item.
+pub const BREWING_BOTTLE_SLOTS: usize = 3;
+pub const BREWING_INGREDIENT_SLOT: usize = 3;
+pub const BREWING_FUEL_SLOT: usize = 4;
+pub const BREWING_SLOT_COUNT: usize = 5;
+
+/// `PotionBrewing.BREWING_TIME_SECONDS * 20`.
+pub const BREW_TIME_TICKS: i32 = 400;
+
+/// `BrewingStandBlockEntity.FUEL_USES`: one blaze powder powers 20 brews.
+pub const BREWING_FUEL_USES: i32 = 20;
+
+/// A potion-to-potion mix, equivalent to `PotionBrewing.Mix<Potion>`.
+///
+/// `addStartMix` contributes a `water -> mundane` row and an
+/// `awkward -> effect` row, matching the Java bootstrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PotionMix {
+    pub from: &'static str,
+    pub ingredient: &'static str,
+    pub to: &'static str,
+}
+
+/// A potion-item container mix, equivalent to `PotionBrewing.Mix<Item>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerMix {
+    pub from: &'static str,
+    pub ingredient: &'static str,
+    pub to: &'static str,
+}
+
+const fn potion_mix(from: &'static str, ingredient: &'static str, to: &'static str) -> PotionMix {
+    PotionMix {
+        from,
+        ingredient,
+        to,
+    }
+}
+
+const fn container_mix(
+    from: &'static str,
+    ingredient: &'static str,
+    to: &'static str,
+) -> ContainerMix {
+    ContainerMix {
+        from,
+        ingredient,
+        to,
+    }
+}
+
+/// All vanilla `PotionBrewing.addMix` rows, including `addStartMix`'s water to
+/// mundane step.
+pub const POTION_MIXES: &[PotionMix] = &[
+    potion_mix(
+        "minecraft:water",
+        "minecraft:glowstone_dust",
+        "minecraft:thick",
+    ),
+    potion_mix("minecraft:water", "minecraft:redstone", "minecraft:mundane"),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:nether_wart",
+        "minecraft:awkward",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:breeze_rod",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:breeze_rod",
+        "minecraft:wind_charged",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:slime_block",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:slime_block",
+        "minecraft:oozing",
+    ),
+    potion_mix("minecraft:water", "minecraft:stone", "minecraft:mundane"),
+    potion_mix("minecraft:awkward", "minecraft:stone", "minecraft:infested"),
+    potion_mix("minecraft:water", "minecraft:cobweb", "minecraft:mundane"),
+    potion_mix("minecraft:awkward", "minecraft:cobweb", "minecraft:weaving"),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:golden_carrot",
+        "minecraft:night_vision",
+    ),
+    potion_mix(
+        "minecraft:night_vision",
+        "minecraft:redstone",
+        "minecraft:long_night_vision",
+    ),
+    potion_mix(
+        "minecraft:night_vision",
+        "minecraft:fermented_spider_eye",
+        "minecraft:invisibility",
+    ),
+    potion_mix(
+        "minecraft:long_night_vision",
+        "minecraft:fermented_spider_eye",
+        "minecraft:long_invisibility",
+    ),
+    potion_mix(
+        "minecraft:invisibility",
+        "minecraft:redstone",
+        "minecraft:long_invisibility",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:magma_cream",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:magma_cream",
+        "minecraft:fire_resistance",
+    ),
+    potion_mix(
+        "minecraft:fire_resistance",
+        "minecraft:redstone",
+        "minecraft:long_fire_resistance",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:rabbit_foot",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:rabbit_foot",
+        "minecraft:leaping",
+    ),
+    potion_mix(
+        "minecraft:leaping",
+        "minecraft:redstone",
+        "minecraft:long_leaping",
+    ),
+    potion_mix(
+        "minecraft:leaping",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_leaping",
+    ),
+    potion_mix(
+        "minecraft:leaping",
+        "minecraft:fermented_spider_eye",
+        "minecraft:slowness",
+    ),
+    potion_mix(
+        "minecraft:long_leaping",
+        "minecraft:fermented_spider_eye",
+        "minecraft:long_slowness",
+    ),
+    potion_mix(
+        "minecraft:slowness",
+        "minecraft:redstone",
+        "minecraft:long_slowness",
+    ),
+    potion_mix(
+        "minecraft:slowness",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_slowness",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:turtle_helmet",
+        "minecraft:turtle_master",
+    ),
+    potion_mix(
+        "minecraft:turtle_master",
+        "minecraft:redstone",
+        "minecraft:long_turtle_master",
+    ),
+    potion_mix(
+        "minecraft:turtle_master",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_turtle_master",
+    ),
+    potion_mix(
+        "minecraft:swiftness",
+        "minecraft:fermented_spider_eye",
+        "minecraft:slowness",
+    ),
+    potion_mix(
+        "minecraft:long_swiftness",
+        "minecraft:fermented_spider_eye",
+        "minecraft:long_slowness",
+    ),
+    potion_mix("minecraft:water", "minecraft:sugar", "minecraft:mundane"),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:sugar",
+        "minecraft:swiftness",
+    ),
+    potion_mix(
+        "minecraft:swiftness",
+        "minecraft:redstone",
+        "minecraft:long_swiftness",
+    ),
+    potion_mix(
+        "minecraft:swiftness",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_swiftness",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:pufferfish",
+        "minecraft:water_breathing",
+    ),
+    potion_mix(
+        "minecraft:water_breathing",
+        "minecraft:redstone",
+        "minecraft:long_water_breathing",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:glistering_melon_slice",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:glistering_melon_slice",
+        "minecraft:healing",
+    ),
+    potion_mix(
+        "minecraft:healing",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_healing",
+    ),
+    potion_mix(
+        "minecraft:healing",
+        "minecraft:fermented_spider_eye",
+        "minecraft:harming",
+    ),
+    potion_mix(
+        "minecraft:strong_healing",
+        "minecraft:fermented_spider_eye",
+        "minecraft:strong_harming",
+    ),
+    potion_mix(
+        "minecraft:harming",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_harming",
+    ),
+    potion_mix(
+        "minecraft:poison",
+        "minecraft:fermented_spider_eye",
+        "minecraft:harming",
+    ),
+    potion_mix(
+        "minecraft:long_poison",
+        "minecraft:fermented_spider_eye",
+        "minecraft:harming",
+    ),
+    potion_mix(
+        "minecraft:strong_poison",
+        "minecraft:fermented_spider_eye",
+        "minecraft:strong_harming",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:spider_eye",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:spider_eye",
+        "minecraft:poison",
+    ),
+    potion_mix(
+        "minecraft:poison",
+        "minecraft:redstone",
+        "minecraft:long_poison",
+    ),
+    potion_mix(
+        "minecraft:poison",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_poison",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:ghast_tear",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:ghast_tear",
+        "minecraft:regeneration",
+    ),
+    potion_mix(
+        "minecraft:regeneration",
+        "minecraft:redstone",
+        "minecraft:long_regeneration",
+    ),
+    potion_mix(
+        "minecraft:regeneration",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_regeneration",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:blaze_powder",
+        "minecraft:mundane",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:blaze_powder",
+        "minecraft:strength",
+    ),
+    potion_mix(
+        "minecraft:strength",
+        "minecraft:redstone",
+        "minecraft:long_strength",
+    ),
+    potion_mix(
+        "minecraft:strength",
+        "minecraft:glowstone_dust",
+        "minecraft:strong_strength",
+    ),
+    potion_mix(
+        "minecraft:water",
+        "minecraft:fermented_spider_eye",
+        "minecraft:weakness",
+    ),
+    potion_mix(
+        "minecraft:weakness",
+        "minecraft:redstone",
+        "minecraft:long_weakness",
+    ),
+    potion_mix(
+        "minecraft:awkward",
+        "minecraft:phantom_membrane",
+        "minecraft:slow_falling",
+    ),
+    potion_mix(
+        "minecraft:slow_falling",
+        "minecraft:redstone",
+        "minecraft:long_slow_falling",
+    ),
+];
+
+/// `PotionBrewing.addContainerRecipe` rows. The potion contents are kept; only
+/// the container item changes.
+pub const CONTAINER_MIXES: &[ContainerMix] = &[
+    container_mix(
+        "minecraft:potion",
+        "minecraft:gunpowder",
+        "minecraft:splash_potion",
+    ),
+    container_mix(
+        "minecraft:splash_potion",
+        "minecraft:dragon_breath",
+        "minecraft:lingering_potion",
+    ),
+];
+
+/// Whether an item can be placed in the brewing stand's ingredient slot.
+pub fn is_brewing_ingredient(item: &str) -> bool {
+    let item = normalize_key(item);
+    let item = item.as_str();
+    CONTAINER_MIXES.iter().any(|mix| mix.ingredient == item)
+        || POTION_MIXES.iter().any(|mix| mix.ingredient == item)
+}
+
+/// Whether a stack is `#minecraft:brewing_fuel` (blaze powder in 1.21.11).
+pub fn is_brewing_fuel(stack: &ItemStack) -> bool {
+    !stack.is_empty() && crate::tags::item_has("minecraft:brewing_fuel", &stack.item)
+}
+
+/// The `minecraft:potion_contents` component, if present.
+pub fn potion_contents(stack: &ItemStack) -> Option<&PotionContents> {
+    match stack.get_component("minecraft:potion_contents") {
+        Some(ComponentValue::PotionContents(contents)) => Some(contents),
+        _ => None,
+    }
+}
+
+/// Build a potion item stack with a base potion component.
+pub fn potion_stack(item: &str, potion: &str) -> ItemStack {
+    let mut stack = ItemStack::new(item, 1);
+    stack.set_component(ComponentValue::PotionContents(PotionContents::new(potion)));
+    stack
+}
+
+/// Append a custom effect to a stack's potion contents. Returns `false` when
+/// the stack has no typed potion component.
+pub fn add_potion_effect(stack: &mut ItemStack, effect: MobEffectInstance) -> bool {
+    let Some(ComponentValue::PotionContents(existing)) =
+        stack.get_component("minecraft:potion_contents")
+    else {
+        return false;
+    };
+    let mut contents = existing.clone();
+    contents.custom_effects.push(effect);
+    stack.set_component(ComponentValue::PotionContents(contents));
+    true
+}
+
+fn potion_result(template: &ItemStack, item: &str, potion: &str) -> ItemStack {
+    let mut contents = potion_contents(template)
+        .cloned()
+        .unwrap_or_else(|| PotionContents::new(potion));
+    contents.potion = Some(normalize_key(potion));
+    let mut stack = template.copy_with_count(1);
+    stack.item = normalize_key(item);
+    stack.set_component(ComponentValue::PotionContents(contents));
+    stack
+}
+
+/// `PotionBrewing.mix`: the resulting bottle stack for an ingredient, or
+/// `None` when the pair has no mix.
+///
+/// The result keeps the input bottle's component patch (custom name, custom
+/// effects, color) and only replaces the potion id or container item. Java
+/// `PotionContents.createItemStack` starts from a fresh stack, so this is a
+/// deliberate component-preserving extension; see `DECISIONS.md`.
+pub fn brew_result(ingredient: &ItemStack, bottle: &ItemStack) -> Option<ItemStack> {
+    if ingredient.is_empty() || bottle.is_empty() {
+        return None;
+    }
+    let contents = potion_contents(bottle)?;
+    let potion = normalize_key(contents.potion.as_deref()?);
+    let bottle_item = normalize_key(&bottle.item);
+    let ingredient_item = normalize_key(&ingredient.item);
+
+    for mix in CONTAINER_MIXES {
+        if bottle_item == mix.from && ingredient_item == mix.ingredient {
+            return Some(potion_result(bottle, mix.to, &potion));
+        }
+    }
+    for mix in POTION_MIXES {
+        if potion == mix.from && ingredient_item == mix.ingredient {
+            return Some(potion_result(bottle, &bottle_item, mix.to));
+        }
+    }
+    None
+}
+
+/// A brewing stand's five slots plus its vanilla `BrewTime`/`Fuel` state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrewingStandState {
+    slots: [ItemStack; BREWING_SLOT_COUNT],
+    /// `BrewingStandBlockEntity.brewTime`, counting down from 400.
+    pub brew_time: i32,
+    /// `BrewingStandBlockEntity.recipeBrewTime`, default 400.
+    pub recipe_brew_time: i32,
+    /// Stored blaze-powder charges; each started brew spends one.
+    pub fuel: i32,
+    /// The `Item` recorded when the current brew started. Vanilla uses it to
+    /// abort a brew when the ingredient slot changes.
+    brewing_ingredient: Option<String>,
+    /// Crafting remainders that vanilla would drop in the world because the
+    /// ingredient slot still contained items.
+    drops: Vec<ItemStack>,
+}
+
+impl Default for BrewingStandState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BrewingStandState {
+    pub fn new() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| ItemStack::empty()),
+            brew_time: 0,
+            recipe_brew_time: BREW_TIME_TICKS,
+            fuel: 0,
+            brewing_ingredient: None,
+            drops: Vec::new(),
+        }
+    }
+
+    pub fn slots(&self) -> &[ItemStack] {
+        &self.slots
+    }
+
+    pub fn slot(&self, index: usize) -> Option<&ItemStack> {
+        self.slots.get(index)
+    }
+
+    pub fn set_slot(&mut self, index: usize, stack: ItemStack) -> bool {
+        match self.slots.get_mut(index) {
+            Some(slot) => {
+                *slot = stack;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The three bottle slots.
+    pub fn bottles(&self) -> &[ItemStack] {
+        &self.slots[..BREWING_BOTTLE_SLOTS]
+    }
+
+    pub fn ingredient(&self) -> &ItemStack {
+        &self.slots[BREWING_INGREDIENT_SLOT]
+    }
+
+    pub fn fuel_item(&self) -> &ItemStack {
+        &self.slots[BREWING_FUEL_SLOT]
+    }
+
+    pub fn is_brewing(&self) -> bool {
+        self.brew_time > 0
+    }
+
+    pub fn brewing_ingredient(&self) -> Option<&str> {
+        self.brewing_ingredient.as_deref()
+    }
+
+    /// `BrewingStandBlockEntity.isBrewable`: the ingredient is known to the
+    /// brewing registry and at least one bottle has a mix.
+    pub fn is_brewable(&self) -> bool {
+        let ingredient = &self.slots[BREWING_INGREDIENT_SLOT];
+        if ingredient.is_empty() || !is_brewing_ingredient(&ingredient.item) {
+            return false;
+        }
+        self.bottles()
+            .iter()
+            .any(|bottle| brew_result(ingredient, bottle).is_some())
+    }
+
+    /// `BrewingStandBlockEntity.canPlaceItem`.
+    pub fn can_place_in_slot(&self, index: usize, stack: &ItemStack) -> bool {
+        match index {
+            0..=2 => {
+                !stack.is_empty()
+                    && self.slots[index].is_empty()
+                    && matches!(
+                        stack.item.as_str(),
+                        "minecraft:potion"
+                            | "minecraft:splash_potion"
+                            | "minecraft:lingering_potion"
+                            | "minecraft:glass_bottle"
+                    )
+            }
+            BREWING_INGREDIENT_SLOT => is_brewing_ingredient(&stack.item),
+            BREWING_FUEL_SLOT => is_brewing_fuel(stack),
+            _ => false,
+        }
+    }
+
+    /// `BrewingStandBlockEntity.getPotionBits`, used for the block's
+    /// `has_bottle_0..2` properties.
+    pub fn bottle_bits(&self) -> [bool; BREWING_BOTTLE_SLOTS] {
+        std::array::from_fn(|index| !self.slots[index].is_empty())
+    }
+
+    /// Remainders vanilla would drop because the ingredient stack was not
+    /// emptied by the brew. Drained by the caller.
+    pub fn take_drops(&mut self) -> Vec<ItemStack> {
+        std::mem::take(&mut self.drops)
+    }
+
+    /// `BrewingStandBlockEntity.serverTick`.
+    pub fn tick(&mut self) {
+        self.refuel();
+
+        let brewable = self.is_brewable();
+        if self.brew_time > 0 {
+            self.brew_time -= 1;
+            let ingredient_matches = self.brewing_ingredient.as_deref()
+                == Some(self.slots[BREWING_INGREDIENT_SLOT].item.as_str());
+            if self.brew_time == 0 && brewable {
+                self.do_brew();
+            } else if !brewable || !ingredient_matches {
+                self.brew_time = 0;
+                self.brewing_ingredient = None;
+            }
+        } else if brewable && self.fuel > 0 {
+            self.fuel -= 1;
+            self.recipe_brew_time = BREW_TIME_TICKS;
+            self.brew_time = self.recipe_brew_time;
+            self.brewing_ingredient = Some(self.slots[BREWING_INGREDIENT_SLOT].item.clone());
+        }
+    }
+
+    fn refuel(&mut self) {
+        if self.fuel <= 0 && is_brewing_fuel(&self.slots[BREWING_FUEL_SLOT]) {
+            self.fuel = BREWING_FUEL_USES;
+            self.slots[BREWING_FUEL_SLOT].shrink(1);
+        }
+    }
+
+    fn do_brew(&mut self) {
+        let ingredient = self.slots[BREWING_INGREDIENT_SLOT].clone();
+        for index in 0..BREWING_BOTTLE_SLOTS {
+            if let Some(result) = brew_result(&ingredient, &self.slots[index]) {
+                self.slots[index] = result;
+            }
+        }
+
+        self.slots[BREWING_INGREDIENT_SLOT].shrink(1);
+        if let Some(remainder) = container_result(&ingredient.item) {
+            if self.slots[BREWING_INGREDIENT_SLOT].is_empty() {
+                self.slots[BREWING_INGREDIENT_SLOT] = remainder;
+            } else {
+                self.drops.push(remainder);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

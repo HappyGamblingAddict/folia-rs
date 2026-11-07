@@ -515,7 +515,15 @@ These are expected gaps, not reasons to stop:
     them; addressing one by id returns `CraftingError::UnsupportedRecipe`.
   - No crafting/furnace menu packets, click handling, result-slot preview,
     recipe book/advancement unlocks, or vanilla `lastRecipe` cache fast path.
-  - Brewing is not modeled.
+  - Brewing has a standalone `crafting::BrewingStandState` (slots, fuel, 400-tick
+    timer, vanilla mixes) but no brewing-stand block entity, NBT persistence, or
+    menu/packet wiring. Potion drinking and food use in `item_prototypes` are
+    kernel models driven by explicit `FoodData`/`StatusEffectSet` arguments, not
+    a live player tick.
+  - Food `on_consume_effects` (golden apple regeneration/absorption, rotten flesh
+    and chicken hunger rolls, honey poison removal, pufferfish nausea) are not
+    modeled; only nutrition/saturation and the potion component apply. Milk does
+    clear all effects.
   - Campfires are a single input/result pair with an assumed-lit state; vanilla
     has four slots and a block `lit` property. Furnaces do not persist state to
     block-entity NBT yet, and only the lava-bucket fuel remainder is modeled.
@@ -916,6 +924,11 @@ These are expected gaps, not reasons to stop:
   inventory menu, or block-entity NBT tick persistence on a live tick.
 - Hoppers do not lock, do not skip empty containers with a cooldown, and do not
   emit container-update packets.
+- `WorldStorage::tick_hoppers` is a documented no-op hook. The tick loop calls it
+  after `tick_block_entities`; hopper cooldowns advance through the ticker, but
+  no item transfer runs until block/container lookup is implemented. The hook
+  was added to repair a baseline compile regression where `tick.rs` already
+  called the missing method.
 
 ## 2026-11-07 - Daylight detector boundaries
 

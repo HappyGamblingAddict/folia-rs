@@ -3,7 +3,8 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **964 passing** on the full merged gate (0 failed)
+> Test status: **980 passing** on the merged gate plus 16 new
+> brewing/consumable tests (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~27%** (range 20-32% depending on metric)
 
@@ -47,6 +48,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P4.8/P4.9 brewing and consumables - `crafting.rs` models the
+  brewing stand's five slots, blaze-powder fuel charges, 400-tick brew timer,
+  ingredient-change abort, all vanilla potion mixes and the two container mixes;
+  `effects.rs` carries the full 1.21.11 potion effect table and applies base +
+  custom effects to `StatusEffectSet`; `item_prototypes.rs` adds `FoodData`,
+  consumable eat time/animation/use remainders, and food/potion consumption with
+  creative no-consume. 16 `tests/brewing.rs` tests.
 - 2026-11-07: P6 daylight detectors - `WorldStorage::sky_light_at` exposes
   cached sky-light values; the daylight-detector behavior samples the cell above
   every 20 ticks and drives the `power` property (normal and inverted). 1 more
@@ -1686,9 +1694,11 @@ instantly on start-destroy and places on use-item-on.
   smoker/campfire state (fuel table, cook time, XP, extraction), stonecutting,
   and smithing transforms. Lookup uses vanilla's last-sorted-recipe-id
   priority. Unsupported special/decorated/pot/trim recipes fail explicitly.
-  Still open: menu packets and click handling, recipe book/advancement
-  unlocks, brewing, cached-last-recipe behavior, campfire multi-slot/lit state,
-  and Java recipe/furnace fixtures.
+  Brewing state, the full potion mix table/container mixes, and potion effect
+  application landed on 2026-11-07. Still open: menu packets and click handling,
+  recipe book/advancement unlocks, brewing-stand block-entity persistence/menus,
+  cached-last-recipe behavior, campfire multi-slot/lit state, and Java
+  recipe/furnace fixtures.
 
 ### P4.9 Health, damage, hunger, XP, and effects `[~]` `L`
 
@@ -2095,6 +2105,10 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   through chunk NBT and can be advanced through `crafting::FurnaceState` via an
   explicit ticker. Hopper transfer, menus, dispenser/dropper, brewing,
   enchanting, beacons, and live tick integration remain open.
+- **Progress (2026-11-07):** brewing stand state, fuel/brew timing, potion
+  mixes, potion drinking effects, and food consumption are modeled in
+  `crafting.rs`/`effects.rs`/`item_prototypes.rs`. Live block-entity wiring and
+  menus remain open; the hopper world transfer hook is still a documented no-op.
 
 ### P6.10 Redstone/block parity harness `[ ]` `M`
 

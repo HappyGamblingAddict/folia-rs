@@ -37,6 +37,8 @@ where possible, a differential test against the Java oracle.
 | Full worldgen | ~73% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
 | Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
 | Full worldgen | ~73% | 222/224 configured feature types (fossil x2 remain), 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
+| Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
+| Full worldgen | ~75% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 1,011 shipped structure templates (483 village + 528 non-village); feature-pool placement and trial-chamber templates missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
 | Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
 | Entities | ~32% | Metadata, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, join tracking, item/XP entities; sensors/brains, shared per-viewer tracking, live AI goals missing |
@@ -270,16 +272,17 @@ where possible, a differential test against the Java oracle.
   y=31, cave air above, seven protected roof layers), runs the previously
   missing local-modification and surface-structure feature steps, and exposes
   the shipped `nether_complexes` placement selection. Fortress starts fail with
-  `UnsupportedStructureType`; bastion jigsaw starts fail with the exact missing
-  template id because the template assets are not shipped. `worldgen/end.rs`
+  `UnsupportedStructureType`; bastion template NBTs now ship through
+  `structure_templates_more.json`, while the jigsaw start attachment remains
+  open. `worldgen/end.rs`
   adds the deterministic 10-spike `SpikeFeature` ring, dragon-arena bounds,
   full end-platform construction, `EndGateway` block/exit data, chorus growth,
   and an id-keyed explicit feature dispatch (unsupported types error). Focused:
   7 `tests/nether_content.rs` + 10 `tests/end_content.rs`; `nether_gen`,
   `end_gen`, and `worldgen_parity` stay green. Parity is unchanged at 98.75%
-  block-class / 95.80% exact-name. Remaining: structure templates, end cities,
-  dragon entity fight, live dimension switching, and carve-before-surface
-  ordering.
+  block-class / 95.80% exact-name. Remaining: trial-chamber templates,
+  fortress/End-city piece ports, dragon entity fight, live dimension switching,
+  and carve-before-surface ordering.
 - 2026-11-06: P7.1–P7.3 dimension generation slice — `generator::Dimension`
   models the shipped Overworld/Nether/End type fields (build height, logical
   height, sea level, skylight, ceiling, coordinate scale, ambient light), and
@@ -1222,8 +1225,25 @@ errors are concentrated in `root_system`, `geode`, `freeze_top_layer`,
   `feature_pool_element` entries selected during expansion are skipped and
   recorded on `JigsawStart::skipped_feature_elements` instead of failing the
   whole structure. Still open: actual feature placement for those elements,
-  tree/texture/entity gaps, terrain adaptation, and non-village template
-  families.
+  tree/texture/entity gaps, terrain adaptation, and trial-chamber templates.
+- **Progress (2026-11-07, shipped non-village templates):**
+  `assets/structure_templates_more.json` ships 528 templates across 13 families
+  as one base64+gzip NBT stream per family plus an offset/length index
+  (2,358,479 bytes, 1,729,270 compressed payload bytes, 23,972,845 plain NBT
+  bytes, FNV-1a-64 `0xb45acf2143b063bc`, SHA-256
+  `5412f52e4e3542922ec2faa1501626cc1cf2cd167f2bae368909f7fcd00171c6`).
+  Families: ancient cities (58), bastions (167), End cities (20), fossils (16),
+  nether fossils (14), igloos (3), pillager outposts (11), ruined portals (13),
+  shipwrecks (20), trail ruins (84), underwater ruins (48), woodland mansions
+  (73), and `empty`. `StructureTemplateCatalog::shipped()` parses both catalogs
+  and merges them; `TemplateProvider` resolves village and non-village ids.
+  `structure_templates_more.json` is recompressed with Java zlib level 9, and
+  the extractor `-Check` validates both files byte-for-byte. `tests/
+  structure_catalog_more.rs` pins the asset hash, End-city ship and fossil
+  bounds/palettes, both-catalog lookup, and unknown/corrupt errors. Still open:
+  `trial_chambers` (191 templates) exceeds the 2.5 MB budget and remains
+  unshipped; fortress and End-city `FortressPieces`/`EndCityPieces` ports still
+  need the jigsaw attachment wiring.
 
 ### P2.9 Jigsaw structures `[~]` `XL`
 
@@ -1263,9 +1283,14 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   branch, rotation, bounds, and surface snap done; loot-table block entities,
   biome filtering, and generator wiring remain).
 - [ ] Desert temples, jungle temples, witch huts, ruined portals.
-- [ ] Ancient cities, trial chambers.
-- [~] Nether fortresses, bastions, end cities (placement selection and
-  weighted choice done; real template pieces remain blocked on shipped assets).
+- [~] Ancient cities, trial chambers (59 template NBTs shipped across both
+  families; trial chambers remain unshipped because the 191-template family
+  exceeds the 2.5 MB asset budget, and ancient-city/trial-chamber start wiring
+  still needs the jigsaw attachment path).
+- [~] Nether fortresses, bastions, end cities (placement selection, weighted
+  choice, and 187 bastion/End-city template NBTs shipped; fortress and
+  End-city procedural `FortressPieces`/`EndCityPieces` ports and jigsaw
+  attachment remain).
 - **Why:** Structures are content-heavy but mostly data-driven once P2.8/P2.9
   exist.
 - **Done when:** Structure starts/bounding boxes and sampled blocks match Java

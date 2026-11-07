@@ -75,6 +75,12 @@ pub enum StructureError {
     JigsawRequiresTemplates { structure: String },
     /// A pool element kind cannot be expanded/placed by this slice.
     UnsupportedPoolElement { pool: String, element_type: String },
+    /// A `feature_pool_element` cannot execute its placed feature.
+    UnsupportedFeatureElement {
+        pool: String,
+        feature: String,
+        reason: String,
+    },
     /// `pool_aliases` are not implemented.
     UnsupportedPoolAliases { structure: String },
     /// A `start_height` provider kind is not implemented.
@@ -150,6 +156,15 @@ impl fmt::Display for StructureError {
                 formatter,
                 "template pool `{pool}` selected unsupported element `{element_type}`"
             ),
+            StructureError::UnsupportedFeatureElement {
+                pool,
+                feature,
+                reason,
+            } => write!(
+                formatter,
+                "template pool `{pool}` selected feature element `{feature}`, which cannot be \
+                 placed: {reason}"
+            ),
             StructureError::UnsupportedPoolAliases { structure } => write!(
                 formatter,
                 "structure `{structure}` uses pool aliases, which are not implemented"
@@ -181,8 +196,9 @@ pub use assets::{
     CatalogError, EMBEDDED_STRUCTURE_TEMPLATES, StructureTemplateCatalog, normalize_structure_id,
 };
 pub use jigsaw::{
-    JigsawBlockInfo, JigsawConfig, JigsawJunction, JigsawPiece, JigsawPlacement, JigsawStart,
-    JointType, SequencedPriorityQueue, element_bounds, front_facing, shuffle, top_facing,
+    JigsawBlockInfo, JigsawConfig, JigsawJunction, JigsawPiece, JigsawPiecePlacement,
+    JigsawPlacement, JigsawStart, JointType, SequencedPriorityQueue, element_bounds, front_facing,
+    shuffle, top_facing,
 };
 pub use piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
@@ -191,7 +207,7 @@ pub use piece::{
 };
 pub use pool::{
     LiquidSettings, PoolCatalog, PoolCatalogIndex, PoolElement, PoolElementEntry, PoolError,
-    PoolExpansion, ProcessorListRef, Projection, StructureTemplatePool,
+    PoolExpansion, PoolPlacement, ProcessorListRef, Projection, StructureTemplatePool,
 };
 pub use processor::{
     BlockEntityModifier, BlockSet, IntProvider, PositionTest, ProcessedBlock,

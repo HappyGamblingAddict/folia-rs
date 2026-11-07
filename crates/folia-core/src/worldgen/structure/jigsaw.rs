@@ -19,13 +19,14 @@
 
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
-use crate::worldgen::feature::{FeatureLevel, Heightmap};
+use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use crate::worldgen::structure::StructureError;
 use crate::worldgen::structure::piece::{
     BoundingBox, PiecePlacement, StructureDataMarker, template_bounding_box,
 };
 use crate::worldgen::structure::pool::{
-    LiquidSettings, PoolCatalog, PoolElement, PoolExpansion, Projection, StructureTemplatePool,
+    LiquidSettings, PoolCatalog, PoolElement, PoolError, PoolExpansion, Projection,
+    StructureTemplatePool,
 };
 use crate::worldgen::structure::processor::StructureProcessorCatalog;
 use crate::worldgen::structure::start::{
@@ -35,7 +36,7 @@ use crate::worldgen::structure::template::{
     Mirror, PlacedBlock, PlacedEntity, Rotation, StructureTemplate, transform, transform_state,
 };
 use folia_math::{BlockPos, Direction};
-use folia_random::{LegacyRandomSource, RandomSource};
+use folia_random::{LegacyRandomSource, RandomSource, WorldgenRandom};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 
@@ -178,6 +179,9 @@ impl JigsawPiece {
     }
 
     /// `PoolElementStructurePiece.place` clipped to one chunk box.
+    ///
+    /// Feature-pool pieces have no template and fail explicitly here; use
+    /// [`Self::place_with_features`] with the structure placement random.
     #[allow(clippy::too_many_arguments)]
     pub fn place(
         &self,
@@ -207,10 +211,92 @@ impl JigsawPiece {
                 world_seed,
                 false,
             )
-            .map_err(|error| StructureError::Pool {
-                message: error.to_string(),
-            })?;
+            .map_err(map_pool_error)?;
         Ok(placement)
+    }
+
+    /// `PoolElementStructurePiece.postProcess` with the vanilla structure
+    /// placement random.
+    ///
+    /// Template elements go through processors and filters; feature-pool
+    /// elements execute their placed feature at `self.position` and consume
+    /// `random` in vanilla modifier order. Every successfully written block is
+    /// collected in [`JigsawPiecePlacement::written_blocks`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_with_features(
+        &self,
+        level: &mut dyn FeatureLevel,
+        templates: &dyn TemplateProvider,
+        processors: &StructureProcessorCatalog,
+        chunk_box: BoundingBox,
+        structure_pos: BlockPos,
+        world_seed: i64,
+        random: &mut dyn RandomSource,
+    ) -> Result<JigsawPiecePlacement, StructureError> {
+        let expansion = PoolExpansion {
+            pool: self.pool.clone(),
+            rotation: self.rotation,
+            position: self.position,
+            element: self.element.clone(),
+            piece: None,
+            bounding_box: Some(self.bounding_box),
+        };
+        let mut recording = RecordingLevel::new(level);
+        let placement = {
+            let mut waterlogging = WaterloggingLevel::new(&mut recording, self.liquid_settings);
+            expansion
+                .place_with_features(
+                    &mut waterlogging,
+                    templates,
+                    processors,
+                    chunk_box,
+                    structure_pos,
+                    world_seed,
+                    random,
+                    false,
+                )
+                .map_err(map_pool_error)?
+        };
+        Ok(JigsawPiecePlacement {
+            placement: placement.placement,
+            feature_elements: placement.feature_elements,
+            feature_placements: placement.feature_placements,
+            feature_written: placement.feature_written,
+            feature_rejected: placement.feature_rejected,
+            feature_blocks: placement.feature_blocks,
+            written_blocks: recording.written_blocks,
+        })
+    }
+}
+
+/// Placement output for one `PoolElementStructurePiece`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JigsawPiecePlacement {
+    pub placement: PiecePlacement,
+    pub feature_elements: usize,
+    pub feature_placements: usize,
+    pub feature_written: usize,
+    pub feature_rejected: usize,
+    /// Blocks written by feature-pool elements, in write order.
+    pub feature_blocks: Vec<BlockPos>,
+    /// Every block this piece wrote, template and feature alike.
+    pub written_blocks: Vec<BlockPos>,
+}
+
+fn map_pool_error(error: PoolError) -> StructureError {
+    match error {
+        PoolError::UnsupportedFeatureElement {
+            pool,
+            feature,
+            reason,
+        } => StructureError::UnsupportedFeatureElement {
+            pool,
+            feature,
+            reason,
+        },
+        other => StructureError::Pool {
+            message: other.to_string(),
+        },
     }
 }
 
@@ -222,9 +308,9 @@ pub struct JigsawStart {
     references: i32,
     terrain_adaptation: TerrainAdjustment,
     pieces: Vec<JigsawPiece>,
-    /// `feature_pool_element` entries selected during expansion. Their
-    /// configured-feature placement is not ported yet, so they are skipped and
-    /// recorded here instead of silently vanishing.
+    /// Retained for API compatibility. Feature-pool elements are now real
+    /// pieces and execute their placed feature at placement time, so this list
+    /// stays empty; nothing is silently skipped.
     skipped_feature_elements: Vec<String>,
 }
 
@@ -293,6 +379,10 @@ impl JigsawStart {
     }
 
     /// `StructureStart.placeInChunk` for a jigsaw start.
+    ///
+    /// Direct callers get a deterministic `WorldgenRandom` seeded from the
+    /// start chunk's decoration seed. The generator passes its own per-chunk
+    /// random through [`Self::place_in_chunk_with_random`].
     pub fn place_in_chunk(
         &self,
         level: &mut dyn FeatureLevel,
@@ -300,6 +390,38 @@ impl JigsawStart {
         templates: &dyn TemplateProvider,
         processors: &StructureProcessorCatalog,
         world_seed: i64,
+    ) -> Result<StartPlacement, StructureError> {
+        let mut random = WorldgenRandom::new(0);
+        let decoration_seed =
+            random.set_decoration_seed(world_seed, chunk_box.min_x(), chunk_box.min_z());
+        random.set_feature_seed(
+            decoration_seed,
+            0,
+            Decoration::SurfaceStructures.index() as i32,
+        );
+        self.place_in_chunk_with_random(
+            level,
+            chunk_box,
+            templates,
+            processors,
+            world_seed,
+            &mut random,
+        )
+    }
+
+    /// `StructureStart.placeInChunk` with the caller's structure placement RNG.
+    ///
+    /// `random` is shared by every intersecting piece in piece order, exactly
+    /// like Java's `WorldgenRandom` in `ChunkGenerator.addVanillaDecorations`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_in_chunk_with_random(
+        &self,
+        level: &mut dyn FeatureLevel,
+        chunk_box: BoundingBox,
+        templates: &dyn TemplateProvider,
+        processors: &StructureProcessorCatalog,
+        world_seed: i64,
+        random: &mut dyn RandomSource,
     ) -> Result<StartPlacement, StructureError> {
         let mut result = StartPlacement::default();
         let Some(first) = self.pieces.first() else {
@@ -312,21 +434,38 @@ impl JigsawStart {
                 result.skipped_pieces += 1;
                 continue;
             }
-            let placement = piece.place(
+            let placement = piece.place_with_features(
                 level,
                 templates,
                 processors,
                 chunk_box,
                 structure_pos,
                 world_seed,
+                random,
             )?;
             result.placed_pieces += 1;
-            result.written += placement.written;
-            result.rejected += placement.rejected;
-            result.block_entities.extend(placement.block_entities);
-            result.entities.extend(placement.entities);
-            result.data_markers.extend(placement.data_markers);
+            result.written += placement.placement.written + placement.feature_written;
+            result.rejected += placement.placement.rejected;
+            result.feature_elements += placement.feature_elements;
+            result.feature_placements += placement.feature_placements;
+            result.feature_written += placement.feature_written;
+            result.feature_rejected += placement.feature_rejected;
+            result.written_blocks.extend(placement.written_blocks);
+            result.feature_blocks.extend(placement.feature_blocks);
+            result
+                .block_entities
+                .extend(placement.placement.block_entities);
+            result.entities.extend(placement.placement.entities);
+            result.data_markers.extend(placement.placement.data_markers);
         }
+        result
+            .written_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.written_blocks.dedup();
+        result
+            .feature_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.feature_blocks.dedup();
         Ok(result)
     }
 }
@@ -426,15 +565,8 @@ impl<'a> JigsawPlacement<'a> {
             return Ok(None);
         };
         let element = element.clone();
-        match element {
-            PoolElement::Empty => return Ok(None),
-            PoolElement::Feature { feature, .. } => {
-                return Err(StructureError::UnsupportedPoolElement {
-                    pool: pool.name().to_owned(),
-                    element_type: format!("feature_pool_element({feature})"),
-                });
-            }
-            _ => {}
+        if matches!(element, PoolElement::Empty) {
+            return Ok(None);
         }
 
         let chunk_min = BlockPos::new(
@@ -511,7 +643,6 @@ impl<'a> JigsawPlacement<'a> {
         };
 
         let mut pieces = vec![start_piece];
-        let mut skipped_feature_elements = Vec::new();
         if self.config.max_depth > 0 {
             let min_y = level.min_y() + self.config.dimension_padding_bottom;
             let max_y = level.min_y() + level.height() - 1 - self.config.dimension_padding_top;
@@ -534,7 +665,6 @@ impl<'a> JigsawPlacement<'a> {
                 occupied: &mut occupied,
                 allowed,
                 placing: SequencedPriorityQueue::new(),
-                skipped_feature_elements: &mut skipped_feature_elements,
             };
             placer.try_placing_children(0, 0)?;
             while let Some((piece_index, depth)) = placer.placing.pop() {
@@ -542,15 +672,13 @@ impl<'a> JigsawPlacement<'a> {
             }
         }
 
-        let mut start = JigsawStart::new(
+        Ok(Some(JigsawStart::new(
             structure_id,
             context.chunk_pos,
             context.references,
             terrain_adaptation,
             pieces,
-        );
-        start.skipped_feature_elements = skipped_feature_elements;
-        Ok(Some(start))
+        )))
     }
 
     fn start_too_close_to_world_limits(
@@ -577,7 +705,6 @@ struct Placer<'a> {
     occupied: &'a mut Vec<BoundingBox>,
     allowed: BoundingBox,
     placing: SequencedPriorityQueue<(usize, usize)>,
-    skipped_feature_elements: &'a mut Vec<String>,
 }
 
 impl Placer<'_> {
@@ -595,6 +722,10 @@ impl Placer<'_> {
         let parent_bounds = piece.bounding_box;
         let parent_min_y = parent_bounds.min_y();
         let mut height_at_connector = UNSET_HEIGHT;
+        // Java keeps one local free shape per parent for connectors that point
+        // back inside the parent box; it is the parent box minus children
+        // already attached through those connectors.
+        let mut inside_occupied = Vec::new();
 
         let jigsaws = shuffled_jigsaw_blocks(
             &element,
@@ -642,14 +773,6 @@ impl Placer<'_> {
             };
 
             let connector_inside = parent_bounds.is_inside(front_pos);
-            // Java uses the piece's own box as the free-space seed when the
-            // connector points back into the piece, and the inherited free
-            // shape otherwise. Both cases reject overlap with the parent.
-            let mut local_occupied = if connector_inside {
-                vec![parent_bounds]
-            } else {
-                Vec::new()
-            };
 
             let mut candidates = Vec::new();
             if depth != self.config.max_depth as usize {
@@ -663,13 +786,6 @@ impl Placer<'_> {
                 if matches!(candidate, PoolElement::Empty) {
                     // Java `break`s the whole element list, not just this item.
                     break;
-                }
-                if let PoolElement::Feature { feature, .. } = &candidate {
-                    // Feature-level placement needs the configured/placed
-                    // feature pipeline. Record the skip instead of failing the
-                    // whole structure or pretending the feature ran.
-                    self.skipped_feature_elements.push(feature.clone());
-                    continue;
                 }
                 for child_rotation in shuffled_rotations(self.random) {
                     // `getShuffledJigsawBlocks` is called even when the child
@@ -752,7 +868,12 @@ impl Placer<'_> {
                                 child_box.max_z(),
                             );
                         }
-                        if !self.is_free(&child_box, &local_occupied, !connector_inside) {
+                        if !self.is_free(
+                            &child_box,
+                            parent_bounds,
+                            connector_inside,
+                            &inside_occupied,
+                        ) {
                             continue;
                         }
                         if let Some(parent_piece) = self.pieces.get_mut(piece_index) {
@@ -793,8 +914,11 @@ impl Placer<'_> {
                                 delta_y: -y_delta,
                                 dest_projection: projection,
                             };
-                            self.occupied.push(child_box);
-                            local_occupied.push(child_box);
+                            if connector_inside {
+                                inside_occupied.push(child_box);
+                            } else {
+                                self.occupied.push(child_box);
+                            }
                             let child_index = self.pieces.len();
                             self.pieces.push(JigsawPiece {
                                 pool: pool.name().to_owned(),
@@ -822,11 +946,19 @@ impl Placer<'_> {
         Ok(())
     }
 
+    /// Java's free-space test for one candidate child box.
+    ///
+    /// For a connector that points back inside the parent box, Java seeds a
+    /// local free shape with the parent box and requires the candidate to fit
+    /// inside it; previously attached inside children are subtracted. For an
+    /// outside connector it uses the inherited free shape, represented here by
+    /// the global occupied list (the start box plus every outside child).
     fn is_free(
         &self,
         bounds: &BoundingBox,
-        local_occupied: &[BoundingBox],
-        check_global: bool,
+        parent_bounds: BoundingBox,
+        connector_inside: bool,
+        inside_occupied: &[BoundingBox],
     ) -> bool {
         if bounds.min_x() < self.allowed.min_x()
             || bounds.max_x() > self.allowed.max_x()
@@ -837,17 +969,22 @@ impl Placer<'_> {
         {
             return false;
         }
-        if local_occupied
+        if connector_inside {
+            let contained = bounds.min_x() >= parent_bounds.min_x()
+                && bounds.max_x() <= parent_bounds.max_x()
+                && bounds.min_y() >= parent_bounds.min_y()
+                && bounds.max_y() <= parent_bounds.max_y()
+                && bounds.min_z() >= parent_bounds.min_z()
+                && bounds.max_z() <= parent_bounds.max_z();
+            return contained
+                && !inside_occupied
+                    .iter()
+                    .any(|occupied| occupied.intersects(*bounds));
+        }
+        !self
+            .occupied
             .iter()
             .any(|occupied| occupied.intersects(*bounds))
-        {
-            return false;
-        }
-        !check_global
-            || !self
-                .occupied
-                .iter()
-                .any(|occupied| occupied.intersects(*bounds))
     }
 }
 
@@ -1073,6 +1210,60 @@ fn expansion_hack_size(
         max = max.max(sizes.into_iter().max().unwrap_or(0));
     }
     Ok(max)
+}
+
+/// Records every block a piece successfully writes so the start can expose a
+/// complete written-block set after chunk filtering.
+struct RecordingLevel<'a> {
+    inner: &'a mut dyn FeatureLevel,
+    written_blocks: Vec<BlockPos>,
+}
+
+impl<'a> RecordingLevel<'a> {
+    fn new(inner: &'a mut dyn FeatureLevel) -> Self {
+        Self {
+            inner,
+            written_blocks: Vec::new(),
+        }
+    }
+}
+
+impl FeatureLevel for RecordingLevel<'_> {
+    fn min_y(&self) -> i32 {
+        self.inner.min_y()
+    }
+
+    fn height(&self) -> i32 {
+        self.inner.height()
+    }
+
+    fn get_block(&self, pos: BlockPos) -> Option<&BlockState> {
+        self.inner.get_block(pos)
+    }
+
+    fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
+        let written = self.inner.set_block(pos, state);
+        if written {
+            self.written_blocks.push(pos);
+        }
+        written
+    }
+
+    fn sea_level(&self) -> i32 {
+        self.inner.sea_level()
+    }
+
+    fn schedule_tick(&mut self, pos: BlockPos, block: &str, delay: u64) -> bool {
+        self.inner.schedule_tick(pos, block, delay)
+    }
+
+    fn set_block_entity(&mut self, pos: BlockPos, nbt: Tag) -> bool {
+        self.inner.set_block_entity(pos, nbt)
+    }
+
+    fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        self.inner.heightmap(kind, x, z)
+    }
 }
 
 /// Waterlogging wrapper around the caller's feature level. Java reads the

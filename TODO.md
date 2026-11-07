@@ -1156,13 +1156,23 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   `StructureGenerator::from_catalog`/`shipped_catalog` pass it into the jigsaw
   path. `tests/structure_assets.rs` parses
   `minecraft:village/plains/town_centers/plains_meeting_point_1` (size 10x7x10,
-  153 blocks, 1 palette), then generates a fixed-seed 48-piece village with
+  153 blocks, 1 palette), then generates a fixed-seed 101-piece village with
   deterministic bounds and places it through `StructureGenerator` twice.
-  `feature_pool_element` entries selected during expansion are skipped and
-  recorded on `JigsawStart::skipped_feature_elements` instead of failing the
-  whole structure. Still open: actual feature placement for those elements,
-  tree/texture/entity gaps, terrain adaptation, and non-village template
-  families.
+- **Progress (2026-11-07, feature-pool placement):**
+  `feature_pool_element` candidates are no longer skipped. They consume the
+  four shuffled rotations, pass the synthetic downward `minecraft:bottom`
+  connector through Java's local free-shape rule, and become `JigsawPiece`s.
+  `PoolExpansion::place_with_features` resolves the element id through
+  `FeatureData::vanilla()`, runs placement modifiers depth-first with the
+  shared structure `WorldgenRandom`, executes the configured feature at the
+  piece origin, and records every written block in `StartPlacement::
+  written_blocks`. Unknown/unported features fail with
+  `UnsupportedFeatureElement` and the exact id. `WorldGenerator` now supplies
+  a base-height approximation for neighbouring start chunks and structure
+  feature seeds from the chunk decoration seed. 3 `tests/feature_pools.rs`
+  tests; still open: feature writes outside the current chunk, feature-created
+  block entities, exact structure-index/base-height parity, terrain adaptation,
+  tree/texture/entity gaps, and non-village template families.
 
 ### P2.9 Jigsaw structures `[~]` `XL`
 
@@ -1195,8 +1205,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
 
 - [ ] Mineshafts and strongholds.
 - [~] Villages (village template NBTs, recursive plains generation, pools,
-  processors, and deterministic placement; feature-pool decor, loot/chest block
-  entities, entity spawning, and Java block-for-block fixture remain).
+  processors, deterministic placement, and feature-pool trees/decor; loot/chest
+  block entities, entity spawning, terrain adaptation, and Java
+  block-for-block fixture remain).
 - [ ] Ocean ruins, shipwrecks, buried treasure, ocean monuments.
 - [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
   branch, rotation, bounds, and surface snap done; loot-table block entities,

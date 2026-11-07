@@ -14,13 +14,20 @@
 //! `StructureTemplatePool.getRandomTemplate`.
 //!
 //! [`PoolCatalog::expand_start`] resolves a start pool into one
-//! [`PoolExpansion`] and [`PoolExpansion::place`] writes that element through
-//! the existing [`TemplateStructurePiece`] geometry. Recursive jigsaw
-//! connection, junction/expansion-hack placement, terrain adaptation, and
-//! `FeaturePoolElement` world placement remain explicit later slices.
+//! [`PoolExpansion`] and [`PoolExpansion::place`] writes template elements
+//! through the existing [`TemplateStructurePiece`] geometry.
+//! [`PoolExpansion::place_with_features`] additionally executes
+//! `feature_pool_element` entries through [`FeatureData::vanilla`] at the
+//! element's piece origin, matching `FeaturePoolElement.place`. Recursive
+//! jigsaw connection, junction/expansion-hack placement, and terrain
+//! adaptation remain separate slices.
 
+use crate::chunk::BlockState;
 use crate::nbt::Tag;
-use crate::worldgen::feature::FeatureLevel;
+use crate::worldgen::feature::{
+    ConfiguredFeature, FeatureData, FeatureLevel, PlacedFeature, PlacementModifierKind,
+    PlacementWorld,
+};
 use crate::worldgen::structure::piece::{
     BoundingBox, PiecePlacement, StructureDataMarker, StructurePiece, TemplateStructurePiece,
     template_bounding_box,
@@ -613,6 +620,21 @@ pub struct PoolExpansion {
     pub bounding_box: Option<BoundingBox>,
 }
 
+/// Result of placing one expansion, including `feature_pool_element` children.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PoolPlacement {
+    /// Template/list placement counters (buildings, lamps, roads, ...).
+    pub placement: PiecePlacement,
+    /// Feature-pool elements executed at their piece origin.
+    pub feature_elements: usize,
+    /// Feature-pool elements whose configured feature reported success.
+    pub feature_placements: usize,
+    pub feature_written: usize,
+    pub feature_rejected: usize,
+    /// Blocks written by feature-pool elements, in write order.
+    pub feature_blocks: Vec<BlockPos>,
+}
+
 impl PoolExpansion {
     /// Places this element through the template-piece path.
     ///
@@ -620,6 +642,10 @@ impl PoolExpansion {
     /// position predicates); `chunk_box` is the write box. Processing happens
     /// over the whole template, like Java, and only processed blocks inside
     /// `chunk_box` are written.
+    ///
+    /// `FeaturePoolElement` has no template, so this template-only entry point
+    /// fails explicitly for it. Use [`Self::place_with_features`] for a real
+    /// structure piece, which executes the configured placed feature instead.
     #[allow(clippy::too_many_arguments)]
     pub fn place(
         &self,
@@ -646,6 +672,213 @@ impl PoolExpansion {
         Ok(result)
     }
 
+    /// Places template elements and executes feature-pool elements like
+    /// `PoolElementStructurePiece.place`.
+    ///
+    /// `random` is Java's structure placement `RandomSource`; feature
+    /// placement modifiers and the configured feature consume it in vanilla
+    /// order. Feature writes are clipped to `chunk_box` and recorded in
+    /// [`PoolPlacement::feature_blocks`] so the caller can merge them into the
+    /// piece/start written-block set.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_with_features(
+        &self,
+        level: &mut dyn FeatureLevel,
+        templates: &dyn TemplateProvider,
+        processors: &StructureProcessorCatalog,
+        chunk_box: BoundingBox,
+        structure_pos: BlockPos,
+        world_seed: i64,
+        random: &mut dyn RandomSource,
+        keep_jigsaws: bool,
+    ) -> Result<PoolPlacement, PoolError> {
+        let mut result = PoolPlacement::default();
+        self.place_element_with_features(
+            &self.element,
+            level,
+            templates,
+            processors,
+            chunk_box,
+            structure_pos,
+            world_seed,
+            random,
+            keep_jigsaws,
+            &mut result,
+        )?;
+        Ok(result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn place_element_with_features(
+        &self,
+        element: &PoolElement,
+        level: &mut dyn FeatureLevel,
+        templates: &dyn TemplateProvider,
+        processors: &StructureProcessorCatalog,
+        chunk_box: BoundingBox,
+        structure_pos: BlockPos,
+        world_seed: i64,
+        random: &mut dyn RandomSource,
+        keep_jigsaws: bool,
+        result: &mut PoolPlacement,
+    ) -> Result<(), PoolError> {
+        match element {
+            PoolElement::Feature { feature, .. } => {
+                self.place_feature_element(feature, level, chunk_box, random, result)
+            }
+            PoolElement::List { elements, .. } => {
+                for child in elements {
+                    self.place_element_with_features(
+                        child,
+                        level,
+                        templates,
+                        processors,
+                        chunk_box,
+                        structure_pos,
+                        world_seed,
+                        random,
+                        keep_jigsaws,
+                        result,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => self.place_element(
+                element,
+                level,
+                templates,
+                processors,
+                chunk_box,
+                structure_pos,
+                world_seed,
+                keep_jigsaws,
+                &mut result.placement,
+            ),
+        }
+    }
+
+    /// `FeaturePoolElement.place`: `PlacedFeature.place(level, generator,
+    /// random, offset)` at the piece origin.
+    fn place_feature_element(
+        &self,
+        feature: &str,
+        level: &mut dyn FeatureLevel,
+        chunk_box: BoundingBox,
+        random: &mut dyn RandomSource,
+        result: &mut PoolPlacement,
+    ) -> Result<(), PoolError> {
+        let data = FeatureData::vanilla();
+        let placed = data
+            .placed(feature)
+            .ok_or_else(|| PoolError::UnknownPlacedFeature {
+                pool: self.pool.clone(),
+                feature: feature.to_owned(),
+            })?;
+        if placed
+            .placement_modifiers()
+            .iter()
+            .any(|modifier| matches!(modifier.kind(), PlacementModifierKind::Biome))
+        {
+            return Err(PoolError::UnsupportedFeatureElement {
+                pool: self.pool.clone(),
+                feature: feature.to_owned(),
+                reason: "the `minecraft:biome` placement modifier needs a biome source, which \
+                         FeatureLevel does not expose"
+                    .to_owned(),
+            });
+        }
+        let configured = data.configured(placed.feature()).ok_or_else(|| {
+            PoolError::UnknownConfiguredFeature {
+                pool: self.pool.clone(),
+                feature: feature.to_owned(),
+                configured: placed.feature().to_owned(),
+            }
+        })?;
+        if !configured.is_supported() {
+            return Err(PoolError::UnsupportedFeatureElement {
+                pool: self.pool.clone(),
+                feature: feature.to_owned(),
+                reason: format!(
+                    "configured feature `{}` uses unported type `{}`",
+                    configured.id(),
+                    configured.vanilla_type()
+                ),
+            });
+        }
+
+        result.feature_elements += 1;
+        let mut feature_level = FeatureWriteLevel {
+            inner: level,
+            chunk_box,
+            written: 0,
+            rejected: 0,
+            written_blocks: Vec::new(),
+        };
+        let placed_any = self.place_feature_at(
+            placed,
+            configured,
+            &mut feature_level,
+            random,
+            self.position,
+            0,
+        )?;
+        result.feature_written += feature_level.written;
+        result.feature_rejected += feature_level.rejected;
+        result.feature_blocks.extend(feature_level.written_blocks);
+        if placed_any {
+            result.feature_placements += 1;
+        }
+        Ok(())
+    }
+
+    /// `PlacedFeature.placeWithContext` depth-first: run the configured
+    /// feature for each position before sampling the next one, so multi-count
+    /// placements keep vanilla RNG order.
+    #[allow(clippy::too_many_arguments)]
+    fn place_feature_at(
+        &self,
+        placed: &PlacedFeature,
+        configured: &ConfiguredFeature,
+        level: &mut FeatureWriteLevel<'_>,
+        random: &mut dyn RandomSource,
+        pos: BlockPos,
+        index: usize,
+    ) -> Result<bool, PoolError> {
+        let Some(modifier) = placed.placement_modifiers().get(index) else {
+            return configured.place(level, random, pos).map_err(|error| {
+                PoolError::UnsupportedFeatureElement {
+                    pool: self.pool.clone(),
+                    feature: placed.id().to_owned(),
+                    reason: error.to_string(),
+                }
+            });
+        };
+        let positions = {
+            let world = FeatureLevelPlacementWorld { level: &*level };
+            modifier
+                .get_positions(
+                    pos,
+                    random,
+                    &world,
+                    placed.id(),
+                    level.min_y(),
+                    level.height(),
+                )
+                .map_err(|error| PoolError::UnsupportedFeatureElement {
+                    pool: self.pool.clone(),
+                    feature: placed.id().to_owned(),
+                    reason: error.to_string(),
+                })?
+        };
+        let mut any = false;
+        for next in positions {
+            if self.place_feature_at(placed, configured, level, random, next, index + 1)? {
+                any = true;
+            }
+        }
+        Ok(any)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn place_element(
         &self,
@@ -664,6 +897,9 @@ impl PoolExpansion {
             PoolElement::Feature { feature, .. } => Err(PoolError::UnsupportedFeatureElement {
                 pool: self.pool.clone(),
                 feature: feature.clone(),
+                reason: "this template-only placement entry point has no structure random or \
+                         feature context; use `place_with_features`"
+                    .to_owned(),
             }),
             PoolElement::List { elements, .. } => {
                 for child in elements {
@@ -796,6 +1032,93 @@ impl PoolExpansion {
         collect_data_markers(&piece, origin, chunk_box, result);
         collect_entities(&piece, origin, chunk_box, result);
         Ok(())
+    }
+}
+
+/// Chunk-bounded, recording wrapper used while a feature-pool element runs.
+///
+/// `FeaturePoolElement.place` receives the whole `WorldGenLevel`, but a
+/// structure start is placed one write box at a time. Writes outside
+/// `chunk_box` are rejected exactly like out-of-region writes, and every
+/// accepted write is recorded so the caller can merge feature blocks into its
+/// written-block set.
+struct FeatureWriteLevel<'a> {
+    inner: &'a mut dyn FeatureLevel,
+    chunk_box: BoundingBox,
+    written: usize,
+    rejected: usize,
+    written_blocks: Vec<BlockPos>,
+}
+
+impl FeatureLevel for FeatureWriteLevel<'_> {
+    fn min_y(&self) -> i32 {
+        self.inner.min_y()
+    }
+
+    fn height(&self) -> i32 {
+        self.inner.height()
+    }
+
+    fn get_block(&self, pos: BlockPos) -> Option<&BlockState> {
+        self.inner.get_block(pos)
+    }
+
+    fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
+        if !self.chunk_box.is_inside(pos) {
+            self.rejected += 1;
+            return false;
+        }
+        if self.inner.set_block(pos, state) {
+            self.written += 1;
+            self.written_blocks.push(pos);
+            true
+        } else {
+            self.rejected += 1;
+            false
+        }
+    }
+
+    fn sea_level(&self) -> i32 {
+        self.inner.sea_level()
+    }
+
+    fn schedule_tick(&mut self, pos: BlockPos, block: &str, delay: u64) -> bool {
+        self.inner.schedule_tick(pos, block, delay)
+    }
+
+    fn set_block_entity(&mut self, pos: BlockPos, nbt: Tag) -> bool {
+        self.inner.set_block_entity(pos, nbt)
+    }
+
+    fn heightmap(&self, kind: crate::worldgen::feature::Heightmap, x: i32, z: i32) -> Option<i32> {
+        self.inner.heightmap(kind, x, z)
+    }
+}
+
+/// `PlacementWorld` view over a [`FeatureLevel`] for feature-pool modifiers.
+///
+/// The biome methods are deliberately blank: a `FeatureLevel` has no biome
+/// source, so [`PoolExpansion::place_feature_element`] rejects `biome`
+/// modifiers explicitly instead of silently filtering every position.
+struct FeatureLevelPlacementWorld<'a> {
+    level: &'a dyn FeatureLevel,
+}
+
+impl PlacementWorld for FeatureLevelPlacementWorld<'_> {
+    fn biome_at(&self, _pos: BlockPos) -> &str {
+        ""
+    }
+
+    fn biome_has_placed_feature(&self, _biome: &str, _placed_feature: &str) -> bool {
+        false
+    }
+
+    fn heightmap(&self, kind: crate::worldgen::feature::Heightmap, x: i32, z: i32) -> Option<i32> {
+        self.level.heightmap(kind, x, z)
+    }
+
+    fn block_at(&self, pos: BlockPos) -> Option<&BlockState> {
+        self.level.get_block(pos)
     }
 }
 
@@ -946,11 +1269,33 @@ fn data_marker_name(nbt: Option<&Tag>) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolError {
     InvalidDefinition(String),
-    UnknownElementType { type_name: String },
-    UnknownPool { pool: String },
-    UnknownTemplate { pool: String, template: String },
-    UnknownProcessorList { list: String },
-    UnsupportedFeatureElement { pool: String, feature: String },
+    UnknownElementType {
+        type_name: String,
+    },
+    UnknownPool {
+        pool: String,
+    },
+    UnknownTemplate {
+        pool: String,
+        template: String,
+    },
+    UnknownProcessorList {
+        list: String,
+    },
+    UnknownPlacedFeature {
+        pool: String,
+        feature: String,
+    },
+    UnknownConfiguredFeature {
+        pool: String,
+        feature: String,
+        configured: String,
+    },
+    UnsupportedFeatureElement {
+        pool: String,
+        feature: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for PoolError {
@@ -974,10 +1319,28 @@ impl fmt::Display for PoolError {
                 formatter,
                 "template-pool element references missing processor list `{list}`"
             ),
-            PoolError::UnsupportedFeatureElement { pool, feature } => write!(
+            PoolError::UnknownPlacedFeature { pool, feature } => write!(
                 formatter,
-                "template pool `{pool}` selected feature element `{feature}`; feature pool \
-                 placement is not implemented"
+                "template pool `{pool}` selected feature element `{feature}`, which is not a \
+                 known placed feature"
+            ),
+            PoolError::UnknownConfiguredFeature {
+                pool,
+                feature,
+                configured,
+            } => write!(
+                formatter,
+                "template pool `{pool}` feature element `{feature}` refers to missing configured \
+                 feature `{configured}`"
+            ),
+            PoolError::UnsupportedFeatureElement {
+                pool,
+                feature,
+                reason,
+            } => write!(
+                formatter,
+                "template pool `{pool}` selected feature element `{feature}`, which cannot be \
+                 placed: {reason}"
             ),
         }
     }

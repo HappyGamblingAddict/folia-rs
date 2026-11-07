@@ -13,6 +13,39 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-07 — Feature pool elements are real pieces and execute placed features
+
+- Context: `feature_pool_element` entries were selected during recursive jigsaw
+  expansion but skipped before rotation/child checks, which both omitted village
+  trees/decor and diverged from Java's RNG stream. `FeaturePoolElement.place`
+  executes a `PlacedFeature` at the piece origin during `StructureStart.placeInChunk`.
+- Decision: `PoolElement::Feature` candidates now go through the normal
+  candidate path (four shuffled rotations, synthetic downward `minecraft:bottom`
+  jigsaw, one-block bounding box) and become `JigsawPiece`s. At placement time
+  `PoolExpansion::place_with_features` resolves the element's id as a placed
+  feature through `FeatureData::vanilla()`, runs its modifiers depth-first with
+  the shared structure-placement `WorldgenRandom`, and executes the configured
+  feature at the piece origin through a recording `FeatureLevel` clipped to the
+  chunk box. `JigsawStart::skipped_feature_elements` stays empty; unknown or
+  unported placed/configured features return `StructureError::UnsupportedFeatureElement`
+  (or `PoolError`) with the exact id and reason. Inside-pointing connectors use
+  Java's local free shape semantics (parent box minus already attached inside
+  children) so `up_north` decor/villager connectors attach; outside connectors
+  keep the global occupied list.
+- Why: this is vanilla's placement order, consumes the same RNG, writes the
+  feature blocks into the active `WorldGenRegion`, and never silently drops a
+  selected element. Feature writes join the start's sorted `written_blocks` set.
+- Consequences: fixed-seed village layouts change because the old skip consumed
+  no rotations; `structure_assets` now pins 101 pieces and feature elements
+  instead of 48 pieces and skipped ids. Worldgen parity is unchanged because the
+  default generator still runs without structures. The generator now samples
+  neighbouring start heights through `WorldGenerator::base_height` (block-level
+  final-density approximation of `WORLD_SURFACE_WG`) and seeds structure feature
+  placement from the chunk decoration seed; the structure-within-step index is
+  alphabetical over the seven shipped definitions, not the full vanilla registry.
+  Feature writes outside the target chunk are rejected (no neighbour write
+  region), and feature-created block entities are not materialised yet.
+
 ## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a

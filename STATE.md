@@ -14,19 +14,21 @@ Last updated: 2026-11-07
   exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
-  483 shipped village templates, recursive jigsaw, Nether carvers, End
-  spikes/gateways/chorus, dimension storage and portal math.
+  483 shipped village templates, recursive jigsaw with placed feature-pool
+  elements, Nether carvers, End spikes/gateways/chorus, dimension storage and
+  portal math.
 - Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
   leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
   tickers, region ownership, and live bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and non-village structure templates;
-  live session dimension switching; effect/menu packets; shared per-viewer
-  entity tracking and live AI goals; full plugin API; real region tick threading.
+- Major gaps: non-village structure templates, cross-chunk feature write
+  regions/block-entity materialisation, terrain adaptation; live session
+  dimension switching; effect/menu packets; shared per-viewer entity tracking
+  and live AI goals; full plugin API; real region tick threading.
 
 ## Current focus
 
-1. P2.8 feature-pool placement and the remaining six configured feature types.
-2. P7 portal-driven dimension switching and non-village structure templates.
+1. P2.8 non-village structure templates and the remaining six configured feature types.
+2. P7 portal-driven dimension switching and terrain adaptation/start caching.
 3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
 4. P6 container menus/packets and deeper redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
@@ -39,7 +41,7 @@ Last updated: 2026-11-07
 - [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
 - [~] P1.7 loot/recipes (block/chest drops; entity loot next).
 - [~] P2.1/P2.2 218/224 feature types and all modifiers.
-- [~] P2.8 recursive jigsaw + village templates (feature pools/non-village).
+- [~] P2.8 recursive jigsaw + village templates (non-village/terrain adapt).
 - [~] P3.5-P3.8 light (Java fixtures and exact occlusion columns).
 - [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
 - [~] P4.1-P4.4 physics/breaking/item entities (live hunger and special movement).
@@ -52,6 +54,15 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: jigsaw feature-pool placement — `feature_pool_element` entries
+  are normal jigsaw pieces with vanilla rotation/RNG consumption; placement
+  resolves the placed feature through `FeatureData::vanilla()`, runs modifiers
+  and the configured feature at the piece origin, records feature blocks in
+  the start written-block set, and fails with the exact feature id when
+  unportable. 3 `tests/feature_pools.rs` tests (synthetic hay feature, shipped
+  village execution/determinism, generated chunk feature blocks); focused
+  `jigsaw`/`structure_assets`/`structure_generation`/`structure_processors`/
+  `structure_starts` green. Parity unchanged at 98.75% / 95.80%.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

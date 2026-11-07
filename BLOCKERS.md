@@ -127,10 +127,13 @@ Format:
   per-entry gzip+base64 catalog past the 2.5 MB budget. Selecting those
   structures still fails explicitly with an unknown template until the asset is
   expanded (or a shared bundle format is chosen).
-- `feature_pool_element` entries selected during recursive expansion are skipped
-  and recorded on `JigsawStart::skipped_feature_elements`; their configured
-  features (village trees/decor/piles) are not placed yet. A feature element
-  chosen as the start element still returns `UnsupportedPoolElement`.
+- `feature_pool_element` entries are now real pieces and execute their placed
+  feature at the piece origin (village trees/decor/piles); `skipped_feature_elements`
+  stays empty and unportable features fail with the exact id. Remaining gaps:
+  feature writes are clipped to the target chunk (no neighbour write region),
+  feature-created block entities are not materialised, and the generator's
+  structure-within-step seed index / neighbouring base height are deterministic
+  approximations rather than Java-exact.
 - Template entities are returned as `PlacedEntity` descriptors, not spawned;
   block-entity NBT is returned as `PlacedBlock` markers, not instantiated (so
   chest loot tables, bells, beds, and villager POIs are not live block

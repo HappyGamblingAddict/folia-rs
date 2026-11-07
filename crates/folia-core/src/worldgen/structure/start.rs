@@ -26,7 +26,7 @@ use crate::worldgen::structure::template::{
     PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,
 };
 use folia_math::BlockPos;
-use folia_random::{LegacyRandomSource, RandomSource};
+use folia_random::{LegacyRandomSource, RandomSource, WorldgenRandom};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -331,8 +331,21 @@ impl<'a> StructureGenerationContext<'a> {
 pub struct StartPlacement {
     pub placed_pieces: usize,
     pub skipped_pieces: usize,
+    /// Template blocks plus feature-pool blocks that were written.
     pub written: usize,
+    /// Template blocks rejected by the write box. Feature rejections are
+    /// reported separately so template parity counts stay stable.
     pub rejected: usize,
+    /// Feature-pool elements executed at their piece origin.
+    pub feature_elements: usize,
+    /// Feature-pool elements whose configured feature reported success.
+    pub feature_placements: usize,
+    pub feature_written: usize,
+    pub feature_rejected: usize,
+    /// Every block written by this start, sorted and deduplicated.
+    pub written_blocks: Vec<BlockPos>,
+    /// Blocks written by feature-pool elements, sorted and deduplicated.
+    pub feature_blocks: Vec<BlockPos>,
     pub block_entities: Vec<PlacedBlock>,
     pub entities: Vec<PlacedEntity>,
     pub data_markers: Vec<StructureDataMarker>,
@@ -568,6 +581,28 @@ impl StructureStart {
             Some(jigsaw) => {
                 jigsaw.place_in_chunk(level, chunk_box, templates, processors, world_seed)
             }
+            None => Ok(StartPlacement::default()),
+        }
+    }
+
+    /// Places the jigsaw payload with an explicit structure placement RNG.
+    ///
+    /// Structure-level feature seeds are applied by [`StructureGenerator`];
+    /// this keeps the per-chunk decoration stream shared by every piece.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_jigsaw_in_chunk_with_random(
+        &self,
+        level: &mut dyn FeatureLevel,
+        chunk_box: BoundingBox,
+        templates: &dyn TemplateProvider,
+        processors: &StructureProcessorCatalog,
+        world_seed: i64,
+        random: &mut dyn RandomSource,
+    ) -> Result<StartPlacement, StructureError> {
+        match &self.jigsaw {
+            Some(jigsaw) => jigsaw.place_in_chunk_with_random(
+                level, chunk_box, templates, processors, world_seed, random,
+            ),
             None => Ok(StartPlacement::default()),
         }
     }
@@ -1915,6 +1950,57 @@ impl StructureGenerator {
         radius: i32,
         step: Decoration,
     ) -> Result<StructureChunkPlacement, StructureError> {
+        self.place_for_chunk_inner(
+            level, None, chunk_pos, seed, dimension, biome_y, biomes, radius, step,
+        )
+    }
+
+    /// Places every enabled start using a separate height source for start
+    /// generation and piece placement.
+    ///
+    /// `height_source` supplies `WorldSurfaceWg` sampling for neighbouring
+    /// start chunks that are not in the writable chunk; `level` still receives
+    /// all writes. The generator uses this to answer base-height queries for
+    /// surrounding chunks without materialising them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_for_chunk_with_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: &dyn FeatureLevel,
+        chunk_pos: ChunkPos,
+        seed: i64,
+        dimension: StructureDimension,
+        biome_y: i32,
+        biomes: &dyn StructureBiomeLookup,
+        radius: i32,
+        step: Decoration,
+    ) -> Result<StructureChunkPlacement, StructureError> {
+        self.place_for_chunk_inner(
+            level,
+            Some(height_source),
+            chunk_pos,
+            seed,
+            dimension,
+            biome_y,
+            biomes,
+            radius,
+            step,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn place_for_chunk_inner(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: Option<&dyn FeatureLevel>,
+        chunk_pos: ChunkPos,
+        seed: i64,
+        dimension: StructureDimension,
+        biome_y: i32,
+        biomes: &dyn StructureBiomeLookup,
+        radius: i32,
+        step: Decoration,
+    ) -> Result<StructureChunkPlacement, StructureError> {
         let processors = StructureProcessorCatalog::shipped();
         let mut result = StructureChunkPlacement::default();
         let min_x = chunk_pos.x << 4;
@@ -1922,6 +2008,9 @@ impl StructureGenerator {
         let max_y = level.min_y() + level.height() - 1;
         let chunk_box =
             BoundingBox::new(min_x, level.min_y(), min_z, min_x + 15, max_y, min_z + 15);
+        let mut random = WorldgenRandom::new(0);
+        let decoration_seed = random.set_decoration_seed(seed, min_x, min_z);
+        let mut seeded_structures = BTreeSet::new();
 
         for x in (chunk_pos.x - radius)..=(chunk_pos.x + radius) {
             for z in (chunk_pos.z - radius)..=(chunk_pos.z + radius) {
@@ -1940,29 +2029,47 @@ impl StructureGenerator {
                 if definition.step() != step {
                     continue;
                 }
-                let context =
-                    StructureGenerationContext::new(seed, ChunkPos::new(x, z), 0, &self.templates)
-                        .with_level(level);
-                let start = match definition.generate_start(&context) {
-                    Ok(start) => start,
-                    Err(StructureError::UnsupportedStructureType { .. })
-                    | Err(StructureError::UnsupportedHeightProvider { .. }) => {
-                        result.skipped_unsupported.push(selection.structure);
-                        continue;
+                let start = {
+                    let source: &dyn FeatureLevel = match height_source {
+                        Some(source) => source,
+                        None => &*level,
+                    };
+                    let context = StructureGenerationContext::new(
+                        seed,
+                        ChunkPos::new(x, z),
+                        0,
+                        &self.templates,
+                    )
+                    .with_level(source);
+                    match definition.generate_start(&context) {
+                        Ok(start) => start,
+                        Err(StructureError::UnsupportedStructureType { .. })
+                        | Err(StructureError::UnsupportedHeightProvider { .. }) => {
+                            result.skipped_unsupported.push(selection.structure);
+                            continue;
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 };
                 if !start.is_valid() {
                     continue;
                 }
                 result.generated_starts += 1;
                 let placement = if start.jigsaw().is_some() {
-                    start.place_jigsaw_in_chunk(
+                    if seeded_structures.insert(selection.structure.clone()) {
+                        random.set_feature_seed(
+                            decoration_seed,
+                            self.structure_step_index(&selection.structure, step),
+                            step.index() as i32,
+                        );
+                    }
+                    start.place_jigsaw_in_chunk_with_random(
                         level,
                         chunk_box,
                         &self.templates,
                         processors,
                         seed,
+                        &mut random,
                     )?
                 } else {
                     start.place_in_chunk(level, chunk_pos)?
@@ -1971,12 +2078,42 @@ impl StructureGenerator {
                 result.skipped_pieces += placement.skipped_pieces;
                 result.written += placement.written;
                 result.rejected += placement.rejected;
+                result.feature_elements += placement.feature_elements;
+                result.feature_placements += placement.feature_placements;
+                result.feature_written += placement.feature_written;
+                result.feature_rejected += placement.feature_rejected;
+                result.written_blocks.extend(placement.written_blocks);
+                result.feature_blocks.extend(placement.feature_blocks);
                 result.block_entities.extend(placement.block_entities);
                 result.entities.extend(placement.entities);
                 result.data_markers.extend(placement.data_markers);
             }
         }
+        result
+            .written_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.written_blocks.dedup();
+        result
+            .feature_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.feature_blocks.dedup();
         Ok(result)
+    }
+
+    /// Approximate Java's `i1` in `ChunkGenerator.addVanillaDecorations`: the
+    /// index of a structure within its decoration step.
+    ///
+    /// The shipped catalog only contains the seven implemented definitions, so
+    /// this is alphabetical over those definitions rather than the full
+    /// vanilla registry order. That is deterministic and recorded as a parity
+    /// gap; it does not change which blocks a feature writes once the seed is
+    /// fixed.
+    fn structure_step_index(&self, structure: &str, step: Decoration) -> i32 {
+        self.definitions
+            .values()
+            .filter(|definition| definition.step() == step)
+            .position(|definition| definition.name == structure)
+            .unwrap_or(0) as i32
     }
 }
 
@@ -1988,6 +2125,12 @@ pub struct StructureChunkPlacement {
     pub skipped_pieces: usize,
     pub written: usize,
     pub rejected: usize,
+    pub feature_elements: usize,
+    pub feature_placements: usize,
+    pub feature_written: usize,
+    pub feature_rejected: usize,
+    pub written_blocks: Vec<BlockPos>,
+    pub feature_blocks: Vec<BlockPos>,
     pub skipped_unsupported: Vec<String>,
     pub block_entities: Vec<PlacedBlock>,
     pub entities: Vec<PlacedEntity>,

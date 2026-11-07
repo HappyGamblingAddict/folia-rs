@@ -15,8 +15,8 @@ use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
 use crate::worldgen::feature::{
-    ConfiguredFeature, Decoration, FeatureData, Heightmap, PlacedFeature, PlacementWorld,
-    WorldGenRegion,
+    ConfiguredFeature, Decoration, FeatureData, FeatureLevel, Heightmap, PlacedFeature,
+    PlacementWorld, WorldGenRegion,
 };
 use crate::worldgen::ore_vein::OreVeinifier;
 use crate::worldgen::structure::StructureDimension;
@@ -26,6 +26,7 @@ use crate::worldgen::structure::template::StructureTemplate;
 use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
 use folia_math::BlockPos;
 use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, OnceLock};
@@ -263,6 +264,30 @@ impl WorldGenerator {
 
     pub fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
         self.biomes.sample_block(x, y, z)
+    }
+
+    /// Approximation of `NoiseBasedChunkGenerator.getBaseHeight` for
+    /// `WORLD_SURFACE_WG`: scan the final-density column from the top and
+    /// return the first non-air level above sea level.
+    ///
+    /// Vanilla evaluates an interpolated `NoiseChunk`; this uses the exact
+    /// final-density router per block, so heights can differ by a block or two
+    /// at cell edges. It is only used for structure start height sampling in
+    /// neighbouring chunks, where the alternative is no terrain source at all.
+    pub fn base_height(&self, x: i32, z: i32) -> i32 {
+        let density = self.router.final_density();
+        let max_y = self.min_y + self.height - 1;
+        for y in (self.min_y..=max_y).rev() {
+            if density.compute(x, y, z) > 0.0 {
+                return y + 1;
+            }
+            if y <= self.sea_level {
+                // The heightmap predicate is NOT_AIR, so sea-level fluid
+                // counts even when the density column is empty.
+                return self.sea_level + 1;
+            }
+        }
+        self.min_y
     }
 
     /// Decoration steps run by `generate_chunk`. Keeping this explicit lets the
@@ -563,10 +588,15 @@ impl WorldGenerator {
         let biomes = GeneratorBiomeLookup {
             sampler: &self.biomes,
         };
+        let height_source = GeneratorHeightLevel {
+            generator: self,
+            cache: RefCell::new(HashMap::new()),
+        };
         let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
         structures
-            .place_for_chunk(
+            .place_for_chunk_with_height_source(
                 &mut region,
+                &height_source,
                 chunk_pos,
                 self.seed,
                 StructureDimension::Overworld,
@@ -655,6 +685,41 @@ impl WorldGenerator {
             }
         }
         indices
+    }
+}
+
+/// Height-only [`FeatureLevel`] for structure generation in neighbouring
+/// chunks. Writes are not supported; placement still goes through the
+/// writable [`WorldGenRegion`].
+struct GeneratorHeightLevel<'a> {
+    generator: &'a WorldGenerator,
+    cache: RefCell<HashMap<(i32, i32), i32>>,
+}
+
+impl FeatureLevel for GeneratorHeightLevel<'_> {
+    fn min_y(&self) -> i32 {
+        self.generator.min_y
+    }
+
+    fn height(&self) -> i32 {
+        self.generator.height
+    }
+
+    fn get_block(&self, _pos: BlockPos) -> Option<&BlockState> {
+        None
+    }
+
+    fn set_block(&mut self, _pos: BlockPos, _state: BlockState) -> bool {
+        false
+    }
+
+    fn heightmap(&self, _kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        if let Some(height) = self.cache.borrow().get(&(x, z)) {
+            return Some(*height);
+        }
+        let height = self.generator.base_height(x, z);
+        self.cache.borrow_mut().insert((x, z), height);
+        Some(height)
     }
 }
 

@@ -17,6 +17,10 @@ pub struct ServerProperties {
     pub max_players: i32,
     pub online_mode: bool,
     pub prevent_proxy_connections: bool,
+    /// Require signed chat and reject unsigned/malformed chat when enabled.
+    /// Parsed from `enforces-secure-chat` (the status-list name) and the
+    /// vanilla `enforce-secure-profile` alias. Defaults to `false`.
+    pub enforces_secure_chat: bool,
     pub level_name: String,
     pub view_distance: i32,
     pub simulation_distance: i32,
@@ -44,6 +48,7 @@ impl Default for ServerProperties {
             max_players: 20,
             online_mode: true,
             prevent_proxy_connections: false,
+            enforces_secure_chat: false,
             level_name: "world".into(),
             view_distance: 10,
             simulation_distance: 10,
@@ -93,6 +98,9 @@ impl ServerProperties {
             "prevent-proxy-connections" => {
                 self.prevent_proxy_connections = parse_bool(&value);
             }
+            "enforces-secure-chat" | "enforce-secure-profile" => {
+                self.enforces_secure_chat = parse_bool(&value);
+            }
             "level-name" => self.level_name = value,
             "view-distance" => self.view_distance = parse_i32(&value, 10),
             "simulation-distance" => self.simulation_distance = parse_i32(&value, 10),
@@ -138,6 +146,35 @@ pub fn online_mode() -> bool {
         }
         read_server_properties().is_none_or(|properties| properties.online_mode)
     })
+}
+
+/// `enforces-secure-chat` for the chat path. `FOLIA_ENFORCES_SECURE_CHAT`
+/// overrides `server.properties`; absent configuration defaults to `false`
+/// (vanilla's `enforce-secure-profile` defaults to `true`, but this port stays
+/// opt-in until the join path provisions keys). The first read emits the
+/// startup audit line so an operator sees whether secure chat is actually on.
+pub fn enforces_secure_chat() -> bool {
+    static SETTING: OnceLock<bool> = OnceLock::new();
+    *SETTING.get_or_init(|| {
+        let enabled = if let Ok(value) = std::env::var("FOLIA_ENFORCES_SECURE_CHAT") {
+            parse_bool(&value)
+        } else {
+            read_server_properties().is_some_and(|properties| properties.enforces_secure_chat)
+        };
+        if enabled {
+            eprintln!(
+                "[chat] enforces-secure-chat=true: unsigned or invalid player chat will be \
+                 rejected; profile-key provisioning must be active for every login"
+            );
+        }
+        enabled
+    })
+}
+
+/// Call once during startup so the secure-chat audit is visible even before the
+/// first player chats. Returns the effective setting.
+pub fn secure_chat_startup_audit() -> bool {
+    enforces_secure_chat()
 }
 
 /// `prevent-proxy-connections`: when enabled, Mojang's session check receives
@@ -396,6 +433,23 @@ unknown-key=kept
         assert!(properties.prevent_proxy_connections);
         let properties = ServerProperties::parse("prevent-proxy-connections=false\n");
         assert!(!properties.prevent_proxy_connections);
+    }
+
+    #[test]
+    fn parses_enforces_secure_chat_with_a_false_default() {
+        assert!(!ServerProperties::default().enforces_secure_chat);
+        assert!(!ServerProperties::parse("").enforces_secure_chat);
+
+        let properties = ServerProperties::parse("enforces-secure-chat=true\n");
+        assert!(properties.enforces_secure_chat);
+        let properties = ServerProperties::parse("enforces-secure-chat=false\n");
+        assert!(!properties.enforces_secure_chat);
+        let properties = ServerProperties::parse("enforces-secure-chat=TRUE\n");
+        assert!(properties.enforces_secure_chat);
+
+        // Vanilla's server.properties name is accepted as an alias.
+        let properties = ServerProperties::parse("enforce-secure-profile=true\n");
+        assert!(properties.enforces_secure_chat);
     }
 
     #[test]

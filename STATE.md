@@ -21,8 +21,9 @@ Last updated: 2026-11-07
   ownership, armor/status effects, item entities/XP, and daylight detectors.
 - Major gaps: shipped structure-template assets and full village jigsaw data;
   hopper live pull/push; nether/end portal session wiring and dimension
-  switching; chat signing; bridge live chat/kick/sound packets; entity AI on
-  live sessions; full plugin API surface; real per-world region tick threading.
+  switching; login/status secure-chat wiring; bridge live chat/kick/sound
+  packets; entity AI on live sessions; full plugin API surface; real per-world
+  region tick threading.
 
 ## Current focus
 
@@ -49,11 +50,24 @@ Last updated: 2026-11-07
 - [~] P5.1/P5.2 metadata/AI/effects (live AI and effect packets).
 - [~] P6 block entities (chest/furnace/sign/spawner/hopper, furnaces tick).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
-- [~] P8.1 online-mode core (TLS and chat signing).
+- [~] P8.1/P8.2 online-mode and chat-signing core (TLS, login/status wiring).
 - [~] P9.2/P9.3 bridge proxies/events (outbound packets, API depth).
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: P8.2 chat signing core — `SignedMessageBody` 1.21.11 wire codec
+  (content/timestamp/salt/packed last-seen), `ServerboundChat` parser/builder,
+  fixed 20-bit `LastSeenUpdate` bitset, `SignedMessage` (sequence, salt,
+  timestamp, SHA-256 content hash, 256-byte signature, last-seen tracking),
+  `PlayerChatMessage.updateSignature` payload, local signing chain and remote
+  chain verification with sequence/timestamp/expiry bounds. `crypto.rs` adds
+  SHA-256 and RSASSA-PKCS1-v1_5/SHA-256 sign/verify plus parameterized RSA
+  generation. Server-issued 2048-bit profile keys are encoded in the Login
+  Success `profile_key` GameProfile property; a deterministic 256-byte test
+  signer exists but enforced mode rejects it. `enforces-secure-chat` parses
+  with a false default and logs an audit line when enabled. 15 focused
+  `tests/chat_signing.rs` tests (1 ignored release benchmark) + 2 crypto lib
+  tests. Gaps: join/status wiring and clientbound Player Chat packets.
 - 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
   random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

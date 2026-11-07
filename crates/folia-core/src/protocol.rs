@@ -1,4 +1,4 @@
-use crate::crypto::{AES_KEY_SIZE, Cfb8};
+use crate::crypto::{self, AES_KEY_SIZE, Cfb8};
 use crate::varint::{read_varint, read_varint_slice, write_varint};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -501,6 +501,471 @@ pub fn parse_login_success(payload: &[u8]) -> io::Result<GameProfile> {
         name,
         properties,
     })
+}
+
+// ===========================================================================
+// 1.21.11 chat signing wire types
+// ===========================================================================
+
+/// `MessageSignature.BYTES`: every profile-key signature is exactly 256 bytes.
+pub const MESSAGE_SIGNATURE_BYTES: usize = 256;
+/// `LastSeenMessages.LAST_SEEN_MESSAGES_MAX_LENGTH`.
+pub const LAST_SEEN_MESSAGES_MAX: usize = 20;
+/// `ServerboundChatPacket` reads the message with `readUtf(256)`.
+pub const MAX_CHAT_MESSAGE_LENGTH: usize = 256;
+/// `GameProtocolTypes.SERVERBOUND_CHAT` registration index.
+pub const SERVERBOUND_CHAT: i32 = 8;
+/// `MessageSignatureCache.DEFAULT_CAPACITY`.
+pub const MESSAGE_SIGNATURE_CACHE_CAPACITY: usize = 128;
+
+/// A 256-byte RSA signature (`net.minecraft.network.chat.MessageSignature`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MessageSignature {
+    bytes: [u8; MESSAGE_SIGNATURE_BYTES],
+}
+
+impl MessageSignature {
+    pub fn new(bytes: [u8; MESSAGE_SIGNATURE_BYTES]) -> Self {
+        Self { bytes }
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> io::Result<Self> {
+        let bytes: [u8; MESSAGE_SIGNATURE_BYTES] = bytes.try_into().map_err(|_| {
+            invalid(format!(
+                "message signature must be {MESSAGE_SIGNATURE_BYTES} bytes, got {}",
+                bytes.len()
+            ))
+        })?;
+        Ok(Self { bytes })
+    }
+
+    pub fn as_bytes(&self) -> &[u8; MESSAGE_SIGNATURE_BYTES] {
+        &self.bytes
+    }
+
+    /// Mutable access for tamper-detection tests. Never use this on a signature
+    /// that is about to be sent or verified in production code.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8; MESSAGE_SIGNATURE_BYTES] {
+        &mut self.bytes
+    }
+
+    pub fn read(reader: &mut PacketReader<'_>) -> io::Result<Self> {
+        let mut bytes = [0u8; MESSAGE_SIGNATURE_BYTES];
+        bytes.copy_from_slice(reader.read_bytes(MESSAGE_SIGNATURE_BYTES)?);
+        Ok(Self { bytes })
+    }
+
+    pub fn write(&self, writer: &mut PacketWriter) -> io::Result<()> {
+        writer.write_bytes(&self.bytes);
+        Ok(())
+    }
+
+    /// Java `Arrays.hashCode(byte[])`, used by `LastSeenMessages.computeChecksum`.
+    pub fn checksum(&self) -> i32 {
+        let mut result = 1i32;
+        for byte in self.bytes {
+            result = result.wrapping_mul(31).wrapping_add(i32::from(byte as i8));
+        }
+        result
+    }
+}
+
+/// `MessageSignature.Packed`: a cache id, or `-1` followed by the full
+/// signature on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackedMessageSignature {
+    Cached(i32),
+    Full(Box<MessageSignature>),
+}
+
+impl PackedMessageSignature {
+    pub fn read(reader: &mut PacketReader<'_>) -> io::Result<Self> {
+        let id = reader.read_varint()?.wrapping_sub(1);
+        if id == -1 {
+            Ok(Self::Full(Box::new(MessageSignature::read(reader)?)))
+        } else {
+            Ok(Self::Cached(id))
+        }
+    }
+
+    pub fn write(&self, writer: &mut PacketWriter) -> io::Result<()> {
+        match self {
+            Self::Cached(id) => writer.write_varint(id.wrapping_add(1)),
+            Self::Full(signature) => {
+                writer.write_varint(0)?;
+                signature.write(writer)
+            }
+        }
+    }
+
+    pub fn unpack(&self, cache: &MessageSignatureCache) -> io::Result<MessageSignature> {
+        match self {
+            Self::Cached(id) => cache.unpack(*id).cloned().ok_or_else(|| {
+                invalid(format!(
+                    "message signature cache id {id} is not present in this session"
+                ))
+            }),
+            Self::Full(signature) => Ok((**signature).clone()),
+        }
+    }
+}
+
+/// Bounded signature cache used by `SignedMessageBody.Packed`.
+#[derive(Debug, Clone)]
+pub struct MessageSignatureCache {
+    entries: Vec<Option<MessageSignature>>,
+}
+
+impl Default for MessageSignatureCache {
+    fn default() -> Self {
+        Self::new(MESSAGE_SIGNATURE_CACHE_CAPACITY)
+    }
+}
+
+impl MessageSignatureCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: vec![None; capacity.max(1)],
+        }
+    }
+
+    pub fn pack(&self, signature: &MessageSignature) -> PackedMessageSignature {
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.as_ref() == Some(signature) {
+                return PackedMessageSignature::Cached(index as i32);
+            }
+        }
+        PackedMessageSignature::Full(Box::new(signature.clone()))
+    }
+
+    pub fn unpack(&self, index: i32) -> Option<&MessageSignature> {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.entries.get(index))
+            .and_then(Option::as_ref)
+    }
+
+    /// `MessageSignatureCache.push`: newest signatures occupy the low indexes
+    /// and entries that are no longer referenced are discarded.
+    pub fn push(&mut self, body: &SignedMessageBody, signature: Option<&MessageSignature>) {
+        let mut incoming: Vec<MessageSignature> = body.last_seen.entries().to_vec();
+        if let Some(signature) = signature {
+            incoming.push(signature.clone());
+        }
+        let mut new_set: Vec<MessageSignature> = Vec::new();
+        for signature in &incoming {
+            if !new_set.contains(signature) {
+                new_set.push(signature.clone());
+            }
+        }
+
+        let old: Vec<Option<MessageSignature>> = self.entries.clone();
+        let mut incoming_reversed = incoming;
+        let mut old_front: Vec<MessageSignature> = Vec::new();
+        for old_entry in old {
+            if let Some(old_entry) = old_entry
+                && !new_set.contains(&old_entry)
+                && !old_front.contains(&old_entry)
+            {
+                old_front.push(old_entry);
+            }
+        }
+        for entry in &mut self.entries {
+            *entry = incoming_reversed.pop().or_else(|| {
+                if old_front.is_empty() {
+                    None
+                } else {
+                    Some(old_front.remove(0))
+                }
+            });
+        }
+    }
+}
+
+fn read_signature_list(
+    reader: &mut PacketReader<'_>,
+    cache: &MessageSignatureCache,
+) -> io::Result<Vec<MessageSignature>> {
+    let count = reader.read_varint()?;
+    if count < 0 || count as usize > LAST_SEEN_MESSAGES_MAX {
+        return Err(invalid(format!(
+            "invalid last-seen signature count {count}"
+        )));
+    }
+    let mut signatures = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        signatures.push(PackedMessageSignature::read(reader)?.unpack(cache)?);
+    }
+    Ok(signatures)
+}
+
+fn write_signature_list(
+    writer: &mut PacketWriter,
+    signatures: &[MessageSignature],
+    cache: &MessageSignatureCache,
+) -> io::Result<()> {
+    if signatures.len() > LAST_SEEN_MESSAGES_MAX {
+        return Err(invalid(format!(
+            "last-seen signature list has {} entries, maximum is {LAST_SEEN_MESSAGES_MAX}",
+            signatures.len()
+        )));
+    }
+    writer.write_varint(signatures.len() as i32)?;
+    for signature in signatures {
+        cache.pack(signature).write(writer)?;
+    }
+    Ok(())
+}
+
+/// `LastSeenMessages`: the acknowledged signatures a client includes in the
+/// next signed body.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LastSeenMessages {
+    entries: Vec<MessageSignature>,
+}
+
+impl LastSeenMessages {
+    pub fn new(entries: Vec<MessageSignature>) -> io::Result<Self> {
+        if entries.len() > LAST_SEEN_MESSAGES_MAX {
+            return Err(invalid(format!(
+                "last-seen message list has {} entries, maximum is {LAST_SEEN_MESSAGES_MAX}",
+                entries.len()
+            )));
+        }
+        Ok(Self { entries })
+    }
+
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn entries(&self) -> &[MessageSignature] {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn push(&mut self, signature: MessageSignature) -> io::Result<()> {
+        if self.entries.len() >= LAST_SEEN_MESSAGES_MAX {
+            self.entries.remove(0);
+        }
+        if !self.entries.contains(&signature) {
+            self.entries.push(signature);
+        }
+        Ok(())
+    }
+
+    /// `LastSeenMessages.computeChecksum`.
+    pub fn compute_checksum(&self) -> u8 {
+        let mut value = 1i32;
+        for signature in &self.entries {
+            value = value.wrapping_mul(31).wrapping_add(signature.checksum());
+        }
+        let byte = value as u8;
+        if byte == 0 { 1 } else { byte }
+    }
+
+    pub fn write_packed(
+        &self,
+        writer: &mut PacketWriter,
+        cache: &MessageSignatureCache,
+    ) -> io::Result<()> {
+        write_signature_list(writer, &self.entries, cache)
+    }
+
+    pub fn read_packed(
+        reader: &mut PacketReader<'_>,
+        cache: &MessageSignatureCache,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            entries: read_signature_list(reader, cache)?,
+        })
+    }
+}
+
+/// `LastSeenMessages.Update`: the acknowledgement window sent with a chat
+/// packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastSeenUpdate {
+    pub offset: i32,
+    pub acknowledged: u32,
+    pub checksum: u8,
+}
+
+impl LastSeenUpdate {
+    pub fn new(offset: i32, acknowledged: u32, checksum: u8) -> io::Result<Self> {
+        if offset < 0 || acknowledged >= (1 << LAST_SEEN_MESSAGES_MAX) {
+            return Err(invalid(format!(
+                "invalid last-seen update offset {offset} or acknowledgement bits {acknowledged:#x}"
+            )));
+        }
+        Ok(Self {
+            offset,
+            acknowledged,
+            checksum,
+        })
+    }
+
+    pub fn acknowledges(&self, index: usize) -> bool {
+        index < LAST_SEEN_MESSAGES_MAX && (self.acknowledged >> index) & 1 != 0
+    }
+
+    pub fn read(reader: &mut PacketReader<'_>) -> io::Result<Self> {
+        let offset = reader.read_varint()?;
+        let bytes = reader.read_bytes(3)?;
+        let acknowledged =
+            u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16);
+        let checksum = reader.read_u8()?;
+        Self::new(offset, acknowledged, checksum)
+    }
+
+    pub fn write(&self, writer: &mut PacketWriter) -> io::Result<()> {
+        Self::new(self.offset, self.acknowledged, self.checksum)?;
+        writer.write_varint(self.offset)?;
+        let bytes = self.acknowledged.to_le_bytes();
+        writer.write_bytes(&bytes[..3]);
+        writer.write_u8(self.checksum)
+    }
+}
+
+/// `SignedMessageBody.Packed`: the signed body carried by
+/// `ClientboundPlayerChatPacket` and mirrored in `ServerboundChatPacket`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedMessageBody {
+    pub content: String,
+    pub timestamp_ms: i64,
+    pub salt: i64,
+    pub last_seen: LastSeenMessages,
+}
+
+impl SignedMessageBody {
+    pub fn new(
+        content: impl Into<String>,
+        timestamp_ms: i64,
+        salt: i64,
+        last_seen: LastSeenMessages,
+    ) -> io::Result<Self> {
+        let content = content.into();
+        if content.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
+            return Err(invalid(format!(
+                "chat message is longer than {MAX_CHAT_MESSAGE_LENGTH} characters"
+            )));
+        }
+        Ok(Self {
+            content,
+            timestamp_ms,
+            salt,
+            last_seen,
+        })
+    }
+
+    pub fn content_hash(&self) -> [u8; crypto::SHA256_DIGEST_SIZE] {
+        crypto::sha256(self.content.as_bytes())
+    }
+
+    pub fn write_packed(
+        &self,
+        writer: &mut PacketWriter,
+        cache: &MessageSignatureCache,
+    ) -> io::Result<()> {
+        writer.write_string(&self.content)?;
+        writer.write_i64(self.timestamp_ms)?;
+        writer.write_i64(self.salt)?;
+        self.last_seen.write_packed(writer, cache)
+    }
+
+    pub fn read_packed(
+        reader: &mut PacketReader<'_>,
+        cache: &MessageSignatureCache,
+    ) -> io::Result<Self> {
+        let content = reader.read_string()?;
+        if content.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
+            return Err(invalid(format!(
+                "chat message is longer than {MAX_CHAT_MESSAGE_LENGTH} characters"
+            )));
+        }
+        let timestamp_ms = reader.read_i64()?;
+        let salt = reader.read_i64()?;
+        let last_seen = LastSeenMessages::read_packed(reader, cache)?;
+        Ok(Self {
+            content,
+            timestamp_ms,
+            salt,
+            last_seen,
+        })
+    }
+}
+
+/// `ServerboundChatPacket` body for 1.21.11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerboundChat {
+    pub message: String,
+    pub timestamp_ms: i64,
+    pub salt: i64,
+    pub signature: Option<MessageSignature>,
+    pub last_seen: LastSeenUpdate,
+}
+
+pub fn parse_serverbound_chat(payload: &[u8]) -> io::Result<ServerboundChat> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_CHAT {
+        return Err(invalid(format!(
+            "expected serverbound chat id {SERVERBOUND_CHAT}, got {id}"
+        )));
+    }
+    let message = reader.read_string()?;
+    if message.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
+        return Err(invalid(format!(
+            "chat message is longer than {MAX_CHAT_MESSAGE_LENGTH} characters"
+        )));
+    }
+    let timestamp_ms = reader.read_i64()?;
+    let salt = reader.read_i64()?;
+    let signature = if reader.read_bool()? {
+        Some(MessageSignature::read(&mut reader)?)
+    } else {
+        None
+    };
+    let last_seen = LastSeenUpdate::read(&mut reader)?;
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after serverbound chat"));
+    }
+    Ok(ServerboundChat {
+        message,
+        timestamp_ms,
+        salt,
+        signature,
+        last_seen,
+    })
+}
+
+pub fn build_serverbound_chat(chat: &ServerboundChat) -> io::Result<Vec<u8>> {
+    if chat.message.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
+        return Err(invalid(format!(
+            "chat message is longer than {MAX_CHAT_MESSAGE_LENGTH} characters"
+        )));
+    }
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_CHAT)?;
+    writer.write_string(&chat.message)?;
+    writer.write_i64(chat.timestamp_ms)?;
+    writer.write_i64(chat.salt)?;
+    match &chat.signature {
+        Some(signature) => {
+            writer.write_u8(1)?;
+            signature.write(&mut writer)?;
+        }
+        None => writer.write_u8(0)?,
+    }
+    chat.last_seen.write(&mut writer)?;
+    Ok(writer.into_inner())
 }
 
 /// Packets at or above `threshold` are zlib-compressed after the login

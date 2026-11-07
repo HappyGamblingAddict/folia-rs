@@ -22,6 +22,11 @@ pub const RSA_KEY_BITS: usize = 1024;
 const RSA_PUBLIC_EXPONENT: u32 = 65537;
 /// SHA-1 digest size.
 pub const SHA1_DIGEST_SIZE: usize = 20;
+/// SHA-256 digest size used by chat/profile-key signatures.
+pub const SHA256_DIGEST_SIZE: usize = 32;
+/// RSA key size used for server-issued 1.21.11 chat profile keys. Chat message
+/// signatures are fixed at 256 bytes, which requires a 2048-bit modulus.
+pub const PROFILE_KEY_BITS: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CryptoError {
@@ -240,6 +245,149 @@ impl Sha1 {
 
 pub fn sha1(data: &[u8]) -> [u8; SHA1_DIGEST_SIZE] {
     let mut hasher = Sha1::new();
+    hasher.update(data);
+    hasher.finish()
+}
+
+// ===========================================================================
+// SHA-256
+// ===========================================================================
+
+#[rustfmt::skip]
+const SHA256_K: [u32; 64] = [
+    0x428a_2f98, 0x7137_4491, 0xb5c0_fbcf, 0xe9b5_dba5, 0x3956_c25b, 0x59f1_11f1, 0x923f_82a4, 0xab1c_5ed5,
+    0xd807_aa98, 0x1283_5b01, 0x2431_85be, 0x550c_7dc3, 0x72be_5d74, 0x80de_b1fe, 0x9bdc_06a7, 0xc19b_f174,
+    0xe49b_69c1, 0xefbe_4786, 0x0fc1_9dc6, 0x240c_a1cc, 0x2de9_2c6f, 0x4a74_84aa, 0x5cb0_a9dc, 0x76f9_88da,
+    0x983e_5152, 0xa831_c66d, 0xb003_27c8, 0xbf59_7fc7, 0xc6e0_0bf3, 0xd5a7_9147, 0x06ca_6351, 0x1429_2967,
+    0x27b7_0a85, 0x2e1b_2138, 0x4d2c_6dfc, 0x5338_0d13, 0x650a_7354, 0x766a_0abb, 0x81c2_c92e, 0x9272_2c85,
+    0xa2bf_e8a1, 0xa81a_664b, 0xc24b_8b70, 0xc76c_51a3, 0xd192_e819, 0xd699_0624, 0xf40e_3585, 0x106a_a070,
+    0x19a4_c116, 0x1e37_6c08, 0x2748_774c, 0x34b0_bcb5, 0x391c_0cb3, 0x4ed8_aa4a, 0x5b9c_ca4f, 0x682e_6ff3,
+    0x748f_82ee, 0x78a5_636f, 0x84c8_7814, 0x8cc7_0208, 0x90be_fffa, 0xa450_6ceb, 0xbef9_a3f7, 0xc671_78f2,
+];
+
+/// Incremental SHA-256 (`java.security.MessageDigest.getInstance("SHA-256")`).
+#[derive(Clone)]
+pub struct Sha256 {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffered: usize,
+    length: u64,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            state: [
+                0x6a09_e667,
+                0xbb67_ae85,
+                0x3c6e_f372,
+                0xa54f_f53a,
+                0x510e_527f,
+                0x9b05_688c,
+                0x1f83_d9ab,
+                0x5be0_cd19,
+            ],
+            buffer: [0u8; 64],
+            buffered: 0,
+            length: 0,
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.length = self.length.wrapping_add(data.len() as u64);
+        if self.buffered > 0 {
+            let needed = 64 - self.buffered;
+            let take = needed.min(data.len());
+            self.buffer[self.buffered..self.buffered + take].copy_from_slice(&data[..take]);
+            self.buffered += take;
+            data = &data[take..];
+            if self.buffered == 64 {
+                let block = self.buffer;
+                self.compress(&block);
+                self.buffered = 0;
+            }
+        }
+        while data.len() >= 64 {
+            let mut block = [0u8; 64];
+            block.copy_from_slice(&data[..64]);
+            self.compress(&block);
+            data = &data[64..];
+        }
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.buffered = data.len();
+        }
+    }
+
+    pub fn finish(mut self) -> [u8; SHA256_DIGEST_SIZE] {
+        let bit_length = self.length.wrapping_mul(8);
+        self.update(&[0x80]);
+        while self.buffered != 56 {
+            self.update(&[0x00]);
+        }
+        self.update(&bit_length.to_be_bytes());
+        let mut digest = [0u8; SHA256_DIGEST_SIZE];
+        for (chunk, word) in digest.chunks_exact_mut(4).zip(self.state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        digest
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        let mut words = [0u32; 64];
+        for (index, chunk) in block.chunks_exact(4).enumerate() {
+            words[index] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for (word, constant) in words.iter().zip(SHA256_K) {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(choice)
+                .wrapping_add(constant)
+                .wrapping_add(*word);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(majority);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        for (state, value) in self.state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *state = state.wrapping_add(value);
+        }
+    }
+}
+
+pub fn sha256(data: &[u8]) -> [u8; SHA256_DIGEST_SIZE] {
+    let mut hasher = Sha256::new();
     hasher.update(data);
     hasher.finish()
 }
@@ -1089,15 +1237,17 @@ fn is_probable_prime(candidate: &BigUint) -> bool {
 }
 
 fn generate_prime(
+    bits: usize,
     random: &mut impl FnMut(&mut [u8]) -> Result<(), CryptoError>,
 ) -> Result<BigUint, CryptoError> {
-    const PRIME_BYTES: usize = RSA_KEY_BITS / 16;
+    let prime_bytes = bits / 16;
     for _ in 0..200_000 {
-        let mut bytes = [0u8; PRIME_BYTES];
+        let mut bytes = vec![0u8; prime_bytes];
         random(&mut bytes)?;
-        // Exactly 512 bits, so two factors always produce a 1024-bit modulus.
+        // Force the exact requested bit length, so two factors always produce a
+        // modulus of `bits` bits.
         bytes[0] |= 0xC0;
-        bytes[PRIME_BYTES - 1] |= 1;
+        bytes[prime_bytes - 1] |= 1;
         let candidate = BigUint::from_be_bytes(&bytes);
         if is_probable_prime(&candidate) {
             return Ok(candidate);
@@ -1308,6 +1458,52 @@ impl RsaPublicKey {
         );
         Ok(ciphertext.to_be_bytes(modulus_bytes))
     }
+
+    /// Verify an RSASSA-PKCS1-v1_5/SHA-256 signature. Malformed signatures and
+    /// wrong lengths return `false`; they are untrusted network input.
+    pub fn verify_sha256(&self, message: &[u8], signature: &[u8]) -> bool {
+        let modulus_bytes = self.modulus_bytes();
+        if signature.len() != modulus_bytes {
+            return false;
+        }
+        let signature = BigUint::from_be_bytes(signature);
+        if signature.cmp_big(&self.modulus) != Ordering::Less {
+            return false;
+        }
+        let recovered = mod_pow(
+            &signature,
+            &BigUint::from_u64(u64::from(self.exponent)),
+            &self.modulus,
+        );
+        let recovered = recovered.to_be_bytes(modulus_bytes);
+        let Ok(expected) = emsa_pkcs1_v1_5_sha256(message, modulus_bytes) else {
+            return false;
+        };
+        constant_time_eq(&recovered, &expected)
+    }
+}
+
+/// DER-encoded `DigestInfo` prefix for SHA-256 (RFC 8017, section 9.2).
+const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
+];
+
+/// `EMSA-PKCS1-v1_5` encoding for SHA-256.
+fn emsa_pkcs1_v1_5_sha256(message: &[u8], modulus_bytes: usize) -> Result<Vec<u8>, CryptoError> {
+    let mut digest_info = Vec::with_capacity(SHA256_DIGEST_INFO_PREFIX.len() + SHA256_DIGEST_SIZE);
+    digest_info.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
+    digest_info.extend_from_slice(&sha256(message));
+    if modulus_bytes < digest_info.len() + 11 {
+        return Err(CryptoError::InvalidKey);
+    }
+    let mut encoded = vec![0xFF; modulus_bytes];
+    encoded[0] = 0x00;
+    encoded[1] = 0x01;
+    let separator = modulus_bytes - digest_info.len() - 1;
+    encoded[separator] = 0x00;
+    encoded[separator + 1..].copy_from_slice(&digest_info);
+    Ok(encoded)
 }
 
 #[derive(Clone, Debug)]
@@ -1333,17 +1529,27 @@ pub struct RsaKeyPair {
 
 impl RsaKeyPair {
     /// Generate a fresh 1024-bit RSA key pair with the Java default public
-    /// exponent 65537.
+    /// exponent 65537. This is the login-encryption key size.
     pub fn generate() -> Result<Self, CryptoError> {
+        Self::generate_with_bits(RSA_KEY_BITS)
+    }
+
+    /// Generate a fresh RSA key pair of `bits` bits with the Java default
+    /// public exponent 65537. Chat profile keys need 2048 bits so their
+    /// signatures are the 256 bytes required by `MessageSignature`.
+    pub fn generate_with_bits(bits: usize) -> Result<Self, CryptoError> {
+        if bits < 512 || !bits.is_multiple_of(16) {
+            return Err(CryptoError::InvalidKey);
+        }
         let mut random = |buffer: &mut [u8]| random_bytes(buffer);
         for _ in 0..1024 {
-            let p = generate_prime(&mut random)?;
-            let q = generate_prime(&mut random)?;
+            let p = generate_prime(bits, &mut random)?;
+            let q = generate_prime(bits, &mut random)?;
             if p == q {
                 continue;
             }
             let modulus = p.mul(&q);
-            if modulus.bit_len() != RSA_KEY_BITS {
+            if modulus.bit_len() != bits {
                 continue;
             }
             let exponent = BigUint::from_u64(u64::from(RSA_PUBLIC_EXPONENT));
@@ -1414,6 +1620,31 @@ impl RsaKeyPair {
         self.public.to_der()
     }
 
+    /// RSA private-key operation: `input^d mod n`, using CRT when available.
+    fn private_operation(&self, input: &BigUint) -> BigUint {
+        match &self.private {
+            RsaPrivateKey::Exponent(exponent) => mod_pow(input, exponent, &self.public.modulus),
+            RsaPrivateKey::Crt {
+                p,
+                q,
+                dp,
+                dq,
+                q_inverse,
+            } => {
+                let reduced_p = input.rem(p);
+                let reduced_q = input.rem(q);
+                let from_p = mod_pow(&reduced_p, dp, p);
+                let from_q = mod_pow(&reduced_q, dq, q);
+                // CRT combines modulo p, so the q residue must be reduced mod p
+                // first (p and q are independent primes, either may be larger).
+                let difference = from_p.sub_mod(&from_q.rem(p), p);
+                let montgomery = Montgomery::new(p.clone());
+                let h = montgomery.multiply(&montgomery.to_montgomery(&difference), q_inverse);
+                from_q.add(&q.mul(&h))
+            }
+        }
+    }
+
     /// Decrypt one PKCS#1 v1.5 block and return the unpadded message.
     pub fn decrypt_pkcs1v15(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let modulus_bytes = self.public.modulus_bytes();
@@ -1424,32 +1655,18 @@ impl RsaKeyPair {
         if ciphertext.cmp_big(&self.public.modulus) != Ordering::Less {
             return Err(CryptoError::InvalidCiphertext);
         }
-        let message = match &self.private {
-            RsaPrivateKey::Exponent(exponent) => {
-                mod_pow(&ciphertext, exponent, &self.public.modulus)
-            }
-            RsaPrivateKey::Crt {
-                p,
-                q,
-                dp,
-                dq,
-                q_inverse,
-            } => {
-                let reduced_p = ciphertext.rem(p);
-                let reduced_q = ciphertext.rem(q);
-                let from_p = mod_pow(&reduced_p, dp, p);
-                let from_q = mod_pow(&reduced_q, dq, q);
-                // CRT combines modulo p, so the q residue must be reduced mod p
-                // first (p and q are independent 512-bit primes, either may be
-                // the larger one).
-                let difference = from_p.sub_mod(&from_q.rem(p), p);
-                let montgomery = Montgomery::new(p.clone());
-                let h = montgomery.multiply(&montgomery.to_montgomery(&difference), q_inverse);
-                from_q.add(&q.mul(&h))
-            }
-        };
+        let message = self.private_operation(&ciphertext);
         let encoded = message.to_be_bytes(modulus_bytes);
         decode_pkcs1_v1_5(&encoded)
+    }
+
+    /// Sign `message` with RSASSA-PKCS1-v1_5 and SHA-256
+    /// (`SHA256withRSA`, the profile-key/message-signature algorithm).
+    pub fn sign_sha256(&self, message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let encoded = emsa_pkcs1_v1_5_sha256(message, self.public.modulus_bytes())?;
+        let message = BigUint::from_be_bytes(&encoded);
+        let signature = self.private_operation(&message);
+        Ok(signature.to_be_bytes(self.public.modulus_bytes()))
     }
 }
 
@@ -1491,6 +1708,50 @@ mod self_tests {
         };
         let q_mod_p = q.rem(p);
         assert_eq!(mul_mod(&q_mod_p, q_inverse, p), BigUint::one());
+    }
+
+    #[test]
+    fn sha256_matches_nist_vectors() {
+        assert_eq!(
+            sha256(b""),
+            [
+                0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+                0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+                0x78, 0x52, 0xb8, 0x55,
+            ]
+        );
+        assert_eq!(
+            sha256(b"abc"),
+            [
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad,
+            ]
+        );
+        let long = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        assert_eq!(
+            sha256(long),
+            [
+                0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8, 0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e,
+                0x60, 0x39, 0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67, 0xf6, 0xec, 0xed, 0xd4,
+                0x19, 0xdb, 0x06, 0xc1,
+            ]
+        );
+    }
+
+    #[test]
+    fn rsa_sha256_sign_verify_round_trip_and_tamper() {
+        let keypair = RsaKeyPair::generate().unwrap();
+        let message = b"Folia-RS signed chat payload";
+        let signature = keypair.sign_sha256(message).unwrap();
+        assert_eq!(signature.len(), keypair.public().modulus_bytes());
+        assert!(keypair.public().verify_sha256(message, &signature));
+
+        let mut tampered = signature.clone();
+        tampered[0] ^= 0x01;
+        assert!(!keypair.public().verify_sha256(message, &tampered));
+        assert!(!keypair.public().verify_sha256(b"different", &signature));
+        assert!(!keypair.public().verify_sha256(message, &signature[1..]));
     }
 
     #[test]

@@ -33,11 +33,11 @@ where possible, a differential test against the Java oracle.
 | Player simulation | ~38% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
 | Entities | ~30% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, deterministic join mobs with tracking/cleanup; sensors/brains, armor, shared per-viewer tracking missing |
 | Blocks/redstone/fluids | ~35% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons/sticky pistons, chest/furnace/sign/spawner/hopper block entities; hopper live transfer, menus, lamps/targets missing |
-| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
+| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; chat-signing core landed; TLS, login/status secure-chat wiring, and full packet coverage pending |
 | Plugin compatibility | ~20% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block read/write, player vitals/game mode, inventory, item meta, three cancellable events; live-session packets and most gameplay API unfinished |
 | Folia regionization | ~15% | Per-region task queues/world slices/ownership checks; world, entities, and chunk tickets are still global |
 | Overall rewrite | **~27%** | Foundation-heavy, content-light |
-| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; TLS and full packet coverage pending |
+| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; chat-signing core landed; TLS, login/status secure-chat wiring, and full packet coverage pending |
 | Plugin compatibility | ~20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
 | Folia regionization | ~15% | Task queues exist; world state is still globally shared |
 | Overall rewrite | **~27%** | Foundation-heavy, content-light |
@@ -47,6 +47,12 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P8.2 chat-signing core - SHA-256 and RSA/SHA-256 signatures,
+  `SignedMessageBody`/`ServerboundChat`/`LastSeen*` 1.21.11 codecs, local and
+  remote signed-message chains with sequence/timestamp bounds, 2048-bit
+  server-issued `profile_key` Login Success properties, deterministic test
+  signer, and `enforces-secure-chat` config parsing/audit. 15
+  `tests/chat_signing.rs` + 2 crypto lib tests; join/status wiring remains.
 - 2026-11-07: P6 daylight detectors - `WorldStorage::sky_light_at` exposes
   cached sky-light values; the daylight-detector behavior samples the cell above
   every 20 ticks and drives the `power` property (normal and inverted). 1 more
@@ -2234,7 +2240,7 @@ chat signing.
   `accept_logins: true`; then exercise a real Mojang session. Chat signing is
   P8.2, and an in-process TLS client should replace the curl shell-out.
 
-### P8.2 Chat signing and profile keys `[ ]` `L`
+### P8.2 Chat signing and profile keys `[~]` `L`
 
 - **What:** Implement 1.21.11 profile keys, signed chat, message chains, and
   the enforcement/report path required by online mode.
@@ -2242,6 +2248,30 @@ chat signing.
 - **Reference:** `net/minecraft/network/chat/*`, `PlayerChatMessage`,
   `SignedMessageChain`.
 - **Done when:** Signed chat messages are accepted/validated and displayed.
+- **Landed 2026-11-07 (core):** `player.rs` models `SignedMessage` with salt,
+  monotonically increasing `SignedMessageLink.index`, epoch-millisecond
+  timestamp, SHA-256 content hash, optional 256-byte signature, and packed
+  last-seen signatures. The signature payload matches
+  `PlayerChatMessage.updateSignature` (marker `1`, sender/session UUID, link
+  index, salt, epoch seconds, UTF-8 content, last-seen list). Local signing and
+  remote verification chains enforce sequence continuity, nondecreasing and
+  non-expired timestamps, future-skew bounds, profile-key expiry, and
+  `enforces-secure-chat` key strength. `protocol.rs` adds
+  `SignedMessageBody.Packed`, `MessageSignature`/cache, `LastSeenMessages`,
+  `LastSeenUpdate`, and `ServerboundChat` wire codecs. `crypto.rs` adds SHA-256
+  and RSASSA-PKCS1-v1_5/SHA-256 sign/verify plus 2048-bit profile-key
+  generation. Login Success provisioning is exposed as
+  `PlayerSession::provision_chat_signing` + `login_profile` and a `profile_key`
+  GameProfile property; a deterministic test signer exists but enforced mode
+  rejects it. `enforces-secure-chat` parses with a `false` default and emits a
+  startup audit log when enabled. 15 focused integration tests (1 ignored
+  release benchmark) and 2 crypto lib tests.
+- **Remaining:** `join.rs` must call provisioning before Login Success and
+  route `ServerboundChat`/`ServerboundChatSessionUpdate`; `status.rs` still
+  hardcodes `enforcesSecureChat: false`; clientbound Player Chat/Disguised Chat
+  packets, last-seen window validation (`LastSeenMessagesValidator`), Mojang
+  profile-key trust roots, and a real 2048-bit login key-generation path are
+  still open. See `BLOCKERS.md`.
 
 ### P8.3 Full play-packet coverage `[ ]` `XL`
 

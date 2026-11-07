@@ -4,126 +4,54 @@
 > Update it after every completed task. Keep it short and factual.
 > `TODO.md` is the full roadmap. `AGENTS.md` is the operating manual.
 
-Last updated: 2026-11-06
+Last updated: 2026-11-07
 
 ## Current status
 
-- Current commit: see `git log`; the tree is committed and not pushed.
-- Tests: focused join/entity suites pass (6 new `tests/join_entities.rs`
-  checks); the full merged gate was not rerun in this worktree.
-- Tests: **804 passing** on the full merged gate before this slice; the loot
-  drop slice adds 13 `tests/loot_drops.rs` tests (focused runs green).
-- Tests: **804 passing** on the last merged gate (0 failed); the block-entity
-  slice adds **3 lib + 9 integration tests** (focused green on this branch).
-- Tests: **817 passing** with the two known CRLF asset-hash guards skipped;
-  the piston slice adds 7 lib + 9 `tests/pistons.rs` tests (0 failed).
-- Tests: **812 total on this branch** (802 existing + 10 new light-occlusion
-  tests). Focused light suites are green; the coordinator owns the full
-  workspace gate.
-- Tests: **813 passing** on the full merged gate (0 failed).
-- Formatting: `cargo fmt --check` clean; Clippy (`-D warnings`) clean; no build
-  warnings.
-- Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column
-  Java fixture. Ore features and `OreVeinifier` are wired, all 888 placement
-  modifiers execute, and **207/224** configured feature types execute. The
-  2026-11-06 terrain/dripstone/selector batch adds all 21 random selectors and
-  all 4 simple selectors through a two-registry placed/configured resolver,
-  plus disks, springs, lava lake, icebergs/blue ice/ice spikes, Nether blobs,
-  basalt columns/pillar, delta, and pointed/cluster/large dripstone.
-  modifiers execute, and 171/224 configured feature types execute.
-- Structures: recursive `JigsawPlacement` (connectors, junctions, expansion
-  hack, free-space/max-distance checks, priority order), biome/dimension-filtered
-  `StructureGenerator`, opt-in generator wiring for surface structures, igloo and
-  desert-pyramid starts, waterlogging/`structure_void` handling, and explicit
-  missing-template/feature-element failures. Real village NBT assets and
-  feature-pool placement are still missing.
-- Second wave landed: per-state collision/outline shapes with swept physics;
-  incremental light decrease/increase, sky columns, and dirty sections;
-  crafting/furnace/stonecutting/smithing models; the 1,504-item prototype
-  catalog; structure processor lists and template pools; repeaters,
-  comparators, observers, torches, pressure plates, and tripwire; lava/water
-  quenching, fire, and bubble columns; Nether and End generation; entity goals,
-  pathfinding, and natural spawning; online-mode RSA/AES auth and encryption.
-- Join sessions now own a deterministic three-mob set (cow/pig/zombie) with
-  Add Entity, full initial metadata, equipment, per-tick physics/AI environment,
-  health/death/remove packets, chunk-unload and out-of-range cleanup. Player
-  fall/void damage runs through the living metadata store so metadata health and
-  `ClientboundSetHealth` agree. Global broadcast entity packets are filtered to
-  ids the session tracks.
-- Major gaps: recursive jigsaw and structure generator/biome wiring; typed
-  block-entity storage and tickers; pistons; live join entity spawning and AI
-  tick integration; shape-aware light occlusion; item entities/XP orbs from
-  loot drops; dimension storage/portals; chat signing; bridge live-session sync;
-  Folia region ownership.
-- Major gaps: recursive jigsaw and structure generator/biome wiring; remaining
-  block-entity types, container menus/placement wiring, and live ticker
-  integration; pistons; live join entity spawning and AI tick integration;
-  shape-aware light occlusion; loot-table gameplay wiring; dimension
-  storage/portals; chat signing; bridge live-session sync; Folia region
-  ownership.
-  quenching, fire, and bubble columns; pistons and sticky pistons; Nether and
-  End generation; entity goals, pathfinding, and natural spawning; online-mode
-  RSA/AES auth and encryption.
-- Major gaps: recursive jigsaw and structure generator/biome wiring; typed
-  block-entity storage and tickers; live join entity spawning and AI tick
-  integration; shape-aware light occlusion; loot-table gameplay wiring;
-  dimension storage/portals; chat signing; bridge live-session sync; Folia
-  region ownership.
-  tick integration; loot-table gameplay wiring; dimension storage/portals;
-  chat signing; bridge live-session sync; Folia region ownership.
-- Major gaps: shipped structure-template assets, terrain adaptation, structure
-  block-entity/entity persistence, typed block-entity storage and tickers;
-  pistons; live join entity spawning and AI tick integration; shape-aware light
-  occlusion; loot-table gameplay wiring; dimension storage/portals; chat
-  signing; bridge live-session sync; Folia region ownership.
-- Folia region threading is still task queues only.
+- Current commit: see `git log`; all work is committed and pushed to `main`.
+- Tests: **964 passing** on the full merged gate (0 failed); parity holds at
+  **98.75% block-class / 95.80% exact-name**.
+- Formatting/Clippy: clean; no warnings.
+- Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
+  recursive jigsaw, Nether/End generators, dimension storage and portal math.
+- Second/third wave landings: shape collision, incremental/shape-aware light,
+  crafting/furnaces, item prototypes, processors/pools, redstone components,
+  fluids/fire, Nether/End, goals/pathfinding/spawning, online-mode auth, block
+  entities/hoppers, pistons, loot-table drops, join entity tracking, region
+  ownership, armor/status effects, item entities/XP, and daylight detectors.
+- Major gaps: shipped structure-template assets and full village jigsaw data;
+  hopper live pull/push; nether/end portal session wiring and dimension
+  switching; chat signing; bridge live chat/kick/sound packets; entity AI on
+  live sessions; full plugin API surface; real per-world region tick threading.
 
 ## Current focus
 
-1. P2.8/P2.9 remaining: structure template asset extraction, feature-pool
-   placement, terrain adaptation, and structure serialization.
-2. P6 typed block entities (chest/furnace/sign/spawner) and pistons.
-3. P5 join-session entity tracking is wired for the pinned mob set; remaining
-   work is P5.13 per-viewer parity, AI goals/sensors, persistence, and armor.
-2. P4.7/P6 remaining block-entity menus, placement wiring, and ticker
-   integration; pistons.
-2. P6 typed block entities (chest/furnace/sign/spawner) and moving-block NBT.
-3. P5 join-session entity spawning/tracking and AI tick integration.
-4. P1.5 remaining support/waterlogging rules and exact
-   `canOcclude`/`useShapeForLightOcclusion` flags.
-5. P9.3 bridge live-session state and gameplay event dispatch.
+1. P2.8 shipped structure-template assets, feature-pool placement, and village
+   pipeline completion.
+2. P6 hopper live transfer tick and furnace-lit block state.
+3. P7 portal-driven dimension switching and Nether/End structure generation.
+4. P5 live AI goals, armor enchantments, and effect packets.
+5. P9.3 bridge outbound chat/kick/sound/particle packets.
 
 ## Next queue
 
 - [x] P0.1-P0.4, P0.6 foundation, docs, assets, CI, commit policy.
-- [ ] P0.5 reproducible oracle data (deferred, see `BLOCKERS.md`).
-- [~] P1.4 components + item prototypes (network codecs, hashing, Java fixture).
-- [~] P1.5 shapes (support/occlusion/waterlogging/per-state random-tick rules).
-- [~] P1.7 loot/recipes (gameplay wiring; cooked by the next wave).
-- [~] P2.1/P2.2 framework + all 888 modifiers; 171/224 configured types.
-- [~] P2.3-P2.5 ores/trees/vegetation; remaining feature types and fixtures.
-- [~] P2.8 templates/starts/processors/pools; recursive jigsaw + wiring remain.
-- [~] P3.5-P3.8 light (storage/BFS/incremental/outline occlusion; Java fixtures).
-- [~] P2.8/P2.9 templates/starts/processors/pools/jigsaw + generator wiring;
-  template assets, feature pools, terrain adaptation, serialization remain.
-- [~] P3.5-P3.8 light (storage/BFS/incremental; shape occlusion + fixtures).
-- [~] P3.10 ticks/redstone/fluids (pistons, lamps, NBT tick persistence).
-- [~] P4.1-P4.3 physics/breaking (special movement, item entities/XP, Java
-  fixture; shipped loot-table drops are wired).
-- [~] P3.10 ticks/redstone/fluids (pistons landed; lamps, tripwire hooks, leaf
-  decay, crops, and NBT tick persistence remain).
-- [~] P4.1-P4.3 physics/breaking (special movement, loot, item entities).
-- [~] P4.7 block entities (typed chest/furnace/sign/spawner + chunk NBT/world
-  persistence done; other types, menus, placement, and live ticks remain).
-- [~] P4.8 crafting (menus, packets, recipe book, brewing).
-- [~] P5.1/P5.2 metadata/AI (join mobs, initial metadata/equipment, damage/death,
-  and player damage are wired; persistence, armor, more goals/sensors remain).
-- [~] P5.13 entity tracking (session-owned mobs plus tracked-id filtering;
-  velocity/animation/passenger/global tracking parity remains).
-- [~] P7.1-P7.3 Nether/End (storage, portals, structures, Java fixtures).
-- [~] P8.1 online mode core (binary wired; TLS, chat signing).
-- [~] P9.2/P9.3 bridge proxies/events (live sessions, API depth).
-- [ ] P10 Folia region ownership.
+- [ ] P0.5 reproducible oracle data (deferred).
+- [~] P1.4 components/prototypes (network codecs, hashing, fixtures).
+- [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
+- [~] P1.7 loot/recipes (block drops wired; entity/chest drops next).
+- [~] P2.1/P2.2 207/224 feature types and all modifiers.
+- [~] P2.8 recursive jigsaw (shipped templates and feature pools remain).
+- [~] P3.5-P3.8 light (shape occlusion; Java light fixtures remain).
+- [~] P3.10 ticks/redstone (lamps/daylight/doors; pistons/hoppers wiring).
+- [~] P4.1-P4.4 physics/breaking/item entities (special movement, XP polish).
+- [~] P4.8 crafting (menus, packets, recipe book).
+- [~] P5.1/P5.2 metadata/AI/effects (live AI and effect packets).
+- [~] P6 block entities (chest/furnace/sign/spawner/hopper, furnaces tick).
+- [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
+- [~] P8.1 online-mode core (TLS and chat signing).
+- [~] P9.2/P9.3 bridge proxies/events (outbound packets, API depth).
+- [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

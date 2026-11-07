@@ -1,9 +1,9 @@
 # Folia-RS Handoff
 
-Last updated: 2026-11-06
+Last updated: 2026-11-07
 Repository: https://github.com/HappyGamblingAddict/folia-rs
 Branch: `main`
-Last local commit: see `git log` (not pushed)
+Last local commit: see `git log` (pushed)
 
 This document is a status snapshot for continuing the Rust rewrite of Folia
 1.21.11. It is not a claim of parity. The project is still a partial server.
@@ -20,12 +20,11 @@ Architecture:
 - Rust owns the server, world, protocol, game logic, and tick loop.
 - The core has no Java runtime dependency. An embedded JVM starts lazily only
   when `plugins/` contains at least one `.jar`; it exists solely for plugin
-  API/classloading/events and the compatibility bridge. With no jars (or
-  `FOLIA_DISABLE_PLUGINS=1`) the server runs fully native.
+  API/classloading/events and the compatibility bridge.
 - Folia 1.21.11 decompiled sources are the reference at
   `C:/Users/austr/Downloads/rustfol/decompiled`.
-- Java oracle data is captured from a real Folia server, then embedded or used
-  in differential tests.
+- Java oracle data is captured from a real Folia server and used in
+  differential tests.
 
 Current size is still far below the 744k-line Folia codebase. Major gameplay
 systems remain missing.
@@ -34,23 +33,19 @@ systems remain missing.
 
 ## Working tree state
 
-The working tree is clean and work is committed in coherent slices on `main`.
-Do not branch, reset, or push unless the user asks.
+The working tree is clean and work is committed and pushed on `main`.
 
-Verified state (2026-11-06, merged workspace):
+Verified state (2026-11-07, merged workspace):
 
 ```text
-812 tests on this branch (802 existing + 10 new light-occlusion tests)
-focused light suites: green
+964 tests passing on the merged tree (full gate)
+0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
 cargo build --workspace: clean
 native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
-
-The full workspace gate is run by the coordinator after merging worker
-branches; the 812 count above is this branch's focused-light slice.
 
 Worldgen parity on the 16-column fixture:
 

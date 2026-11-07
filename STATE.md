@@ -72,6 +72,7 @@ Last updated: 2026-11-07
   storage still one global lock).
 
 ## Recently completed
+- 2026-11-07: oxygen/drowning tick model; 3 integration tests.
 - 2026-11-07: Unbreaking durability rolls; 4 integration tests.
 - 2026-11-07: P10.4 region tick loop (first slice) — `RegionTickDriver` groups
   cached chunks into vanilla 8x8 regions, ticks the global queue first and each

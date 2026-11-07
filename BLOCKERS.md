@@ -1226,3 +1226,9 @@ These are expected gaps, not reasons to stop:
 - Mending, Unbreaking on armor, item break sounds/particles, and XP repair are
   not modeled; the live break path must call the RNG variant to get Unbreaking.
 - No Java durability fixture yet; tests pin the formula and distribution band.
+
+## 2026-11-07 - Oxygen boundaries
+
+- No live call from the session loop and no packet for air changes; breathing
+  enchantments, water breathing, conduit power, and bubble columns are not
+  applied.

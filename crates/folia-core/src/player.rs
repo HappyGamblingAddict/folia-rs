@@ -1359,6 +1359,15 @@ pub enum FoodTick {
     Starve,
 }
 
+/// Result of one oxygen tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AirTick {
+    Nothing,
+    Consumed,
+    Refilled,
+    Drowning,
+}
+
 impl PlayerSession {
     /// Adds exhaustion, then burns saturation and food in whole 4-point units.
     pub fn add_exhaustion(&mut self, amount: f32) {
@@ -1447,6 +1456,26 @@ impl PlayerSession {
         }
         let needed = Self::xp_needed_for_next_level(self.xp_level) as f32;
         self.xp_progress = (remaining / needed).clamp(0.0, 0.999_999);
+    }
+
+    /// One oxygen tick. Submerged players lose one air per tick and take two
+    /// damage every 20 ticks once the bar has drained; air refills by four per
+    /// tick out of water. Returns what happened for packet/tests.
+    pub fn tick_air(&mut self, submerged: bool) -> AirTick {
+        if submerged {
+            self.air = (self.air - 1).max(-20);
+            if self.air == -20 {
+                self.air = 0;
+                self.health = (self.health - 2.0).max(0.0);
+                return AirTick::Drowning;
+            }
+            AirTick::Consumed
+        } else if self.air < 300 {
+            self.air = (self.air + 4).min(300);
+            AirTick::Refilled
+        } else {
+            AirTick::Nothing
+        }
     }
 }
 

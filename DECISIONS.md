@@ -3206,3 +3206,10 @@ Format:
   wear when `nextInt(level + 1) != 0`, matching `ItemStack.hurtAndBreak`.
 - The old `apply_block_durability` wrapper uses a fixed legacy RNG so existing
   no-enchant callers and tests stay stable; production should pass the level RNG.
+
+## 2026-11-07 - Oxygen is a player model, not yet wired to sessions
+
+- `tick_air` follows the vanilla `-20` drowning threshold, two damage per
+  20-tick cycle, and four-per-tick refill out of water.
+- `join.rs` does not call it yet; water/eye-submersion detection, water-breathing
+  and respiration enchantments, and bubble columns remain open.

@@ -42,6 +42,15 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P4.6/P4.7 enchanting-table backend - `item_components::enchanting`
+  ships all 43 1.21.11 enchantment definitions (registry id, max level,
+  category, supported/primary item tags, slots, weight, min/max cost curves,
+  anvil cost, exclusive set, treasure flag), deterministic three-slot offers
+  from an enchantment seed and bookshelf power, click validation with lapis and
+  experience-level consumption, and component merge with max-level caps and
+  exclusive-set rejection. 15 `tests/enchanting.rs` tests. Still open: menu
+  packets/state ids, anvil combine/repair, plugin events, and a Java RNG
+  fixture.
 - 2026-11-07: P4.8/P4.9 brewing and consumables - `crafting.rs` models the
   brewing stand's five slots, blaze-powder fuel charges, 400-tick brew timer,
   ingredient-change abort, all vanilla potion mixes and the two container mixes;
@@ -1732,6 +1741,11 @@ instantly on start-destroy and places on use-item-on.
   `AbstractContainerMenu.java`, `ServerboundContainerClickPacket`.
 - **Done when:** Inventory click sequences match Java and items persist with
   components.
+- **Progress (2026-11-07):** the enchanting-table backend lives in
+  `item_components::enchanting` (all 43 definitions, deterministic offers,
+  cost/XP/lapis validation, and `minecraft:enchantments` merge). Menu type /
+  state-id / packet wiring, bookshelf scanning, `PrepareItemEnchantEvent` /
+  `EnchantItemEvent`, and anvil combine/repair remain open.
 
 ### P4.7 Block entities `[~]` `XL`
 

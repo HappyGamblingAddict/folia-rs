@@ -13,6 +13,49 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-07 — Enchanting table is a deterministic backend slice
+
+- Context: the shipped client menu uses `EnchantmentMenu`'s two-phase random
+  order (costs first, then a reseed per slot), `EnchantmentHelper`'s weighted
+  selection with enchantability variance, and `ItemStack.enchant` component
+  writes. The slice may not edit `lib.rs`, `inventory.rs`, `join.rs`, or
+  `Cargo.toml`.
+- Decision: embed the 43-enchantment definition table directly in
+  `src/enchanting.rs`, derived from `data/minecraft/enchantment/*.json`
+  (DataVersion 4788), and cross-check its ids against the existing
+  `assets/registries/enchantment.tsv` at test time. Applicability, exclusive
+  sets, and the offer pool read the existing flattened tag assets
+  (`enchantable/*`, `exclusive_set/*`, `in_enchanting_table`, `treasure`).
+- Decision: declare the module with `#[path = "enchanting.rs"] pub mod
+  enchanting;` inside `item_components.rs` because `lib.rs` is outside this
+  slice's file scope. The public path is
+  `folia_core::item_components::enchanting`; promote it to `pub mod
+  enchanting;` in `lib.rs` at merge if desired.
+- Decision: offer generation and click application use
+  `LegacyRandomSource` in the exact vanilla order: one seed draws the three
+  costs, then each slot reseeds to `seed + slot` for the list, the book
+  single-entry removal, and the hint. A click re-rolls with `seed + slot` and
+  the stored cost, so the applied list is identical to the offer's list.
+  Applying `slot + 1` levels and `slot + 1` lapis matches
+  `Player.onEnchantmentPerformed` and `ItemStack.consume`; creative bypasses
+  the requirements and spends nothing.
+- Decision: `apply_enchantments` merges into `minecraft:enchantments` (or
+  `minecraft:stored_enchantments` for books), upgrades to the higher level,
+  clamps at `max_level`, and rejects a rolled enchantment that conflicts with
+  an existing or other rolled enchantment. Vanilla's `ItemStack.enchant`
+  clamps only at 255 and does not check existing exclusivity; the stricter
+  behavior is intentional for this task and keeps incompatible components
+  impossible. Unknown (modded) enchantment names are preserved but skipped in
+  the compatibility check.
+- Decision: anvil combine/repair, renaming, and repair-cost accumulation are
+  an explicit `AnvilError::Unsupported`; no empty result is returned.
+- Why: the backend is independently testable without menu packets, and the
+  seed order and definition data are the parity-critical parts.
+- Consequences: `join.rs`/menu state ids, bookshelf scanning, Paper
+  `PrepareItemEnchantEvent`/`EnchantItemEvent`, the client clue display, and a
+  Java RNG fixture remain open. Direct `apply_enchantments` calls clamp
+  over-maximum levels instead of honoring vanilla's command path.
+
 ## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a

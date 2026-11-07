@@ -3885,16 +3885,19 @@ mod tests {
     #[test]
     fn console_gamemode_reaches_a_registered_session() {
         let (guard, receiver) = SessionCommandGuard::register("ConsoleTarget", [0x9a; 16]);
-        let worker =
-            std::thread::spawn(
-                move || match receiver.recv_timeout(Duration::from_secs(2)) {
+        let worker = std::thread::spawn(move || {
+            loop {
+                match receiver.recv_timeout(Duration::from_secs(2)) {
                     Ok(SessionCommand::SetGameMode { mode, reply }) => {
                         assert_eq!(mode, 1);
                         let _ = reply.send(Ok(()));
+                        break;
                     }
-                    other => panic!("unexpected console command: {other:?}"),
-                },
-            );
+                    Ok(_) => continue,
+                    Err(error) => panic!("unexpected console command: {error:?}"),
+                }
+            }
+        });
 
         let output = execute_console_command("gamemode creative ConsoleTarget");
         assert_eq!(

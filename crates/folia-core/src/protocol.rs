@@ -2,7 +2,12 @@ use crate::crypto::{self, AES_KEY_SIZE, Cfb8};
 use crate::varint::{read_varint, read_varint_slice, write_varint};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// A client that accepts no bytes for this long is treated as dead. The short
+/// socket write timeout only bounds how often a session can poll for shutdown;
+/// the stall budget keeps the old "stalled client" disconnect behaviour.
+const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Vanilla clients refuse packets larger than 2 MiB. Keeping the same limit in
 /// the Rust core prevents malicious length prefixes from allocating unbounded
@@ -126,6 +131,11 @@ impl<S: Read + Write> Connection<S> {
     }
 
     pub fn write_packet(&mut self, payload: &[u8]) -> io::Result<()> {
+        let frame = self.encode_frame(payload)?;
+        self.stream.write_all(&frame)
+    }
+
+    fn encode_frame(&mut self, payload: &[u8]) -> io::Result<Vec<u8>> {
         if payload.len() > MAX_PACKET_SIZE {
             return Err(invalid("packet exceeds 2 MiB"));
         }
@@ -135,7 +145,7 @@ impl<S: Read + Write> Connection<S> {
         if let Some(cipher) = &mut self.encryption {
             cipher.process(&mut frame);
         }
-        self.stream.write_all(&frame)
+        Ok(frame)
     }
 
     fn read_frame_length(&mut self) -> io::Result<usize> {
@@ -171,6 +181,52 @@ impl Connection<TcpStream> {
 
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.stream.set_write_timeout(timeout)
+    }
+
+    /// Send one frame, retrying socket write timeouts so `keep_going` gets a
+    /// chance to observe shutdown instead of the session waiting out the full
+    /// socket timeout while a client is not reading.
+    ///
+    /// Returns `false` when `keep_going` asked to abandon the frame; the caller
+    /// owns unwinding and saving.
+    pub fn write_packet_while<F>(&mut self, payload: &[u8], mut keep_going: F) -> io::Result<bool>
+    where
+        F: FnMut() -> bool,
+    {
+        let frame = self.encode_frame(payload)?;
+        let mut written = 0;
+        let mut stalled = Instant::now();
+        while written < frame.len() {
+            match self.stream.write(&frame[written..]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "connection closed while writing a packet",
+                    ));
+                }
+                Ok(count) => {
+                    written += count;
+                    stalled = Instant::now();
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut =>
+                {
+                    if !keep_going() {
+                        return Ok(false);
+                    }
+                    if stalled.elapsed() >= WRITE_STALL_TIMEOUT {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "the client stopped reading packets",
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
     }
 
     pub fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
@@ -1284,6 +1340,37 @@ mod tests {
     fn ping_round_trip() {
         let payload = build_ping(0x1122334455667788);
         assert_eq!(parse_ping(&payload).unwrap(), 0x1122334455667788);
+    }
+
+    #[test]
+    fn cancellable_write_polls_while_the_client_is_not_reading() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut connection = Connection::new(server);
+        connection
+            .set_write_timeout(Some(Duration::from_millis(5)))
+            .unwrap();
+
+        // The client never reads, so the loopback buffers fill and every later
+        // write times out. The callback must be polled and must be able to
+        // abandon the frame instead of waiting out a long socket timeout.
+        let payload = vec![0x5A; MAX_PACKET_SIZE];
+        let started = Instant::now();
+        let mut abandoned = false;
+        for _ in 0..10_000 {
+            let keep_going = || started.elapsed() < Duration::from_millis(200);
+            if !connection
+                .write_packet_while(&payload, keep_going)
+                .expect("loopback write")
+            {
+                abandoned = true;
+                break;
+            }
+        }
+        assert!(abandoned, "filled the buffers and observed cancellation");
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        drop(client);
     }
 
     #[test]

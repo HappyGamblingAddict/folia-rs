@@ -53,7 +53,11 @@ fn read_packet(stream: &mut LoginStream) -> io::Result<Vec<u8>> {
 }
 
 fn write_packet(stream: &mut LoginStream, payload: &[u8]) -> io::Result<()> {
-    stream.write_packet(payload)
+    if shutdown_requested() {
+        return Ok(());
+    }
+    stream.write_packet_while(payload, || !shutdown_requested())?;
+    Ok(())
 }
 
 const LOGIN_ACKNOWLEDGED: i32 = 3;
@@ -1401,6 +1405,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     // the loading screen until it has both; the old order generated every
     // column first, so a 441-column join sat on the loading screen for the
     // whole batch. The first column streamed below is this position's column.
+    //
+    // Use a short write timeout from here on: `write_packet` retries the
+    // timeout and polls the shutdown flag, so a client that stops reading can
+    // never keep a session from saving during shutdown. The retry loop still
+    // disconnects a client that accepts no bytes for 15 seconds.
+    stream.set_write_timeout(Some(SESSION_TICK_INTERVAL))?;
     write_packet(&mut stream, &position_packet(&session, 1000))?;
     // Session-owned mobs are announced between the position and the chunk
     // batch. The client keeps them until their columns arrive, and the join
@@ -1454,6 +1464,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     println!("[join] chunk source: {}", counts.describe());
 
     stream.set_read_timeout(Some(SESSION_TICK_INTERVAL))?;
+    stream.set_write_timeout(Some(SESSION_TICK_INTERVAL))?;
     let mut teleport_id = 1001i32;
     let mut last_keepalive = Instant::now();
     let mut last_save = Instant::now();
@@ -3081,11 +3092,14 @@ fn send_columns(
         return Ok(());
     }
 
-    let (sender, receiver) = std::sync::mpsc::sync_channel(GENERATION_QUEUE);
     let next = AtomicUsize::new(0);
     let next = &next;
     let workers = generation_workers(pending.len());
     std::thread::scope(|scope| -> io::Result<()> {
+        // The receiver is dropped as soon as this closure returns, even on an
+        // early shutdown return, so workers blocked on a full queue see the
+        // disconnect and can exit before `thread::scope` joins them.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(GENERATION_QUEUE);
         for _ in 0..workers {
             let sender = sender.clone();
             scope.spawn(move || {

@@ -1214,6 +1214,12 @@ impl LivingEntity {
     /// negative damage is zero, and the 20-tick invulnerability window ignores
     /// hits that do not exceed the previous hit.
     pub fn hurt(&mut self, amount: f32) -> HurtResult {
+        self.hurt_with(amount, false)
+    }
+
+    /// [`Self::hurt`] with an explicit invulnerability bypass for damage types
+    /// such as the void, matching `DamageSource.is(DamageTypeTags.BYPASSES_INVULNERABILITY)`.
+    pub fn hurt_with(&mut self, amount: f32, bypass_invulnerability: bool) -> HurtResult {
         if self.removed || self.dead || self.health <= 0.0 {
             return HurtResult::rejected();
         }
@@ -1225,12 +1231,12 @@ impl LivingEntity {
         };
 
         let in_invulnerable_window = self.invulnerable_time > self.invulnerable_duration / 2;
-        if in_invulnerable_window && amount <= self.last_hurt {
+        if !bypass_invulnerability && in_invulnerable_window && amount <= self.last_hurt {
             return HurtResult::rejected();
         }
 
         self.last_hurt = amount;
-        if !in_invulnerable_window {
+        if !bypass_invulnerability && !in_invulnerable_window {
             self.invulnerable_time = self.invulnerable_duration;
             self.hurt_duration = 10;
             self.hurt_time = self.hurt_duration;

@@ -869,3 +869,15 @@ These are expected gaps, not reasons to stop:
   `TemplateProvider` backed by it; implement `FeaturePoolElement` through the
   configured-feature pipeline; then add a start cache/region manager so
   cross-chunk height sampling and terrain adaptation can be exact.
+
+## 2026-11-07 - Effects/armor slice boundaries
+
+- Armor enchantments (Protection/Blast/Fire/Projectile), armor durability loss,
+  and armor trims are not modeled.
+- No absorption, health boost, hunger, levitation, slow falling, conduit,
+  dolphin, bad omen, or darkness gameplay; only the listed effect flags and
+  modifiers are exposed.
+- Effect application/removal is not wired to consuming potions, beacons,
+  conduits, or commands, and no `ClientboundUpdateMobEffect` packet is emitted.
+- Damage types are a typed enum, not the full `DamageSources` registry; totems,
+  absorption, knockback, death messages, and loot on death remain open.

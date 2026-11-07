@@ -52,6 +52,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P5 damage/effects slice — `effects.rs` adds the armor table
+  (diamond 20 points/8 toughness, iron 15/0, leather 7/0), the Java
+  `CombatRules.getDamageAfterAbsorb` curve, Resistance/Speed/Slowness/
+  Strength/Weakness/Jump Boost modifiers, poison/wither/regeneration tick
+  intervals, fire-resistance flag, typed `DamageType` bypass rules, and a
+  `LivingEntity::hurt_with` invulnerability bypass for void damage. `tests/effects.rs`
+  adds 11 focused tests.
 - 2026-11-06: P5 join-session entity wiring — live sessions now spawn a
   deterministic cow/pig/zombie near the player, send Add Entity (id 1), full
   synched metadata (id 97, including health), and equipment (id 100), then tick

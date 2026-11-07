@@ -2734,3 +2734,16 @@ Format:
   plumbing slice.
 - Consequences: collapsed-roof/suspicious-sand choices can differ from Java for
   the same seed. The four chests and main pyramid body are position-stable.
+
+## 2026-11-07 - Armor and effect math is formula-based, not entity-differential
+
+- Armor uses the vanilla `CombatRules.getDamageAfterAbsorb` curve with the
+  per-material point table (leather/chain/iron/gold/diamond/netherite/turtle)
+  and diamond/netherite toughness. Enchantment Protection and armor durability
+  are not part of the reduction yet.
+- Status-effect intervals use `25 >> amplifier`, `40 >> amplifier`, and
+  `50 >> amplifier` for poison, wither, and regeneration, clamped to one tick.
+  Effects are ticked by callers; instant effects are added but not scheduled.
+- `LivingEntity::hurt_with` adds the invulnerability bypass used by void damage;
+  `hurt` delegates to it with the default rules so existing behavior is
+  unchanged.

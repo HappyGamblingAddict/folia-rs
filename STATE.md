@@ -126,6 +126,11 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-07: effects/armor slice — `effects.rs` models armor points and the
+  vanilla absorb curve, status effects (poison/wither/regen intervals,
+  resistance, speed/slowness, strength/weakness, jump boost, fire resistance),
+  typed damage bypass flags, and a void-damage invulnerability bypass on
+  `LivingEntity`. 11 integration + 2 lib tests.
 - 2026-11-06: P10.1/P10.2/P10.6 region ownership slice — `region.rs` now makes
   ownership real: public `Region` (owned task queue, `RegionWorldSlice` world
   token + sparse cells, monotonic tick counter), `RegionOwned<T>`/`OwnedWorld`

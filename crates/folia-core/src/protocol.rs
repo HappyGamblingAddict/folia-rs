@@ -571,6 +571,17 @@ pub const LAST_SEEN_MESSAGES_MAX: usize = 20;
 pub const MAX_CHAT_MESSAGE_LENGTH: usize = 256;
 /// `GameProtocolTypes.SERVERBOUND_CHAT` registration index.
 pub const SERVERBOUND_CHAT: i32 = 8;
+/// `ServerboundChatSessionUpdatePacket` in the 1.21.11 play protocol.
+pub const SERVERBOUND_CHAT_SESSION_UPDATE: i32 = 9;
+/// `ClientboundPlayerChatPacket` in the 1.21.11 play protocol (bundle offset
+/// included, like the other play ids in this crate).
+pub const PLAY_CLIENTBOUND_PLAYER_CHAT: i32 = 63;
+/// `ClientboundDisguisedChatPacket` in the 1.21.11 play protocol.
+pub const PLAY_CLIENTBOUND_DISGUISED_CHAT: i32 = 33;
+/// `minecraft:chat` in the shipped `chat_type` registry.
+pub const CHAT_TYPE_CHAT_ID: i32 = 0;
+/// `LastSeenMessages.MAX_ENTRIES` / the server's acknowledgement window.
+pub const LAST_SEEN_MESSAGES_WINDOW: usize = 20;
 /// `MessageSignatureCache.DEFAULT_CAPACITY`.
 pub const MESSAGE_SIGNATURE_CACHE_CAPACITY: usize = 128;
 
@@ -1024,6 +1035,226 @@ pub fn build_serverbound_chat(chat: &ServerboundChat) -> io::Result<Vec<u8>> {
     Ok(writer.into_inner())
 }
 
+/// `RemoteChatSession.Data` carried by `ServerboundChatSessionUpdatePacket`.
+/// `public_key` is the DER SubjectPublicKeyInfo and `key_signature` is the
+/// Mojang-issued signature over the key data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerboundChatSessionUpdate {
+    pub session_id: [u8; 16],
+    pub expires_at_ms: i64,
+    pub public_key: Vec<u8>,
+    pub key_signature: Vec<u8>,
+}
+
+pub fn parse_serverbound_chat_session_update(
+    payload: &[u8],
+) -> io::Result<ServerboundChatSessionUpdate> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_CHAT_SESSION_UPDATE {
+        return Err(invalid(format!(
+            "expected serverbound chat session update id {SERVERBOUND_CHAT_SESSION_UPDATE}, got {id}"
+        )));
+    }
+    let mut session_id = [0u8; 16];
+    session_id.copy_from_slice(reader.read_bytes(16)?);
+    let expires_at_ms = reader.read_i64()?;
+    let public_key = reader.read_byte_array(4096)?;
+    let key_signature = reader.read_byte_array(4096)?;
+    if !reader.is_empty() {
+        return Err(invalid(
+            "trailing bytes after serverbound chat session update",
+        ));
+    }
+    Ok(ServerboundChatSessionUpdate {
+        session_id,
+        expires_at_ms,
+        public_key,
+        key_signature,
+    })
+}
+
+pub fn build_serverbound_chat_session_update(
+    update: &ServerboundChatSessionUpdate,
+) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_CHAT_SESSION_UPDATE)?;
+    writer.write_bytes(&update.session_id);
+    writer.write_i64(update.expires_at_ms)?;
+    writer.write_byte_array(&update.public_key)?;
+    writer.write_byte_array(&update.key_signature)?;
+    Ok(writer.into_inner())
+}
+
+/// Build a `ClientboundPlayerChatPacket` body. Components are already encoded
+/// network-NBT roots; `None` for `target_component` writes the absent target.
+#[allow(clippy::too_many_arguments)]
+pub fn build_player_chat_packet(
+    global_index: i32,
+    sender: [u8; 16],
+    index: i32,
+    signature: Option<&MessageSignature>,
+    body: &SignedMessageBody,
+    unsigned_content: Option<&[u8]>,
+    name_component: &[u8],
+    target_component: Option<&[u8]>,
+) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_CLIENTBOUND_PLAYER_CHAT)?;
+    writer.write_varint(global_index)?;
+    writer.write_bytes(&sender);
+    writer.write_varint(index)?;
+    match signature {
+        Some(signature) => {
+            writer.write_u8(1)?;
+            signature.write(&mut writer)?;
+        }
+        None => writer.write_u8(0)?,
+    }
+    // An empty cache writes every last-seen entry in full, which is always a
+    // valid encoding and avoids per-recipient cache bookkeeping on the server.
+    body.write_packed(&mut writer, &MessageSignatureCache::new(1))?;
+    match unsigned_content {
+        Some(component) => {
+            writer.write_u8(1)?;
+            writer.write_bytes(component);
+        }
+        None => writer.write_u8(0)?,
+    }
+    writer.write_varint(0)?; // FilterMask.PASS_THROUGH
+    write_chat_type_bound(&mut writer, name_component, target_component)?;
+    Ok(writer.into_inner())
+}
+
+/// Build a `ClientboundDisguisedChatPacket` body.
+pub fn build_disguised_chat_packet(
+    message_component: &[u8],
+    name_component: &[u8],
+    target_component: Option<&[u8]>,
+) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_CLIENTBOUND_DISGUISED_CHAT)?;
+    writer.write_bytes(message_component);
+    write_chat_type_bound(&mut writer, name_component, target_component)?;
+    Ok(writer.into_inner())
+}
+
+/// `ChatType.Bound.STREAM_CODEC` for `minecraft:chat`: registry holder id 0
+/// plus one, the sender display name, then an optional target name.
+fn write_chat_type_bound(
+    writer: &mut PacketWriter,
+    name_component: &[u8],
+    target_component: Option<&[u8]>,
+) -> io::Result<()> {
+    writer.write_varint(CHAT_TYPE_CHAT_ID.wrapping_add(1))?;
+    writer.write_bytes(name_component);
+    match target_component {
+        Some(component) => {
+            writer.write_u8(1)?;
+            writer.write_bytes(component);
+        }
+        None => writer.write_u8(0)?,
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrackedChatSignature {
+    signature: MessageSignature,
+    pending: bool,
+}
+
+/// Server-side `LastSeenMessagesValidator`. Each live session tracks the
+/// signatures of the signed chat packets it has been sent; every incoming chat
+/// packet acknowledges a window of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastSeenValidator {
+    window: usize,
+    tracked: Vec<Option<TrackedChatSignature>>,
+    last_pending: Option<MessageSignature>,
+}
+
+impl LastSeenValidator {
+    pub fn new(window: usize) -> Self {
+        assert!(
+            window > 0 && window <= LAST_SEEN_MESSAGES_MAX,
+            "last-seen window must be 1..={LAST_SEEN_MESSAGES_MAX}"
+        );
+        Self {
+            window,
+            tracked: vec![None; window],
+            last_pending: None,
+        }
+    }
+
+    /// `LastSeenMessagesValidator.addPending`.
+    pub fn add_pending(&mut self, signature: MessageSignature) {
+        if self.last_pending.as_ref() == Some(&signature) {
+            return;
+        }
+        self.tracked.push(Some(TrackedChatSignature {
+            signature: signature.clone(),
+            pending: true,
+        }));
+        self.last_pending = Some(signature);
+    }
+
+    pub fn tracked_messages(&self) -> usize {
+        self.tracked.len()
+    }
+
+    /// `LastSeenMessagesValidator.applyUpdate`: advance the window, apply the
+    /// acknowledgement bits, and verify the client checksum.
+    pub fn apply_update(&mut self, update: LastSeenUpdate) -> io::Result<LastSeenMessages> {
+        let advanceable = self.tracked.len().saturating_sub(self.window);
+        let offset = usize::try_from(update.offset)
+            .map_err(|_| invalid(format!("negative last-seen offset {}", update.offset)))?;
+        if offset > advanceable {
+            return Err(invalid(format!(
+                "advanced last-seen window by {offset} messages, but expected at most {advanceable}"
+            )));
+        }
+        self.tracked.drain(0..offset);
+
+        let mut list = Vec::new();
+        for index in 0..self.window {
+            let acknowledged = update.acknowledges(index);
+            match (&self.tracked[index], acknowledged) {
+                (Some(entry), true) => {
+                    list.push(entry.signature.clone());
+                    self.tracked[index] = Some(TrackedChatSignature {
+                        signature: entry.signature.clone(),
+                        pending: false,
+                    });
+                }
+                (None, true) => {
+                    return Err(invalid(format!(
+                        "last-seen update acknowledged unknown message at index {index}"
+                    )));
+                }
+                (Some(entry), false) if !entry.pending => {
+                    return Err(invalid(format!(
+                        "last-seen update ignored previously acknowledged message at index {index}"
+                    )));
+                }
+                _ => {
+                    self.tracked[index] = None;
+                }
+            }
+        }
+
+        let messages = LastSeenMessages::new(list)?;
+        if messages.compute_checksum() != update.checksum {
+            return Err(invalid(format!(
+                "last-seen checksum mismatch: client {}, server {}",
+                update.checksum,
+                messages.compute_checksum()
+            )));
+        }
+        Ok(messages)
+    }
+}
+
 /// Packets at or above `threshold` are zlib-compressed after the login
 /// `Set Compression` packet. Below the threshold, Minecraft sends a zero
 /// uncompressed-length marker followed by the raw payload.
@@ -1464,5 +1695,110 @@ mod tests {
         assert!(parse_login_start(&payload).is_err());
         let payload = build_login_start("ABCDEFGHIJKLMNOP", None).unwrap();
         assert!(parse_login_start(&payload).is_ok());
+    }
+
+    #[test]
+    fn chat_session_update_round_trips() {
+        let update = ServerboundChatSessionUpdate {
+            session_id: [0x31; 16],
+            expires_at_ms: 1_800_000_000_000,
+            public_key: vec![0xAA; 294],
+            key_signature: vec![0xBB; 256],
+        };
+        let bytes = build_serverbound_chat_session_update(&update).unwrap();
+        assert_eq!(
+            parse_serverbound_chat_session_update(&bytes).unwrap(),
+            update
+        );
+        assert!(parse_serverbound_chat_session_update(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn player_chat_packet_uses_the_vanilla_field_order() {
+        let body =
+            SignedMessageBody::new("hello", 1_700_000_000_000, 42, LastSeenMessages::empty())
+                .unwrap();
+        let signature = MessageSignature::new([0x5A; MESSAGE_SIGNATURE_BYTES]);
+        let packet = build_player_chat_packet(
+            3,
+            [0x11; 16],
+            9,
+            Some(&signature),
+            &body,
+            None,
+            b"NAME",
+            None,
+        )
+        .unwrap();
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_CLIENTBOUND_PLAYER_CHAT);
+        assert_eq!(reader.read_varint().unwrap(), 3);
+        assert_eq!(reader.read_bytes(16).unwrap(), &[0x11; 16]);
+        assert_eq!(reader.read_varint().unwrap(), 9);
+        assert!(reader.read_bool().unwrap());
+        assert_eq!(reader.read_bytes(256).unwrap(), &[0x5A; 256]);
+        assert_eq!(reader.read_string().unwrap(), "hello");
+        assert_eq!(reader.read_i64().unwrap(), 1_700_000_000_000);
+        assert_eq!(reader.read_i64().unwrap(), 42);
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert!(!reader.read_bool().unwrap());
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert_eq!(reader.read_varint().unwrap(), CHAT_TYPE_CHAT_ID + 1);
+        assert_eq!(reader.read_bytes(4).unwrap(), b"NAME");
+        assert!(!reader.read_bool().unwrap());
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn disguised_chat_packet_carries_the_chat_bound() {
+        let packet = build_disguised_chat_packet(b"MSG", b"NAME", None).unwrap();
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            PLAY_CLIENTBOUND_DISGUISED_CHAT
+        );
+        assert_eq!(reader.read_bytes(3).unwrap(), b"MSG");
+        assert_eq!(reader.read_varint().unwrap(), CHAT_TYPE_CHAT_ID + 1);
+        assert_eq!(reader.read_bytes(4).unwrap(), b"NAME");
+        assert!(!reader.read_bool().unwrap());
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn last_seen_validator_acknowledges_and_rejects_stale_windows() {
+        let mut validator = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
+        let first = MessageSignature::new([1; MESSAGE_SIGNATURE_BYTES]);
+        let second = MessageSignature::new([2; MESSAGE_SIGNATURE_BYTES]);
+        validator.add_pending(first.clone());
+        validator.add_pending(second.clone());
+        // Consecutive duplicate signatures are not tracked twice.
+        validator.add_pending(second.clone());
+        assert_eq!(validator.tracked_messages(), LAST_SEEN_MESSAGES_WINDOW + 2);
+
+        let acknowledged = LastSeenMessages::new(vec![first.clone(), second.clone()]).unwrap();
+        let update =
+            LastSeenUpdate::new(2, (1 << 18) | (1 << 19), acknowledged.compute_checksum()).unwrap();
+        assert_eq!(validator.apply_update(update).unwrap(), acknowledged);
+
+        // A later packet may not ignore a message the client already acked.
+        let ignore =
+            LastSeenUpdate::new(0, 0, LastSeenMessages::empty().compute_checksum()).unwrap();
+        assert!(validator.apply_update(ignore).is_err());
+
+        // Offset may not advance past the messages that were sent.
+        let beyond =
+            LastSeenUpdate::new(1, 0, LastSeenMessages::empty().compute_checksum()).unwrap();
+        assert!(validator.apply_update(beyond).is_err());
+    }
+
+    #[test]
+    fn last_seen_validator_checks_the_checksum() {
+        let mut validator = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
+        let signature = MessageSignature::new([7; MESSAGE_SIGNATURE_BYTES]);
+        validator.add_pending(signature.clone());
+        let acknowledged = LastSeenMessages::new(vec![signature]).unwrap();
+        let mut update = LastSeenUpdate::new(1, 1 << 19, acknowledged.compute_checksum()).unwrap();
+        update.checksum = update.checksum.wrapping_add(1);
+        assert!(validator.apply_update(update).is_err());
     }
 }

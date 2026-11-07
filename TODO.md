@@ -2510,12 +2510,16 @@ chat signing.
   rejects it. `enforces-secure-chat` parses with a `false` default and emits a
   startup audit log when enabled. 15 focused integration tests (1 ignored
   release benchmark) and 2 crypto lib tests.
-- **Remaining:** `join.rs` must call provisioning before Login Success and
-  route `ServerboundChat`/`ServerboundChatSessionUpdate`; `status.rs` still
-  hardcodes `enforcesSecureChat: false`; clientbound Player Chat/Disguised Chat
-  packets, last-seen window validation (`LastSeenMessagesValidator`), Mojang
-  profile-key trust roots, and a real 2048-bit login key-generation path are
-  still open. See `BLOCKERS.md`.
+- **Remaining:** wired into the live session on 2026-11-08: `join.rs` parses
+  `ServerboundChatSessionUpdate` (remote session id + DER key + expiry) and
+  `ServerboundChat`, maintains the 20-entry `LastSeenValidator` window, verifies
+  signed bodies with the remote chain, and broadcasts signed messages as
+  `ClientboundPlayerChat` (63) and unsigned messages as
+  `ClientboundDisguisedChat` (33) with the `minecraft:chat` bound. `status.rs`
+  advertises the parsed `enforces-secure-chat` flag through `main.rs`. Still
+  open: Mojang profile-key trust roots, signed-command validation, chat
+  filtering/reporting, plugin `AsyncChatEvent` dispatch, and a live two-client
+  wire test.
 
 ### P8.3 Full play-packet coverage `[ ]` `XL`
 

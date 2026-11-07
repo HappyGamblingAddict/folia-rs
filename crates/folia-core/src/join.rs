@@ -26,12 +26,17 @@ use crate::entity::{SessionEntityTracker, WorldCollider};
 use crate::inventory;
 use crate::math::BlockPos;
 use crate::nbt::Tag;
-use crate::player::{PlayerSession, uuid_string};
+use crate::player::{
+    ChatPublicKey, PlayerSession, ProfilePublicKey, RemoteChatSession, SignedMessage, uuid_string,
+};
 use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
 use crate::protocol::{
-    Connection, EncryptionRequest, GameProfile, Handshake, PacketReader, PacketWriter,
-    ProfileProperty, build_encryption_request, build_login_disconnect, build_login_success,
-    parse_encryption_response, parse_login_start,
+    Connection, EncryptionRequest, GameProfile, Handshake, LAST_SEEN_MESSAGES_WINDOW,
+    LastSeenValidator, PacketReader, PacketWriter, ProfileProperty, SERVERBOUND_CHAT,
+    SERVERBOUND_CHAT_SESSION_UPDATE, SignedMessageBody, build_disguised_chat_packet,
+    build_encryption_request, build_login_disconnect, build_login_success,
+    build_player_chat_packet, parse_encryption_response, parse_login_start, parse_serverbound_chat,
+    parse_serverbound_chat_session_update,
 };
 use crate::world::WorldStorage;
 use std::collections::{HashMap, HashSet};
@@ -201,6 +206,13 @@ enum SessionCommand {
     },
     /// `ClientboundSystemChat` with a plain-text component.
     Chat { message: String },
+    /// A player chat message broadcast to every live session. Signed messages
+    /// use `ClientboundPlayerChat`; unsigned messages use Disguised Chat.
+    PlayerChat {
+        sender: [u8; 16],
+        sender_name: String,
+        message: Box<SignedMessage>,
+    },
     /// Play-state disconnect with a text component reason.
     Disconnect { reason: String },
     /// Authoritative move; the play loop writes `ClientboundPlayerPosition`.
@@ -350,6 +362,18 @@ pub fn send_player_chat_by_name(name: &str, message: &str) -> bool {
                 message: message.to_owned(),
             })
             .is_ok()
+    })
+}
+
+/// Broadcast one player chat message to every live session. The sender also
+/// receives the command, matching vanilla's loopback chat delivery.
+fn broadcast_player_chat(sender: [u8; 16], sender_name: &str, message: &SignedMessage) -> usize {
+    broadcast_command(|_| {
+        Some(SessionCommand::PlayerChat {
+            sender,
+            sender_name: sender_name.to_owned(),
+            message: Box::new(message.clone()),
+        })
     })
 }
 
@@ -1478,6 +1502,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let play_started = Instant::now();
     let mut dig = DigState::default();
     let mut menus = inventory::SessionMenus::new();
+    let mut remote_chat: Option<RemoteChatSession> = None;
+    let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
+    let mut next_chat_index = 0i32;
     let (_console_guard, console_commands) =
         SessionCommandGuard::register(&session.name, session.uuid);
 
@@ -1523,6 +1550,32 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 SessionCommand::Chat { message } => {
                     write_packet(&mut stream, &system_chat_packet(&message)?)?;
+                }
+                SessionCommand::PlayerChat {
+                    sender,
+                    sender_name,
+                    message,
+                } => {
+                    let name_component = component_nbt(&sender_name)?;
+                    let packet = if let Some(signature) = &message.signature {
+                        last_seen.add_pending(signature.clone());
+                        let packet = build_player_chat_packet(
+                            next_chat_index,
+                            sender,
+                            message.sequence,
+                            Some(signature),
+                            &message.body,
+                            None,
+                            &name_component,
+                            None,
+                        )?;
+                        next_chat_index = next_chat_index.wrapping_add(1);
+                        packet
+                    } else {
+                        let content = component_nbt(&message.body.content)?;
+                        build_disguised_chat_packet(&content, &name_component, None)?
+                    };
+                    write_packet(&mut stream, &packet)?;
                 }
                 SessionCommand::Disconnect { reason } => {
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
@@ -1779,6 +1832,24 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             death_at = None;
                             for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
                                 write_packet(&mut stream, &packet)?;
+                            }
+                        }
+                    }
+                    SERVERBOUND_CHAT => {
+                        if let Err(error) =
+                            handle_plain_chat(&session, &mut remote_chat, &mut last_seen, &packet)
+                        {
+                            eprintln!("[join] {} chat rejected: {error}", start.name);
+                        }
+                    }
+                    SERVERBOUND_CHAT_SESSION_UPDATE => {
+                        match accept_chat_session_update(&session, &packet) {
+                            Ok(remote) => {
+                                println!("[join] {} registered a chat session key", start.name);
+                                remote_chat = Some(remote);
+                            }
+                            Err(error) => {
+                                eprintln!("[join] {} chat session rejected: {error}", start.name)
                             }
                         }
                     }
@@ -2195,6 +2266,89 @@ fn component_nbt(message: &str) -> io::Result<Vec<u8>> {
     let mut encoded = Vec::new();
     crate::nbt::write_any_tag(&mut encoded, &tag)?;
     Ok(encoded)
+}
+
+fn accept_chat_session_update(
+    session: &PlayerSession,
+    payload: &[u8],
+) -> io::Result<RemoteChatSession> {
+    let update = parse_serverbound_chat_session_update(payload)?;
+    let key = ProfilePublicKey {
+        expires_at_ms: update.expires_at_ms,
+        key: ChatPublicKey::Rsa(update.public_key),
+        key_signature: update.key_signature,
+    };
+    // The client's key is signed by Mojang's root; this server does not ship
+    // the Mojang trust root yet, so only the expiry/algorithm checks run here.
+    RemoteChatSession::new(
+        session.uuid,
+        update.session_id,
+        key,
+        epoch_millis(),
+        crate::config::enforces_secure_chat(),
+        None,
+    )
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+}
+
+/// Validate and broadcast one `ServerboundChat` message. The last-seen window
+/// is advanced before signature verification, matching
+/// `ServerGamePacketListenerImpl.handleChat`.
+fn handle_plain_chat(
+    session: &PlayerSession,
+    remote_chat: &mut Option<RemoteChatSession>,
+    last_seen: &mut LastSeenValidator,
+    payload: &[u8],
+) -> io::Result<()> {
+    let chat = parse_serverbound_chat(payload)?;
+    if chat.message.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "empty chat message",
+        ));
+    }
+    let now_ms = epoch_millis();
+    let seen = last_seen.apply_update(chat.last_seen)?;
+    let body = SignedMessageBody::new(chat.message, chat.timestamp_ms, chat.salt, seen)?;
+    let message = match chat.signature {
+        Some(signature) => {
+            let Some(remote) = remote_chat.as_mut() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "signed chat before a chat session update",
+                ));
+            };
+            let mut message = SignedMessage::new(
+                remote.next_sequence(),
+                session.uuid,
+                *remote.session_id(),
+                body,
+            );
+            message.signature = Some(signature);
+            remote
+                .verify(&message, now_ms)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+            message
+        }
+        None => {
+            if crate::config::enforces_secure_chat() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unsigned chat rejected while enforces-secure-chat is on",
+                ));
+            }
+            SignedMessage::unsigned(0, session.uuid, [0u8; 16], body)
+        }
+    };
+    broadcast_player_chat(session.uuid, &session.name, &message);
+    Ok(())
+}
+
+fn epoch_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn system_chat_packet(message: &str) -> io::Result<Vec<u8>> {
@@ -4288,6 +4442,10 @@ mod tests {
     use crate::anvil::{Compression, RegionFile};
     use crate::chunk::encode_chunk;
     use crate::chunk_packet::flat_chunk;
+    use crate::player::ChatSigningSession;
+    use crate::protocol::{
+        LastSeenMessages, LastSeenUpdate, ServerboundChat, build_serverbound_chat,
+    };
     use crate::world::RegionPos;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4875,6 +5033,92 @@ mod tests {
             Some("Kicked by a plugin")
         );
         assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn unsigned_player_chat_is_broadcast_as_disguised_chat() {
+        let mut session = PlayerSession::new("ChatSender".into(), [0x91; 16], 0.0, 64.0, 0.0);
+        session.uuid = [0x91; 16];
+        let (_guard, receiver) = SessionCommandGuard::register(&session.name, session.uuid);
+        let mut remote = None;
+        let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
+        let update =
+            LastSeenUpdate::new(0, 0, LastSeenMessages::empty().compute_checksum()).unwrap();
+        let payload = build_serverbound_chat(&ServerboundChat {
+            message: "hello world".into(),
+            timestamp_ms: 1,
+            salt: 7,
+            signature: None,
+            last_seen: update,
+        })
+        .unwrap();
+
+        handle_plain_chat(&session, &mut remote, &mut last_seen, &payload).unwrap();
+        let (sender_name, message) = next_player_chat(&receiver, [0x91; 16]);
+        assert_eq!(sender_name, "ChatSender");
+        assert_eq!(message.body.content, "hello world");
+        assert!(message.signature.is_none());
+    }
+
+    #[test]
+    fn signed_player_chat_verifies_the_session_key_and_sequence() {
+        let uuid = [0x92; 16];
+        let session = PlayerSession::new("SignedSender".into(), uuid, 0.0, 64.0, 0.0);
+        let (_guard, receiver) = SessionCommandGuard::register(&session.name, session.uuid);
+        let now_ms = epoch_millis();
+        let mut signing =
+            ChatSigningSession::deterministic_for_tests(uuid, [0x24; 16], [0x5A; 32], now_ms)
+                .unwrap();
+        let signed = signing.sign("signed hello", 11, now_ms).unwrap();
+        let remote = RemoteChatSession::new(
+            uuid,
+            [0x24; 16],
+            signing.public_key().clone(),
+            now_ms,
+            false,
+            None,
+        )
+        .unwrap();
+        let mut remote = Some(remote);
+        let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
+        let update =
+            LastSeenUpdate::new(0, 0, LastSeenMessages::empty().compute_checksum()).unwrap();
+        let payload = build_serverbound_chat(&ServerboundChat {
+            message: "signed hello".into(),
+            timestamp_ms: now_ms,
+            salt: 11,
+            signature: signed.signature.clone(),
+            last_seen: update,
+        })
+        .unwrap();
+
+        handle_plain_chat(&session, &mut remote, &mut last_seen, &payload).unwrap();
+        let (sender_name, message) = next_player_chat(&receiver, uuid);
+        assert_eq!(sender_name, "SignedSender");
+        assert_eq!(message.sequence, 0);
+        assert_eq!(message.body.content, "signed hello");
+        assert_eq!(message.signature, signed.signature);
+
+        // A replay reuses sequence 0, so the remote chain rejects it.
+        assert!(handle_plain_chat(&session, &mut remote, &mut last_seen, &payload).is_err());
+    }
+
+    /// Chat is broadcast to every registered session, so skip commands that
+    /// belong to sessions owned by other tests running in parallel.
+    fn next_player_chat(
+        receiver: &mpsc::Receiver<SessionCommand>,
+        sender: [u8; 16],
+    ) -> (String, SignedMessage) {
+        loop {
+            match receiver.try_recv().expect("chat command") {
+                SessionCommand::PlayerChat {
+                    sender: from,
+                    sender_name,
+                    message,
+                } if from == sender => return (sender_name, *message),
+                _ => {}
+            }
+        }
     }
 
     #[test]

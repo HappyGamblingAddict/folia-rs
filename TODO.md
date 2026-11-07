@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1186 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1188 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,12 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: live AI environment - `BlockCollider::block_at` exposes the
+  real block state (default `None`), `WorldCollider` overrides it, and
+  `SessionEntityTracker` feeds the zombie AI water/lava/ground flags from the
+  actual collider instead of the flat memory world, falling back only when the
+  chunk is unavailable. `AiMob::update_environment_from_blocks` plus a tracker
+  wire test and an AI unit test. 1,188 tests.
 - 2026-11-08: live player chat - `protocol.rs` adds `ServerboundChatSessionUpdate`
   codecs, `ClientboundPlayerChat` (63) / `ClientboundDisguisedChat` (33)
   builders, and `LastSeenValidator` (20-entry window, acknowledgement bits,

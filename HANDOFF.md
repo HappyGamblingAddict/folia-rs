@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1186 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1188 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -50,14 +50,15 @@ native-only startup (no jars): verified to completion
 Latest merged wave (2026-11-08): live signed/unsigned player chat with
 `ServerboundChatSessionUpdate`, a 20-entry last-seen window, signature and
 sequence verification, and `ClientboundPlayerChat`/`ClientboundDisguisedChat`
-broadcast to every session. Join streaming polls shutdown during the column
-scan and chunk generation, and generation workers are detached so a slow chunk
-cannot delay the save path. The 2026-11-07 wave added fossils, trial-chamber
-templates, portal-driven live dimension switching, target blocks +
-dispenser/dropper automation, anvil combine/repair/rename, Nether fortress and
-End city pieces, deeper pathfinding, and the 3x3 feature biome region. All 224
-configured feature types execute and the shipped structure catalogs total 1,202
-templates.
+broadcast to every session. Session AI now reads the real collider's
+water/lava/ground state instead of only the flat memory view. Join streaming
+polls shutdown during the column scan and chunk generation, and generation
+workers are detached so a slow chunk cannot delay the save path. The 2026-11-07
+wave added fossils, trial-chamber templates, portal-driven live dimension
+switching, target blocks + dispenser/dropper automation, anvil
+combine/repair/rename, Nether fortress and End city pieces, deeper pathfinding,
+and the 3x3 feature biome region. All 224 configured feature types execute and
+the shipped structure catalogs total 1,202 templates.
 
 Worldgen parity on the 16-column fixture:
 
@@ -645,13 +646,13 @@ PowerShell redirection must not write UTF-16; use `cmd /c` as above.
   comparators, torches, observers, pressure plates, lamps, pistons, and other
   components are not. Fluids flow on scheduled ticks but lava fire/quenching
   and block-destruction drops are not modeled.
-- Entity AI goals, pathfinding, combat, and general damage are not ticked in
-  live sessions. Join mobs update `entity_ai` environment state but do not use
-  goal selectors; players take fall and void damage through the `LivingEntity`
-  model, and die/respawn at world spawn. Hunger, fire, projectile, armor,
-  enchantment, absorption, knockback, and damage types are still missing.
-  Metadata covers indices 0-9 only, and there is no Java-captured
-  metadata/equipment packet fixture.
+- Entity AI goals, pathfinding, and combat are not ticked in live sessions.
+  Join mobs refresh water/lava/ground from the real collider, but goal
+  selectors and navigation are not driven; players take fall and void damage
+  through the `LivingEntity` model, and die/respawn at world spawn. Hunger,
+  fire, projectile, armor, enchantment, absorption, knockback, and damage types
+  are still missing. Metadata covers indices 0-9 only, and there is no
+  Java-captured metadata/equipment packet fixture.
 - Session entities are viewer-owned: they are not saved with chunks, shared
   between players, or given vanilla per-type tracking ranges. Entity tracking
   still lacks velocity/teleport variants, animation/effect/passenger/leash

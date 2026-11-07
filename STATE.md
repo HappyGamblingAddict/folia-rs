@@ -11,7 +11,7 @@ Last updated: 2026-11-07
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green on `6d18821` (Ubuntu + Windows: fmt, clippy, 1,179 tests,
   release build).
-- Tests: **1186 passing** on the full merged gate (0 failed, 1 ignored
+- Tests: **1188 passing** on the full merged gate (0 failed, 1 ignored
   benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -34,7 +34,7 @@ Last updated: 2026-11-07
 ## Current focus
 
 1. P8.2 signed-command validation, Mojang trust roots, and plugin chat events.
-2. P5 live AI goals, per-viewer ranges, and entity ticking in live sessions.
+2. P5 goal-driven live movement, per-viewer ranges, and attack/damage wiring.
 3. P2.8 structure terrain adaptation and cross-chunk height/start caching.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
 5. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
@@ -60,6 +60,9 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-08: live AI environment — session AI now reads the real collider's
+  water/lava/ground state via `BlockCollider::block_at`, falling back to the
+  flat memory view only for unloaded chunks. 2 focused tests.
 - 2026-11-08: live player chat — serverbound chat/session-update codecs,
   last-seen validator, remote signature/sequence verification, and
   clientbound Player Chat/Disguised Chat broadcast to every session. 7 focused

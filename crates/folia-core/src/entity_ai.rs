@@ -1895,13 +1895,30 @@ impl AiAgent {
         game_time: i64,
         events: &mut Vec<AiEvent>,
     ) {
+        self.tick_with_environment(world, None, actors, game_time, events);
+    }
+
+    /// Tick goals/navigation with an optional real-block environment override.
+    /// Live sessions pass the collider's feet/below states so water, lava, and
+    /// ground checks are not limited to the flat memory world.
+    pub fn tick_with_environment(
+        &mut self,
+        world: &dyn WorldView,
+        environment: Option<(Option<&BlockState>, Option<&BlockState>)>,
+        actors: &[ActorView],
+        game_time: i64,
+        events: &mut Vec<AiEvent>,
+    ) {
         let Self {
             mob,
             goal_selector,
             target_selector,
             look,
         } = self;
-        mob.update_environment(world);
+        match environment {
+            Some((feet, below)) => mob.update_environment_from_blocks(feet, below),
+            None => mob.update_environment(world),
+        }
 
         {
             let mut ctx = GoalContext {

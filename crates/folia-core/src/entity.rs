@@ -1,6 +1,6 @@
 use crate::block_shapes::Aabb;
 use crate::chunk::{BlockState, Chunk};
-use crate::entity_ai::{ActorKind, AiMob, MemoryWorld};
+use crate::entity_ai::{ActorView, AiAgent, MemoryWorld};
 use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
 use crate::math::Vec3;
 use crate::protocol::PacketWriter;
@@ -352,13 +352,24 @@ struct SessionMobSpawn {
 /// A session-owned living entity. The process-wide [`ENTITIES`] map is for
 /// legacy broadcast entities; tracked mobs live here so each player sees only
 /// their own deterministic population.
-#[derive(Debug, Clone)]
 pub struct TrackedEntity {
     pub entity: Entity,
     pub living: LivingEntity,
-    /// AI environment state for mobs whose goals are usable with the current
-    /// world model. Goal-driven movement remains a later P5.6 slice.
-    pub ai: Option<AiMob>,
+    /// Goal-driven AI for mobs whose goals are usable with the current world
+    /// model. Cows/pigs keep `None`; the session zombie wanders and looks at
+    /// the player.
+    pub ai: Option<AiAgent>,
+}
+
+impl std::fmt::Debug for TrackedEntity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TrackedEntity")
+            .field("entity", &self.entity)
+            .field("living", &self.living)
+            .field("ai", &self.ai.as_ref().map(|agent| agent.mob.id))
+            .finish()
+    }
 }
 
 /// Packets produced by one session entity tick.
@@ -725,14 +736,8 @@ impl SessionEntityTracker {
             // re-send them on the first tick.
             living.metadata.pack_dirty();
 
-            let ai = (spawn.name == "minecraft:zombie").then(|| {
-                AiMob::new(
-                    id,
-                    ActorKind::Zombie,
-                    Vec3::new(x, y, z),
-                    seed ^ i64::from(id),
-                )
-            });
+            let ai = (spawn.name == "minecraft:zombie")
+                .then(|| AiAgent::zombie(id, Vec3::new(x, y, z), seed ^ i64::from(id)));
 
             entities.insert(TrackedEntity { entity, living, ai });
         }
@@ -796,6 +801,8 @@ impl SessionEntityTracker {
         let mut out = SessionEntityTick::default();
         let range_sq = SESSION_TRACKING_RANGE * SESSION_TRACKING_RANGE;
         let ai_world = &self.ai_world;
+        let player_actor = ActorView::player(0, Vec3::new(player.0, player.1, player.2));
+        let actors = [player_actor];
         let ids: Vec<i32> = self.entities.ids().collect();
         for id in ids {
             let Some(tracked) = self.entities.get_mut(id) else {
@@ -811,20 +818,31 @@ impl SessionEntityTracker {
                 continue;
             }
 
-            let moved = tracked.entity.tick_physics(collider);
-            if let Some(ai) = &mut tracked.ai {
-                ai.health = tracked.living.health;
-                ai.pos = Vec3::new(tracked.entity.x, tracked.entity.y, tracked.entity.z);
-                let feet = ai.block_pos();
+            let before = (tracked.entity.x, tracked.entity.y, tracked.entity.z);
+            if let Some(agent) = &mut tracked.ai {
+                agent.mob.health = tracked.living.health;
+                agent.mob.pos = Vec3::new(tracked.entity.x, tracked.entity.y, tracked.entity.z);
+                let feet = agent.mob.block_pos();
                 let feet_block = collider.block_at(feet.x(), feet.y(), feet.z());
                 let below = feet.below();
                 let below_block = collider.block_at(below.x(), below.y(), below.z());
-                if feet_block.is_some() || below_block.is_some() {
-                    ai.update_environment_from_blocks(feet_block.as_ref(), below_block.as_ref());
-                } else {
-                    ai.update_environment(ai_world);
-                }
+                let environment = (feet_block.is_some() || below_block.is_some())
+                    .then_some((feet_block.as_ref(), below_block.as_ref()));
+                let mut events = Vec::new();
+                agent.tick_with_environment(
+                    ai_world,
+                    environment,
+                    &actors,
+                    self.game_time,
+                    &mut events,
+                );
+                // Navigation writes horizontal movement; physics below owns
+                // gravity and collision.
+                tracked.entity.x = agent.mob.pos.x();
+                tracked.entity.z = agent.mob.pos.z();
             }
+            tracked.entity.tick_physics(collider);
+            let moved = (tracked.entity.x, tracked.entity.y, tracked.entity.z) != before;
             if moved {
                 out.packets
                     .push(entity_position_sync_packet(&tracked.entity));
@@ -848,10 +866,10 @@ impl SessionEntityTracker {
         let tracked = self.entities.get_mut(id)?;
         let result = tracked.living.hurt(amount);
         let health = tracked.living.health;
-        if let Some(ai) = &mut tracked.ai {
-            ai.health = health;
+        if let Some(agent) = &mut tracked.ai {
+            agent.mob.health = health;
             if tracked.living.dead {
-                ai.alive = false;
+                agent.mob.alive = false;
             }
         }
         Some(result)
@@ -1288,6 +1306,7 @@ mod tests {
             .entity(zombie)
             .and_then(|tracked| tracked.ai.as_ref())
             .expect("zombie AI")
+            .mob
             .block_pos();
         let mut collider = LiveEnvironmentCollider { feet };
         tracker.tick((0.0, 63.0, 0.0), &mut collider);
@@ -1295,8 +1314,46 @@ mod tests {
             .entity(zombie)
             .and_then(|tracked| tracked.ai.as_ref());
         let ai = ai.expect("zombie AI survives one tick");
-        assert!(ai.in_water, "water at the zombie's feet must be visible");
-        assert!(ai.on_ground, "solid ground below must be visible");
+        assert!(
+            ai.mob.in_water,
+            "water at the zombie's feet must be visible"
+        );
+        assert!(ai.mob.on_ground, "solid ground below must be visible");
+    }
+
+    #[test]
+    fn session_zombie_wanders_with_goal_driven_navigation() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let mut zombie = None;
+        for id in tracker.entities.ids() {
+            if tracker
+                .entity(id)
+                .is_some_and(|tracked| tracked.ai.is_some())
+            {
+                zombie = Some(id);
+                break;
+            }
+        }
+        let zombie = zombie.expect("session tracker spawns a zombie");
+        let start = {
+            let entity = &tracker.entity(zombie).expect("zombie").entity;
+            (entity.x, entity.z)
+        };
+        let mut collider = FlatCollider { ground_y: 63 };
+        let mut synced = false;
+        for _ in 0..400 {
+            let tick = tracker.tick((0.5, 63.0, 0.5), &mut collider);
+            synced |= !tick.packets.is_empty();
+        }
+        let end = {
+            let entity = &tracker.entity(zombie).expect("zombie").entity;
+            (entity.x, entity.z)
+        };
+        assert!(
+            (end.0 - start.0).abs() + (end.1 - start.1).abs() > 0.1,
+            "zombie did not wander: {start:?} -> {end:?}"
+        );
+        assert!(synced, "wandering must emit position syncs");
     }
 
     fn packet_id(packet: &[u8]) -> i32 {

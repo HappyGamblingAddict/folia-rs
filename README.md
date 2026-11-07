@@ -239,7 +239,7 @@ add the same TCP 25565 allow rule in AVG's firewall settings.
 Run the core test suite:
 
 ```powershell
-cargo test --workspace    # 1186 tests
+cargo test --workspace    # 1188 tests
 ```
 
 The baseline is clean: `cargo fmt --check` and

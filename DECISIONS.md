@@ -3254,3 +3254,28 @@ Format:
   provider. The error names both missing pieces.
 - Consequence: 222/224 configured features dispatch as supported. The two
   remaining unsupported configs are `fossil_coal` and `fossil_diamonds`.
+## 2026-11-07 - Container menus are session-owned and sync full content
+
+- Menu state lives in `inventory::SessionMenus`, not `PlayerSession`, because
+  `player.rs` was outside this worker's file set. A session has at most one open
+  menu; container ids follow `ServerPlayer.nextContainerCounter` (1..100) and
+  state ids follow `AbstractContainerMenu.incrementStateId` (15-bit wrap).
+- Click handling keeps the session cursor authoritative. The packet's hashed
+  carried stack is parsed only for framing and is never used to reconstruct
+  components, so component patches survive every move. Menu slots map to the
+  player inventory in vanilla `addStandardInventorySlots` order: main inventory
+  9..35 first, then hotbar 0..8.
+- Play packet ids come from `GameProtocols` (bundle packet occupies id 0):
+  Open Screen 57, Set Content 18, Set Data 19, Container Close 17, Container
+  Click 17. Menu type ids come from `MenuType` registration order: generic_9x3
+  2, blast furnace 10, brewing stand 11, furnace 14, smoker 22.
+- Furnace data slots are `litTimeRemaining`, `litTotalTime`, `cookingTimer`,
+  `cookingTotalTime`. Brewing slot 0 is the menu wrapper's
+  `400 * brewTime / recipeBrewTime`; slot 1 is the fuel charge.
+- Menu edits are written through `WorldStorage::remove_block_entity`/
+  `insert_block_entity` and then `update_chunk`, which preserves top-level
+  chunk fields this port does not decode. Menus close on block break or
+  disconnect. Unknown block-entity/menu ids are rejected rather than guessed.
+- `QUICK_CRAFT` drag and generalized double-click collection are not modelled;
+  only chest, furnace/blast furnace/smoker, and brewing stand menus are
+  supported in this slice.

@@ -947,9 +947,10 @@ These are expected gaps, not reasons to stop:
   get/insert/remove. 3 lib + 9 integration tests pass; `world_round_trip` and
   `bulk_validation` remain green.
 - Not wired: placing a chest/furnace/sign/spawner does not create a block
-  entity, `tick.rs` does not call `BlockEntityTicker`, join does not send
-  block-entity update packets, and there are no container menus, click
-  handling, hopper transfers, or loot-table unpacking.
+  entity, join does not send block-entity update packets, and hopper menus,
+  loot-table-on-open, and placement remain open.
+- Resolved later: `tick.rs` now drives `BlockEntityTicker`, and join opens
+  chest/furnace/brewing menus with click handling and persistence (2026-11-07).
 - Not modelled: barrel, shulker box, hopper, dispenser/dropper, brewing stand,
   enchanting table, beacon, beehive, campfire (its NBT is different), and every
   other block-entity type are preserved opaquely rather than typed.
@@ -1145,8 +1146,9 @@ These are expected gaps, not reasons to stop:
 
 - Hoppers and other container automation are not modeled yet; chests/furnaces
   are containers but have no transfer ticker.
-- Smithing/cooking menu packets, block-entity animation packets, furnace-lit
-  block state updates, and spawner entity creation are not wired.
+- Chest/furnace/brewing menu packets landed 2026-11-07. Smithing/cooking recipe
+  book screens, hopper menus, block-entity animation packets, furnace-lit block
+  state updates, and spawner entity creation remain unwired.
 - Block entities only tick once their chunk is loaded; no chunk-ticket-driven
   ticking exists.
 
@@ -1194,8 +1196,10 @@ These are expected gaps, not reasons to stop:
 
 ## 2026-11-07 - Brewing-stand block-entity boundaries
 
-- No brewing menu/packets, bottle-slot click handling, or live fuel-item
-  interaction; the entity ticks but does not expose a container menu.
+- Resolved 2026-11-07: the brewing stand now opens a real 5+36 menu with
+  bottle/ingredient/fuel click validation and brew-progress/fuel data packets.
+- Remaining: live fuel-item interaction (using blaze powder directly on the
+  block) is not modelled; fuel only enters through the menu slot.
 - Brewing stand `Fuel` is persisted as a byte and clamped, matching vanilla's
   `getByteOr`/`putByte`; custom Paper fuel values above 127 lose precision.
 ## 2026-11-07 - Bridge live-packet boundaries
@@ -1228,3 +1232,23 @@ These are expected gaps, not reasons to stop:
 - No live call from the session loop and no packet for air changes; breathing
   enchantments, water breathing, conduit power, and bubble columns are not
   applied.
+## 2026-11-07 - Container-menu boundaries
+
+- Only chest (27+36), furnace/blast furnace/smoker (3+36), and brewing stand
+  (5+36) menus are implemented. Hopper, dispenser/dropper, shulker box,
+  crafting table, anvil, merchant, and the other `MenuType`s are not openable.
+- `QUICK_CRAFT` drag is rejected as an unsupported click type instead of being
+  accumulated across packets; double-click is modelled as one collect-to-cursor
+  scan, not the vanilla two-pass slot-order loop.
+- Menu slot listeners/remote-slot hashes are not tracked. Every accepted click
+  sends `ClientboundContainerSetContent` with the whole menu instead of only
+  changed `ClientboundContainerSetSlot` packets; correctness is preserved but
+  the traffic pattern differs from vanilla.
+- Opening uses the block entity already cached for a loaded column. There is no
+  chunk ticket or block-entity validation beyond the entity type, so a stale
+  cached block entity for a removed block is only closed by the periodic sync
+  check.
+- Chest loot is not rolled or unpacked on first open by the menu path; only the
+  standalone `ChestBlockEntity::fill_loot` API does that.
+- Dropped items from throw/outside-slot clicks are discarded, because item
+  entities are not spawned by this slice. No drop/pickup event path exists yet.

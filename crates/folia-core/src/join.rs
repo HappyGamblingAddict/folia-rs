@@ -16,6 +16,7 @@
 
 use crate::anvil::Compression;
 use crate::block_breaking::{self, DigStart, DigState, DigStop, MiningContext};
+use crate::block_entity::{BlockEntity, BlockEntityPos};
 use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
@@ -238,6 +239,8 @@ enum SessionCommand {
         count: i32,
         force: bool,
     },
+    /// Open the chest/furnace/brewing-stand menu backed by this position.
+    OpenMenu { position: BlockEntityPos },
 }
 
 struct ActiveSession {
@@ -343,6 +346,23 @@ pub fn send_player_chat_by_name(name: &str, message: &str) -> bool {
             })
             .is_ok()
     })
+}
+
+/// Ask the live session to open the container menu backed by `position`.
+///
+/// This is the server-side `open_menu` entry point (the Rust equivalent of
+/// `Player.openInventory`); the play loop validates that a chest/furnace/
+/// brewing-stand block entity exists and writes `ClientboundOpenScreen`,
+/// `ClientboundContainerSetContent`, and the menu's data slots. Returns false
+/// when the player is not connected or the command channel is closed.
+pub fn open_menu(uuid: [u8; 16], position: BlockEntityPos) -> bool {
+    session_sender(uuid)
+        .is_some_and(|sender| sender.send(SessionCommand::OpenMenu { position }).is_ok())
+}
+
+/// Convenience variant for callers that only have block coordinates.
+pub fn open_menu_at(uuid: [u8; 16], x: i32, y: i32, z: i32) -> bool {
+    open_menu(uuid, BlockEntityPos::new(x, y, z))
 }
 
 /// Ask the live session to write a play-state disconnect and close. Returns
@@ -1433,12 +1453,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut death_at: Option<Instant> = None;
     let play_started = Instant::now();
     let mut dig = DigState::default();
+    let mut menus = inventory::SessionMenus::new();
     let (_console_guard, console_commands) =
         SessionCommandGuard::register(&session.name, session.uuid);
 
     loop {
         if shutdown_requested() {
             tracked_entities.clear();
+            menus.on_disconnect();
             if let Err(error) = session.save(playerdata_dir()) {
                 eprintln!("[join] could not save playerdata: {error}");
             }
@@ -1479,6 +1501,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 SessionCommand::Disconnect { reason } => {
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
                     tracked_entities.clear();
+                    menus.on_disconnect();
                     if let Err(error) = session.save(playerdata_dir()) {
                         eprintln!("[join] could not save playerdata before kick: {error}");
                     }
@@ -1579,6 +1602,20 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         ),
                     }
                 }
+                SessionCommand::OpenMenu { position } => {
+                    if let Err(error) = open_menu_session(
+                        &mut stream,
+                        &mut menus,
+                        &session,
+                        world.storage,
+                        position,
+                    ) {
+                        eprintln!(
+                            "[join] {}: could not open menu at ({}, {}, {}): {error}",
+                            start.name, position.x, position.y, position.z
+                        );
+                    }
+                }
             }
         }
         if awaiting_respawn {
@@ -1621,6 +1658,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 return Err(error);
             }
+        }
+        // The world tick may have advanced an open furnace/brewing stand, or
+        // another session may have changed the chest. Push item/data changes
+        // before handling the next packet.
+        if let Err(error) = sync_open_menu(&mut stream, &mut menus, &session, world.storage) {
+            eprintln!("[join] could not sync open menu: {error}");
         }
         match read_packet(&mut stream) {
             Ok(packet) => {
@@ -1681,6 +1724,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut stream,
                             world.storage,
                             &mut session,
+                            &mut menus,
                             &mut dig,
                             play_started,
                             &packet,
@@ -1707,15 +1751,46 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     inventory::SERVERBOUND_CONTAINER_CLICK => {
                         if let Some(click) = inventory::parse_container_click(&packet) {
-                            inventory::apply_click(
-                                &mut session.inventory,
-                                &mut session.cursor,
-                                click,
-                            );
-                            send_container_content(&mut stream, &session)?;
-                            if let Err(error) = session.save(playerdata_dir()) {
-                                eprintln!("[join] could not save inventory: {error}");
+                            let open_container_id = menus.open().map(|menu| menu.container_id);
+                            if let Some(open_container_id) = open_container_id {
+                                // While a container is open, clicks for any
+                                // other container id (including the player's
+                                // inventory menu 0) are ignored, as vanilla's
+                                // `containerMenu.containerId == packet.containerId`
+                                // guard does.
+                                if open_container_id == click.container_id
+                                    && let Err(error) = handle_menu_click(
+                                        &mut stream,
+                                        &mut menus,
+                                        &mut session,
+                                        world.storage,
+                                        &click,
+                                    )
+                                {
+                                    eprintln!("[join] container click failed: {error}");
+                                }
+                            } else if click.container_id == 0 {
+                                // Player inventory menu (container id 0) keeps
+                                // the pre-menu behaviour byte-for-byte.
+                                inventory::apply_click(
+                                    &mut session.inventory,
+                                    &mut session.cursor,
+                                    click,
+                                );
+                                send_container_content(&mut stream, &session)?;
+                                if let Err(error) = session.save(playerdata_dir()) {
+                                    eprintln!("[join] could not save inventory: {error}");
+                                }
                             }
+                        }
+                    }
+                    inventory::SERVERBOUND_CONTAINER_CLOSE => {
+                        if let Ok(container_id) = parse_container_close(&packet)
+                            && menus
+                                .open()
+                                .is_some_and(|menu| menu.container_id == container_id)
+                        {
+                            menus.close();
                         }
                     }
                     _ => {
@@ -1829,6 +1904,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     world.storage,
                     &mut stream,
                     &mut session,
+                    &mut menus,
                     &mut dig,
                     play_started,
                 ) {
@@ -1856,6 +1932,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
             Err(error) => {
+                menus.on_disconnect();
                 if let Err(save_error) = session.save(playerdata_dir()) {
                     eprintln!("[join] could not save playerdata: {save_error}");
                 }
@@ -3126,10 +3203,256 @@ fn chunk_cache_center(chunk_x: i32, chunk_z: i32) -> Vec<u8> {
     writer.into_inner()
 }
 
+/// Decode the block entity into the menu kind, its container slots, and the
+/// `ClientboundContainerSetData` values. Unknown block-entity types return
+/// `None` and are never guessed into a menu.
+fn menu_contents(
+    entity: &BlockEntity,
+) -> Option<(inventory::MenuKind, Vec<inventory::ItemStack>, Vec<i16>)> {
+    match entity {
+        BlockEntity::Chest(chest) => {
+            Some((inventory::MenuKind::Chest, chest.items.clone(), Vec::new()))
+        }
+        BlockEntity::Furnace(furnace) => Some((
+            inventory::MenuKind::Furnace(inventory::FurnaceMenuKind::from_block_kind(
+                furnace.kind,
+            )?),
+            furnace.items.clone(),
+            furnace.menu_data().to_vec(),
+        )),
+        BlockEntity::BrewingStand(stand) => Some((
+            inventory::MenuKind::BrewingStand,
+            stand.state.slots().to_vec(),
+            stand.menu_data().to_vec(),
+        )),
+        BlockEntity::Hopper(_) | BlockEntity::Sign(_) | BlockEntity::Spawner(_) => None,
+        BlockEntity::Unknown(_) => None,
+    }
+}
+
+/// Open `position` in the session's menu slot and write the open/content/data
+/// packets. Returns false when there is no supported container block entity.
+fn open_menu_from_entity(
+    stream: &mut LoginStream,
+    menus: &mut inventory::SessionMenus,
+    session: &PlayerSession,
+    position: BlockEntityPos,
+    entity: &BlockEntity,
+) -> io::Result<bool> {
+    let Some((kind, container, data)) = menu_contents(entity) else {
+        return Ok(false);
+    };
+    let packets = menus
+        .open_menu(
+            kind,
+            position,
+            container,
+            &data,
+            &session.inventory,
+            &session.cursor,
+        )
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "cannot open menu at ({}, {}, {}): {error}",
+                    position.x, position.y, position.z
+                ),
+            )
+        })?;
+    write_packet(stream, &packets.open_screen)?;
+    write_packet(stream, &packets.content)?;
+    for packet in &packets.data {
+        write_packet(stream, packet)?;
+    }
+    Ok(true)
+}
+
+fn open_menu_session(
+    stream: &mut LoginStream,
+    menus: &mut inventory::SessionMenus,
+    session: &PlayerSession,
+    storage: &Mutex<WorldStorage>,
+    position: BlockEntityPos,
+) -> io::Result<bool> {
+    let entity = crate::world::lock(storage).block_entity(position)?.cloned();
+    let Some(entity) = entity else {
+        return Ok(false);
+    };
+    open_menu_from_entity(stream, menus, session, position, &entity)
+}
+
+/// Persist a menu's container slots through the WorldStorage block-entity
+/// APIs. The chest keeps its loot fields and the brewing stand keeps its brew
+/// timers because only the item list is replaced.
+pub fn persist_menu_container(
+    storage: &mut WorldStorage,
+    menu: &inventory::OpenMenu,
+) -> io::Result<bool> {
+    let Some(mut entity) = storage.remove_block_entity(menu.pos)? else {
+        return Ok(false);
+    };
+    let applied = entity.set_container_items(&menu.container);
+    storage.insert_block_entity(entity)?;
+    if applied && let Some(chunk) = storage.load_chunk(menu.pos.chunk_x(), menu.pos.chunk_z())? {
+        // `update_chunk` preserves top-level fields this port does not decode
+        // and writes the current position-keyed block-entity map into the
+        // region file. The region cache is flushed by the normal terrain
+        // interval (or on disconnect/shutdown).
+        storage.update_chunk(&chunk, Compression::Zlib, &[])?;
+    }
+    Ok(applied)
+}
+
+fn send_menu_content(
+    stream: &mut LoginStream,
+    menus: &inventory::SessionMenus,
+    session: &PlayerSession,
+) -> io::Result<()> {
+    let Some(menu) = menus.open() else {
+        return Ok(());
+    };
+    write_packet(
+        stream,
+        &menu.content_packet(&session.inventory, &session.cursor),
+    )
+}
+
+fn handle_menu_click(
+    stream: &mut LoginStream,
+    menus: &mut inventory::SessionMenus,
+    session: &mut PlayerSession,
+    storage: &Mutex<WorldStorage>,
+    click: &inventory::ContainerClick,
+) -> io::Result<()> {
+    let creative = session.game_mode == 1;
+    match menus.click(&mut session.inventory, &mut session.cursor, click, creative) {
+        Ok(outcome) => {
+            if outcome.changed {
+                let position = menus.open().map(|menu| menu.pos);
+                let persisted = {
+                    let mut storage = crate::world::lock(storage);
+                    let Some(menu) = menus.open() else {
+                        return Ok(());
+                    };
+                    persist_menu_container(&mut storage, menu)?
+                };
+                if !persisted {
+                    if let Some(position) = position {
+                        eprintln!(
+                            "[join] {}: container at ({}, {}, {}) disappeared during a click",
+                            session.name, position.x, position.y, position.z
+                        );
+                    }
+                    if let Some(menu) = menus.close() {
+                        write_packet(stream, &menu.close_packet())?;
+                    }
+                    return Ok(());
+                }
+                if let Err(error) = session.save(playerdata_dir()) {
+                    eprintln!("[join] could not save inventory: {error}");
+                }
+            }
+            if outcome.changed || outcome.state_mismatch {
+                send_menu_content(stream, menus, session)?;
+            }
+            sync_open_menu(stream, menus, session, storage)?;
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!(
+                "[join] {}: rejected container click (slot {}, type {}): {error}",
+                session.name, click.slot, click.click_type
+            );
+            // Vanilla resynchronises the whole menu after a desync/invalid
+            // click instead of silently drifting from the client.
+            send_menu_content(stream, menus, session)
+        }
+    }
+}
+
+/// Push block-entity state into the open menu. Closes the menu when its block
+/// entity is gone or its type changed.
+fn sync_open_menu(
+    stream: &mut LoginStream,
+    menus: &mut inventory::SessionMenus,
+    session: &PlayerSession,
+    storage: &Mutex<WorldStorage>,
+) -> io::Result<()> {
+    let Some(menu) = menus.open().cloned() else {
+        return Ok(());
+    };
+    let entity = crate::world::lock(storage).block_entity(menu.pos)?.cloned();
+    let Some(entity) = entity else {
+        if let Some(closed) = menus.close() {
+            write_packet(stream, &closed.close_packet())?;
+        }
+        return Ok(());
+    };
+    let Some((kind, container, data)) = menu_contents(&entity) else {
+        if let Some(closed) = menus.close() {
+            write_packet(stream, &closed.close_packet())?;
+        }
+        return Ok(());
+    };
+    if kind != menu.kind {
+        if let Some(closed) = menus.close() {
+            write_packet(stream, &closed.close_packet())?;
+        }
+        return Ok(());
+    }
+    let (contents_changed, data_packets) = menus
+        .sync(container, &data)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if contents_changed {
+        send_menu_content(stream, menus, session)?;
+    }
+    for packet in &data_packets {
+        write_packet(stream, packet)?;
+    }
+    Ok(())
+}
+
+/// Close the open menu when its backing block is removed by this session.
+fn close_menu_for_block(
+    stream: &mut LoginStream,
+    menus: &mut inventory::SessionMenus,
+    pos: BlockPos,
+) -> io::Result<()> {
+    if let Some(closed) = menus.on_block_removed(BlockEntityPos::new(pos.x(), pos.y(), pos.z())) {
+        write_packet(stream, &closed.close_packet())?;
+    }
+    Ok(())
+}
+
+fn parse_container_close(packet: &[u8]) -> io::Result<i32> {
+    let mut reader = PacketReader::new(packet);
+    let id = reader.read_varint()?;
+    if id != inventory::SERVERBOUND_CONTAINER_CLOSE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "expected container close id {}, got {id}",
+                inventory::SERVERBOUND_CONTAINER_CLOSE
+            ),
+        ));
+    }
+    let container_id = reader.read_varint()?;
+    if !reader.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing bytes after container close",
+        ));
+    }
+    Ok(container_id)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn handle_block_action(
     stream: &mut LoginStream,
     storage: &Mutex<WorldStorage>,
     session: &mut PlayerSession,
+    menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     play_started: Instant,
     packet: &[u8],
@@ -3167,6 +3490,7 @@ fn handle_block_action(
                     match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
                         DigStart::Instant => {
                             finish_break(storage, session, pos, &state, held.as_ref())?;
+                            close_menu_for_block(stream, menus, pos)?;
                             if !creative {
                                 send_container_content(stream, session)?;
                                 save_after_break(session);
@@ -3190,6 +3514,7 @@ fn handle_block_action(
                     match dig.stop(pos, &state, held.as_ref(), &context, now) {
                         DigStop::Destroyed => {
                             finish_break(storage, session, pos, &state, held.as_ref())?;
+                            close_menu_for_block(stream, menus, pos)?;
                             if !creative {
                                 send_container_content(stream, session)?;
                                 save_after_break(session);
@@ -3207,6 +3532,7 @@ fn handle_block_action(
                             match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
                                 DigStart::Instant => {
                                     finish_break(storage, session, pos, &state, held.as_ref())?;
+                                    close_menu_for_block(stream, menus, pos)?;
                                     if !creative {
                                         send_container_content(stream, session)?;
                                         save_after_break(session);
@@ -3217,6 +3543,7 @@ fn handle_block_action(
                                         == DigStop::Destroyed
                                     {
                                         finish_break(storage, session, pos, &state, held.as_ref())?;
+                                        close_menu_for_block(stream, menus, pos)?;
                                         send_container_content(stream, session)?;
                                         save_after_break(session);
                                     }
@@ -3237,6 +3564,12 @@ fn handle_block_action(
         }
         SERVERBOUND_USE_ITEM_ON => {
             let use_item = crate::block_update::parse_use_item_on(packet)?;
+            let clicked = BlockEntityPos::new(use_item.x, use_item.y, use_item.z);
+            if let Some(entity) = storage.block_entity(clicked)?.cloned()
+                && open_menu_from_entity(stream, menus, session, clicked, &entity)?
+            {
+                return Ok(());
+            }
             let Some(held) = session.selected_item().cloned() else {
                 return Ok(());
             };
@@ -3335,6 +3668,7 @@ fn finish_break(
     else {
         return Ok(());
     };
+    storage.remove_block_entity(BlockEntityPos::new(pos.x(), pos.y(), pos.z()))?;
     crate::block_update::broadcast_change(&change);
     if creative {
         return Ok(());
@@ -3374,6 +3708,7 @@ fn tick_delayed_destroy(
     storage: &Mutex<WorldStorage>,
     stream: &mut LoginStream,
     session: &mut PlayerSession,
+    menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     play_started: Instant,
 ) -> io::Result<()> {
@@ -3393,6 +3728,7 @@ fn tick_delayed_destroy(
     let context = mining_context(session, storage);
     if dig.tick_delayed(&state, held.as_ref(), &context, mining_tick(play_started)) {
         finish_break(storage, session, pos, &state, held.as_ref())?;
+        close_menu_for_block(stream, menus, pos)?;
         send_container_content(stream, session)?;
         save_after_break(session);
     }
@@ -3968,8 +4304,91 @@ mod tests {
             Ok(SessionCommand::Particle { particle, count: 1, .. }) if particle == "END_ROD"
         ));
 
+        let menu_position = BlockEntityPos::new(1, 64, -2);
+        assert!(open_menu(uuid, menu_position));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::OpenMenu { position }) if position == menu_position
+        ));
+        assert!(open_menu_at(uuid, 1, 64, -2));
+
         drop(guard);
         assert!(!send_player_chat(uuid, "after close"));
+    }
+
+    #[test]
+    fn open_menu_writes_the_open_screen_and_initial_content() {
+        use crate::block_entity::ChestBlockEntity;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client_stream = TcpStream::connect(address).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let mut server = Connection::new(server_stream);
+        let mut client = Connection::new(client_stream);
+
+        let position = BlockEntityPos::new(0, 64, 0);
+        let mut chest = ChestBlockEntity::new(position);
+        chest.set_slot(0, inventory::ItemStack::new("minecraft:diamond", 3));
+        let entity = BlockEntity::Chest(chest);
+        let mut menus = inventory::SessionMenus::new();
+        let session = PlayerSession::new("MenuTest".into(), [0x22; 16], 0.5, 64.0, 0.5);
+
+        assert!(
+            open_menu_from_entity(&mut server, &mut menus, &session, position, &entity).unwrap()
+        );
+        assert!(menus.is_open());
+
+        let open = read_packet(&mut client).unwrap();
+        let mut reader = PacketReader::new(&open);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            inventory::CLIENTBOUND_OPEN_SCREEN
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            inventory::MENU_TYPE_GENERIC_9X3
+        );
+        let title = reader.read_nbt_any().unwrap();
+        assert_eq!(
+            title.get("translate").and_then(Tag::as_str),
+            Some("container.chest")
+        );
+
+        let content = read_packet(&mut client).unwrap();
+        let mut reader = PacketReader::new(&content);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            inventory::CLIENTBOUND_CONTAINER_SET_CONTENT
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert_eq!(reader.read_varint().unwrap(), 63);
+        let first = inventory::read_item_stack(&mut reader).expect("first chest slot");
+        assert_eq!(first.item, "minecraft:diamond");
+        assert_eq!(first.count, 3);
+
+        // Unknown block-entity types are not guessed into a menu.
+        let unknown = BlockEntity::Unknown(crate::block_entity::UnknownBlockEntity {
+            pos: position,
+            id: "mod:not_a_menu".into(),
+            data: Tag::Compound(Vec::new()),
+        });
+        let mut menus = inventory::SessionMenus::new();
+        assert!(
+            !open_menu_from_entity(&mut server, &mut menus, &session, position, &unknown).unwrap()
+        );
+        assert!(!menus.is_open());
+
+        // Serverbound close uses the same play id and a VarInt container id.
+        let mut close = PacketWriter::new();
+        close
+            .write_varint(inventory::SERVERBOUND_CONTAINER_CLOSE)
+            .unwrap();
+        close.write_varint(7).unwrap();
+        assert_eq!(parse_container_close(&close.into_inner()).unwrap(), 7);
     }
 
     #[test]

@@ -7,6 +7,10 @@
 > `density_parity` tests in the vein-interpolation worktree.
 > Worldgen parity: **98.75% block-class (6067/6144) / 95.88% exact-name
 > (5891/6144)** on the 16-column fixture (28/33 Java ore blocks matched).
+> Test status: **1065 passing** expected on the next full gate (1052 prior
+> full gate + 11 `tests/menus.rs` + 1 join lib menu-wire test + 1 block-entity
+> lib container-helper test)
+> Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
 > Overall completion estimate: **~28%** (range 20-33% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
@@ -36,7 +40,7 @@ where possible, a differential test against the Java oracle.
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
 | Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
 | Entities | ~32% | Metadata, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, join tracking, item/XP entities; sensors/brains, shared per-viewer tracking, live AI goals missing |
-| Blocks/redstone/fluids | ~38% | Break/place, shapes, ticks, fluids/quenching/fire/bubbles, wire/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities; menus, automation depth, lamps/targets missing |
+| Blocks/redstone/fluids | ~39% | Break/place, shapes, ticks, fluids/quenching/fire/bubbles, wire/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities, chest/furnace/brewing menus; hopper/dispenser menus, automation depth, lamps/targets missing |
 | Networking | ~45% offline / ~45% online core | Offline + encrypted online login, chat-signing core, live bridge chat/time/weather/sound/particles; TLS, login secure-chat wiring, full packet coverage pending |
 | Plugin compatibility | ~23% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block, player, inventory, item meta, live chat/effects; most gameplay API unfinished |
 | Folia regionization | ~15% | Per-region task queues/world slices/ownership checks; world, entities, and chunk tickets are still global |
@@ -71,6 +75,15 @@ where possible, a differential test against the Java oracle.
   exclusive-set rejection. 15 `tests/enchanting.rs` tests. Still open: menu
   packets/state ids, anvil combine/repair, plugin events, and a Java RNG
   fixture.
+- 2026-11-07: P4.6 container menus - `inventory.rs` adds `MenuKind`/`OpenMenu`/
+  `SessionMenus` for chest (27+36), furnace/blast-furnace/smoker (3+36), and
+  brewing stand (5+36); 1.21.11 `ClientboundOpenScreen` (57), `SetContent` (18),
+  `SetData` (19), `ContainerClose` (17), and `ServerboundContainerClick` (17)
+  handling; left/right/shift/swap/clone/throw/double-click semantics with
+  validation; per-session container ids and state ids; block-entity menu
+  routing and persistence through `WorldStorage`; `join::open_menu` plus
+  right-click container opening, close on break/disconnect. 11
+  `tests/menus.rs`; the captured-world join packet sequence is unchanged.
 - 2026-11-07: P4.8/P4.9 brewing and consumables - `crafting.rs` models the
   brewing stand's five slots, blaze-powder fuel charges, 400-tick brew timer,
   ingredient-change abort, all vanilla potion mixes and the two container mixes;
@@ -1769,7 +1782,7 @@ instantly on start-destroy and places on use-item-on.
 - **Done when:** Each implemented item has a behavior test and the correct
   client packets.
 
-### P4.6 Full inventory and menu framework `[ ]` `XL`
+### P4.6 Full inventory and menu framework `[~]` `XL`
 
 - **What:** Add armor/offhand, crafting grid, chest/furnace/hopper/etc. menus,
   click modes (pickup, quick move, swap, throw, quick craft), drag handling,
@@ -1785,6 +1798,16 @@ instantly on start-destroy and places on use-item-on.
   cost/XP/lapis validation, and `minecraft:enchantments` merge). Menu type /
   state-id / packet wiring, bookshelf scanning, `PrepareItemEnchantEvent` /
   `EnchantItemEvent`, and anvil combine/repair remain open.
+- **Progress (2026-11-07):** chest, furnace/blast furnace/smoker, and brewing
+  stand menus open through `ClientboundOpenScreen` with the correct
+  `MenuType` ids and vanilla `addStandardInventorySlots` ordering. Clicks
+  support pickup (left/right), quick move, number-key swap, creative clone,
+  throw, outside-slot drops, and double-click collecting; per-session cursor,
+  container id, and 15-bit state id are authoritative. Changes persist through
+  `WorldStorage` block-entity APIs and the chunk file, and menus close on block
+  removal or disconnect. Still open: hopper/dispenser/shulker/crafting-table
+  menus, drag (`QUICK_CRAFT`) and recipe-book placement, armor/off-hand slots,
+  and drop/pickup entities.
 
 ### P4.7 Block entities `[~]` `XL`
 
@@ -1802,9 +1825,10 @@ instantly on start-destroy and places on use-item-on.
   unknown types and unknown fields are preserved; world storage exposes
   get/insert/remove and drops an entity when its block position is edited.
   Furnace smelting reuses `crafting::FurnaceState`, and an explicit
-  `BlockEntityTicker` exists. Still open: container menus/packets, placement,
-  spawning, sign editing, other block-entity types, live ticker/`tick.rs`
-  wiring, and a Java differential NBT fixture.
+  `BlockEntityTicker` exists. Chest/furnace/brewing menus, right-click opening,
+  click persistence, and close-on-break landed on 2026-11-07. Still open:
+  hopper/dispenser/shulker menus, placement, spawning, sign editing, other
+  block-entity types, and a Java differential NBT fixture.
 
 ### P4.8 Crafting and recipe system `[~]` `L`
 
@@ -1827,8 +1851,8 @@ instantly on start-destroy and places on use-item-on.
   and smithing transforms. Lookup uses vanilla's last-sorted-recipe-id
   priority. Unsupported special/decorated/pot/trim recipes fail explicitly.
   Brewing state, the full potion mix table/container mixes, and potion effect
-  application landed on 2026-11-07. Still open: menu packets and click handling,
-  recipe book/advancement unlocks, brewing-stand block-entity persistence/menus,
+  application landed on 2026-11-07. Chest/furnace/brewing menus and click
+  handling followed the same day. Still open: recipe book/advancement unlocks,
   cached-last-recipe behavior, campfire multi-slot/lit state, and Java
   recipe/furnace fixtures.
 
@@ -2262,7 +2286,9 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 - **Progress (2026-11-07):** brewing stand state, fuel/brew timing, potion
   mixes, potion drinking effects, and food consumption are modeled in
   `crafting.rs`/`effects.rs`/`item_prototypes.rs`; the hopper world transfer
-  runs on the tick loop. Live block-entity menu wiring remains open.
+  runs on the tick loop. Chest/furnace/brewing menus are live, persist through
+  `WorldStorage`, and stream furnace/brewing data-slot changes. Dispenser/
+  dropper, enchanting, beacons, hopper menus, and automation depth remain open.
 
 ### P6.10 Redstone/block parity harness `[ ]` `M`
 

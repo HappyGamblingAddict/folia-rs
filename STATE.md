@@ -38,6 +38,22 @@ Last updated: 2026-11-07
   live session dimension switching; container menu packets; live per-viewer
   tracking wiring and live AI goals; full plugin API; real region tick
   threading.
+- Tests: **1065 passing** expected on the next full gate (1052 prior full gate
+  + 11 new `tests/menus.rs` + 1 join lib menu-wire test + 1 block-entity lib
+  container-helper test; focused suites green), 1 ignored (2048-bit
+  secure-chat benchmark); parity is **98.75% block-class / 95.80% exact-name**.
+- Formatting/Clippy: clean; no warnings.
+- Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
+  483 shipped village templates, recursive jigsaw, Nether carvers, End
+  spikes/gateways/chorus, dimension storage and portal math.
+- Gameplay: chest/furnace/brewing container menus, brewing/potions/food,
+  hunger, chat signing, armor/effects, crops, leaf decay, chest loot, item/XP
+  entities, hoppers, pistons, block-entity tickers, region ownership, and live
+  bridge chat/time/weather/sound/particles.
+- Major gaps: feature-pool placement and non-village structure templates;
+  live session dimension switching; effect packets and hopper/dispenser/
+  crafting-table menus; shared per-viewer entity tracking and live AI goals;
+  full plugin API; real region tick threading.
 
 ## Current focus
 
@@ -46,6 +62,9 @@ Last updated: 2026-11-07
 2. P7 portal-driven dimension switching and non-village structure templates.
 3. P5 live AI goals and wiring the shared tracker into live session visibility.
 4. P6 container menus/packets and deeper redstone/automation.
+3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
+4. P6 remaining container menus (hopper/dispenser/crafting table) and deeper
+   redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
 6. P2.3 ore parity — `NoiseChunk` vein interpolation is landed; remaining gaps
    are the 3x3-chunk feature write region, ellipsoid/vein edges, and the
@@ -67,6 +86,10 @@ Last updated: 2026-11-07
 - [~] P5.1/P5.2 metadata/AI/effects (effect packets + shared tracker core
   landed; live AI goals and live-session tracker wiring remain).
 - [~] P6 block entities (chest/furnace/brewing/sign/spawner/hopper).
+- [~] P4.8 crafting/brewing (recipe book/advancement unlocks).
+- [~] P5.1/P5.2 metadata/AI/effects (live AI, effect packets, shared tracking).
+- [~] P6 block entities and menus (chest/furnace/brewing/sign/spawner/hopper;
+  remaining menu types).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1 online/chat-signing core (TLS and login wiring).
 - [~] P9.2/P9.3 bridge proxies/events/live effects (API depth).
@@ -129,6 +152,13 @@ Last updated: 2026-11-07
   explicit unsupported because the fossil NBT is not in the shipped template
   catalog. Focused: 19 `feature_gaps`, 18 `vegetation`, 75
   `worldgen::feature` lib tests; fmt/clippy clean.
+- 2026-11-07: container menus — `inventory.rs` adds `MenuKind`/`OpenMenu`/
+  `SessionMenus` (chest 63 slots, furnace 39, brewing 41), Open Screen (57),
+  Set Content (18), Set Data (19), close (17), and click handling with
+  per-session state ids and cursor; `join.rs` wires right-click opening and
+  `open_menu`/`open_menu_at`, persists through `WorldStorage`, and closes on
+  break/disconnect. 11 `tests/menus.rs`; the captured join sequence is
+  byte-identical.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

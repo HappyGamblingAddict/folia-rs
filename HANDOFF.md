@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1188 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1191 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -47,15 +47,17 @@ native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
 
-Latest merged wave (2026-11-08): live signed/unsigned player chat with
-`ServerboundChatSessionUpdate`, a 20-entry last-seen window, signature and
-sequence verification, and `ClientboundPlayerChat`/`ClientboundDisguisedChat`
-broadcast to every session. Session AI now reads the real collider's
-water/lava/ground state instead of only the flat memory view. Join streaming
-polls shutdown during the column scan and chunk generation, and generation
-workers are detached so a slow chunk cannot delay the save path. The 2026-11-07
-wave added fossils, trial-chamber templates, portal-driven live dimension
-switching, target blocks + dispenser/dropper automation, anvil
+Latest merged wave (2026-11-08): the session zombie now runs the real goal set
+(float, melee, stroll, look, hurt-by-target) with navigation-driven movement,
+and player interact attacks apply held-item damage through the session tracker.
+Session AI also reads the real collider's water/lava/ground state. Live
+signed/unsigned player chat works with `ServerboundChatSessionUpdate`, a
+20-entry last-seen window, signature and sequence verification, and
+`ClientboundPlayerChat`/`ClientboundDisguisedChat` broadcast to every session.
+Join streaming polls shutdown during the column scan and chunk generation, and
+generation workers are detached so a slow chunk cannot delay the save path. The
+2026-11-07 wave added fossils, trial-chamber templates, portal-driven live
+dimension switching, target blocks + dispenser/dropper automation, anvil
 combine/repair/rename, Nether fortress and End city pieces, deeper pathfinding,
 and the 3x3 feature biome region. All 224 configured feature types execute and
 the shipped structure catalogs total 1,202 templates.
@@ -333,11 +335,13 @@ Key files:
   bridges.
 - `SessionEntityTracker` gives every live session a deterministic cow/pig/zombie
   set with Add Entity, full initial metadata, equipment, 20 Hz physics,
-  `entity_ai` environment updates, dirty metadata flush, death/poof/remove, and
-  out-of-range/chunk-unload/disconnect cleanup. Broadcast entity packets are
-  filtered to tracked ids. `join.rs` routes fall/void player damage through the
-  living store and resets it on respawn. Session mobs are viewer-owned and are
-  not saved or shared between players yet.
+  goal-driven zombie navigation, real-collider environment updates, dirty
+  metadata flush, death/poof/remove, and out-of-range/chunk-unload/disconnect
+  cleanup. Broadcast entity packets are filtered to tracked ids. `join.rs`
+  routes fall/void player damage through the living store, resets it on
+  respawn, and applies `ServerboundInteract` attacks with the held item's
+  attack damage. Session mobs are viewer-owned and are not saved or shared
+  between players yet.
 
 Key files:
 

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1188 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1191 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: goal-driven live mobs and attacks - the session zombie now owns
+  the real `AiAgent` goal set (float, melee, stroll, look, hurt-by-target);
+  navigation writes horizontal movement into the tracked entity and physics
+  still owns gravity/collision. `ServerboundInteract` attack actions apply the
+  held item's attack damage (diamond sword 7) through the session tracker with
+  a 3-block reach plus target width. 4 focused tests (wander, environment,
+  interact layout, held damage). 1,191 tests.
 - 2026-11-08: live AI environment - `BlockCollider::block_at` exposes the
   real block state (default `None`), `WorldCollider` overrides it, and
   `SessionEntityTracker` feeds the zombie AI water/lava/ground flags from the

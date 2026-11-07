@@ -9,93 +9,28 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **1052 passing** on the last full merged gate, 1 ignored
-  (2048-bit secure-chat benchmark), plus 6 new `density_parity` tests in this
-  worktree (focused runs green; full gate not re-run here). Parity is
-  **98.75% block-class (6067/6144) / 95.88% exact-name (5891/6144)**; 28 of 33
-  fixture ore blocks match.
+- Tests: **1141 passing** on the full merged gate (0 failed, 1 ignored
+  benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
-- Worldgen: 222/224 configured feature types (all except fossil x2), 888/888
-  placement modifiers, 483 shipped village templates, recursive jigsaw, Nether
-  carvers, End spikes/gateways/chorus, geode/freeze/root-system features,
-  dimension storage and portal math.
-- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
-  leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
-  tickers, region ownership, region tick driver, and live bridge
-  chat/time/weather/sound/particles.
-  tickers, enchanting-table offers/application, region ownership, and live
-  bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and non-village structure templates;
-  live session dimension switching; effect/menu packets; shared per-viewer
-  entity tracking and live AI goals; full plugin API; true parallel
-  per-region world state (the region driver scopes chunk work, but
-  `WorldStorage` is still one global lock).
-- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects,
-  status-effect packets, shared per-viewer tracking, crops, leaf decay, chest
-  loot, item/XP entities, hoppers, pistons, block-entity tickers, region
-  ownership, and live bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and non-village structure templates;
-  live session dimension switching; container menu packets; live per-viewer
-  tracking wiring and live AI goals; full plugin API; real region tick
-  threading.
-- Tests: **1065 passing** expected on the next full gate (1052 prior full gate
-  + 11 new `tests/menus.rs` + 1 join lib menu-wire test + 1 block-entity lib
-  container-helper test; focused suites green), 1 ignored (2048-bit
-  secure-chat benchmark); parity is **98.75% block-class / 95.80% exact-name**.
-- Formatting/Clippy: clean; no warnings.
-- Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
-  483 shipped village templates, recursive jigsaw, Nether carvers, End
-  spikes/gateways/chorus, dimension storage and portal math.
-- Gameplay: chest/furnace/brewing container menus, brewing/potions/food,
-  hunger, chat signing, armor/effects, crops, leaf decay, chest loot, item/XP
-  entities, hoppers, pistons, block-entity tickers, region ownership, and live
-  bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and non-village structure templates;
-  live session dimension switching; effect packets and hopper/dispenser/
-  crafting-table menus; shared per-viewer entity tracking and live AI goals;
-  full plugin API; real region tick threading.
+- Worldgen: 222/224 configured feature types, 888/888 placement modifiers,
+  recursive jigsaw + feature-pool placement, **1,011 shipped structure
+  templates** across village and non-village catalogs, Nether carvers, End
+  spikes/gateways/chorus, interpolated ore veins.
+- Gameplay: container menus (chest/furnace/brewing), enchanting offers,
+  brewing/potions/food, hunger/air/XP, effect packets + shared tracking, crops,
+  leaf decay, chest loot, item/XP entities, hoppers, pistons, block entities,
+  region-scoped ticking, and live bridge chat/effects.
+- Major gaps: the two fossil features (need a feature-level template provider),
+  trial-chamber templates, live dimension switching, secure-chat login wiring,
+  live AI goals, and real multi-region world parallelism.
 
 ## Current focus
 
-1. P2.8 feature-pool placement, non-village templates, and the two fossil
-   configured features (missing template NBT).
-2. P7 portal-driven dimension switching and non-village structure templates.
-3. P5 live AI goals and wiring the shared tracker into live session visibility.
-  1,011 shipped structure templates (483 village + 528 non-village), recursive
-  jigsaw, Nether carvers, End spikes/gateways/chorus, dimension storage and
-  483 shipped village templates, recursive jigsaw with placed feature-pool
-  elements, Nether carvers, End spikes/gateways/chorus, dimension storage and
-  portal math.
-- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
-  leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
-  tickers, region ownership, and live bridge chat/time/weather/sound/particles.
-- Major gaps: feature-pool placement and the trial-chamber template family;
-  live session dimension switching; effect/menu packets; shared per-viewer
-  entity tracking and live AI goals; full plugin API; real region tick threading.
-
-## Current focus
-
-1. P2.8 feature-pool placement and the remaining six configured feature types.
-2. P2.10 trial-chamber templates, fortress/end-city procedural pieces, and
-   P7 portal-driven dimension switching.
-- Major gaps: non-village structure templates, cross-chunk feature write
-  regions/block-entity materialisation, terrain adaptation; live session
-  dimension switching; effect/menu packets; shared per-viewer entity tracking
-  and live AI goals; full plugin API; real region tick threading.
-
-## Current focus
-
-1. P2.8 non-village structure templates and the remaining six configured feature types.
-2. P7 portal-driven dimension switching and terrain adaptation/start caching.
-3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
-4. P6 container menus/packets and deeper redstone/automation.
-3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
-4. P6 remaining container menus (hopper/dispenser/crafting table) and deeper
-   redstone/automation.
-5. P9.3 remaining bridge API surface and secure-chat login wiring.
-6. P2.3 ore parity — `NoiseChunk` vein interpolation is landed; remaining gaps
-   are the 3x3-chunk feature write region, ellipsoid/vein edges, and the
-   `disk_*`/`underwater_magma` entries in the `underground_ores` step.
+1. P2.8 fossil feature via the shipped template catalogs and trial-chamber data.
+2. P7 portal-driven dimension switching for live sessions.
+3. P5 live AI goals, per-viewer ranges, and effect packets on live sessions.
+4. P6 automation depth, target blocks, and remaining menus.
+5. P9.3 secure-chat login wiring and plugin API breadth.
 
 ## Next queue
 
@@ -104,26 +39,18 @@ Last updated: 2026-11-07
 - [~] P1.4 components/prototypes (network codecs, hashing, fixtures).
 - [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
 - [~] P1.7 loot/recipes (block/chest drops; entity loot next).
-- [~] P2.1/P2.2 222/224 feature types and all modifiers; only fossil x2 remain.
-- [~] P2.8 recursive jigsaw + village templates (feature pools/non-village).
-- [~] P2.1/P2.2 218/224 feature types and all modifiers.
-- [~] P2.8 recursive jigsaw + village templates (non-village/terrain adapt).
+- [~] P2.1/P2.2 222/224 feature types and all modifiers.
+- [~] P2.8 jigsaw + feature pools + 1,011 templates (fossils/trial chambers).
 - [~] P3.5-P3.8 light (Java fixtures and exact occlusion columns).
-- [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
-- [~] P4.1-P4.4 physics/breaking/item entities (live hunger and special movement).
-- [~] P4.8 crafting/brewing (menus, packets, recipe book).
-- [~] P5.1/P5.2 metadata/AI/effects (effect packets + shared tracker core
-  landed; live AI goals and live-session tracker wiring remain).
-- [~] P6 block entities (chest/furnace/brewing/sign/spawner/hopper).
-- [~] P4.8 crafting/brewing (recipe book/advancement unlocks).
-- [~] P5.1/P5.2 metadata/AI/effects (live AI, effect packets, shared tracking).
-- [~] P6 block entities and menus (chest/furnace/brewing/sign/spawner/hopper;
-  remaining menu types).
+- [~] P3.10 ticks/redstone (automation/menus depth remain).
+- [~] P4.1-P4.4 physics/breaking/item entities (live hunger/air, special movement).
+- [~] P4.8 crafting/brewing/enchanting (menus, packets, recipe book).
+- [~] P5.1/P5.2 metadata/AI/effects (live AI/ranges/effect packets).
+- [~] P6 block entities + menus (automation depth, target blocks).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1 online/chat-signing core (TLS and login wiring).
 - [~] P9.2/P9.3 bridge proxies/events/live effects (API depth).
-- [~] P10 region ownership (per-region tasks/world tick slices; world
-  storage still one global lock).
+- [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
 - 2026-11-07: oxygen/drowning tick model; 3 integration tests.

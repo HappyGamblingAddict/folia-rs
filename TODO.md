@@ -3,15 +3,9 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1052 passing** on the full merged gate (0 failed), plus 6 new
-> `density_parity` tests in the vein-interpolation worktree.
-> Worldgen parity: **98.75% block-class (6067/6144) / 95.88% exact-name
-> (5891/6144)** on the 16-column fixture (28/33 Java ore blocks matched).
-> Test status: **1065 passing** expected on the next full gate (1052 prior
-> full gate + 11 `tests/menus.rs` + 1 join lib menu-wire test + 1 block-entity
-> lib container-helper test)
-> Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
-> Overall completion estimate: **~28%** (range 20-33% depending on metric)
+> Test status: **1141 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
+> Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -33,20 +27,16 @@ where possible, a differential test against the Java oracle.
 | Area | Estimate | Notes |
 |---|---:|---|
 | Foundation (M0-M2) | 90-92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
-| Terrain generation | ~81% | Density (incl. `NoiseChunk` vein interpolation), biomes, aquifers, surface rules, carvers, ore pass, Nether/End generators, dimension storage, Nether carvers |
-| Full worldgen | ~73% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
-| Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
-| Full worldgen | ~73% | 222/224 configured feature types (fossil x2 remain), 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
-| Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
-| Full worldgen | ~75% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 1,011 shipped structure templates (483 village + 528 non-village); feature-pool placement and trial-chamber templates missing |
-| Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
-| Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
-| Entities | ~32% | Metadata, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, join tracking, item/XP entities; sensors/brains, shared per-viewer tracking, live AI goals missing |
-| Blocks/redstone/fluids | ~39% | Break/place, shapes, ticks, fluids/quenching/fire/bubbles, wire/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities, chest/furnace/brewing menus; hopper/dispenser menus, automation depth, lamps/targets missing |
-| Networking | ~45% offline / ~45% online core | Offline + encrypted online login, chat-signing core, live bridge chat/time/weather/sound/particles; TLS, login secure-chat wiring, full packet coverage pending |
-| Plugin compatibility | ~23% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block, player, inventory, item meta, live chat/effects; most gameplay API unfinished |
-| Folia regionization | ~15% | Per-region task queues/world slices/ownership checks; world, entities, and chunk tickets are still global |
-| Overall rewrite | **~28%** | Foundation-heavy, content-light |
+| Terrain generation | ~82% | Density (interpolated veins), biomes, aquifers, surface, carvers, ores, Nether/End generators, dimension storage |
+| Full worldgen | ~76% | 222/224 configured feature types, 888/888 modifiers, recursive jigsaw + feature pools, 1,011 shipped templates; fossils and trial chambers missing |
+| Lighting | ~50% | Nibble storage/NBT, sky+block BFS, shape occlusion, incremental queues, cross-chunk payloads; Java fixtures and exact occlusion columns missing |
+| Player simulation | ~42% | Movement/collision/fall damage, break/tools/drops, hunger, air/drowning, XP curve; live food/air ticks and special movement missing |
+| Entities | ~35% | Metadata, attributes, equipment, effects, damage/death, goals/pathfinding/spawn, join tracking, item/XP entities, shared viewer tracker; live AI and per-type ranges missing |
+| Blocks/redstone/fluids | ~40% | Ticks, fluids/fire, wire/diodes/observers/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities, menus; automation depth/targets missing |
+| Networking | ~50% offline / ~50% online core | Offline+encrypted login, chat signing, container menus, bridge chat/time/weather/sound/particles; TLS, login secure-chat wiring, full coverage |
+| Plugin compatibility | ~25% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block/player/inventory/item meta, menus, live chat/effects; gameplay API depth missing |
+| Folia regionization | ~20% | Per-region queues/world slices/ownership + region-scoped world tick driver; global lock and no merge/split/transfer |
+| Overall rewrite | **~30%** | Foundation-heavy, content-light |
 
 ---
 

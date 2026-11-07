@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1052 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1141 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -51,7 +51,7 @@ Worldgen parity on the 16-column fixture:
 
 ```text
 block-class agreement: 98.75% (6067/6144)
-exact block names: 95.80% (5886/6144)
+exact block names: 95.88% (5891/6144)
 water blocks: Rust 282 / Java 289, 35 mismatches
 ```
 

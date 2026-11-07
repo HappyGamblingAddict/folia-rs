@@ -920,15 +920,11 @@ These are expected gaps, not reasons to stop:
 
 ## 2026-11-07 - Hopper wiring boundaries
 
-- Hopper pull/push is not connected to the block above/below; no hopper minecart,
-  inventory menu, or block-entity NBT tick persistence on a live tick.
+- Hopper pull/push runs on the world tick through `WorldStorage::tick_hoppers`,
+  using the container above/below lookup and the 8-tick transfer cooldown. No
+  hopper minecart, inventory menu, or container-update packets yet.
 - Hoppers do not lock, do not skip empty containers with a cooldown, and do not
   emit container-update packets.
-- `WorldStorage::tick_hoppers` is a documented no-op hook. The tick loop calls it
-  after `tick_block_entities`; hopper cooldowns advance through the ticker, but
-  no item transfer runs until block/container lookup is implemented. The hook
-  was added to repair a baseline compile regression where `tick.rs` already
-  called the missing method.
 
 ## 2026-11-07 - Daylight detector boundaries
 

@@ -2107,8 +2107,8 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   enchanting, beacons, and live tick integration remain open.
 - **Progress (2026-11-07):** brewing stand state, fuel/brew timing, potion
   mixes, potion drinking effects, and food consumption are modeled in
-  `crafting.rs`/`effects.rs`/`item_prototypes.rs`. Live block-entity wiring and
-  menus remain open; the hopper world transfer hook is still a documented no-op.
+  `crafting.rs`/`effects.rs`/`item_prototypes.rs`; the hopper world transfer
+  runs on the tick loop. Live block-entity menu wiring remains open.
 
 ### P6.10 Redstone/block parity harness `[ ]` `M`
 

@@ -15,10 +15,11 @@
 //!   `minecraft:stored_enchantments` for books) while capping levels at the
 //!   enchantment maximum and rejecting incompatible combinations.
 //!
-//! Anvil combine/repair is intentionally not ported yet; [`combine_in_anvil`]
-//! returns an explicit [`AnvilError::Unsupported`] instead of silently doing
-//! nothing. The same is true for rename handling, repair-cost accumulation,
-//! and the Paper `PrepareItemEnchantEvent` hooks.
+//! [`combine_in_anvil`] ports the combine/repair/rename subset of
+//! `AnvilMenu.createResult`: material repair, same-item durability merging,
+//! enchantment merging through an enchanted book or a second item, repair-cost
+//! accumulation, the 40-level limit, and the creative bypass. Paper's
+//! `PrepareAnvilEvent` hooks and anvil block damage remain outside this slice.
 //!
 //! # RNG order
 //!
@@ -35,6 +36,7 @@
 
 use crate::item_components::{ComponentValue, ItemStack, enchantment_id, normalize_key};
 use crate::item_prototypes::prototype;
+use crate::nbt::Tag;
 use crate::tags::{self, TagRegistryKind};
 use folia_random::{LegacyRandomSource, RandomSource};
 use std::collections::{BTreeMap, HashMap};
@@ -1491,27 +1493,158 @@ pub fn apply_enchantments(
     })
 }
 
-/// Anvil combine/repair outcome (not produced yet).
+/// Vanilla `AnvilMenu.maximumRepairCost`: the menu refuses a result whose cost
+/// reaches this value unless the player has infinite materials.
+pub const ANVIL_MAXIMUM_REPAIR_COST: i32 = 40;
+
+/// Vanilla `AnvilMenu.MAX_NAME_LENGTH`.
+pub const ANVIL_MAX_NAME_LENGTH: usize = 50;
+
+/// The optional inputs that the anvil menu normally receives from the client
+/// and the player.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnvilOptions {
+    /// The current rename field text.
+    ///
+    /// `None` keeps the input stack's name (the client mirrors the hover name
+    /// into the field). `Some("")` clears an existing custom name, matching a
+    /// blank field. Names longer than [`ANVIL_MAX_NAME_LENGTH`] after control
+    /// characters are removed are rejected.
+    pub rename: Option<String>,
+    /// `Player.hasInfiniteMaterials()`: skips the 40-level limit and makes
+    /// every enchantment applicable (vanilla's creative bypass).
+    pub creative: bool,
+    /// Paper's `bypassEnchantmentLevelRestriction` field. When set, anvil
+    /// merging does not clamp at the enchantment's `max_level`.
+    pub bypass_enchantment_level_restriction: bool,
+}
+
+impl AnvilOptions {
+    /// Survival options: no rename and the normal 40-level limit.
+    pub fn survival() -> Self {
+        Self::default()
+    }
+
+    /// Creative options (`Player.hasInfiniteMaterials()`).
+    pub fn creative() -> Self {
+        Self {
+            creative: true,
+            ..Self::default()
+        }
+    }
+
+    /// Set the rename field text.
+    pub fn with_rename(mut self, name: impl Into<String>) -> Self {
+        self.rename = Some(name.into());
+        self
+    }
+
+    /// Set the creative bypass.
+    pub fn with_creative(mut self, creative: bool) -> Self {
+        self.creative = creative;
+        self
+    }
+}
+
+/// A successful anvil combine, repair, or rename.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnvilResult {
+    /// The stack shown in the result slot.
     pub result: ItemStack,
+    /// Menu cost, which is also the experience-level requirement checked by
+    /// `AnvilMenu.mayPickup` when the player is not in creative.
     pub cost: i32,
+    /// How many items the right slot contributes as repair material.
+    ///
+    /// Vanilla shrinks the right slot by this amount on take; when it is zero,
+    /// the whole right slot is consumed unless [`Self::only_renaming`] is set.
+    pub repair_item_count_cost: i32,
+    /// The rename was the only operation, so taking the result keeps the right
+    /// input slot in place (vanilla's `onlyRenaming`).
+    pub only_renaming: bool,
+}
+
+impl AnvilResult {
+    /// The experience-level requirement for taking the result.
+    pub fn level_requirement(&self) -> i32 {
+        self.cost
+    }
+
+    /// `AnvilMenu.mayPickup`: creative players bypass the level requirement.
+    pub fn can_take(&self, experience_level: i32, creative: bool) -> bool {
+        !self.result.is_empty() && self.cost > -1 && (creative || experience_level >= self.cost)
+    }
 }
 
 /// Anvil errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnvilError {
-    /// The subset of `AnvilMenu.createResult` needed for combine/repair has not
-    /// been ported. Renaming, repair-cost accumulation, and item durability
-    /// merging are all intentionally included in this unsupported path.
-    Unsupported(&'static str),
+    /// The left input stack is empty.
+    EmptyInput,
+    /// The right input is empty and no rename was requested.
+    MissingSecondSlot,
+    /// The left stack has an explicit removed enchantment component and cannot
+    /// receive enchantments (vanilla `canStoreEnchantments` is false). This is
+    /// normally impossible for vanilla items.
+    CannotStoreEnchantments { item: String },
+    /// The two stacks cannot combine and the right stack is not a repair
+    /// material (vanilla returns an empty result with cost `-1`).
+    IncompatibleItems { left: String, right: String },
+    /// The left item is damaged by definition but has no damage that one unit
+    /// of the repair material can remove, including a full-durability item.
+    FullDurability { item: String },
+    /// Nothing would change (vanilla returns an empty result with cost 0).
+    NoChange,
+    /// The result cost reached [`ANVIL_MAXIMUM_REPAIR_COST`] and the player is
+    /// not in creative.
+    TooExpensive { cost: i32 },
+    /// The rename text is longer than [`ANVIL_MAX_NAME_LENGTH`].
+    NameTooLong { length: usize },
+    /// An enchantment on the right stack is not in the shipped definition
+    /// table, so its max level, applicability, and exclusive set are unknown.
+    UnknownEnchantment { name: String },
+    /// Every enchantment on the right stack was skipped because it conflicted
+    /// with an existing enchantment (vanilla returns an empty result).
+    IncompatibleEnchantments { first: String, second: String },
+    /// A modeled component has the wrong value type.
+    MalformedComponent { component: &'static str },
+    /// An enchantment level in a component is outside `1..=255`.
+    MalformedEnchantmentLevel { name: String, level: i32 },
 }
 
 impl fmt::Display for AnvilError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unsupported(reason) => {
-                write!(formatter, "anvil combine/repair is unsupported: {reason}")
+            Self::EmptyInput => write!(formatter, "the left anvil input is empty"),
+            Self::MissingSecondSlot => write!(formatter, "the right anvil input is empty"),
+            Self::CannotStoreEnchantments { item } => {
+                write!(formatter, "{item} cannot store enchantments")
+            }
+            Self::IncompatibleItems { left, right } => {
+                write!(formatter, "{left} cannot be combined with {right}")
+            }
+            Self::FullDurability { item } => {
+                write!(formatter, "{item} is not damaged enough to repair")
+            }
+            Self::NoChange => write!(formatter, "the anvil inputs produce no change"),
+            Self::TooExpensive { cost } => {
+                write!(formatter, "the anvil result costs {cost}, too expensive")
+            }
+            Self::NameTooLong { length } => write!(
+                formatter,
+                "the anvil name is {length} characters, over {ANVIL_MAX_NAME_LENGTH}"
+            ),
+            Self::UnknownEnchantment { name } => {
+                write!(formatter, "{name} is not a shipped enchantment")
+            }
+            Self::IncompatibleEnchantments { first, second } => {
+                write!(formatter, "{first} is incompatible with {second}")
+            }
+            Self::MalformedComponent { component } => {
+                write!(formatter, "{component} is not an enchantment component")
+            }
+            Self::MalformedEnchantmentLevel { name, level } => {
+                write!(formatter, "{name} has invalid level {level}")
             }
         }
     }
@@ -1519,14 +1652,458 @@ impl fmt::Display for AnvilError {
 
 impl std::error::Error for AnvilError {}
 
-/// Explicitly unsupported anvil combine/repair entry point.
+/// `AnvilMenu.calculateIncreasedRepairCost`: `old * 2 + 1`, clamped to the
+/// `i32` range. Repeating this from zero produces `2^prior - 1`.
+pub fn calculate_increased_repair_cost(old_repair_cost: i32) -> i32 {
+    (i64::from(old_repair_cost) * 2 + 1).min(i64::from(i32::MAX)) as i32
+}
+
+/// Combine, repair, or rename two anvil inputs with survival defaults.
 ///
-/// Returning an error here keeps the slice honest: callers cannot mistake an
-/// empty stack or an unmodified input for a successful combine.
-pub fn combine_in_anvil(_left: &ItemStack, _right: &ItemStack) -> Result<AnvilResult, AnvilError> {
-    Err(AnvilError::Unsupported(
-        "anvil combine/repair, renaming, and repair-cost accumulation are not ported",
-    ))
+/// This is [`combine_in_anvil_with`] with [`AnvilOptions::survival`]: no
+/// rename, no creative bypass.
+pub fn combine_in_anvil(left: &ItemStack, right: &ItemStack) -> Result<AnvilResult, AnvilError> {
+    combine_in_anvil_with(left, right, &AnvilOptions::default())
+}
+
+/// Port of the combine/repair/rename subset of `AnvilMenu.createResult`.
+///
+/// The result follows the vanilla order:
+///
+/// 1. material repair (left damageable + right is one of its repair items);
+/// 2. otherwise same-item durability merging for damageable items;
+/// 3. enchantment merging from the right stack's `enchantments` or
+///    `stored_enchantments`, with anvil costs, exclusive-set skips, max-level
+///    clamps, and the enchanted-book half-cost rule;
+/// 4. renaming, including clearing an existing custom name with a blank name;
+/// 5. repair-cost accumulation (`repair_cost * 2 + 1`) and the 40-level limit.
+///
+/// Invalid combinations are returned as [`AnvilError`] rather than vanilla's
+/// empty result with cost `-1`/0. The input stacks are never mutated.
+pub fn combine_in_anvil_with(
+    left: &ItemStack,
+    right: &ItemStack,
+    options: &AnvilOptions,
+) -> Result<AnvilResult, AnvilError> {
+    if left.is_empty() {
+        return Err(AnvilError::EmptyInput);
+    }
+
+    let left_enchantment_component = enchantment_component(left);
+    if left.components.is_removed(left_enchantment_component) {
+        return Err(AnvilError::CannotStoreEnchantments {
+            item: left.item.clone(),
+        });
+    }
+
+    let rename = match options.rename.as_deref() {
+        Some(name) => {
+            let filtered = filter_anvil_name(name);
+            let length = filtered.chars().count();
+            if length > ANVIL_MAX_NAME_LENGTH {
+                return Err(AnvilError::NameTooLong { length });
+            }
+            Some(filtered)
+        }
+        None => None,
+    };
+    let rename_action = rename_action(left, rename.as_deref());
+
+    let right_empty = right.is_empty();
+    if right_empty {
+        // Vanilla with an empty second slot only produces a result when the
+        // rename field changes (or clears) the name.
+        if matches!(rename_action, RenameAction::None) {
+            return Err(AnvilError::MissingSecondSlot);
+        }
+    }
+
+    let mut result = left.copy_with_count(left.count);
+    let mut operation_cost: i64 = 0;
+    let mut repair_item_count_cost = 0;
+    let mut enchantments_touched = false;
+    let mut enchantments = crafting_enchantments(left)?;
+
+    if !right_empty {
+        let right_has_stored_enchantments = has_stored_enchantments(right);
+        let left_max_damage = effective_max_damage(left);
+        let left_damage = effective_damage(left, left_max_damage);
+        let left_damageable = left_max_damage > 0;
+
+        if left_damageable && is_valid_repair_item(left, right) {
+            // `AnvilMenu.createResult` material-repair branch. Each right item
+            // removes at most a quarter of the maximum durability.
+            let mut damage = left_damage;
+            let mut repair_per_item = (left_max_damage / 4).min(damage);
+            if repair_per_item <= 0 {
+                return Err(AnvilError::FullDurability {
+                    item: left.item.clone(),
+                });
+            }
+            let mut used = 0;
+            while repair_per_item > 0 && used < right.count {
+                damage -= repair_per_item;
+                used += 1;
+                operation_cost += 1;
+                repair_per_item = (left_max_damage / 4).min(damage);
+            }
+            repair_item_count_cost = used;
+            set_effective_damage(&mut result, damage, left_max_damage);
+        } else {
+            if !right_has_stored_enchantments && (left.item != right.item || !left_damageable) {
+                return Err(AnvilError::IncompatibleItems {
+                    left: left.item.clone(),
+                    right: right.item.clone(),
+                });
+            }
+
+            if left_damageable && !right_has_stored_enchantments {
+                // Same-item durability merge: right remaining durability plus
+                // 12% of the left maximum, capped at a fully repaired stack.
+                let right_max_damage = effective_max_damage(right);
+                let right_damage = effective_damage(right, right_max_damage);
+                let left_remaining = i64::from(left_max_damage) - i64::from(left_damage);
+                let right_remaining = i64::from(right_max_damage) - i64::from(right_damage);
+                let bonus = i64::from(left_max_damage) * 12 / 100;
+                let new_damage = (i64::from(left_max_damage)
+                    - (left_remaining + right_remaining + bonus))
+                    .max(0)
+                    .min(i64::from(left_max_damage)) as i32;
+                if new_damage < left_damage {
+                    set_effective_damage(&mut result, new_damage, left_max_damage);
+                    operation_cost += 2;
+                }
+            }
+
+            let right_enchantments = crafting_enchantments(right)?;
+            if !right_enchantments.is_empty() {
+                let outcome = merge_anvil_enchantments(
+                    enchantments,
+                    &left.item,
+                    left.count,
+                    &right_enchantments,
+                    right_has_stored_enchantments,
+                    options,
+                    &mut operation_cost,
+                )?;
+                enchantments = outcome.enchantments;
+                if !outcome.applied {
+                    return Err(AnvilError::IncompatibleEnchantments {
+                        first: outcome.first_conflict.0,
+                        second: outcome.first_conflict.1,
+                    });
+                }
+                enchantments_touched = true;
+            }
+        }
+    }
+
+    let mut rename_cost = 0i64;
+    match rename_action {
+        RenameAction::None => {}
+        RenameAction::Set(name) => {
+            result.set_component(ComponentValue::CustomName(Tag::String(name)));
+            rename_cost = 1;
+        }
+        RenameAction::Remove => {
+            result.remove_component("minecraft:custom_name");
+            rename_cost = 1;
+        }
+    }
+    operation_cost += rename_cost;
+
+    if operation_cost <= 0 {
+        return Err(AnvilError::NoChange);
+    }
+
+    let only_renaming = rename_cost > 0 && operation_cost == rename_cost;
+    let left_repair_cost = repair_cost(left);
+    let right_repair_cost = if right_empty { 0 } else { repair_cost(right) };
+    let mut total = (i64::from(left_repair_cost) + i64::from(right_repair_cost) + operation_cost)
+        .clamp(0, i64::from(i32::MAX)) as i32;
+    if only_renaming && total >= ANVIL_MAXIMUM_REPAIR_COST {
+        // Vanilla keeps rename-only results one level below the hard limit.
+        total = ANVIL_MAXIMUM_REPAIR_COST - 1;
+    }
+    if total >= ANVIL_MAXIMUM_REPAIR_COST && !options.creative {
+        return Err(AnvilError::TooExpensive { cost: total });
+    }
+
+    if enchantments_touched {
+        let component = enchantment_component(left);
+        if enchantments.is_empty() {
+            if result.get_component(component).is_some() {
+                result.remove_component(component);
+            }
+        } else {
+            let value = if left.item == "minecraft:enchanted_book" {
+                ComponentValue::StoredEnchantments(enchantments)
+            } else {
+                ComponentValue::Enchantments(enchantments)
+            };
+            result
+                .set_component_named(component, value)
+                .map_err(|_| AnvilError::MalformedComponent { component })?;
+        }
+    }
+
+    let mut repair_cost = left_repair_cost.max(right_repair_cost);
+    if !only_renaming {
+        repair_cost = calculate_increased_repair_cost(repair_cost);
+    }
+    if repair_cost != 0 {
+        result.set_component(ComponentValue::RepairCost(repair_cost));
+    } else if result.get_component("minecraft:repair_cost").is_some() {
+        result.remove_component("minecraft:repair_cost");
+    }
+
+    Ok(AnvilResult {
+        result,
+        cost: total,
+        repair_item_count_cost,
+        only_renaming,
+    })
+}
+
+enum RenameAction {
+    None,
+    Set(String),
+    Remove,
+}
+
+fn rename_action(left: &ItemStack, rename: Option<&str>) -> RenameAction {
+    let Some(name) = rename else {
+        return RenameAction::None;
+    };
+    if name.trim().is_empty() {
+        return if left.get_component("minecraft:custom_name").is_some() {
+            RenameAction::Remove
+        } else {
+            RenameAction::None
+        };
+    }
+    match left.get_component("minecraft:custom_name") {
+        Some(ComponentValue::CustomName(tag)) if tag_text(tag) == name => RenameAction::None,
+        Some(ComponentValue::CustomName(_)) | None => RenameAction::Set(name.to_owned()),
+        Some(_) => RenameAction::Set(name.to_owned()),
+    }
+}
+
+/// `StringUtil.filterText`: remove control characters before the 50-character
+/// length check.
+fn filter_anvil_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}
+
+fn tag_text(tag: &Tag) -> String {
+    match tag {
+        Tag::String(text) => text.clone(),
+        Tag::Compound(entries) => entries
+            .iter()
+            .find(|(key, _)| key == "text")
+            .and_then(|(_, value)| value.as_str())
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// The enchantment component a stack stores enchantments in:
+/// `stored_enchantments` for enchanted books, `enchantments` otherwise.
+fn enchantment_component(stack: &ItemStack) -> &'static str {
+    if stack.item == "minecraft:enchanted_book" {
+        "minecraft:stored_enchantments"
+    } else {
+        "minecraft:enchantments"
+    }
+}
+
+fn has_stored_enchantments(stack: &ItemStack) -> bool {
+    if stack.components.is_removed("minecraft:stored_enchantments") {
+        return false;
+    }
+    stack.item == "minecraft:enchanted_book"
+        || stack
+            .get_component("minecraft:stored_enchantments")
+            .is_some()
+}
+
+fn crafting_enchantments(stack: &ItemStack) -> Result<BTreeMap<String, i32>, AnvilError> {
+    let component = enchantment_component(stack);
+    if stack.components.is_removed(component) {
+        return Ok(BTreeMap::new());
+    }
+    match stack.get_component(component) {
+        Some(ComponentValue::Enchantments(map)) | Some(ComponentValue::StoredEnchantments(map)) => {
+            Ok(map.clone())
+        }
+        Some(_) => Err(AnvilError::MalformedComponent { component }),
+        None => Ok(BTreeMap::new()),
+    }
+}
+
+fn repair_cost(stack: &ItemStack) -> i32 {
+    match stack.get_component("minecraft:repair_cost") {
+        Some(ComponentValue::RepairCost(cost)) => *cost,
+        _ => 0,
+    }
+}
+
+fn effective_max_damage(stack: &ItemStack) -> i32 {
+    match stack.get_component("minecraft:max_damage") {
+        Some(ComponentValue::MaxDamage(max_damage)) => (*max_damage).max(0),
+        Some(_) => 0,
+        None => prototype(&stack.item)
+            .and_then(|prototype| prototype.max_damage)
+            .unwrap_or(0),
+    }
+}
+
+fn effective_damage(stack: &ItemStack, max_damage: i32) -> i32 {
+    let damage = match stack.get_component("minecraft:damage") {
+        Some(ComponentValue::Damage(damage)) => *damage,
+        _ => 0,
+    };
+    damage.clamp(0, max_damage.max(0))
+}
+
+fn set_effective_damage(stack: &mut ItemStack, damage: i32, max_damage: i32) {
+    stack.set_component(ComponentValue::Damage(damage.clamp(0, max_damage.max(0))));
+}
+
+fn is_valid_repair_item(left: &ItemStack, right: &ItemStack) -> bool {
+    let Some(prototype) = prototype(&left.item) else {
+        return false;
+    };
+    let Some(repairable) = &prototype.repairable else {
+        return false;
+    };
+    match repairable {
+        crate::item_prototypes::IngredientSet::Tag(tag) => tags::item_has(tag, &right.item),
+        crate::item_prototypes::IngredientSet::Items(items) => {
+            items.iter().any(|item| item == &right.item)
+        }
+    }
+}
+
+struct AnvilMergeOutcome {
+    enchantments: BTreeMap<String, i32>,
+    applied: bool,
+    first_conflict: (String, String),
+}
+
+/// Port of the enchantment loop in `AnvilMenu.createResult`.
+///
+/// Right-hand entries are merged in sorted key order. An entry that conflicts
+/// with any current enchantment is skipped and adds one cost; the operation
+/// only fails when every entry was skipped. Max levels clamp after merging
+/// (`level == right level` becomes `level + 1`, otherwise the higher level),
+/// and enchanted-book input halves each anvil cost with a minimum of one.
+fn merge_anvil_enchantments(
+    mut enchantments: BTreeMap<String, i32>,
+    left_item: &str,
+    left_count: i32,
+    right: &BTreeMap<String, i32>,
+    right_has_stored_enchantments: bool,
+    options: &AnvilOptions,
+    cost: &mut i64,
+) -> Result<AnvilMergeOutcome, AnvilError> {
+    let mut applied = false;
+    let mut first_conflict: Option<(String, String)> = None;
+
+    for (name, right_level) in right {
+        let enchantment = definition(name)
+            .ok_or_else(|| AnvilError::UnknownEnchantment { name: name.clone() })?;
+        if *right_level <= 0 || *right_level > MAX_ENCHANTMENT_LEVEL {
+            return Err(AnvilError::MalformedEnchantmentLevel {
+                name: name.clone(),
+                level: *right_level,
+            });
+        }
+
+        let left_level =
+            existing_level(&enchantments, enchantment.name).map_or(0, |(_, level)| level);
+        let mut merged_level = if left_level == *right_level {
+            right_level.saturating_add(1)
+        } else {
+            (*right_level).max(left_level)
+        };
+
+        let mut can_enchant = options.creative
+            || left_item == "minecraft:enchanted_book"
+            || enchantment.is_supported_item(left_item);
+
+        for existing_name in enchantments.keys() {
+            if normalize_key(existing_name) == enchantment.name {
+                continue;
+            }
+            let Some(existing) = definition(existing_name) else {
+                // Unknown (modded) enchantments are preserved but their
+                // exclusive sets cannot be checked.
+                continue;
+            };
+            if !are_compatible(enchantment, existing) {
+                can_enchant = false;
+                *cost += 1;
+                if first_conflict.is_none() {
+                    first_conflict = Some((enchantment.name.to_owned(), existing.name.to_owned()));
+                }
+            }
+        }
+
+        if !can_enchant {
+            continue;
+        }
+
+        applied = true;
+        if merged_level > enchantment.max_level && !options.bypass_enchantment_level_restriction {
+            merged_level = enchantment.max_level;
+        }
+        merged_level = merged_level.min(MAX_ENCHANTMENT_LEVEL);
+
+        if let Some((key, _)) = existing_level(&enchantments, enchantment.name)
+            && key != enchantment.name
+        {
+            enchantments.remove(&key);
+        }
+        enchantments.insert(enchantment.name.to_owned(), merged_level);
+
+        let mut anvil_cost = enchantment.anvil_cost;
+        if right_has_stored_enchantments {
+            anvil_cost = (anvil_cost / 2).max(1);
+        }
+        *cost += i64::from(anvil_cost) * i64::from(merged_level);
+        if left_count > 1 {
+            // Vanilla hard-sets the operation cost for stacked inputs.
+            *cost = i64::from(ANVIL_MAXIMUM_REPAIR_COST);
+        }
+    }
+
+    if !applied {
+        let conflict = first_conflict.unwrap_or_else(|| {
+            (
+                right
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "minecraft:unknown".to_owned()),
+                "minecraft:unknown".to_owned(),
+            )
+        });
+        return Ok(AnvilMergeOutcome {
+            enchantments,
+            applied: false,
+            first_conflict: conflict,
+        });
+    }
+
+    Ok(AnvilMergeOutcome {
+        enchantments,
+        applied: true,
+        first_conflict: first_conflict.unwrap_or_default(),
+    })
 }
 
 /// Verify that the embedded definition table matches the shipped enchantment

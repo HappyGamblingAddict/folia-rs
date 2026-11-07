@@ -6,8 +6,9 @@ use crate::block_entity::{
 use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
 use crate::item_components::ItemStack;
 use crate::nbt::Tag;
-use crate::tick::TickState;
-use std::collections::{HashMap, VecDeque};
+use crate::region::{ChunkPos, RegionKey, RegionMap};
+use crate::tick::{BehaviorTable, TickReport, TickState};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -393,6 +394,146 @@ impl WorldStorage {
         Ok(moved)
     }
 
+    /// Runs one game tick of block simulation for only the chunks owned by
+    /// `region`.
+    ///
+    /// This is the regionized form of [`crate::tick::tick_world`]. The cached
+    /// chunks, block entities, due scheduled ticks, and neighbour updates that
+    /// belong to other regions are taken out of the live storage for the
+    /// duration of the tick, so the existing tick implementation can only see
+    /// (and therefore only mutate) this region's slice. They are restored
+    /// afterwards, including cross-region neighbour updates produced by the
+    /// tick (those are queued for the owning region's later tick).
+    ///
+    /// Random ticks, block-entity tickers (furnaces, spawners, brewing stands,
+    /// hoppers), and the hopper transfer pass therefore run only for chunks in
+    /// `region`, matching Folia's per-region chunk ownership.
+    pub fn tick_region(
+        &mut self,
+        map: &RegionMap,
+        region: RegionKey,
+        tick: u64,
+    ) -> io::Result<TickReport> {
+        self.tick_region_with_table(map, region, tick, &BehaviorTable::vanilla())
+    }
+
+    /// [`tick_region`](Self::tick_region) with an explicit behaviour table.
+    pub fn tick_region_with_table(
+        &mut self,
+        map: &RegionMap,
+        region: RegionKey,
+        tick: u64,
+        table: &BehaviorTable,
+    ) -> io::Result<TickReport> {
+        let in_region_chunk = |x: i32, z: i32| map.region_for_chunk(ChunkPos::new(x, z)) == region;
+        let in_region = |x: i32, z: i32| in_region_chunk(x.div_euclid(16), z.div_euclid(16));
+
+        // Hide every other region's cached chunks and block entities for the
+        // duration of this tick.
+        let mut foreign_chunks = HashMap::new();
+        for (key, chunk) in std::mem::take(&mut self.chunks) {
+            if in_region_chunk(key.0, key.1) {
+                self.chunks.insert(key, chunk);
+            } else {
+                foreign_chunks.insert(key, chunk);
+            }
+        }
+        let mut foreign_block_entities = HashMap::new();
+        for (key, entities) in std::mem::take(&mut self.block_entities) {
+            if in_region_chunk(key.0, key.1) {
+                self.block_entities.insert(key, entities);
+            } else {
+                foreign_block_entities.insert(key, entities);
+            }
+        }
+
+        // Move this region's due scheduled ticks into the live queue and keep
+        // every other scheduled tick aside. `ScheduledTickQueue::schedule`
+        // preserves the original trigger/priority/sub-tick order; the queue's
+        // monotonically increasing sub-tick counter is untouched, so newly
+        // scheduled ticks created during the tick cannot collide with them.
+        let scheduled = self.tick.scheduled.tick(u64::MAX);
+        let mut foreign_scheduled = Vec::new();
+        for scheduled in scheduled {
+            if in_region(scheduled.pos.x(), scheduled.pos.z()) && scheduled.trigger_tick <= tick {
+                self.tick.scheduled.schedule(scheduled);
+            } else {
+                foreign_scheduled.push(scheduled);
+            }
+        }
+
+        // Only neighbour updates targeted at this region's chunks run now.
+        let neighbors = self.tick.neighbors.drain();
+        let mut foreign_neighbors = Vec::new();
+        for update in neighbors {
+            if in_region(update.pos.x(), update.pos.z()) {
+                self.tick
+                    .neighbors
+                    .enqueue(update.source, update.pos, update.flags);
+            } else {
+                foreign_neighbors.push(update);
+            }
+        }
+
+        let result = crate::tick::tick_world_with_table(self, tick, table);
+
+        // Neighbour updates that the tick produced for another region were
+        // consumed as no-ops (their chunk was hidden). Requeue them for the
+        // owning region instead of dropping them at the border.
+        let processed = std::mem::take(&mut self.tick.last_neighbor_updates);
+        let mut region_processed = Vec::with_capacity(processed.len());
+        for update in processed {
+            if in_region(update.pos.x(), update.pos.z()) {
+                region_processed.push(update);
+            } else {
+                self.tick
+                    .neighbors
+                    .enqueue(update.source, update.pos, update.flags);
+            }
+        }
+        let remaining_neighbors = self.tick.neighbors.drain();
+        let region_scheduled = self.tick.scheduled.tick(u64::MAX);
+
+        // Drop any chunk/block-entity read that the tick pulled in from
+        // another region, then restore the original foreign caches.
+        self.chunks.retain(|(x, z), _| in_region_chunk(*x, *z));
+        for (key, chunk) in foreign_chunks {
+            self.chunks.insert(key, chunk);
+        }
+        self.block_entities
+            .retain(|(x, z), _| in_region_chunk(*x, *z));
+        for (key, entities) in foreign_block_entities {
+            self.block_entities.insert(key, entities);
+        }
+        self.sync_cache_order();
+
+        for scheduled in foreign_scheduled {
+            self.tick.scheduled.schedule(scheduled);
+        }
+        for scheduled in region_scheduled {
+            self.tick.scheduled.schedule(scheduled);
+        }
+        for update in foreign_neighbors {
+            self.tick
+                .neighbors
+                .enqueue(update.source, update.pos, update.flags);
+        }
+        for update in remaining_neighbors {
+            self.tick
+                .neighbors
+                .enqueue(update.source, update.pos, update.flags);
+        }
+        self.tick.last_neighbor_updates = region_processed;
+
+        match result {
+            Ok(mut report) => {
+                report.neighbor_updates = self.tick.last_neighbor_updates.len();
+                Ok(report)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn ensure_block_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
         let key = (chunk_x, chunk_z);
         if self.block_entities.contains_key(&key) {
@@ -582,6 +723,29 @@ impl WorldStorage {
             };
             self.chunks.remove(&oldest);
         }
+    }
+
+    /// Keep `cache_order` in sync with the chunks that survived a region tick.
+    /// Chunks that were temporarily hidden and restored keep their original
+    /// order; any newly loaded chunks are appended in coordinate order so the
+    /// eviction order stays deterministic.
+    fn sync_cache_order(&mut self) {
+        let mut seen = HashSet::new();
+        let mut order = VecDeque::with_capacity(self.cache_order.len());
+        for key in self.cache_order.drain(..) {
+            if self.chunks.contains_key(&key) && seen.insert(key) {
+                order.push_back(key);
+            }
+        }
+        let mut missing: Vec<(i32, i32)> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|key| !seen.contains(key))
+            .collect();
+        missing.sort_unstable();
+        order.extend(missing);
+        self.cache_order = order;
     }
 
     pub fn flush(&mut self) -> io::Result<()> {

@@ -2,7 +2,7 @@ mod jvm;
 
 use anyhow::{Context, Result};
 use folia_core::config::ServerProperties;
-use folia_core::region::{ChunkPos, RegionScheduler};
+use folia_core::region::{ChunkPos, RegionTickDriver};
 use folia_core::status::{StatusConfig, serve};
 use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
@@ -82,7 +82,7 @@ fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()
     }
 
     start_console(Arc::clone(&running));
-    let mut regions = RegionScheduler::new(8);
+    let mut regions = RegionTickDriver::vanilla();
     regions.schedule_at(ChunkPos::new(0, 0), 5, 0, || {
         println!("[rust] spawn region task fired");
     });
@@ -92,10 +92,6 @@ fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()
 
     let mut ticks = 0u64;
     while running.load(Ordering::SeqCst) {
-        let region_tasks = regions.tick_parallel(4);
-        if region_tasks > 0 {
-            println!("[rust] region scheduler ran {region_tasks} task(s)");
-        }
         for joined in folia_core::join::take_pending_joins() {
             if let Some(plugins) = plugins.as_mut() {
                 plugins.fire_player_join(&joined.name, &joined.uuid)?;
@@ -105,15 +101,25 @@ fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()
             plugins.tick()?;
         }
         ticks += 1;
-        // Block-level world tick: pending neighbour updates, scheduled ticks,
-        // and random ticks for every cached chunk. This precedes entity ticks,
-        // matching ServerLevel.tick's block-then-entity order. The storage lock
-        // is released before sleeping; sessions take it for edits and loads.
-        let storage = folia_core::world::shared_overworld(level_root.to_path_buf());
-        if let Err(error) =
-            folia_core::tick::tick_world(&mut folia_core::world::lock(storage), ticks)
-        {
-            eprintln!("[rust] world tick {ticks} failed: {error}");
+        // Regionized block-level world tick: chunks are grouped by vanilla
+        // 8x8 regions and every region runs its own task queue, scheduled/
+        // random ticks, block entities, hoppers, and neighbour drains in
+        // sorted region order. This precedes entity ticks, matching
+        // ServerLevel.tick's block-then-entity order. The storage lock is
+        // released before sleeping; sessions take it for edits and loads.
+        let outcome = {
+            let storage = folia_core::world::shared_overworld(level_root.to_path_buf());
+            let mut storage = folia_core::world::lock(storage);
+            regions.tick_outcome(&mut storage, ticks)
+        };
+        if outcome.report.tasks > 0 {
+            println!(
+                "[rust] region tick {ticks} ran {} task(s) across {} region(s)",
+                outcome.report.tasks, outcome.report.regions
+            );
+        }
+        if let Some(error) = outcome.error {
+            eprintln!("[rust] region tick {ticks} failed: {error}");
         }
         folia_core::entity::tick_all();
         if max_ticks.is_some_and(|limit| ticks >= limit) {

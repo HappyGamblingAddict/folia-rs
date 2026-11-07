@@ -13,6 +13,41 @@ Format:
 - Consequences:
 ```
 
+## 2026-11-07 — Region tick loop scopes existing world logic instead of duplicating it
+- Context: `region.rs` had region task queues and ownership checks, but the
+  server still called `tick::tick_world` once for every cached chunk and no
+  region owned its block-level work. Folia ticks a region's tasks and world
+  slice together and treats another region's chunks as out of bounds.
+- Decision: add `RegionTickDriver` (in `region.rs`) and
+  `WorldStorage::tick_region[_with_table]` (in `world.rs`). The driver groups
+  cached chunks with `RegionMap`, runs the global queue first, then each
+  loaded/task region in sorted `RegionKey` order; each region runs its task
+  queue and its scoped world tick. The world tick temporarily hides foreign
+  chunks and block entities, moves only that region's due scheduled ticks and
+  neighbour updates into the live queues, then calls the existing
+  `tick::tick_world_with_table` so random/scheduled ticks, block-entity
+  tickers, hoppers, and neighbour processing keep their existing semantics.
+  Foreign queues are restored afterwards. Neighbour updates produced for
+  another region are consumed as no-ops while its chunks are hidden, so they
+  are re-enqueued for the owning region's later tick.
+- Decision: `tick_parallel_for_test` is an explicitly test-only mode. It
+  dispatches region *task queues* across scoped threads (preserving per-region
+  task order and deterministic first-error reporting) but leaves the world
+  pass sequential behind the one `WorldStorage` lock. Any ownership error is
+  returned as `RegionTickError::Ownership`, never converted into a panic;
+  `main.rs` logs it and keeps ticking.
+- Why: this wires the real region loop in one slice without copying behaviour
+  out of `tick.rs`, and it preserves the existing `tick_world` ordering and
+  the shutdown flush. It makes cross-region mutation fail/queue instead of
+  silently touching another region.
+- Consequences: `WorldStorage`, entity/player state, and chunk tickets remain
+  global, so regions are not yet ticked in parallel at the world level. The
+  temporary hide/restore pass costs map moves per region tick. Cross-region
+  hopper transfers and border edits that load the other region's block entity
+  while hidden are dropped rather than transferred; queue/handoff support is
+  P10.3/P10.5. `RegionScheduler`'s legacy `tick`/`tick_parallel` APIs are
+  unchanged.
+
 ## 2026-11-07 — Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a

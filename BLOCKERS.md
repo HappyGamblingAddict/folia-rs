@@ -142,30 +142,38 @@ Format:
   unknown/corrupt errors and `StructureGenerator::shipped_catalog` for village
   generation. Do not claim full structure or village parity from this slice.
 
-## 2026-11-06 — P10 region ownership is task-scoped, not world-scoped
+## 2026-11-07 — P10 region tick loop is wired, but world state is still globally locked
 
-- Status: Not a hard blocker. `region.rs` now enforces ownership on the
-  task subsystem (`Region` queue + world-slice token + tick counter,
-  `RegionOwned<T>`/`OwnedWorld`, `OwnershipError`, `RegionMap` vanilla
-  8x8/4x4 math). 18 `tests/region_ownership.rs` tests plus the existing
-  scheduler suites in `bulk_validation` pass.
+- Status: Not a hard blocker. `RegionTickDriver` now groups cached chunks
+  into vanilla 8x8 regions, ticks the global queue first and every loaded/task
+  region in sorted order, and runs each region's task queue plus a
+  region-scoped world tick. `WorldStorage::tick_region[_with_table]` hides
+  other regions' chunks/block entities, moves only that region's due scheduled
+  ticks and neighbour updates through the existing `tick_world`, then restores
+  them; cross-region neighbour updates are requeued. Scheduled/random ticks,
+  block-entity tickers, hoppers, and neighbour drains therefore run only for
+  the owner region. 5 `tests/region_tick_loop.rs` tests plus the existing
+  region/world/scheduler suites pass; `main.rs` uses the driver and keeps the
+  shutdown flush.
 - Not wired (needs P10.3-P10.7, outside this slice's files):
-  - `WorldStorage` (`world.rs`), entity state (`entity.rs`), players, and
-    chunk tickets are still shared/global; the server loop in `main.rs`
-    still ticks the world globally. `RegionWorldSlice` cells are a token
-    model, not yet the real chunk/entity/block-entity store.
-  - Legacy `schedule_at` tasks receive no `OwnedWorld`; only owned tasks
-    and `RegionOwned` values are checked. A legacy task can still mutate
-    global state without an ownership error.
-  - No region merge/split, ownership transfer, cross-region teleport, or
-    entity handoff; `RegionMap::group_chunks` only groups chunks for
-    migration.
-  - The global queue uses the `GLOBAL_REGION_KEY` sentinel so it can
-    never collide with a real region; it is not a real region.
-- Workaround / next task: Use `schedule_owned_*` plus `RegionOwned` for
-  new region-local work. Wire `Region` into the tick loop and per-region
-  world state before claiming Folia region parity; do not treat the
-  current scheduler isolation as world-state isolation.
+  - `WorldStorage` is still one value behind one global lock, so the driver's
+    world pass is sequential and `tick_parallel_for_test` only parallelizes
+    region task queues. Do not claim parallel per-region world ticking.
+  - Entity/player state, POI, and chunk tickets are still shared/global;
+    `RegionWorldSlice` cells remain a token model, not the real store.
+  - Cross-region hopper transfers and border edits that need the other
+    region's block entity while it is hidden are dropped rather than handed
+    off; there is no ownership transfer, teleport handoff, or region
+    merge/split.
+  - Legacy `schedule_at` tasks receive no `OwnedWorld`; only owned tasks and
+    `RegionOwned` values are checked. A legacy task can still mutate global
+    state without an ownership error.
+  - `Region` diagnostics (`last_neighbor_updates`, `overflowed`) are per world
+    tick, so a multi-region driver pass leaves the last region's values.
+- Workaround / next task: Use `RegionTickDriver` plus `schedule_owned_*` and
+  `RegionOwned` for new work. P10.3 must split `WorldStorage` into per-region
+  state before claiming Folia's parallel world model; P10.5 must add
+  cross-region handoff for border transfers.
 
 ## 2026-11-04 — P0.5 Make oracle data reproducible
 

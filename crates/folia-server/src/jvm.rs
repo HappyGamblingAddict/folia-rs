@@ -5,7 +5,7 @@ use folia_core::nbt::Tag;
 use folia_core::player::PlayerSession;
 use folia_core::world::{self, WorldStorage};
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jdouble, jint, jlong, jstring};
+use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jstring};
 use jni::{InitArgsBuilder, JNIEnv, JNIVersion, JavaVM, NativeMethod};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -649,6 +649,31 @@ fn world_full_time(state: &BridgeState) -> i64 {
 fn world_set_full_time(state: &mut BridgeState, time: i64) {
     state.world_state.full_time = time;
     state.save_world_state();
+    let sent = folia_core::join::broadcast_world_time(time, time, true);
+    println!("[bridge] world time {time} sent to {sent} live session(s)");
+}
+
+fn world_set_storm(state: &mut BridgeState, storm: bool) {
+    let changed = state.world_state.storm != storm;
+    state.world_state.storm = storm;
+    state.world_state.weather_duration = 0;
+    state.world_state.clear_weather_duration = 0;
+    state.save_world_state();
+    if changed {
+        folia_core::join::broadcast_game_event(if storm { 1 } else { 2 }, 0.0);
+        folia_core::join::broadcast_game_event(7, if storm { 1.0 } else { 0.0 });
+    }
+}
+
+fn world_set_thundering(state: &mut BridgeState, thundering: bool) {
+    let changed = state.world_state.thundering != thundering;
+    state.world_state.thundering = thundering;
+    state.world_state.thunder_duration = 0;
+    state.world_state.clear_weather_duration = 0;
+    state.save_world_state();
+    if changed {
+        folia_core::join::broadcast_game_event(8, if thundering { 1.0 } else { 0.0 });
+    }
 }
 
 fn world_set_spawn(state: &mut BridgeState, x: f64, y: f64, z: f64) -> bool {
@@ -1091,12 +1116,7 @@ extern "system" fn native_world_set_storm(
     storm: jboolean,
 ) {
     let _world = string_arg(&mut env, &world_name);
-    with_bridge(|state| {
-        state.world_state.storm = storm != 0;
-        state.world_state.weather_duration = 0;
-        state.world_state.clear_weather_duration = 0;
-        state.save_world_state();
-    });
+    with_bridge(|state| world_set_storm(state, storm != 0));
 }
 
 extern "system" fn native_world_weather_duration(
@@ -1137,12 +1157,7 @@ extern "system" fn native_world_set_thundering(
     thundering: jboolean,
 ) {
     let _world = string_arg(&mut env, &world_name);
-    with_bridge(|state| {
-        state.world_state.thundering = thundering != 0;
-        state.world_state.thunder_duration = 0;
-        state.world_state.clear_weather_duration = 0;
-        state.save_world_state();
-    });
+    with_bridge(|state| world_set_thundering(state, thundering != 0));
 }
 
 extern "system" fn native_world_thunder_duration(
@@ -1199,6 +1214,57 @@ extern "system" fn native_world_set_spawn(
 ) -> jboolean {
     let _world = string_arg(&mut env, &world_name);
     u8::from(with_bridge(|state| world_set_spawn(state, x, y, z)).unwrap_or(false))
+}
+
+extern "system" fn native_world_play_sound(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    sound: JString,
+    category: jint,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    volume: jfloat,
+    pitch: jfloat,
+    seed: jlong,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    let sound = string_arg(&mut env, &sound);
+    u8::from(folia_core::join::broadcast_sound(&sound, category, x, y, z, volume, pitch, seed) > 0)
+}
+
+extern "system" fn native_world_spawn_particle(
+    mut env: JNIEnv,
+    _class: JClass,
+    world_name: JString,
+    particle: JString,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    offset_x: jfloat,
+    offset_y: jfloat,
+    offset_z: jfloat,
+    speed: jfloat,
+    count: jint,
+    force: jboolean,
+) -> jboolean {
+    let _world = string_arg(&mut env, &world_name);
+    let particle = string_arg(&mut env, &particle);
+    u8::from(
+        folia_core::join::broadcast_particle(
+            &particle,
+            x,
+            y,
+            z,
+            offset_x,
+            offset_y,
+            offset_z,
+            speed,
+            count,
+            force != 0,
+        ) > 0,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1381,6 +1447,10 @@ extern "system" fn native_player_teleport(
     let Some(uuid) = player_uuid(&mut env, &uuid) else {
         return 0;
     };
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() || !yaw.is_finite() || !pitch.is_finite()
+    {
+        return 0;
+    }
     let accepted = with_bridge(|state| {
         let dir = state.playerdata_dir.clone();
         let session = state.player(uuid);
@@ -1389,10 +1459,6 @@ extern "system" fn native_player_teleport(
         session.pitch = pitch;
         session.physics.yaw = yaw;
         session.physics.pitch = pitch;
-        println!(
-            "[bridge] {} teleported to ({x:.2}, {y:.2}, {z:.2}); live session sync is pending",
-            session.name
-        );
         if let Err(error) = session.save(&dir) {
             eprintln!(
                 "[bridge] could not save teleport for {}: {error}",
@@ -1403,6 +1469,14 @@ extern "system" fn native_player_teleport(
         true
     })
     .unwrap_or(false);
+    if accepted {
+        let live = folia_core::join::teleport_player(uuid, x, y, z, yaw, pitch);
+        println!(
+            "[bridge] teleported {} to ({x:.2}, {y:.2}, {z:.2}); live session {}",
+            uuid_string(uuid),
+            if live { "queued" } else { "not connected" }
+        );
+    }
     u8::from(accepted)
 }
 
@@ -1454,7 +1528,73 @@ extern "system" fn native_player_send_message(
     };
     let message = string_arg(&mut env, &message);
     let name = with_bridge(|state| state.player(uuid).name.clone()).unwrap_or_default();
-    println!("[bridge] -> {name}: {message}");
+    let lines: Vec<&str> = message.lines().collect();
+    let lines = if lines.is_empty() { vec![""] } else { lines };
+    let mut delivered = false;
+    for line in lines {
+        delivered |= folia_core::join::send_player_chat(uuid, line);
+    }
+    if !delivered {
+        println!("[bridge] -> {name} (offline): {message}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+extern "system" fn native_player_play_sound(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    sound: JString,
+    category: jint,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    volume: jfloat,
+    pitch: jfloat,
+    seed: jlong,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let sound = string_arg(&mut env, &sound);
+    u8::from(folia_core::join::send_player_sound(
+        uuid, &sound, category, x, y, z, volume, pitch, seed,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+extern "system" fn native_player_spawn_particle(
+    mut env: JNIEnv,
+    _class: JClass,
+    uuid: JString,
+    particle: JString,
+    x: jdouble,
+    y: jdouble,
+    z: jdouble,
+    offset_x: jfloat,
+    offset_y: jfloat,
+    offset_z: jfloat,
+    speed: jfloat,
+    count: jint,
+    force: jboolean,
+) -> jboolean {
+    let Some(uuid) = player_uuid(&mut env, &uuid) else {
+        return 0;
+    };
+    let particle = string_arg(&mut env, &particle);
+    u8::from(folia_core::join::send_player_particle(
+        uuid,
+        &particle,
+        x,
+        y,
+        z,
+        offset_x,
+        offset_y,
+        offset_z,
+        speed,
+        count,
+        force != 0,
+    ))
 }
 
 extern "system" fn native_player_save(mut env: JNIEnv, _class: JClass, uuid: JString) {
@@ -1749,12 +1889,14 @@ extern "system" fn native_player_kick(
         return 0;
     };
     let reason = string_arg(&mut env, &reason);
-    // The live join session does not expose a disconnect packet queue to the
-    // bridge yet, so record the request instead of pretending the socket was
-    // closed. The join-session integration task owns the transport hook.
-    let name = with_bridge(|state| state.player(uuid).name.clone()).unwrap_or_default();
-    println!("[bridge] kick requested for {name}: {reason} (live disconnect transport pending)");
-    0
+    let pushed = folia_core::join::kick_player(uuid, &reason);
+    if pushed {
+        println!("[bridge] kick queued for {}: {reason}", uuid_string(uuid));
+    } else {
+        let name = with_bridge(|state| state.player(uuid).name.clone()).unwrap_or_default();
+        println!("[bridge] kick requested for {name} but no live session: {reason}");
+    }
+    u8::from(pushed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1956,6 +2098,16 @@ impl PluginRuntime {
                     fn_ptr: native_world_set_spawn as *mut c_void,
                 },
                 NativeMethod {
+                    name: "nativeWorldPlaySound".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;IDDDFFJ)Z".into(),
+                    fn_ptr: native_world_play_sound as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativeWorldSpawnParticle".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;DDDFFFFIZ)Z".into(),
+                    fn_ptr: native_world_spawn_particle as *mut c_void,
+                },
+                NativeMethod {
                     name: "nativeConfigRead".into(),
                     sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
                     fn_ptr: native_config_read as *mut c_void,
@@ -2029,6 +2181,16 @@ impl PluginRuntime {
                     name: "nativePlayerSendMessage".into(),
                     sig: "(Ljava/lang/String;Ljava/lang/String;)V".into(),
                     fn_ptr: native_player_send_message as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerPlaySound".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;IDDDFFJ)Z".into(),
+                    fn_ptr: native_player_play_sound as *mut c_void,
+                },
+                NativeMethod {
+                    name: "nativePlayerSpawnParticle".into(),
+                    sig: "(Ljava/lang/String;Ljava/lang/String;DDDFFFFIZ)Z".into(),
+                    fn_ptr: native_player_spawn_particle as *mut c_void,
                 },
                 NativeMethod {
                     name: "nativePlayerSave".into(),
@@ -2687,9 +2849,9 @@ mod tests {
         assert_eq!(state.world_state.spawn, (0.5, 64.0, 0.5));
         world_set_full_time(&mut state, 18_000);
         assert!(world_set_spawn(&mut state, 12.5, 70.0, -4.5));
-        state.world_state.storm = true;
+        world_set_storm(&mut state, true);
+        world_set_thundering(&mut state, true);
         state.world_state.weather_duration = 120;
-        state.world_state.thundering = true;
         state.world_state.thunder_duration = 80;
         state.world_state.clear_weather_duration = 40;
         state.save_world_state();

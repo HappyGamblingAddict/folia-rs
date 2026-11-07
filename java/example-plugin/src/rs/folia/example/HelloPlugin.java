@@ -94,6 +94,28 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
                 + " (" + player.getUniqueId() + ") at " + player.getLocation().getBlockX()
                 + "," + player.getLocation().getBlockY() + ","
                 + player.getLocation().getBlockZ());
+        player.sendMessage("Welcome, " + player.getName() + "! (from the Rust bridge)");
+        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0F, 1.0F);
+        player.spawnParticle(Particle.END_ROD, player.getLocation(), 4);
+        if (selfTest && "1".equals(System.getenv("FOLIA_BRIDGE_KICK_TEST"))) {
+            getServer().getScheduler().runTaskLater(this, () -> {
+                getLogger().info("live bridge self-test queued kick");
+                player.kickPlayer("Bridge kick self-test");
+            }, 60L);
+        }
+        if (selfTest) {
+            getServer().getScheduler().runTaskLater(this, () -> {
+                World world = getServer().getWorld("world");
+                if (world != null) {
+                    world.setTime(6_000L);
+                    world.setStorm(false);
+                    world.setThundering(false);
+                    world.setStorm(true);
+                    world.setThundering(true);
+                    getLogger().info("live bridge self-test queued time/weather changes");
+                }
+            }, 40L);
+        }
         if (selfTest && PROBE_ID.equals(player.getUniqueId())) {
             exercisePlayer(player);
         }
@@ -201,7 +223,7 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         world.playSound(spawn, Sound.BLOCK_NOTE_BLOCK_PLING, 1.0F, 1.0F);
         world.spawnParticle(Particle.END_ROD, spawn, 1);
         getLogger().info("world depth self-test: time=" + timeOk + " weather=" + weatherOk
-                + " spawn=" + spawnOk + " effects are explicit no-ops");
+                + " spawn=" + spawnOk + " effects=queued for live sessions");
         if (!timeOk || !weatherOk || !spawnOk) {
             getLogger().severe("bridge world depth self-test FAILED");
         }
@@ -253,6 +275,8 @@ public final class HelloPlugin extends JavaPlugin implements Listener {
         Location location = player.getLocation();
         boolean teleported = player.teleport(location);
         player.sendMessage("Hello from the Rust player bridge at " + location);
+        player.playSound(location, Sound.BLOCK_NOTE_BLOCK_PLING, 1.0F, 1.0F);
+        player.spawnParticle(Particle.END_ROD, location, 1);
 
         PlayerInventory inventory = player.getInventory();
         ItemStack previous = inventory.getItem(0);

@@ -29,9 +29,9 @@ import java.util.concurrent.CompletableFuture;
  * Rust-backed {@link Player} proxy.
  *
  * <p>Identity, location, health, food, game mode, and inventory are stored by
- * the Rust bridge in the playerdata record. The live network session still owns
- * its own copy of these values; only {@code setGameMode} is forwarded to that
- * session today (through the existing console command channel).</p>
+ * the Rust bridge in the playerdata record. Game mode, messages, kick,
+ * teleport, sounds, and particles are also forwarded to the live network
+ * session when one is connected.</p>
  */
 final class BridgePlayer implements InvocationHandler {
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
@@ -212,9 +212,33 @@ final class BridgePlayer implements InvocationHandler {
                 Bridge.nativePlayerKick(uuidString, message(args));
                 yield null;
             }
-            case "playSound", "playEffect", "spawnParticle", "stopSound", "stopAllSounds" -> {
-                Bridge.logger().fine(() -> "Ignoring client-only effect " + method.getName()
-                        + " from " + name + ": the bridge has no packet queue for it yet");
+            case "playSound" -> {
+                BridgeEffects.PlaySound sound = BridgeEffects.playSound(args);
+                if (sound != null) {
+                    Bridge.nativePlayerPlaySound(
+                            uuidString, sound.sound(), sound.category(),
+                            sound.location().getX(), sound.location().getY(),
+                            sound.location().getZ(), sound.volume(), sound.pitch(),
+                            sound.seed());
+                }
+                yield null;
+            }
+            case "spawnParticle" -> {
+                BridgeEffects.SpawnParticle particle = BridgeEffects.spawnParticle(world.proxy(), args);
+                if (particle != null) {
+                    Bridge.nativePlayerSpawnParticle(
+                            uuidString, particle.particle(),
+                            particle.location().getX(), particle.location().getY(),
+                            particle.location().getZ(),
+                            (float) particle.offsetX(), (float) particle.offsetY(),
+                            (float) particle.offsetZ(), (float) particle.speed(),
+                            particle.count(), particle.force());
+                }
+                yield null;
+            }
+            case "playEffect", "stopSound", "stopAllSounds" -> {
+                Bridge.logger().fine(() -> "Ignoring unsupported effect " + method.getName()
+                        + " from " + name + ": no matching client packet is modeled");
                 yield null;
             }
             case "setVelocity", "setFireTicks", "setRemainingAir", "setMaximumAir" -> null;

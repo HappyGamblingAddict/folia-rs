@@ -453,8 +453,12 @@ stream from `WorldStorage` and are not retroactively decorated.
   `BlockData`/`BlockState` subsets. Reads use the shared overworld storage and
   do not generate missing terrain.
 - `Player` proxy: world, location, inventory, game mode, messages, teleport,
-  health/food/saturation. `setGameMode` reaches a live session; the rest is
-  persisted through `PlayerSession` playerdata (live-session sync is pending).
+  health/food/saturation, sounds, and particles. Game mode, chat, kick,
+  teleport, and player effects reach a live play session; health/food and
+  inventory still persist through `PlayerSession` playerdata only.
+- Live world state: time, storm/thunder, sounds, and simple particles are sent
+  to connected play sessions as 1.21.11 packets through the join command
+  registry.
 - `PlayerInventory`/`ItemStack` proxies: slots 0-35, type/count/damage,
   display name, lore, unbreakable, and enchantments. `new ItemStack(...)` and
   `Enchantment`/`Sound` static constants work through a
@@ -473,16 +477,18 @@ stream from `WorldStorage` and are not retroactively decorated.
   variants are explicitly downgraded to the server thread and `isSync()`
   reports true.
 - World time (`getTime`/`setTime`/`getFullTime`/`isDayTime`), weather flags and
-  durations, and spawn location persist in `run/world_state.txt`. They do not
-  yet emit play packets to a live client.
+  durations, and spawn location persist in `run/world_state.txt`. Time changes
+  emit `ClientboundSetTime`; storm/thunder changes emit the rain/thunder game
+  events on live sessions.
 - Host-callable `BlockBreakEvent`, `BlockPlaceEvent`, and
   `PlayerInteractEvent` with cancellation. Vanilla break/place handlers still
   bypass the event bus until `join.rs` is wired.
-- `sendMessage` and `kickPlayer` currently log only: `join.rs` exposes no
-  outbound chat/disconnect queue. `playSound`/`spawnParticle` are logged
-  no-ops.
+- `sendMessage`, `kickPlayer`, `playSound`, and `spawnParticle` queue real play
+  packets on connected sessions; offline probes keep the playerdata/log path.
+  Rich/signed chat, effect distance filtering, and option-carrying particles
+  remain open.
 - Example plugin exercises the world, player, inventory, permissions, config,
-  services, time/weather, enchantment, and event APIs.
+  services, time/weather, sound/particle, enchantment, and event APIs.
   `FOLIA_BRIDGE_SELFTEST=1` also fires the three events from Rust and checks
   their cancellation results.
 - `FOLIA_DISABLE_PLUGINS=1` forces native-only startup even when jars exist.

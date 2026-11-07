@@ -3029,3 +3029,33 @@ Format:
   and delegates behaviour to `crafting::BrewingStandState`.
 - The recipe brew time is not persisted because vanilla resets it to 400; the
   runtime state keeps it for tests/menus.
+## 2026-11-07 - Bridge outbound traffic uses a play-session command registry
+
+- `join::SessionCommand` is the single outbound queue. Each play connection
+  registers an `ActiveSession` keyed by UUID with its name and a monotonic
+  connection id in `SESSIONS`; `SessionCommandGuard` removes only its own
+  connection on drop, so a reconnect cannot lose the new registration. Console
+  `gamemode` and the JNI bridge both use the same channel.
+- Packet ids come from the 1.21.11 `GameProtocols` clientbound order: disconnect
+  32, level particles 46, set time 111, sound 115, and system chat 119 (the
+  bundle packet occupies id 0). Component payloads use unnamed network NBT
+  (`nbt::write_any_tag`) rather than the named-root form used by chunk NBT.
+- Chat sends `ClientboundSystemChat` with `overlay=false`; kick sends the
+  play-state common disconnect packet and then saves playerdata and flushes
+  terrain before the session returns. Teleport reuses
+  `ClientboundPlayerPosition`, sets the live session position and physics yaw/
+  pitch, and re-streams chunks when the column changes.
+- World time uses `ClientboundSetTime` with the persisted day time for both
+  game time and day time because the bridge still has no separate game-time
+  clock. Storm/thunder changes emit the vanilla start/stop rain events plus the
+  rain/thunder level events; the flags remain persisted in `world_state.txt`.
+- Sound uses a direct `SoundEvent` holder (registry id 0, identifier, no fixed
+  range), so the bridge does not need a sound registry table. Simple particles
+  use the built-in `particle_type` registration order; option-carrying
+  particles are rejected with an explicit log instead of sending a truncated
+  packet. This slice broadcasts effects to every live session and does not yet
+  apply the vanilla distance filter.
+- `WorldStorage::tick_hoppers` was added to satisfy the existing
+  `tick_world_with_table` call. It pushes one ready hopper item into the
+  container below after the block-entity ticker has advanced the cooldown;
+  hopper pull, locking, and menu packets remain open.

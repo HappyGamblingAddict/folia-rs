@@ -759,6 +759,42 @@ mod tests {
     }
 
     #[test]
+    fn tick_hoppers_pushes_one_item_into_the_container_below() {
+        use crate::block_entity::{ChestBlockEntity, HopperBlockEntity};
+        use crate::item_components::ItemStack;
+
+        let root = temp_dir("hopper-tick");
+        let mut storage = WorldStorage::new(Dimension::Overworld.region_dir(&root));
+        let hopper_pos = BlockEntityPos::new(0, 64, 0);
+        let chest_pos = BlockEntityPos::new(0, 63, 0);
+        let mut hopper = HopperBlockEntity::new(hopper_pos);
+        hopper.set_slot(0, ItemStack::new("minecraft:iron_ingot", 5));
+        let mut entities = BlockEntityMap::new();
+        entities.insert(hopper_pos, BlockEntity::Hopper(hopper));
+        entities.insert(
+            chest_pos,
+            BlockEntity::Chest(ChestBlockEntity::new(chest_pos)),
+        );
+        storage.block_entities.insert((0, 0), entities);
+
+        storage.tick_hoppers().unwrap();
+
+        let Some(BlockEntity::Hopper(hopper)) = storage.get_block_entity(hopper_pos).unwrap()
+        else {
+            panic!("hopper missing after tick");
+        };
+        assert_eq!(hopper.slot(0).unwrap().count, 4);
+        assert_eq!(hopper.transfer_cooldown, 8);
+        let Some(BlockEntity::Chest(chest)) = storage.get_block_entity(chest_pos).unwrap() else {
+            panic!("chest missing after tick");
+        };
+        assert_eq!(chest.slot(0).unwrap().item, "minecraft:iron_ingot");
+        assert_eq!(chest.slot(0).unwrap().count, 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn saves_and_loads_chunks_across_regions() {
         let root = temp_dir("cross-region");
         let region_dir = Dimension::Overworld.region_dir(&root);

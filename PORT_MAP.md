@@ -54,7 +54,7 @@ Rust tree: `crates/folia-core`.
 | `world/level/storage/loot/*` (`LootTable`, `LootPool`, entries, providers, functions, conditions) | `folia-core/src/loot.rs` + `assets/loot_tables.json` | Partial: 1,324 tables typed and rollable in Java order, including weighted pools, alternatives/sequence/group, nested tables, item/tag/empty/dynamic entries, 20 function kinds, and all shipped conditions; unknown payloads fail closed and are reported. Block/entity drop wiring remains |
 | `world/item/crafting/*` / `data/minecraft/recipe/**` | `folia-core/src/loot.rs` + `assets/recipes.json` | Partial: 1,470 recipes parsed (shaped, shapeless, four cooking types, stonecutting, smithing transform/trim, transmute, decorated pot, 13 special types), typed item/tag/alternatives ingredients and component-bearing results; grid/container matching and menus remain |
 | `net/minecraft/world/level/levelgen/feature/*` definitions | `assets/feature_data.json` | Extracted (224 configured / 258 placed / 65 biome lists) |
-| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features, default `FeatureLevel::heightmap`/`sea_level`, scheduled-tick and block-entity region sinks, and a two-registry selector branch resolver (placed feature first, configured inline fallback); **207/224** configured features dispatch as supported |
+| `Feature`, `ConfiguredFeature`, `PlacedFeature`, `FeaturePlaceContext`, `GenerationStep.Decoration` | `folia-core/src/worldgen/feature/mod.rs` | Framework, typed loading, 11-step ordering, deterministic replay, inline nested placed features, default `FeatureLevel::heightmap`/`sea_level`, scheduled-tick and block-entity region sinks, and a two-registry selector branch resolver (placed feature first, configured inline fallback); **218/224** configured features dispatch as supported |
 | `placement/*` modifiers, `IntProvider`, `HeightProvider`, `VerticalAnchor` | `folia-core/src/worldgen/feature/placement.rs` | Typed pipeline; all 888 shipped modifiers execute with vanilla draw order, including every heightmap, block predicate, environment scan, layer/noise count, surface-relative filter, and Gaussian offset |
 | `RandomPatchFeature`, `SimpleBlockFeature`, `SimpleRandomSelectorFeature`, `NoBonemealFlowerFeature` alias, `BlockPileFeature`, `BlockColumnFeature`, `MultifaceGrowthFeature`, `VegetationPatchFeature`, `WaterloggedVegetationPatchFeature`, `stateproviders/*` | `folia-core/src/worldgen/feature/vegetation.rs` | Ported: random patch/flower/`no_bonemeal_flower`, simple block (including `schedule_tick`), simple random selector with full inline modifiers, pile, column, multiface, vegetation and waterlogged patches; simple/weighted/randomized-int/noise/noise-threshold/dual-noise/rotated providers; predicate-only nested placements; Java HashSet order for patch vegetation |
 | `DiskFeature`, `SpringFeature`, `LakeFeature`, `IcebergFeature`, `BlueIceFeature`, `IceSpikeFeature`, `ReplaceBlobsFeature`, `BasaltColumnsFeature`, `BasaltPillarFeature`, `DeltaFeature` | `folia-core/src/worldgen/feature/terrain.rs` | Ported: disks with rule-based providers, springs with tick scheduling, shipped lava lake, icebergs/blue ice/ice spikes, Netherrack blobs, basalt columns/pillar, and deltas; sea level comes from `FeatureLevel::sea_level` (Overworld default 63) |
@@ -92,11 +92,17 @@ Rust tree: `crates/folia-core`.
   occupant NBT (2–3 bees, `ticks_in_hive < 599`, `min_ticks_in_hive = 600`);
   `tests/vegetation.rs` adds 3 integration tests for pale oak pale-moss
   placement, pale forest flower tick scheduling, and deterministic dripleaf
-  selector placement. **207/224** configured features dispatch as supported; 17
+  selector placement. **218/224** configured features dispatch as supported; 6
   remain explicit `Unsupported`. The 2026-11-06 terrain/cave/selector batch
   adds 9 `tests/feature_gaps.rs` cases (selector registry resolution, disks,
   springs, ice, lava lake, Nether blobs/columns/pillar/delta, dripstone,
-  generator determinism) and raises `tests/vegetation.rs`'s snapshot to 207.
+  generator determinism) and raises `tests/vegetation.rs`'s snapshot. The
+  2026-11-07 end/dungeon/sculk batch adds `feature/end.rs` (chorus plant, end
+  island/gateway/platform, void platform), `feature/misc.rs` (bonus chest,
+  desert well, monster room; all attach their chest/brushable/spawner
+  block-entity payloads), and `feature/sculk.rs` (SculkSpreader cursor loop,
+  sculk/sculk-vein behavior, multiface vein regrowth, catalyst and rare
+  shriekers); `tests/feature_gaps.rs` grows to 15 cases.
 - P2.5 aquatic/vine/mushroom evidence: `aquatic.rs` adds coral tag-order and
   horizontal-rotation unit tests, `vines.rs` adds a twisting/weeping column
   unit test, and `tests/aquatic.rs` adds 16 integration tests covering all

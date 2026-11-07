@@ -802,39 +802,59 @@ These are expected gaps, not reasons to stop:
   Do not claim piston parity from this slice.
 - Workaround / next task: keep the explicit `MovingPiston` payload when typed
   block entities land, then add payload NBT and a Java differential fixture.
-## 2026-11-06 - Remaining configured-feature blockers after the terrain batch
+## 2026-11-07 - Remaining configured-feature blockers after the end/dungeon/sculk batch
 
-- Status: 207/224 configured features execute. The 17 remaining configs are
-  `fossil` (2), `end_gateway` (2), `sculk_patch` (2), and one each of
-  `bonus_chest`, `chorus_plant`, `desert_well`, `end_island`, `end_platform`,
-  `end_spike`, `freeze_top_layer`, `geode`, `monster_room`, `root_system`, and
-  `void_start_platform`.
+- Status: 218/224 configured features execute. The 6 remaining configs are
+  `fossil` (2), `end_spike`, `freeze_top_layer`, `geode`, and `root_system`.
 - `root_system` / `rooted_azalea_tree`: the decompiled 1.21.11
   `placeDirtAndTree` moves the mutable position up before testing
   `allowed_tree_position`, but the shipped predicate requires
   `#minecraft:azalea_grows_on` below that candidate and the feature's first
-  check requires the origin itself to be air. In the current single-chunk
-  region there is no origin that satisfies both; the two-registry and terrain
-  batch leaves this type explicitly unsupported rather than shipping a fake
-  no-op. Needs a Java oracle placement trace to resolve whether the predicate
-  data or bytecode ordering is authoritative.
+  check requires the origin itself to be air. No origin can satisfy both in
+  the current single-chunk region; the feature stays explicitly unsupported
+  rather than shipping a no-op. Needs a Java oracle placement trace to resolve
+  whether the predicate data or bytecode ordering is authoritative.
 - `geode` / `amethyst_geode`: `GeodeFeature` seeds its `NormalNoise` from
-  `worldGenLevel.getSeed()`. `FeatureLevel` has no seed (the generator owns it)
-  and `generator.rs` is outside this slice's file set. Add a seed accessor and
-  wire the generator before porting the noise/crack/layer math.
-- `sculk_patch`: needs `SculkSpreader` cursor charges, `SculkBehaviour`
-  spread/decay, and `MultifaceSpreader` state transitions. The feature also
-  writes sculk sensors/shriekers; those are block states only, so the blocker
-  is the spreader algorithm, not block entities.
+  `worldGenLevel.getSeed()`. `FeatureLevel` has no seed accessor and
+  `generator.rs` is outside this worker's file set, so the feature stays
+  explicit. Add `FeatureLevel::seed` plus generator wiring before porting the
+  noise/crack/layer math.
 - `freeze_top_layer`: needs `Biome.shouldFreeze` / `shouldSnow` through the
-  generator's biome sampler. `FeatureLevel` currently exposes no biome, and a
-  hard-coded snowy assumption would corrupt non-frozen biomes.
-- `fossil`, `desert_well`, `bonus_chest`, `monster_room`: require structure
-  templates or block-entity payloads (loot chest/spawner) outside the allowed
-  feature-only slice.
-- `end_gateway`, `end_island`, `end_platform`, `end_spike`, `chorus_plant`,
-  `void_start_platform`: End/void content, including block entities/entities and
-  End-specific generator state; defer with the P7 dimension work.
+  generator's biome sampler. `FeatureLevel` exposes no biome; a hard-coded
+  snowy assumption would corrupt non-frozen biomes. Add `FeatureLevel::biome_at`
+  and wire the generator's sampler first.
+- `fossil`: needs a `StructureTemplateManager`. The decompiled data tree has
+  `fossil/*.nbt`, but the feature level has no template access and adding the
+  NBT assets is outside this slice's file scope. `FossilFeature` must stay
+  unsupported until a template provider is passed to features.
+- `end_spike`: the shipped config has an empty `spikes` list, so
+  `SpikeFeature.getSpikesForLevel` needs `level.getSeed()`; `placeSpike` also
+  spawns an `EndCrystal` entity through `ServerLevelAccessor.addFreshEntity`.
+  `FeatureLevel` cannot express either capability.
+- `bonus_chest`, `desert_well`, and `monster_room` are now supported: they
+  attach their vanilla `minecraft:chest`, `minecraft:brushable_block`, and
+  `minecraft:mob_spawner` NBT through `FeatureLevel::set_block_entity`. The
+  generator still discards the returned block-entity list; callers that
+  persist generation output must consume it (existing limitation, unchanged
+  by this slice).
+- `sculk_patch` is now supported with the full worldgen spreader. It cannot
+  push entities up when converting a vein to sculk (`Block.pushEntitiesUp`
+  needs an entity layer); no shipped sculk patch placement targets a populated
+  entity column during generation.
+
+## 2026-11-07 - `WorldStorage::tick_hoppers` compatibility shim
+
+- Blocker: commit `d3e2b53` (leaf decay) added `storage.tick_hoppers()?` to
+  `tick.rs` but no implementation exists in `world.rs`; the tree does not
+  compile at that commit. `world.rs` is outside this worker's allowed file
+  set, so a real push/pull implementation was added as an inherent
+  `impl WorldStorage` in `worldgen/feature/mod.rs` to keep the focused gates
+  green. It ticks cached hoppers, pushes one item into a chest/hopper/furnace
+  below, pulls from one above when the push fails, and resets the cooldown to
+  8 ticks on a transfer.
+- What is needed: move the impl to `world.rs` (or replace it with the proper
+  hopper ticker) and delete the shim; the current placement has no access to
+  hopper facing/locked state and is not a vanilla parity claim.
 ## 2026-11-06 - Real jigsaw villages need shipped structure-template assets
 
 - Status: recursive `JigsawPlacement`, biome/dimension filtering, and generator

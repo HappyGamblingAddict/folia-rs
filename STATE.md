@@ -12,7 +12,7 @@ Last updated: 2026-11-07
 - Tests: **964 passing** on the full merged gate (0 failed); parity holds at
   **98.75% block-class / 95.80% exact-name**.
 - Formatting/Clippy: clean; no warnings.
-- Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
+- Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
   recursive jigsaw, Nether/End generators, dimension storage and portal math.
 - Second/third wave landings: shape collision, incremental/shape-aware light,
   crafting/furnaces, item prototypes, processors/pools, redstone components,
@@ -40,7 +40,7 @@ Last updated: 2026-11-07
 - [~] P1.4 components/prototypes (network codecs, hashing, fixtures).
 - [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
 - [~] P1.7 loot/recipes (block drops wired; entity/chest drops next).
-- [~] P2.1/P2.2 207/224 feature types and all modifiers.
+- [~] P2.1/P2.2 218/224 feature types and all modifiers.
 - [~] P2.8 recursive jigsaw (shipped templates and feature pools remain).
 - [~] P3.5-P3.8 light (shape occlusion; Java light fixtures remain).
 - [~] P3.10 ticks/redstone (lamps/daylight/doors; pistons/hoppers wiring).
@@ -54,6 +54,13 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: feature completion batch — `end.rs` (chorus plant, end island,
+  end gateway x2 with exit block entity, end platform, void platform),
+  `misc.rs` (bonus chest, desert well with suspicious-sand payloads, monster
+  room with loot chests and spawner), and `sculk.rs` (SculkSpreader cursor
+  loop, sculk/sculk-vein behavior, multiface vein spreading, catalyst/rare
+  shriekers). 218/224 configured features; 6 explicit unsupported remain.
+  Focused: 15 `feature_gaps`, 18 `vegetation`, 74 `worldgen::feature` lib.
 - 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
   random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

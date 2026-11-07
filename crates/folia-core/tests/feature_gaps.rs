@@ -127,22 +127,13 @@ fn assert_places_for_some_seed(
 #[test]
 fn unsupported_feature_inventory_is_explicit() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 207);
+    assert_eq!(data.supported_feature_count(), 218);
     let expected: BTreeMap<&str, usize> = [
-        ("minecraft:bonus_chest", 1),
-        ("minecraft:chorus_plant", 1),
-        ("minecraft:desert_well", 1),
-        ("minecraft:end_gateway", 2),
-        ("minecraft:end_island", 1),
-        ("minecraft:end_platform", 1),
         ("minecraft:end_spike", 1),
         ("minecraft:fossil", 2),
         ("minecraft:freeze_top_layer", 1),
         ("minecraft:geode", 1),
-        ("minecraft:monster_room", 1),
         ("minecraft:root_system", 1),
-        ("minecraft:sculk_patch", 2),
-        ("minecraft:void_start_platform", 1),
     ]
     .into_iter()
     .collect();
@@ -406,4 +397,326 @@ fn generator_decorations_are_deterministic() {
     let first = generator.generate_chunk(0, 0).unwrap();
     let second = generator.generate_chunk(0, 0).unwrap();
     assert_eq!(first, second);
+}
+
+fn place_capture(
+    data: &FeatureData,
+    id: &str,
+    chunk: &mut Chunk,
+    seed: i64,
+    origin: BlockPos,
+) -> (bool, Vec<folia_core::worldgen::feature::FeatureBlockEntity>) {
+    let feature = data.configured(id).expect("configured feature exists");
+    let mut level = WorldGenRegion::new(chunk, MIN_Y, HEIGHT);
+    let mut random = LegacyRandomSource::new(seed);
+    let placed = feature
+        .place(&mut level, &mut random, origin)
+        .expect("feature should be executable");
+    (placed, level.take_block_entities())
+}
+
+fn nbt_string<'a>(nbt: &'a folia_core::nbt::Tag, key: &str) -> Option<&'a str> {
+    nbt.as_compound()?
+        .iter()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, value)| value.as_str())
+}
+
+fn nbt_int_array(nbt: &folia_core::nbt::Tag, key: &str) -> Option<Vec<i32>> {
+    nbt.as_compound()?
+        .iter()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, value)| value.as_int_array().map(|values| values.to_vec()))
+}
+
+fn cave_chunk() -> Chunk {
+    let mut chunk = flat_chunk(80, "minecraft:stone");
+    let air = block("minecraft:air");
+    for x in 5..=11 {
+        for z in 5..=11 {
+            for y in 51..=54 {
+                chunk.set_block_state(x, y, z, air.clone());
+            }
+        }
+    }
+    for x in 3..=4 {
+        for y in 51..=52 {
+            chunk.set_block_state(x, y, 8, air.clone());
+        }
+    }
+    chunk
+}
+
+#[test]
+fn shipped_end_features_place() {
+    let data = FeatureData::vanilla();
+
+    let mut chorus = flat_chunk(63, "minecraft:end_stone");
+    let (placed, _) = place_capture(
+        data,
+        "minecraft:chorus_plant",
+        &mut chorus,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+    assert!(count_blocks(&chorus, "minecraft:chorus_plant") > 0);
+    assert!(count_blocks(&chorus, "minecraft:chorus_flower") > 0);
+
+    let mut island = empty_chunk();
+    let (placed, _) = place_capture(
+        data,
+        "minecraft:end_island",
+        &mut island,
+        7,
+        BlockPos::new(8, 50, 8),
+    );
+    assert!(placed);
+    assert!(count_blocks(&island, "minecraft:end_stone") > 0);
+
+    let mut platform = empty_chunk();
+    let (placed, _) = place_capture(
+        data,
+        "minecraft:end_platform",
+        &mut platform,
+        7,
+        BlockPos::new(8, 49, 8),
+    );
+    assert!(placed);
+    assert_eq!(count_blocks(&platform, "minecraft:obsidian"), 25);
+
+    let mut void = empty_chunk();
+    let (placed, _) = place_capture(
+        data,
+        "minecraft:void_start_platform",
+        &mut void,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+    assert_eq!(count_blocks(&void, "minecraft:cobblestone"), 1);
+    assert_eq!(count_blocks(&void, "minecraft:stone"), 255);
+}
+
+#[test]
+fn shipped_end_gateway_features_place_and_attach_the_exit() {
+    let data = FeatureData::vanilla();
+
+    let mut gateway = empty_chunk();
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:end_gateway_return",
+        &mut gateway,
+        7,
+        BlockPos::new(8, 50, 8),
+    );
+    assert!(placed);
+    assert_eq!(
+        gateway
+            .block_state(8, 50, 8)
+            .map(|state| state.name.as_str()),
+        Some("minecraft:end_gateway")
+    );
+    assert!(count_blocks(&gateway, "minecraft:bedrock") > 0);
+    let entity = entities
+        .iter()
+        .find(|entity| entity.pos == BlockPos::new(8, 50, 8))
+        .expect("gateway block entity");
+    assert_eq!(nbt_string(&entity.nbt, "id"), Some("minecraft:end_gateway"));
+    assert_eq!(
+        nbt_int_array(&entity.nbt, "exit_portal"),
+        Some(vec![100, 50, 0])
+    );
+
+    let mut delayed = empty_chunk();
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:end_gateway_delayed",
+        &mut delayed,
+        7,
+        BlockPos::new(8, 50, 8),
+    );
+    assert!(placed);
+    let entity = entities
+        .iter()
+        .find(|entity| entity.pos == BlockPos::new(8, 50, 8))
+        .expect("gateway block entity");
+    assert_eq!(nbt_int_array(&entity.nbt, "exit_portal"), None);
+}
+
+#[test]
+fn shipped_bonus_chest_and_desert_well_place_with_block_entities() {
+    let data = FeatureData::vanilla();
+
+    let mut chest_chunk = flat_chunk(63, "minecraft:grass_block");
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:bonus_chest",
+        &mut chest_chunk,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+    assert_eq!(count_blocks(&chest_chunk, "minecraft:chest"), 1);
+    assert!(count_blocks(&chest_chunk, "minecraft:torch") > 0);
+    let entity = entities
+        .iter()
+        .find(|entity| nbt_string(&entity.nbt, "id") == Some("minecraft:chest"))
+        .expect("bonus chest entity");
+    assert_eq!(
+        nbt_string(&entity.nbt, "LootTable"),
+        Some("minecraft:spawn_bonus_chest")
+    );
+
+    let mut well_chunk = flat_chunk(63, "minecraft:sand");
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:desert_well",
+        &mut well_chunk,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+    assert!(count_blocks(&well_chunk, "minecraft:water") > 0);
+    assert!(count_blocks(&well_chunk, "minecraft:sandstone") > 0);
+    assert_eq!(count_blocks(&well_chunk, "minecraft:suspicious_sand"), 2);
+    assert_eq!(
+        entities
+            .iter()
+            .filter(|entity| {
+                nbt_string(&entity.nbt, "id") == Some("minecraft:brushable_block")
+                    && nbt_string(&entity.nbt, "LootTable")
+                        == Some("minecraft:desert_well_archaeology")
+            })
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn shipped_monster_room_places_a_spawner_with_its_mob() {
+    let data = FeatureData::vanilla();
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:monster_room",
+        &mut cave_chunk(),
+        7,
+        BlockPos::new(8, 51, 8),
+    );
+    assert!(placed);
+    let spawner = entities
+        .iter()
+        .find(|entity| entity.pos == BlockPos::new(8, 51, 8))
+        .expect("monster-room spawner");
+    assert_eq!(
+        nbt_string(&spawner.nbt, "id"),
+        Some("minecraft:mob_spawner")
+    );
+    let spawn_data = spawner
+        .nbt
+        .as_compound()
+        .and_then(|fields| fields.iter().find(|(name, _)| name == "SpawnData"))
+        .map(|(_, value)| value)
+        .expect("SpawnData");
+    let entity_id = spawn_data
+        .as_compound()
+        .and_then(|fields| fields.iter().find(|(name, _)| name == "entity"))
+        .map(|(_, value)| value)
+        .and_then(|value| nbt_string(value, "id"))
+        .expect("spawner entity id");
+    assert!(matches!(
+        entity_id,
+        "minecraft:skeleton" | "minecraft:zombie" | "minecraft:spider"
+    ));
+
+    let first = cave_chunk();
+    let second = cave_chunk();
+    let mut first_chunk = first;
+    let mut second_chunk = second;
+    let (_, first_entities) = place_capture(
+        data,
+        "minecraft:monster_room",
+        &mut first_chunk,
+        7,
+        BlockPos::new(8, 51, 8),
+    );
+    let (_, second_entities) = place_capture(
+        data,
+        "minecraft:monster_room",
+        &mut second_chunk,
+        7,
+        BlockPos::new(8, 51, 8),
+    );
+    assert_eq!(first_chunk, second_chunk);
+    assert_eq!(first_entities, second_entities);
+}
+
+#[test]
+fn shipped_sculk_patches_place_deterministically() {
+    let data = FeatureData::vanilla();
+    let mut first = flat_chunk(63, "minecraft:stone");
+    let (placed, entities) = place_capture(
+        data,
+        "minecraft:sculk_patch_deep_dark",
+        &mut first,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+    let sculk = count_blocks(&first, "minecraft:sculk");
+    let veins = count_blocks(&first, "minecraft:sculk_vein");
+    assert!(
+        sculk + veins > 0,
+        "sculk patch must spread sculk or veins (sculk={sculk}, veins={veins})"
+    );
+    assert!(
+        entities
+            .iter()
+            .all(|entity| nbt_string(&entity.nbt, "id") == Some("minecraft:sculk_catalyst"))
+    );
+
+    let mut replay = flat_chunk(63, "minecraft:stone");
+    place(
+        data,
+        "minecraft:sculk_patch_deep_dark",
+        &mut replay,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert_eq!(first, replay);
+
+    let mut city = flat_chunk(63, "minecraft:sculk");
+    let (placed, _) = place_capture(
+        data,
+        "minecraft:sculk_patch_ancient_city",
+        &mut city,
+        7,
+        BlockPos::new(8, 64, 8),
+    );
+    assert!(placed);
+}
+
+#[test]
+fn unsupported_features_name_the_missing_capability() {
+    let data = FeatureData::vanilla();
+    for (id, capability) in [
+        ("minecraft:amethyst_geode", "FeatureLevel::seed"),
+        ("minecraft:freeze_top_layer", "FeatureLevel::biome_at"),
+        ("minecraft:end_spike", "EndCrystal entity spawning"),
+        ("minecraft:fossil_coal", "StructureTemplateManager"),
+        ("minecraft:rooted_azalea_tree", "azalea_grows_on"),
+    ] {
+        let feature = data.configured(id).expect("configured feature");
+        assert!(!feature.is_supported(), "{id} must stay explicit");
+        let mut chunk = flat_chunk(63, "minecraft:stone");
+        let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+        let mut random = LegacyRandomSource::new(7);
+        let error = feature
+            .place(&mut level, &mut random, BlockPos::new(8, 64, 8))
+            .expect_err("unsupported feature must fail loudly");
+        assert!(
+            error.to_string().contains(capability),
+            "{id} error should name {capability}: {error}"
+        );
+    }
 }

@@ -28,7 +28,7 @@ where possible, a differential test against the Java oracle.
 |---|---:|---|
 | Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~78% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage |
-| Full worldgen | ~70% | 207/224 configured feature types, 888/888 placement modifiers, recursive jigsaw; shipped structure templates and feature-pool placement are missing |
+| Full worldgen | ~72% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw; shipped structure templates and feature-pool placement are missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java light fixtures and exact occlusion flags missing |
 | Player simulation | ~38% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
 | Entities | ~30% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, deterministic join mobs with tracking/cleanup; sensors/brains, armor, shared per-viewer tracking missing |
@@ -47,6 +47,21 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P2.5 feature completion batch - `feature/end.rs` ports
+  `chorus_plant` (chorus plant/flower recursion with connection states),
+  `end_island`, `end_gateway` (both shipped configs, including the
+  `exit_portal`/`ExactTeleport` block-entity payload), `end_platform`, and
+  `void_start_platform`; `feature/misc.rs` ports `bonus_chest`, `desert_well`
+  (with both suspicious-sand block entities), and `monster_room` (dungeon
+  carving, 0-2 loot chests, and the randomized spawner payload);
+  `feature/sculk.rs` ports `sculk_patch` via the full `SculkSpreader` cursor
+  loop, sculk/sculk-vein charge behavior, `MultifaceSpreader` same-space/plane/
+  wrap spreading, vein regrowth, charge decay, catalyst, and rare shrieker
+  growth. **218/224** configured features execute; the 6 remaining configs are
+  explicit `Unsupported` (`root_system`, `geode`, `freeze_top_layer`,
+  `end_spike`, fossil x2). Focused: 15 `tests/feature_gaps.rs`, 18
+  `tests/vegetation.rs`, 74 `worldgen::feature` lib tests; generator
+  determinism stays green.
 - 2026-11-07: P6 daylight detectors - `WorldStorage::sky_light_at` exposes
   cached sky-light values; the daylight-detector behavior samples the cell above
   every 20 ticks and drives the `power` property (normal and inverted). 1 more
@@ -124,12 +139,13 @@ where possible, a differential test against the Java oracle.
   placement pipelines, so all 21 `random_selector` and 4
   `simple_random_selector` configs execute, including `pale_garden_vegetation`,
   `warm_ocean_vegetation`, and `pointed_dripstone`. **207/224** configured
-  features execute; 17 remain explicit `Unsupported`. Focused: 9
-  `tests/feature_gaps.rs`, 18 `tests/vegetation.rs`, 74 `worldgen::feature`
-  lib tests; parity stays 98.75% / 95.80%. Remaining: `root_system`
+  features executed in that batch; 17 remained explicit `Unsupported`. Focused:
+  9 `tests/feature_gaps.rs`, 18 `tests/vegetation.rs`, 74 `worldgen::feature`
+  lib tests; parity stayed 98.75% / 95.80%. Remaining at that point: `root_system`
   (bytecode/predicate mismatch, see `BLOCKERS.md`), `sculk_patch` (spreader),
   `geode` (level seed), `freeze_top_layer` (biome), End/void/block-entity
-  features, and structure-template features.
+  features, and structure-template features. The 2026-11-07 end/dungeon/sculk
+  batch raises the count to **218/224**.
 
 - 2026-11-06: P1.4 item prototype catalog — a Java oracle dump of all 1,504
   non-air registry items now lives in `assets/item_prototypes.json` (79,369 B).
@@ -944,7 +960,8 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   inline placed branch, and `simple_block.schedule_tick` queues a one-tick block
   tick through `crate::tick::ScheduledTickQueue`. 171/224 configured features
   executed after this batch; later selector/terrain slices raise that to
-  207/224. Cactus and sugar cane already
+  207/224, and the 2026-11-07 end/dungeon/sculk batch raises it to 218/224.
+  Cactus and sugar cane already
   run through `block_column`, and lily pads through `simple_block`.
 - **Still open:** `random_selector`/`simple_random_selector` branch resolution
   through both registries landed in the 2026-11-06 terrain/selector batch, so

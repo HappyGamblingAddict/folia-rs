@@ -2837,3 +2837,10 @@ Format:
   `LivingEntity.hasInfiniteMaterials`.
 - The `#minecraft:brewing_fuel` tag table is used instead of hardcoding blaze
   powder so datapack additions work through the shipped tag asset.
+
+## 2026-11-07 - Crop growth is a documented light-gated approximation
+
+- `crops.rs` advances age on a random tick when sky light at the cell above is
+  >= 9, with a deterministic 1-in-4 roll. Vanilla's farmland/neighbour growth
+  speed points are not modeled yet.
+- Hydration, stem/fruit crops, bone-meal particles, and crop drops remain open.

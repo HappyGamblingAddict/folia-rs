@@ -29,7 +29,7 @@ fn storage(name: &str) -> WorldStorage {
     let mut storage = WorldStorage::new(root.join("region"));
     storage.save_chunk(&chunk, Compression::Zlib).unwrap();
     storage.set_tick_seed(42);
-    storage.tick_state_mut().random.random_tick_speed = 65_536;
+    storage.tick_state_mut().random.random_tick_speed = 4_096;
     storage
 }
 

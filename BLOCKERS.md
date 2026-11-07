@@ -939,3 +939,10 @@ These are expected gaps, not reasons to stop:
   the block state) and has no Java differential fixture.
 - Mangrove propagules, azalea/flowering leaves, and waterlogged leaves decay
   through the same tag rule; special-source support is not differentiated.
+
+## 2026-11-07 - Crop growth boundaries
+
+- Vanilla `getGrowthSpeed` (farmland rows, neighbouring crops, hydration) is not
+  modeled; growth uses a fixed 1-in-4 roll under sufficient sky light.
+- Bone meal is exposed as `grow` but has no item-use path or particles; crop
+  drops/harvesting and stem crops (melon/pumpkin) remain open.

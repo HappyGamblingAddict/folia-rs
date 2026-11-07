@@ -1106,6 +1106,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::TRIPWIRE_BEHAVIOR
     } else if crate::leaves::is_leaves(state) {
         &crate::leaves::LEAVES_BEHAVIOR
+    } else if crate::crops::is_crop(state) {
+        &crate::crops::CROP_BEHAVIOR
     } else if crate::redstone::is_redstone_lamp(state) {
         &crate::redstone::REDSTONE_LAMP_BEHAVIOR
     } else if crate::redstone::is_daylight_detector(state) {

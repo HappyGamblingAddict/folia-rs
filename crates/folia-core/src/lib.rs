@@ -9,6 +9,7 @@ pub mod chunk_packet;
 pub mod compression;
 pub mod config;
 pub mod crafting;
+pub mod crops;
 pub mod crypto;
 pub mod dimension;
 pub mod effects;

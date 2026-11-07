@@ -55,6 +55,8 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: crop growth — wheat/carrots/potatoes/beetroots age with a
+  sky-light gate and deterministic random tick; 4 integration tests.
 - 2026-11-07: brewing/consumables — `crafting.rs` adds `BrewingStandState`
   (3 bottle slots, ingredient, 20-charge blaze fuel, 400-tick brew, full vanilla
   potion mix table and container mixes), potion component helpers, and the 1.21.11

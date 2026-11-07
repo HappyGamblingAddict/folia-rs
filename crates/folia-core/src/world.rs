@@ -197,6 +197,19 @@ impl WorldStorage {
             .cloned()
     }
 
+    /// Sky-light level at a block position when its chunk and light layer are
+    /// cached. Returns `None` for an unloaded chunk or a section without light.
+    pub fn sky_light_at(&self, x: i32, y: i32, z: i32) -> Option<u8> {
+        let chunk = self.chunks.get(&(x.div_euclid(16), z.div_euclid(16)))?;
+        let section = chunk.section(y.div_euclid(16) as i8)?;
+        let layer = section.light.sky.as_ref()?;
+        Some(layer.get(
+            x.rem_euclid(16) as usize,
+            y.rem_euclid(16) as usize,
+            z.rem_euclid(16) as usize,
+        ))
+    }
+
     /// All block entities of a chunk. Returns `None` when the chunk does not
     /// exist (neither cached nor stored). An existing chunk with no block
     /// entities returns `Some` with an empty map.

@@ -1985,6 +1985,59 @@ fn update_lamp(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> 
     Ok(())
 }
 
+/// `true` for the daylight detector (normal or inverted property).
+pub fn is_daylight_detector(state: &BlockState) -> bool {
+    state.name == "minecraft:daylight_detector"
+}
+
+fn update_daylight(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> io::Result<()> {
+    if !is_daylight_detector(state) {
+        return Ok(());
+    }
+    let inverted = property(state, "inverted") == Some("true");
+    let sky = world
+        .storage()
+        .sky_light_at(pos.x(), pos.y() + 1, pos.z())
+        .unwrap_or(0);
+    let power = daylight_signal(sky, inverted);
+    let current = property(state, "power").and_then(|value| value.parse::<i32>().ok());
+    if current != Some(power) {
+        world.set_block(pos, with_property(state, "power", &power.to_string()))?;
+    }
+    world.schedule(pos, state.name.clone(), DAYLIGHT_RECHECK_TICKS);
+    Ok(())
+}
+
+/// `DaylightDetectorBlock`: samples sky light every 20 ticks and exposes the
+/// analog strength through the `power` property.
+pub struct DaylightDetectorBehavior;
+
+pub static DAYLIGHT_DETECTOR_BEHAVIOR: DaylightDetectorBehavior = DaylightDetectorBehavior;
+
+impl BlockBehavior for DaylightDetectorBehavior {
+    fn scheduled_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        update_daylight(world, pos, state)
+    }
+
+    fn on_place(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        update_daylight(world, pos, state)
+    }
+}
+
+/// Vanilla daylight detector recompute interval.
+pub const DAYLIGHT_RECHECK_TICKS: u64 = 20;
+
 /// `RedstoneLampBlock`: lights while any neighbour supplies power and goes dark
 /// as soon as the power is removed.
 pub struct RedstoneLampBehavior;

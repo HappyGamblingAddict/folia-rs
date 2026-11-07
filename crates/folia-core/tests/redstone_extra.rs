@@ -138,6 +138,51 @@ fn note_frequency_uses_the_vanilla_octave_curve() {
 }
 
 #[test]
+fn daylight_detector_samples_sky_light_and_inverts() {
+    let mut storage = flat_storage("daylight");
+    let detector = BlockPos::new(0, -61, 0);
+    place(&mut storage, detector, state("minecraft:daylight_detector"));
+    for tick_number in 1..=25 {
+        tick::tick_world(&mut storage, tick_number).unwrap();
+    }
+    assert_eq!(
+        redstone::property(&block(&storage, detector), "power"),
+        Some("15")
+    );
+
+    // Cover the detector; the next scheduled sample must drop to zero.
+    place(
+        &mut storage,
+        BlockPos::new(0, -60, 0),
+        state("minecraft:stone"),
+    );
+    for tick_number in 26..=50 {
+        tick::tick_world(&mut storage, tick_number).unwrap();
+    }
+    assert_eq!(
+        redstone::property(&block(&storage, detector), "power"),
+        Some("0")
+    );
+
+    let inverted = BlockPos::new(2, -61, 0);
+    let mut inverted_state = state("minecraft:daylight_detector");
+    inverted_state = redstone::with_property(&inverted_state, "inverted", "true");
+    place(&mut storage, inverted, inverted_state);
+    place(
+        &mut storage,
+        BlockPos::new(2, -60, 0),
+        state("minecraft:stone"),
+    );
+    for tick_number in 51..=75 {
+        tick::tick_world(&mut storage, tick_number).unwrap();
+    }
+    assert_eq!(
+        redstone::property(&block(&storage, inverted), "power"),
+        Some("15")
+    );
+}
+
+#[test]
 fn neighbours_can_supply_power_directly() {
     let mut storage = flat_storage("power");
     let pos = BlockPos::new(0, -60, 0);

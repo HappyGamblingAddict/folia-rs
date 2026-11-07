@@ -126,6 +126,8 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power
+  sampling (inverted supported); 6 redstone-extra tests total.
 - 2026-11-07: hopper slice — persisted 5-slot hopper state, transfer core with
   merge/empty/full/component semantics, cooldown tick; 5 integration tests.
 - 2026-11-07: block-entity ticker wiring — furnaces/spawners advance through

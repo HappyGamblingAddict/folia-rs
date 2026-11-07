@@ -52,6 +52,10 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P6 daylight detectors - `WorldStorage::sky_light_at` exposes
+  cached sky-light values; the daylight-detector behavior samples the cell above
+  every 20 ticks and drives the `power` property (normal and inverted). 1 more
+  `tests/redstone_extra.rs` test.
 - 2026-11-07: P6 hopper container slice - `block_entity.rs` adds persisted
   five-slot hoppers (`Items`, `TransferCooldown`), slot-transfer merging/empty-slot
   semantics with component preservation and prototype stack limits, and ticker

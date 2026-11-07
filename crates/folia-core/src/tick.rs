@@ -1106,6 +1106,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::TRIPWIRE_BEHAVIOR
     } else if crate::redstone::is_redstone_lamp(state) {
         &crate::redstone::REDSTONE_LAMP_BEHAVIOR
+    } else if crate::redstone::is_daylight_detector(state) {
+        &crate::redstone::DAYLIGHT_DETECTOR_BEHAVIOR
     } else if crate::redstone::is_powered_openable(state) {
         &crate::redstone::POWERED_OPENABLE_BEHAVIOR
     } else if crate::piston::is_piston(state) {

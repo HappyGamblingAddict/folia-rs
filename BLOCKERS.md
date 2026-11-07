@@ -916,3 +916,10 @@ These are expected gaps, not reasons to stop:
   inventory menu, or block-entity NBT tick persistence on a live tick.
 - Hoppers do not lock, do not skip empty containers with a cooldown, and do not
   emit container-update packets.
+
+## 2026-11-07 - Daylight detector boundaries
+
+- Celestial angle, weather dimming, and `getSkyDarken` are not modeled; the
+  detector reports raw stored sky light.
+- Inverted detector state is honored but the crafted block id/property split and
+  block-entity-less updates still need a Java fixture.

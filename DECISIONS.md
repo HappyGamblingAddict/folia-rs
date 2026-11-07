@@ -2787,3 +2787,11 @@ Format:
   prototype's `max_stack_size`.
 - `HopperBlockEntity` persists its five slots and `TransferCooldown`; world-level
   pull/push wiring (block above/below container lookup) remains a later slice.
+
+## 2026-11-07 - Daylight detectors sample the cell above
+
+- Stored sky-light nibbles for a non-air block cell are zero in this engine, so
+  the detector samples `pos.y + 1` (the open cell that actually carries sky
+  light) to match the vanilla brightness the player sees.
+- The detector schedules itself every 20 ticks; a block placed above it triggers
+  an immediate light recompute via the existing block-update path.

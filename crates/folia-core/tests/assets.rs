@@ -54,7 +54,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 #[test]
 fn generated_assets_match_the_manifest() {
-    let expected: [(&str, usize, u64); 25] = [
+    let expected: [(&str, usize, u64); 26] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),
         (
             "block_state_behaviour.tsv.gz",
@@ -88,6 +88,11 @@ fn generated_assets_match_the_manifest() {
         ("structure_processors.json", 46_334, 0x446c_0e7b_069e_66c4),
         ("template_pools.json", 252_745, 0xaa64_3467_6fda_e64c),
         ("structure_templates.json", 1_063_517, 0x0dde_46f3_a786_3ed8),
+        (
+            "structure_templates_more.json",
+            2_358_479,
+            0xb45a_cf21_43b0_63bc,
+        ),
     ];
 
     for (name, length, hash) in expected {

@@ -105,6 +105,7 @@ namespaced, whitespace-free JSON with a `counts` index.
 | `structure_processors.json` | 40 lists, 52 processors (block_rot 6, capped 4, protected_blocks 7, rule 35) | 40 | 46,334 | `0x446c0e7b069e66c4` |
 | `template_pools.json` | 188 pools, 1,198 entries, 1,204 element nodes | 188 | 252,745 | `0xaa6434676fdae64c` |
 | `structure_templates.json` | 483 village templates, base64+gzip NBT payloads | 483 | 1,063,517 | `0x0dde46f3a7863ed8` |
+| `structure_templates_more.json` | 528 non-village templates across 13 families | 528 | 2,358,479 | `0xb45acf2143b063bc` |
 
 ## Worldgen and math
 

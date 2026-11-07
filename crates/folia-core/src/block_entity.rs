@@ -2,9 +2,9 @@
 //!
 //! The modern chunk format stores block entities in the top-level
 //! `block_entities` list (older writes used `BlockEntities`).  This module
-//! decodes that list into a position-keyed [`BlockEntityMap`], models the
-//! chest, furnace, sign, and spawner types the server needs today, and writes
-//! the map back.
+//! decodes that list into a position-keyed [`BlockEntityMap`], models chest,
+//! hopper, brewing stand, furnace, sign, and spawner types, and writes the map
+//! back.
 //!
 //! Two compatibility rules drive the design:
 //!
@@ -20,7 +20,10 @@
 //! it, and copies the result back, but only vanilla's persisted fields are
 //! ever written to NBT.
 
-use crate::crafting::{FURNACE_FUEL_SLOT, FURNACE_INPUT_SLOT, FURNACE_RESULT_SLOT};
+use crate::crafting::{
+    BREWING_SLOT_COUNT, BrewingStandState, FURNACE_FUEL_SLOT, FURNACE_INPUT_SLOT,
+    FURNACE_RESULT_SLOT,
+};
 use crate::crafting::{FurnaceKind, FurnaceState};
 use crate::item_components::{ItemStack, item_stack_from_nbt, item_stack_to_nbt};
 use crate::loot::RecipeCatalog;
@@ -74,6 +77,7 @@ pub type BlockEntityMap = BTreeMap<BlockEntityPos, BlockEntity>;
 pub enum BlockEntity {
     Chest(ChestBlockEntity),
     Hopper(HopperBlockEntity),
+    BrewingStand(Box<BrewingStandBlockEntity>),
     Furnace(FurnaceBlockEntity),
     /// Boxed because the four-line front/back text arrays make this variant
     /// much larger than the others.
@@ -89,6 +93,7 @@ impl BlockEntity {
         match self {
             Self::Chest(chest) => &chest.block_id,
             Self::Hopper(hopper) => &hopper.block_id,
+            Self::BrewingStand(stand) => &stand.block_id,
             Self::Furnace(furnace) => furnace.block_id(),
             Self::Sign(sign) => &sign.block_id,
             Self::Spawner(spawner) => &spawner.block_id,
@@ -100,6 +105,7 @@ impl BlockEntity {
         match self {
             Self::Chest(chest) => chest.pos,
             Self::Hopper(hopper) => hopper.pos,
+            Self::BrewingStand(stand) => stand.pos,
             Self::Furnace(furnace) => furnace.pos,
             Self::Sign(sign) => sign.pos,
             Self::Spawner(spawner) => spawner.pos,
@@ -125,6 +131,9 @@ impl BlockEntity {
                 Self::Chest(ChestBlockEntity::from_fields(pos, id, extras)?)
             }
             "minecraft:hopper" => Self::Hopper(HopperBlockEntity::from_fields(pos, extras)?),
+            "minecraft:brewing_stand" => {
+                Self::BrewingStand(Box::new(BrewingStandBlockEntity::from_fields(pos, extras)?))
+            }
             "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
                 Self::Furnace(FurnaceBlockEntity::from_fields(pos, id, extras)?)
             }
@@ -145,6 +154,7 @@ impl BlockEntity {
         match self {
             Self::Chest(chest) => chest.to_nbt(),
             Self::Hopper(hopper) => hopper.to_nbt(),
+            Self::BrewingStand(stand) => stand.to_nbt(),
             Self::Furnace(furnace) => furnace.to_nbt(),
             Self::Sign(sign) => sign.to_nbt(),
             Self::Spawner(spawner) => spawner.to_nbt(),
@@ -339,6 +349,75 @@ impl HopperBlockEntity {
                 Tag::Int(self.transfer_cooldown),
             );
         }
+        Ok(Tag::Compound(fields))
+    }
+}
+
+/// A brewing stand with three bottle slots, an ingredient slot, and the
+/// persisted `BrewTime`/`Fuel` counters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrewingStandBlockEntity {
+    pub pos: BlockEntityPos,
+    pub block_id: String,
+    pub state: BrewingStandState,
+    extras: Vec<(String, Tag)>,
+}
+
+impl BrewingStandBlockEntity {
+    pub fn new(pos: BlockEntityPos) -> Self {
+        Self {
+            pos,
+            block_id: "minecraft:brewing_stand".to_owned(),
+            state: BrewingStandState::new(),
+            extras: Vec::new(),
+        }
+    }
+
+    pub fn slot(&self, index: usize) -> Option<&ItemStack> {
+        self.state.slot(index)
+    }
+
+    pub fn set_slot(&mut self, index: usize, stack: ItemStack) -> bool {
+        self.state.set_slot(index, stack)
+    }
+
+    /// Advances the brew/fuel state by one tick.
+    pub fn tick(&mut self) {
+        self.state.tick();
+    }
+
+    fn from_fields(pos: BlockEntityPos, extras: Vec<(String, Tag)>) -> io::Result<Self> {
+        let mut state = BrewingStandState::new();
+        for (index, stack) in decode_items(&extras, BREWING_SLOT_COUNT)?
+            .into_iter()
+            .enumerate()
+        {
+            state.set_slot(index, stack);
+        }
+        state.brew_time = optional_int(&extras, "BrewTime", 0)?;
+        state.fuel = optional_int(&extras, "Fuel", 0)?;
+        Ok(Self {
+            pos,
+            block_id: "minecraft:brewing_stand".to_owned(),
+            state,
+            extras,
+        })
+    }
+
+    fn to_nbt(&self) -> io::Result<Tag> {
+        let mut fields = self.extras.clone();
+        write_identity(&mut fields, &self.block_id, self.pos);
+        set_field(&mut fields, "Items", encode_items(self.state.slots()));
+        set_field(
+            &mut fields,
+            "BrewTime",
+            Tag::Short(self.state.brew_time.clamp(i16::MIN as i32, i16::MAX as i32) as i16),
+        );
+        set_field(
+            &mut fields,
+            "Fuel",
+            Tag::Byte(self.state.fuel.clamp(i8::MIN as i32, i8::MAX as i32) as i8),
+        );
         Ok(Tag::Compound(fields))
     }
 }
@@ -931,6 +1010,7 @@ impl BlockEntityTicker for SimpleBlockEntityTicker<'_> {
             BlockEntity::Hopper(hopper) => {
                 hopper.tick();
             }
+            BlockEntity::BrewingStand(stand) => stand.tick(),
             BlockEntity::Chest(_) | BlockEntity::Sign(_) | BlockEntity::Unknown(_) => {}
         }
     }

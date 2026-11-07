@@ -1108,3 +1108,10 @@ These are expected gaps, not reasons to stop:
   exhaustion sources are not connected.
 - Difficulty-based starvation damage, peaceful regeneration, hunger effect, and
   food item use remain open.
+
+## 2026-11-07 - Brewing-stand block-entity boundaries
+
+- No brewing menu/packets, bottle-slot click handling, or live fuel-item
+  interaction; the entity ticks but does not expose a container menu.
+- Brewing stand `Fuel` is persisted as a byte and clamped, matching vanilla's
+  `getByteOr`/`putByte`; custom Paper fuel values above 127 lose precision.

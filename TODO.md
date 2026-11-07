@@ -88,6 +88,9 @@ where possible, a differential test against the Java oracle.
 - 2026-11-07: P4.1 player hunger - `PlayerSession::eat`,
   `add_exhaustion`, and `tick_food` port saturation-first exhaustion,
   natural regeneration, and starvation damage; 5 `tests/food.rs` tests.
+- 2026-11-07: P6.8 brewing-stand block entity - persisted `BrewTime`/`Fuel`,
+  five slots, chunk NBT round-trip, and tick integration; 2
+  `tests/brewing_entity.rs` tests.
 - 2026-11-07: P1.7 chest loot - `ChestBlockEntity::fill_loot` rolls the
   shipped catalog table once, preserves existing slots, fills empty slots, and
   clears `LootTable`/`LootTableSeed`; 5 `tests/chest_loot.rs` tests.

@@ -3022,3 +3022,10 @@ Format:
 - It is not called by `join.rs` yet; eating item use still needs the bridge/
   session wiring. Sprint/jump exhaustion sources and difficulty scaling remain
   open.
+
+## 2026-11-07 - Brewing stands persist the vanilla fields
+
+- `BrewingStandBlockEntity` stores `Items`, `BrewTime` (short) and `Fuel` (byte)
+  and delegates behaviour to `crafting::BrewingStandState`.
+- The recipe brew time is not persisted because vanilla resets it to 400; the
+  runtime state keeps it for tests/menus.

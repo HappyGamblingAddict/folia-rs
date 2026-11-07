@@ -2844,3 +2844,32 @@ Format:
   >= 9, with a deterministic 1-in-4 roll. Vanilla's farmland/neighbour growth
   speed points are not modeled yet.
 - Hydration, stem/fruit crops, bone-meal particles, and crop drops remain open.
+## 2026-11-07 - Feature block-entity payloads use the region sink
+
+- `bonus_chest`, `desert_well`, and `monster_room` attach their vanilla
+  `LootTable`/`LootTableSeed`, brushable loot table, and spawner `SpawnData`
+  compounds through `FeatureLevel::set_block_entity` instead of failing the
+  feature. This is the existing worldgen block-entity contract (trees already
+  use it for beehives), so the feature is supported even though the generator
+  currently discards the returned list.
+- `end_gateway` always attaches an `Age`, and attaches `exit_portal`/
+  `ExactTeleport` only when the shipped config supplies the exit, matching
+  `TheEndGatewayBlockEntity.saveAdditional`.
+
+## 2026-11-07 - Sculk patch ports the worldgen spreader
+
+- `sculk.rs` ports `SculkSpreader.createWorldGenSpreader` values (growth cost
+  50, no-growth radius 1, charge decay 5, additional decay 10, replaceable tag
+  `sculk_replaceable_world_gen`) and the cursor update/charge loop.
+- The multiface spreader only implements the three `SpreadType` variants and
+  the sculk-vein `SpreadConfig`; face-sturdiness uses the shared solid-state
+  approximation because `FeatureLevel` has no collision-context query.
+- Entity pushing on sculk conversion (`Block.pushEntitiesUp`) is not modelled;
+  there is no entity layer during feature placement.
+
+## 2026-11-07 - Hopper tick shim lives outside world.rs
+
+- The tree at `d3e2b53` calls `WorldStorage::tick_hoppers` without defining it.
+  Because `world.rs` was outside this worker's file set, the inherent impl was
+  placed in `worldgen/feature/mod.rs` so the workspace compiles. It performs a
+  cached-chunk push/pull pass; move it to `world.rs` when that file is in scope.

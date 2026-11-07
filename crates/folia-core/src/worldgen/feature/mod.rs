@@ -30,9 +30,12 @@ use std::sync::OnceLock;
 
 mod aquatic;
 mod caves;
+mod end;
+mod misc;
 mod mushroom;
 mod ore;
 mod placement;
+mod sculk;
 mod support;
 mod terrain;
 mod tree;
@@ -44,10 +47,16 @@ use aquatic::{
     UnderwaterMagmaFeature,
 };
 use caves::{DripstoneClusterFeature, LargeDripstoneFeature, PointedDripstoneFeature};
+use end::{
+    ChorusPlantFeature, EndGatewayFeature, EndIslandFeature, EndPlatformFeature,
+    VoidStartPlatformFeature,
+};
+use misc::{BonusChestFeature, DesertWellFeature, MonsterRoomFeature};
 use mushroom::{
     BlockBlobFeature, FillLayerFeature, GlowstoneFeature, HugeFungusFeature, HugeMushroomFeature,
     NetherForestVegetationFeature, RandomBooleanSelectorFeature,
 };
+use sculk::SculkPatchFeature;
 use terrain::{
     BasaltColumnsFeature, BasaltPillarFeature, BlueIceFeature, DeltaFeature, DiskFeature,
     IceSpikeFeature, IcebergFeature, LakeFeature, ReplaceBlobsFeature, SpringFeature,
@@ -424,8 +433,33 @@ impl fmt::Display for UnsupportedFeature {
             formatter,
             "configured feature {} uses {}, which is not ported yet",
             self.feature, self.vanilla_type
-        )
+        )?;
+        if let Some(capability) = unsupported_capability(&self.vanilla_type) {
+            write!(formatter, " ({capability})")?;
+        }
+        Ok(())
     }
+}
+
+/// The exact capability a still-unsupported configured feature needs.
+fn unsupported_capability(vanilla_type: &str) -> Option<&'static str> {
+    Some(match vanilla_type {
+        "minecraft:geode" => {
+            "requires FeatureLevel::seed for its NormalNoise; generator wiring is outside this slice"
+        }
+        "minecraft:freeze_top_layer" => {
+            "requires FeatureLevel::biome_at for Biome.shouldFreeze/shouldSnow"
+        }
+        "minecraft:end_spike" => "requires the level seed and EndCrystal entity spawning",
+        "minecraft:fossil" => {
+            "requires a StructureTemplateManager; the feature level has no template access"
+        }
+        "minecraft:root_system" => {
+            "requires an origin that is air while the candidate's support is azalea_grows_on, \
+             which the shipped predicate/bytecode order makes unreachable"
+        }
+        _ => return None,
+    })
 }
 
 impl std::error::Error for UnsupportedFeature {}
@@ -523,6 +557,24 @@ pub enum ConfiguredFeatureKind {
     LargeDripstone(Box<LargeDripstoneFeature>),
     /// `minecraft:pointed_dripstone`.
     PointedDripstone(PointedDripstoneFeature),
+    /// `minecraft:chorus_plant`.
+    ChorusPlant(ChorusPlantFeature),
+    /// `minecraft:end_island`.
+    EndIsland(EndIslandFeature),
+    /// `minecraft:end_gateway`.
+    EndGateway(EndGatewayFeature),
+    /// `minecraft:end_platform`.
+    EndPlatform(EndPlatformFeature),
+    /// `minecraft:void_start_platform`.
+    VoidStartPlatform(VoidStartPlatformFeature),
+    /// `minecraft:bonus_chest`.
+    BonusChest(BonusChestFeature),
+    /// `minecraft:desert_well`.
+    DesertWell(DesertWellFeature),
+    /// `minecraft:monster_room`.
+    MonsterRoom(MonsterRoomFeature),
+    /// `minecraft:sculk_patch`.
+    SculkPatch(Box<SculkPatchFeature>),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
@@ -743,6 +795,15 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::DripstoneCluster(_) => "minecraft:dripstone_cluster",
             ConfiguredFeatureKind::LargeDripstone(_) => "minecraft:large_dripstone",
             ConfiguredFeatureKind::PointedDripstone(_) => "minecraft:pointed_dripstone",
+            ConfiguredFeatureKind::ChorusPlant(_) => "minecraft:chorus_plant",
+            ConfiguredFeatureKind::EndIsland(_) => "minecraft:end_island",
+            ConfiguredFeatureKind::EndGateway(_) => "minecraft:end_gateway",
+            ConfiguredFeatureKind::EndPlatform(_) => "minecraft:end_platform",
+            ConfiguredFeatureKind::VoidStartPlatform(_) => "minecraft:void_start_platform",
+            ConfiguredFeatureKind::BonusChest(_) => "minecraft:bonus_chest",
+            ConfiguredFeatureKind::DesertWell(_) => "minecraft:desert_well",
+            ConfiguredFeatureKind::MonsterRoom(_) => "minecraft:monster_room",
+            ConfiguredFeatureKind::SculkPatch(_) => "minecraft:sculk_patch",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -793,6 +854,15 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::DripstoneCluster(_)
                 | ConfiguredFeatureKind::LargeDripstone(_)
                 | ConfiguredFeatureKind::PointedDripstone(_)
+                | ConfiguredFeatureKind::ChorusPlant(_)
+                | ConfiguredFeatureKind::EndIsland(_)
+                | ConfiguredFeatureKind::EndGateway(_)
+                | ConfiguredFeatureKind::EndPlatform(_)
+                | ConfiguredFeatureKind::VoidStartPlatform(_)
+                | ConfiguredFeatureKind::BonusChest(_)
+                | ConfiguredFeatureKind::DesertWell(_)
+                | ConfiguredFeatureKind::MonsterRoom(_)
+                | ConfiguredFeatureKind::SculkPatch(_)
         )
     }
 
@@ -888,6 +958,17 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::PointedDripstone(feature) => {
                 Ok(feature.place(level, random, origin))
             }
+            ConfiguredFeatureKind::ChorusPlant(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::EndIsland(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::EndGateway(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::EndPlatform(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::VoidStartPlatform(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::BonusChest(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::DesertWell(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::MonsterRoom(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::SculkPatch(feature) => Ok(feature.place(level, random, origin)),
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
                 vanilla_type: vanilla_type.clone(),
@@ -1527,6 +1608,22 @@ fn parse_configured_kind(
         }),
         "minecraft:pointed_dripstone" => Ok(match caves::parse_pointed_dripstone_config(config)? {
             Some(feature) => ConfiguredFeatureKind::PointedDripstone(feature),
+            None => unsupported(),
+        }),
+        "minecraft:chorus_plant" => Ok(ConfiguredFeatureKind::ChorusPlant(ChorusPlantFeature)),
+        "minecraft:end_island" => Ok(ConfiguredFeatureKind::EndIsland(EndIslandFeature)),
+        "minecraft:end_gateway" => Ok(ConfiguredFeatureKind::EndGateway(
+            end::parse_end_gateway_config(config)?,
+        )),
+        "minecraft:end_platform" => Ok(ConfiguredFeatureKind::EndPlatform(EndPlatformFeature)),
+        "minecraft:void_start_platform" => Ok(ConfiguredFeatureKind::VoidStartPlatform(
+            VoidStartPlatformFeature,
+        )),
+        "minecraft:bonus_chest" => Ok(ConfiguredFeatureKind::BonusChest(BonusChestFeature)),
+        "minecraft:desert_well" => Ok(ConfiguredFeatureKind::DesertWell(DesertWellFeature)),
+        "minecraft:monster_room" => Ok(ConfiguredFeatureKind::MonsterRoom(MonsterRoomFeature)),
+        "minecraft:sculk_patch" => Ok(match sculk::parse_sculk_patch_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::SculkPatch(Box::new(feature)),
             None => unsupported(),
         }),
         _ => Ok(unsupported()),

@@ -555,8 +555,8 @@ fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
     assert_eq!(
         data.supported_feature_count(),
-        207,
-        "terrain/selector batch raises configured-feature support"
+        218,
+        "end/dungeon/well/sculk batch raises configured-feature support"
     );
     let unsupported = data.unsupported_type_counts();
     for kind in [

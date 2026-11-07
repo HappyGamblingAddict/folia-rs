@@ -21,6 +21,7 @@ use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
+use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
 use crate::entity::{SessionEntityTracker, WorldCollider};
 use crate::inventory;
 use crate::math::BlockPos;
@@ -820,7 +821,7 @@ fn autosave_playerdata(session: &PlayerSession, last_save: &mut Instant) {
     if !autosave_due(*last_save, Instant::now(), PLAYER_SAVE_INTERVAL) {
         return;
     }
-    if let Err(error) = session.save(playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
         eprintln!("[join] could not save playerdata: {error}");
     }
     *last_save = Instant::now();
@@ -1234,7 +1235,17 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     if session.game_mode < 0 {
         session.game_mode = default_game_mode();
     }
-    unstick_player(&mut session, world.storage, world.trust_stored);
+    let data_dir = playerdata_dir();
+    let initial_dimension = dimension::playerdata_dimension(&data_dir, &uuid);
+    let mut dimension_state = SessionDimensionState::new(initial_dimension);
+    let mut current_storage = crate::world::shared_dimension(world.root.clone(), initial_dimension);
+    unstick_player(
+        &mut session,
+        current_storage,
+        world.trust_stored,
+        initial_dimension,
+        world.seed,
+    );
     // The simulation starts from the accepted login position, not from the
     // playerdata position before settling.
     session.reset_physics();
@@ -1355,7 +1366,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     );
     write_packet(
         &mut stream,
-        &join_game_packet(session.game_mode, radius, radius)?,
+        &join_game_packet(initial_dimension, session.game_mode, radius, radius)?,
     )?;
     for packet in play_packets() {
         let id = packet_id(packet)?;
@@ -1395,7 +1406,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     // batch. The client keeps them until their columns arrive, and the join
     // test's captured chunk loop ignores non-chunk packets.
     let mut tracked_entities = {
-        let mut storage = crate::world::lock(world.storage);
+        let mut storage = crate::world::lock(current_storage);
         SessionEntityTracker::spawn_near_player(
             &mut storage,
             (session.x, session.y, session.z),
@@ -1411,8 +1422,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut sent_chunks: HashSet<(i32, i32)> = HashSet::new();
     let streamed = stream_chunks_around(
         &mut stream,
-        world.storage,
+        current_storage,
         world.trust_stored,
+        initial_dimension,
+        world.seed,
         radius,
         center_x,
         center_z,
@@ -1461,10 +1474,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         if shutdown_requested() {
             tracked_entities.clear();
             menus.on_disconnect();
-            if let Err(error) = session.save(playerdata_dir()) {
+            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                 eprintln!("[join] could not save playerdata: {error}");
             }
-            if let Err(error) = crate::world::lock(world.storage).flush() {
+            if let Err(error) = crate::world::lock(current_storage).flush() {
                 eprintln!("[join] could not flush terrain: {error}");
             }
             println!("[join] {} disconnected for shutdown", start.name);
@@ -1472,7 +1485,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             let tick = {
-                let mut storage = crate::world::lock(world.storage);
+                let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
                 tracked_entities.tick((session.x, session.y, session.z), &mut collider)
             };
@@ -1480,7 +1493,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {
                         tracked_entities.clear();
-                        finish_disconnected(&session, world.storage, &start.name, &error);
+                        finish_disconnected(&session, current_storage, &start.name, &error);
                         return Ok(());
                     }
                     return Err(error);
@@ -1502,10 +1515,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
                     tracked_entities.clear();
                     menus.on_disconnect();
-                    if let Err(error) = session.save(playerdata_dir()) {
+                    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                         eprintln!("[join] could not save playerdata before kick: {error}");
                     }
-                    if let Err(error) = crate::world::lock(world.storage).flush() {
+                    if let Err(error) = crate::world::lock(current_storage).flush() {
                         eprintln!("[join] could not flush terrain before kick: {error}");
                     }
                     println!("[join] {} kicked: {reason}", start.name);
@@ -1532,8 +1545,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         center_z = new_z;
                         stream_chunks_around(
                             &mut stream,
-                            world.storage,
+                            current_storage,
                             world.trust_stored,
+                            dimension_state.current(),
+                            world.seed,
                             radius,
                             center_x,
                             center_z,
@@ -1543,7 +1558,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             write_packet(&mut stream, &packet)?;
                         }
                     }
-                    if let Err(error) = session.save(playerdata_dir()) {
+                    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                         eprintln!("[join] could not save teleport: {error}");
                     }
                     println!(
@@ -1607,7 +1622,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         &mut stream,
                         &mut menus,
                         &session,
-                        world.storage,
+                        current_storage,
                         position,
                     ) {
                         eprintln!(
@@ -1618,12 +1633,42 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
         }
+        if !awaiting_respawn
+            && let Some(trigger) = dimension_state.ready(Instant::now())
+        {
+            let now = Instant::now();
+            let trigger = dimension_state.complete(now).unwrap_or(trigger);
+            let new_storage = crate::world::shared_dimension(world.root.clone(), trigger.to);
+            switch_dimension(
+                &mut stream,
+                &mut session,
+                &mut menus,
+                &mut dig,
+                &mut tracked_entities,
+                &trigger,
+                current_storage,
+                new_storage,
+                world.trust_stored,
+                world.seed,
+                radius,
+                &mut center_x,
+                &mut center_z,
+                &mut sent_chunks,
+                &mut teleport_id,
+            )?;
+            current_storage = new_storage;
+            continue;
+        }
         if awaiting_respawn {
             if death_at.is_some_and(|time| time.elapsed() >= Duration::from_secs(2)) {
+                if dimension_state.current() != crate::world::Dimension::Overworld {
+                    dimension_state.relocate(crate::world::Dimension::Overworld, Instant::now());
+                    current_storage = crate::world::shared_overworld(world.root.clone());
+                }
                 respawn_player(
                     &mut stream,
                     &mut session,
-                    world.storage,
+                    current_storage,
                     world.trust_stored,
                     radius,
                     &mut center_x,
@@ -1641,7 +1686,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         } else if apply_void_damage(&mut stream, &mut session, &mut last_void_damage)? {
             awaiting_respawn = true;
             death_at = Some(Instant::now());
-            if let Err(error) = session.save(playerdata_dir()) {
+            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                 eprintln!("[join] could not save void death: {error}");
             }
             println!("[join] {} died in the void", start.name);
@@ -1653,7 +1698,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             if let Err(error) = write_packet(&mut stream, &update) {
                 if is_disconnect(&error) {
                     tracked_entities.clear();
-                    finish_disconnected(&session, world.storage, &start.name, &error);
+                    finish_disconnected(&session, current_storage, &start.name, &error);
                     return Ok(());
                 }
                 return Err(error);
@@ -1662,7 +1707,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         // The world tick may have advanced an open furnace/brewing stand, or
         // another session may have changed the chest. Push item/data changes
         // before handling the next packet.
-        if let Err(error) = sync_open_menu(&mut stream, &mut menus, &session, world.storage) {
+        if let Err(error) = sync_open_menu(&mut stream, &mut menus, &session, current_storage) {
             eprintln!("[join] could not sync open menu: {error}");
         }
         match read_packet(&mut stream) {
@@ -1695,10 +1740,15 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         if awaiting_respawn
                             && reader.read_varint().ok() == Some(CLIENT_COMMAND_PERFORM_RESPAWN)
                         {
+                            if dimension_state.current() != crate::world::Dimension::Overworld {
+                                dimension_state
+                                    .relocate(crate::world::Dimension::Overworld, Instant::now());
+                                current_storage = crate::world::shared_overworld(world.root.clone());
+                            }
                             respawn_player(
                                 &mut stream,
                                 &mut session,
-                                world.storage,
+                                current_storage,
                                 world.trust_stored,
                                 radius,
                                 &mut center_x,
@@ -1720,9 +1770,37 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
+                        if id == SERVERBOUND_USE_ITEM_ON {
+                            let portal = {
+                                let mut storage = crate::world::lock(current_storage);
+                                portal_click(&mut storage, &packet)?
+                            };
+                            if let Some(kind) = portal {
+                                let now = Instant::now();
+                                match dimension_state.request(
+                                    kind,
+                                    [session.x, session.y, session.z],
+                                    now,
+                                ) {
+                                    PortalRequest::Started => println!(
+                                        "[join] {} used a {} portal; transfer to {:?} pending",
+                                        start.name,
+                                        kind.block_name(),
+                                        kind.destination(dimension_state.current())
+                                    ),
+                                    PortalRequest::AlreadyPending => {}
+                                    PortalRequest::CoolingDown => println!(
+                                        "[join] {} ignored a {} portal re-trigger during cooldown",
+                                        start.name,
+                                        kind.block_name()
+                                    ),
+                                }
+                                continue;
+                            }
+                        }
                         if let Err(error) = handle_block_action(
                             &mut stream,
-                            world.storage,
+                            current_storage,
                             &mut session,
                             &mut menus,
                             &mut dig,
@@ -1744,7 +1822,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         {
                             session.inventory[index] = creative.stack;
                             send_container_content(&mut stream, &session)?;
-                            if let Err(error) = session.save(playerdata_dir()) {
+                            if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                                 eprintln!("[join] could not save inventory: {error}");
                             }
                         }
@@ -1763,7 +1841,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                         &mut stream,
                                         &mut menus,
                                         &mut session,
-                                        world.storage,
+                                        current_storage,
                                         &click,
                                     )
                                 {
@@ -1778,7 +1856,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     click,
                                 );
                                 send_container_content(&mut stream, &session)?;
-                                if let Err(error) = session.save(playerdata_dir()) {
+                                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                                     eprintln!("[join] could not save inventory: {error}");
                                 }
                             }
@@ -1795,7 +1873,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     _ => {
                         let outcome = {
-                            let storage = &mut *crate::world::lock(world.storage);
+                            let storage = &mut *crate::world::lock(current_storage);
                             let mut collider = StoragePhysicsWorld::new(storage);
                             session.apply_movement(&packet, &mut collider)?
                         };
@@ -1833,7 +1911,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             if died {
                                 awaiting_respawn = true;
                                 death_at = Some(Instant::now());
-                                if let Err(error) = session.save(playerdata_dir()) {
+                                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                                     eprintln!("[join] could not save fall death: {error}");
                                 }
                                 println!(
@@ -1850,8 +1928,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             center_z = new_z;
                             let batch = match stream_chunks_around(
                                 &mut stream,
-                                world.storage,
+                                current_storage,
                                 world.trust_stored,
+                                dimension_state.current(),
+                                world.seed,
                                 radius,
                                 center_x,
                                 center_z,
@@ -1862,11 +1942,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 // time; that ends the session, it is not a
                                 // server failure.
                                 Err(error) if is_disconnect(&error) => {
-                                    if let Err(save_error) = session.save(playerdata_dir()) {
+                                    if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                                         eprintln!("[join] could not save playerdata: {save_error}");
                                     }
                                     if let Err(flush_error) =
-                                        crate::world::lock(world.storage).flush()
+                                        crate::world::lock(current_storage).flush()
                                     {
                                         eprintln!("[join] could not flush terrain: {flush_error}");
                                     }
@@ -1901,7 +1981,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     || error.kind() == io::ErrorKind::TimedOut =>
             {
                 if let Err(tick_error) = tick_delayed_destroy(
-                    world.storage,
+                    current_storage,
                     &mut stream,
                     &mut session,
                     &mut menus,
@@ -1912,7 +1992,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 autosave_playerdata(&session, &mut last_save);
                 if last_flush.elapsed() >= TERRAIN_FLUSH_INTERVAL {
-                    if let Err(flush_error) = crate::world::lock(world.storage).flush() {
+                    if let Err(flush_error) = crate::world::lock(current_storage).flush() {
                         eprintln!("[join] could not flush terrain: {flush_error}");
                     }
                     last_flush = Instant::now();
@@ -1922,7 +2002,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         write_packet(&mut stream, &keepalive_packet(keepalive_nonce))
                     {
                         if is_disconnect(&error) {
-                            finish_disconnected(&session, world.storage, &start.name, &error);
+                            finish_disconnected(&session, current_storage, &start.name, &error);
                             return Ok(());
                         }
                         return Err(error);
@@ -1933,10 +2013,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             }
             Err(error) => {
                 menus.on_disconnect();
-                if let Err(save_error) = session.save(playerdata_dir()) {
+                if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                     eprintln!("[join] could not save playerdata: {save_error}");
                 }
-                if let Err(flush_error) = crate::world::lock(world.storage).flush() {
+                if let Err(flush_error) = crate::world::lock(current_storage).flush() {
                     eprintln!("[join] could not flush terrain: {flush_error}");
                 }
                 println!("[join] {} disconnected: {error}", start.name);
@@ -1971,10 +2051,12 @@ fn captured_spawn() -> (f64, f64, f64, f32, f32) {
     (0.0, 64.0, 0.0, 0.0, 0.0)
 }
 
-/// Rebuild the captured Join Game packet with this server's game mode and
-/// live view distance. The captured packet otherwise describes the flat
-/// creative capture world (game mode 1, `isFlat = true`, chunk radius 3).
+/// Rebuild the captured Join Game packet with this server's game mode, live
+/// view distance, and the session's current dimension. For an overworld login
+/// the dimension type/name/sea level are byte-identical to the captured
+/// packet, so the captured-world join sequence is unchanged.
 fn join_game_packet(
+    dimension: crate::world::Dimension,
     game_mode: i32,
     chunk_radius: i32,
     simulation_distance: i32,
@@ -2010,8 +2092,10 @@ fn join_game_packet(
     for _ in 0..3 {
         writer.write_u8(u8::from(reader.read_bool()?))?;
     }
-    writer.write_varint(reader.read_varint()?)?; // dimension type
-    writer.write_string(&reader.read_string()?)?; // dimension name
+    let _dimension_type = reader.read_varint()?;
+    writer.write_varint(dimension.type_id())?;
+    let _dimension_name = reader.read_string()?;
+    writer.write_string(dimension.resource_name())?;
     writer.write_i64(reader.read_i64()?)?; // hashed seed
     let _captured_game_mode = reader.read_u8()?;
     writer.write_u8(game_mode.clamp(0, 3) as u8)?;
@@ -2029,7 +2113,8 @@ fn join_game_packet(
         writer.write_u8(0)?;
     }
     writer.write_varint(reader.read_varint()?)?; // portal cooldown
-    writer.write_varint(reader.read_varint()?)?; // sea level
+    let _sea_level = reader.read_varint()?;
+    writer.write_varint(dimension.sea_level())?;
     writer.write_u8(u8::from(reader.read_bool()?))?;
     if !reader.is_empty() {
         return Err(io::Error::new(
@@ -2304,7 +2389,7 @@ fn apply_game_mode(
         &game_event_packet(GAME_EVENT_CHANGE_GAME_MODE, mode as f32),
     )?;
     write_packet(stream, &abilities_packet(mode))?;
-    if let Err(error) = session.save(playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
         eprintln!("[join] could not save game mode: {error}");
     }
     println!(
@@ -2531,21 +2616,37 @@ fn combat_kill_packet(message: &str) -> Vec<u8> {
     writer.into_inner()
 }
 
-fn respawn_packet(game_mode: i32) -> io::Result<Vec<u8>> {
+/// `ClientboundRespawnPacket` for a dimension transition.
+///
+/// Body: `CommonPlayerSpawnInfo` (dimension type registry id, dimension key,
+/// seed, game mode, previous game mode, debug/flat flags, optional last death
+/// location, portal cooldown, sea level) followed by `dataToKeep`
+/// (1 = keep attribute modifiers, which is what a portal change uses).
+pub fn dimension_respawn_packet(
+    dimension: crate::world::Dimension,
+    game_mode: i32,
+    seed: i64,
+    data_to_keep: u8,
+) -> io::Result<Vec<u8>> {
     let mut writer = PacketWriter::new();
     writer.write_varint(PLAY_RESPAWN)?;
-    writer.write_varint(0)?; // minecraft:overworld dimension type
-    writer.write_string("minecraft:overworld")?;
-    writer.write_i64(0)?; // hashed seed
+    writer.write_varint(dimension.type_id())?;
+    writer.write_string(dimension.resource_name())?;
+    writer.write_i64(seed)?;
     writer.write_u8(game_mode.clamp(0, 3) as u8)?;
     writer.write_u8(0xff)?; // no previous game mode
     writer.write_u8(0)?; // debug
     writer.write_u8(0)?; // flat
     writer.write_u8(0)?; // no last death location
     writer.write_varint(0)?; // portal cooldown
-    writer.write_varint(63)?; // sea level
-    writer.write_u8(0)?; // data to keep
+    writer.write_varint(dimension.sea_level())?;
+    writer.write_u8(data_to_keep)?;
     Ok(writer.into_inner())
+}
+
+/// Death respawn always returns to the overworld spawn.
+fn respawn_packet(game_mode: i32) -> io::Result<Vec<u8>> {
+    dimension_respawn_packet(crate::world::Dimension::Overworld, game_mode, 0, 0)
 }
 
 fn void_damage_health(health: f32, y: f64, game_mode: i32) -> Option<f32> {
@@ -2651,6 +2752,8 @@ fn respawn_player(
         stream,
         storage,
         trust_stored,
+        crate::world::Dimension::Overworld,
+        0,
         radius,
         *center_x,
         *center_z,
@@ -2662,10 +2765,171 @@ fn respawn_player(
             session.name, session.x, session.y, session.z, batch.streamed
         );
     }
-    if let Err(error) = session.save(playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_with_dimension(
+        session,
+        playerdata_dir(),
+        crate::world::Dimension::Overworld,
+    ) {
         eprintln!("[join] could not save respawn: {error}");
     }
     Ok(())
+}
+
+/// Move a live session to another dimension.
+///
+/// The old position is saved first, the destination chunk is loaded/generated
+/// and used to lift the player out of terrain, then the client receives the
+/// dimension `Respawn`, position, health, abilities, and a fresh chunk batch
+/// from the target dimension's storage. Playerdata is written twice: once with
+/// the old dimension/position and once with the destination.
+#[allow(clippy::too_many_arguments)]
+fn switch_dimension(
+    stream: &mut LoginStream,
+    session: &mut PlayerSession,
+    menus: &mut inventory::SessionMenus,
+    dig: &mut DigState,
+    tracked: &mut SessionEntityTracker,
+    trigger: &dimension::PortalTrigger,
+    old_storage: &Mutex<WorldStorage>,
+    new_storage: &'static Mutex<WorldStorage>,
+    trust_stored: bool,
+    seed: i64,
+    radius: i32,
+    center_x: &mut i32,
+    center_z: &mut i32,
+    sent_chunks: &mut HashSet<(i32, i32)>,
+    teleport_id: &mut i32,
+) -> io::Result<()> {
+    // 1. Persist the old position in the old dimension.
+    if let Err(error) = dimension::save_playerdata_with_dimension(
+        session,
+        playerdata_dir(),
+        trigger.from,
+    ) {
+        eprintln!("[join] could not save the old dimension position: {error}");
+    }
+
+    // 2. A container menu cannot survive a dimension change.
+    if let Some(menu) = menus.close() {
+        let mut storage = crate::world::lock(old_storage);
+        if let Err(error) = persist_menu_container(&mut storage, &menu) {
+            eprintln!("[join] could not persist the menu before a dimension change: {error}");
+        }
+        write_packet(stream, &menu.close_packet())?;
+    }
+    tracked.clear();
+    *dig = DigState::default();
+
+    // 3. Load the destination column first so the arrival can be lifted out of
+    //    solid blocks before the position packet goes out.
+    let destination = arrival_position(
+        new_storage,
+        trust_stored,
+        trigger.to,
+        seed,
+        trigger.destination,
+    )?;
+    session.teleport(destination[0], destination[1], destination[2], false);
+    session.reset_physics();
+
+    // 4. Dimension change packets.
+    write_packet(
+        stream,
+        &dimension_respawn_packet(trigger.to, session.game_mode, seed, 1)?,
+    )?;
+    *teleport_id += 1;
+    write_packet(stream, &position_packet(session, *teleport_id))?;
+    write_packet(stream, &health_packet(session))?;
+    write_packet(stream, &abilities_packet(session.game_mode))?;
+
+    // 5. Persist the new position and dimension.
+    if let Err(error) = dimension::save_playerdata_with_dimension(
+        session,
+        playerdata_dir(),
+        trigger.to,
+    ) {
+        eprintln!("[join] could not save the new dimension position: {error}");
+    }
+
+    // 6. The client drops every column on Respawn; stream the destination
+    //    dimension from scratch.
+    *center_x = (session.x.floor() as i32).div_euclid(16);
+    *center_z = (session.z.floor() as i32).div_euclid(16);
+    sent_chunks.clear();
+    let batch = stream_chunks_around(
+        stream,
+        new_storage,
+        trust_stored,
+        trigger.to,
+        seed,
+        radius,
+        *center_x,
+        *center_z,
+        sent_chunks,
+    )?;
+    *tracked = {
+        let mut storage = crate::world::lock(new_storage);
+        SessionEntityTracker::spawn_near_player(
+            &mut storage,
+            (session.x, session.y, session.z),
+            i64::from_le_bytes(session.uuid[0..8].try_into().expect("eight uuid bytes")),
+        )
+    };
+    for packet in tracked.join_packets() {
+        write_packet(stream, &packet)?;
+    }
+    for packet in tracked.retain_in_chunks(sent_chunks) {
+        write_packet(stream, &packet)?;
+    }
+    println!(
+        "[join] {} switched {:?} -> {:?} at ({:.1}, {:.1}, {:.1}); streamed {} chunks",
+        session.name, trigger.from, trigger.to, session.x, session.y, session.z, batch.streamed
+    );
+    Ok(())
+}
+
+/// Loads the destination chunk and lifts a player whose feet or head would be
+/// inside a colliding block. The End platform is already built by the End
+/// generator, so this normally leaves the platform position untouched.
+fn arrival_position(
+    storage: &Mutex<WorldStorage>,
+    trust_stored: bool,
+    dimension: crate::world::Dimension,
+    seed: i64,
+    destination: [f64; 3],
+) -> io::Result<[f64; 3]> {
+    let block_x = destination[0].floor() as i32;
+    let block_y = destination[1].floor() as i32;
+    let block_z = destination[2].floor() as i32;
+    let chunk_x = block_x.div_euclid(16);
+    let chunk_z = block_z.div_euclid(16);
+    let local_x = block_x.rem_euclid(16) as usize;
+    let local_z = block_z.rem_euclid(16) as usize;
+    let mut storage = crate::world::lock(storage);
+    let (chunk, _) = load_or_generate_chunk(
+        &mut storage,
+        trust_stored,
+        dimension,
+        chunk_x,
+        chunk_z,
+        seed,
+    )?;
+    if let Some(y) = first_free_y(&chunk, local_x, local_z, block_y, dimension)
+        && y != block_y
+    {
+        return Ok([destination[0], f64::from(y), destination[2]]);
+    }
+    Ok(destination)
+}
+
+/// Parses `ServerboundUseItemOn` and reports the clicked block when it is a
+/// portal block.
+fn portal_click(storage: &mut WorldStorage, packet: &[u8]) -> io::Result<Option<PortalKind>> {
+    let use_item = crate::block_update::parse_use_item_on(packet)?;
+    let Some(state) = block_at(storage, BlockPos::new(use_item.x, use_item.y, use_item.z))? else {
+        return Ok(None);
+    };
+    Ok(dimension::portal_kind_for_block(&state.name))
 }
 
 fn position_packet(session: &PlayerSession, teleport_id: i32) -> Vec<u8> {
@@ -2758,15 +3022,23 @@ fn generation_workers(pending: usize) -> usize {
 /// Send a batch's columns in order while worker threads generate the missing
 /// ones, so the first columns reach the client before the whole batch exists.
 /// Stored columns keep their place in the same order.
+#[allow(clippy::too_many_arguments)]
 fn send_columns(
     stream: &mut LoginStream,
     storage: &mut WorldStorage,
     generator: Option<&crate::worldgen::generator::WorldGenerator>,
+    dimension: crate::world::Dimension,
+    seed: i64,
     pending: &[(usize, i32, i32)],
     loaded: &mut [Option<(Chunk, ChunkSource)>],
     batch: &mut ChunkBatch,
 ) -> io::Result<()> {
-    let Some(generator) = generator else {
+    let overworld_generator = if dimension == crate::world::Dimension::Overworld {
+        generator
+    } else {
+        None
+    };
+    if dimension == crate::world::Dimension::Overworld && overworld_generator.is_none() {
         for &(index, chunk_x, chunk_z) in pending {
             loaded[index] = Some((
                 crate::chunk_packet::flat_chunk(chunk_x, chunk_z),
@@ -2779,7 +3051,7 @@ fn send_columns(
             record_and_send(stream, batch, source, &packet)?;
         }
         return Ok(());
-    };
+    }
     if pending.is_empty() {
         for column in loaded.iter_mut() {
             if let Some((chunk, source)) = column.take() {
@@ -2806,12 +3078,26 @@ fn send_columns(
                     let Some(&(index, chunk_x, chunk_z)) = pending.get(position) else {
                         break;
                     };
-                    let result = generator
-                        .generate_chunk(chunk_x, chunk_z)
+                    let result = match overworld_generator {
+                        Some(generator) => {
+                            generator
+                                .generate_chunk(chunk_x, chunk_z)
+                                .and_then(|chunk| {
+                                    let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
+                                    Ok((index, chunk, packet))
+                                })
+                        }
+                        None => crate::worldgen::generator::generate_dimension(
+                            dimension::generator_dimension(dimension),
+                            chunk_x,
+                            chunk_z,
+                            seed,
+                        )
                         .and_then(|chunk| {
                             let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
                             Ok((index, chunk, packet))
-                        });
+                        }),
+                    };
                     if sender.send(result).is_err() {
                         break;
                     }
@@ -2872,43 +3158,91 @@ fn record_and_send(
 
 /// Stored chunk when the region files may be trusted, otherwise generated
 /// terrain. Generated chunks are written straight back, so terrain survives a
-/// restart and block edits in it persist.
+/// restart and block edits in it persist. Non-overworld dimensions use their
+/// own generator and ignore the configured overworld generator.
 fn load_or_generate_chunk(
     storage: &mut WorldStorage,
     trust_stored: bool,
+    dimension: crate::world::Dimension,
     chunk_x: i32,
     chunk_z: i32,
+    seed: i64,
 ) -> io::Result<(Chunk, ChunkSource)> {
-    let generated = crate::worldgen::generator::configured().is_some();
+    let generated = dimension != crate::world::Dimension::Overworld
+        || crate::worldgen::generator::configured().is_some();
     let trusted = trust_stored || (generated && storage.is_written_chunk(chunk_x, chunk_z)?);
     if trusted && let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? {
         return Ok((chunk, ChunkSource::World));
     }
-    match crate::worldgen::generator::configured() {
-        Some(generator) => {
-            let chunk = generator.generate_chunk(chunk_x, chunk_z)?;
-            storage.save_chunk(&chunk, Compression::Zlib)?;
-            Ok((chunk, ChunkSource::Generated))
+    if dimension == crate::world::Dimension::Overworld {
+        match crate::worldgen::generator::configured() {
+            Some(generator) => {
+                let chunk = generator.generate_chunk(chunk_x, chunk_z)?;
+                storage.save_chunk(&chunk, Compression::Zlib)?;
+                return Ok((chunk, ChunkSource::Generated));
+            }
+            None => {
+                return Ok((
+                    crate::chunk_packet::flat_chunk(chunk_x, chunk_z),
+                    ChunkSource::Flat,
+                ));
+            }
         }
-        None => Ok((
-            crate::chunk_packet::flat_chunk(chunk_x, chunk_z),
-            ChunkSource::Flat,
-        )),
     }
+    let chunk = crate::worldgen::generator::generate_dimension(
+        dimension::generator_dimension(dimension),
+        chunk_x,
+        chunk_z,
+        seed,
+    )?;
+    storage.save_chunk(&chunk, Compression::Zlib)?;
+    Ok((chunk, ChunkSource::Generated))
+}
+
+/// The first Y where both the player's feet and head blocks are non-colliding,
+/// searching upward from `from`.
+fn first_free_y(
+    chunk: &Chunk,
+    local_x: usize,
+    local_z: usize,
+    from: i32,
+    dimension: crate::world::Dimension,
+) -> Option<i32> {
+    let top = dimension.min_y() + dimension.logical_height() - 2;
+    for y in from..=top {
+        let feet_blocked = chunk
+            .block_state(local_x, y, local_z)
+            .is_some_and(crate::block_behaviour::has_collision);
+        let head_blocked = chunk
+            .block_state(local_x, y + 1, local_z)
+            .is_some_and(crate::block_behaviour::has_collision);
+        if !feet_blocked && !head_blocked {
+            return Some(y);
+        }
+    }
+    None
 }
 
 /// The captured spawn packet puts new players at `y = -60`, four blocks above
 /// bedrock, which is inside the generated terrain, and playerdata saved from
 /// that spawn repeats the problem. Lift any player whose feet block is solid
 /// to the first empty block above their column.
-fn unstick_player(session: &mut PlayerSession, storage: &Mutex<WorldStorage>, trust_stored: bool) {
+fn unstick_player(
+    session: &mut PlayerSession,
+    storage: &Mutex<WorldStorage>,
+    trust_stored: bool,
+    dimension: crate::world::Dimension,
+    seed: i64,
+) {
     let storage = &mut *crate::world::lock(storage);
     let feet = session.y.floor() as i32;
     let local_x = (session.x.floor() as i32).rem_euclid(16) as usize;
     let local_z = (session.z.floor() as i32).rem_euclid(16) as usize;
     let chunk_x = (session.x.floor() as i32).div_euclid(16);
     let chunk_z = (session.z.floor() as i32).div_euclid(16);
-    let Ok((chunk, _)) = load_or_generate_chunk(storage, trust_stored, chunk_x, chunk_z) else {
+    let Ok((chunk, _)) =
+        load_or_generate_chunk(storage, trust_stored, dimension, chunk_x, chunk_z, seed)
+    else {
         return;
     };
     let Some(state) = chunk.block_state(local_x, feet, local_z) else {
@@ -2918,7 +3252,11 @@ fn unstick_player(session: &mut PlayerSession, storage: &Mutex<WorldStorage>, tr
         // A position saved while falling, or from an older, higher spawn, can
         // leave the player in mid-air above the column. Settle survival and
         // adventure players onto the surface; creative and spectator players
-        // are allowed to stay where they logged out.
+        // are allowed to stay where they logged out. Non-overworld dimensions
+        // have no comparable surface, so they keep the saved Y.
+        if dimension != crate::world::Dimension::Overworld {
+            return;
+        }
         let surface = crate::chunk::surface_y(&chunk, local_x, local_z);
         if let Some(y) = floating_snap(session.y, surface, matches!(session.game_mode, 0 | 2)) {
             println!(
@@ -2930,10 +3268,14 @@ fn unstick_player(session: &mut PlayerSession, storage: &Mutex<WorldStorage>, tr
         }
         return;
     }
-    let surface = crate::chunk::surface_y(&chunk, local_x, local_z);
+    let surface = if dimension == crate::world::Dimension::Overworld {
+        crate::chunk::surface_y(&chunk, local_x, local_z)
+    } else {
+        first_free_y(&chunk, local_x, local_z, feet, dimension).unwrap_or(feet)
+    };
     println!(
-        "[join] unstick {}: feet at y={feet} inside {}; moved to the surface at y={surface}",
-        session.name, state.name
+        "[join] unstick {}: feet at y={feet} inside {}; moved to y={surface} in {:?}",
+        session.name, state.name, dimension
     );
     session.y = f64::from(surface);
     session.on_ground = true;
@@ -2959,7 +3301,7 @@ fn finish_disconnected(
     name: &str,
     error: &io::Error,
 ) {
-    if let Err(save_error) = session.save(playerdata_dir()) {
+    if let Err(save_error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
         eprintln!("[join] could not save playerdata: {save_error}");
     }
     if let Err(flush_error) = crate::world::lock(storage).flush() {
@@ -2970,12 +3312,16 @@ fn finish_disconnected(
 
 /// Everything a session needs from the level directory.
 struct WorldContext {
-    storage: &'static Mutex<WorldStorage>,
+    /// World root; per-dimension storages hang off this directory.
+    root: PathBuf,
     /// Whether every stored chunk may be served, not just the ones this server
     /// wrote. True for a foreign world and when `FOLIA_LOAD_STORED=1`.
     trust_stored: bool,
     /// World spawn from `level.dat`, when the level has one.
     spawn: Option<(i32, i32, i32)>,
+    /// Overworld generator seed, or the level's stored seed. Dimension
+    /// generation uses the same seed for every dimension.
+    seed: i64,
 }
 
 /// Open the level directory, creating `level.dat` the first time a world is
@@ -2986,20 +3332,28 @@ struct WorldContext {
 /// are trusted; leftover flat chunks next to them are regenerated. A level that
 /// came from somewhere else has no marker, and every stored chunk is served.
 /// `FOLIA_LOAD_STORED=1` trusts every stored chunk in either case.
+///
+/// Only the overworld `level.dat` is read or written. Nether/End sessions reuse
+/// this level data for time, weather, and spawn; no per-dimension level file is
+/// created, so a switch cannot corrupt the primary file.
 fn open_world() -> WorldContext {
     let directory = world_dir();
     let forced = std::env::var("FOLIA_LOAD_STORED")
         .map(|value| matches!(value.trim(), "1" | "true" | "yes"))
         .unwrap_or(false);
     let storage = crate::world::shared_overworld(directory.clone());
+    let generator_seed = crate::worldgen::generator::configured().map(|generator| generator.seed());
     let level_path = directory.join("level.dat");
     if forced {
+        let level = crate::level::read(&level_path).ok();
+        let seed = generator_seed
+            .or_else(|| level.as_ref().and_then(|level| level.seed))
+            .unwrap_or(0);
         return WorldContext {
-            storage,
+            root: directory,
             trust_stored: true,
-            spawn: crate::level::read(&level_path)
-                .ok()
-                .and_then(|level| level.spawn),
+            spawn: level.and_then(|level| level.spawn),
+            seed,
         };
     }
     match crate::level::read(&level_path) {
@@ -3016,10 +3370,12 @@ fn open_world() -> WorldContext {
                     level.level_name
                 );
             }
+            let seed = generator_seed.or(level.seed).unwrap_or(0);
             return WorldContext {
-                storage,
+                root: directory,
                 trust_stored: !level.own_level,
                 spawn: level.spawn,
+                seed,
             };
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -3030,9 +3386,10 @@ fn open_world() -> WorldContext {
                 level_path.display()
             );
             return WorldContext {
-                storage,
+                root: directory,
                 trust_stored: true,
                 spawn: None,
+                seed: generator_seed.unwrap_or(0),
             };
         }
     }
@@ -3045,23 +3402,32 @@ fn open_world() -> WorldContext {
             );
         }
         return WorldContext {
-            storage,
+            root: directory,
             trust_stored: true,
             spawn: None,
+            seed: generator_seed.unwrap_or(0),
         };
     };
 
     let seed = generator.seed();
     // Anchor the world spawn on the terrain surface at the origin, so the spawn
     // is saved with the level instead of guessed per session.
-    let spawn = match load_or_generate_chunk(&mut crate::world::lock(storage), false, 0, 0) {
+    let spawn = match load_or_generate_chunk(
+        &mut crate::world::lock(storage),
+        false,
+        crate::world::Dimension::Overworld,
+        0,
+        0,
+        seed,
+    ) {
         Ok((chunk, _)) => (8, crate::chunk::surface_y(&chunk, 8, 8), 8),
         Err(error) => {
             eprintln!("[join] could not generate the spawn chunk for level.dat: {error}");
             return WorldContext {
-                storage,
+                root: directory,
                 trust_stored: false,
                 spawn: None,
+                seed,
             };
         }
     };
@@ -3081,17 +3447,19 @@ fn open_world() -> WorldContext {
             );
             crate::world::lock(storage).flush().ok();
             WorldContext {
-                storage,
+                root: directory,
                 trust_stored: false,
                 spawn: Some(spawn),
+                seed,
             }
         }
         Err(error) => {
             eprintln!("[join] could not write {}: {error}", level_path.display());
             WorldContext {
-                storage,
+                root: directory,
                 trust_stored: false,
                 spawn: None,
+                seed,
             }
         }
     }
@@ -3099,11 +3467,14 @@ fn open_world() -> WorldContext {
 
 /// Sends the chunk-cache center, unloads columns that fell outside the live
 /// radius, and sends every chunk in the radius that `sent` has not streamed
-/// yet.
+/// yet. Chunks are loaded/generated from the selected dimension's storage.
+#[allow(clippy::too_many_arguments)]
 fn stream_chunks_around(
     stream: &mut LoginStream,
     storage: &Mutex<WorldStorage>,
     trust_stored: bool,
+    dimension: crate::world::Dimension,
+    seed: i64,
     radius: i32,
     center_x: i32,
     center_z: i32,
@@ -3138,8 +3509,10 @@ fn stream_chunks_around(
     });
 
     // Stored terrain first; everything else is generated on worker threads so a
-    // cold batch uses more than one core.
-    let generated = crate::worldgen::generator::configured().is_some();
+    // cold batch uses more than one core. Non-overworld dimensions always
+    // generate because the configured overworld generator does not apply.
+    let generated = dimension != crate::world::Dimension::Overworld
+        || crate::worldgen::generator::configured().is_some();
     let mut loaded: Vec<Option<(Chunk, ChunkSource)>> = Vec::with_capacity(columns.len());
     let mut pending = Vec::new();
     for (index, (chunk_x, chunk_z)) in columns.iter().copied().enumerate() {
@@ -3156,6 +3529,8 @@ fn stream_chunks_around(
         stream,
         storage,
         generator,
+        dimension,
+        seed,
         &pending,
         &mut loaded,
         &mut batch,
@@ -3349,7 +3724,7 @@ fn handle_menu_click(
                     }
                     return Ok(());
                 }
-                if let Err(error) = session.save(playerdata_dir()) {
+                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                     eprintln!("[join] could not save inventory: {error}");
                 }
             }
@@ -3589,7 +3964,7 @@ fn handle_block_action(
                     session.consume_selected();
                 }
                 send_container_content(stream, session)?;
-                if let Err(error) = session.save(playerdata_dir()) {
+                if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
                     eprintln!("[join] could not save inventory: {error}");
                 }
             }
@@ -3736,7 +4111,7 @@ fn tick_delayed_destroy(
 }
 
 fn save_after_break(session: &PlayerSession) {
-    if let Err(error) = session.save(playerdata_dir()) {
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
         eprintln!("[join] could not save inventory after a block break: {error}");
     }
 }
@@ -3782,7 +4157,7 @@ fn handle_set_carried(
     if (0..inventory::HOTBAR_SLOTS as i32).contains(&slot) {
         session.selected_slot = slot;
         write_packet(stream, &inventory::held_slot_packet(slot))?;
-        if let Err(error) = session.save(playerdata_dir()) {
+        if let Err(error) = dimension::save_playerdata_preserving_dimension(&session, playerdata_dir()) {
             eprintln!("[join] could not save inventory: {error}");
         }
         println!("[join] selected hotbar slot {slot}");
@@ -3895,11 +4270,25 @@ mod tests {
         let directory = temp_region_dir("marked");
         let mut storage = WorldStorage::new(directory.clone());
 
-        let (generated, source) = load_or_generate_chunk(&mut storage, false, 0, 0).unwrap();
+        let (generated, source) = load_or_generate_chunk(
+            &mut storage,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         assert_eq!(source, ChunkSource::Generated);
 
         // A world without `level.dat` still trusts terrain this server wrote.
-        let (reloaded, source) = load_or_generate_chunk(&mut storage, false, 0, 0).unwrap();
+        let (reloaded, source) = load_or_generate_chunk(
+            &mut storage,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(
             crate::chunk::surface_y(&reloaded, 0, 0),
@@ -3921,7 +4310,14 @@ mod tests {
         crate::worldgen::generator::configure(4242).expect("configure generator");
         let directory = temp_region_dir("edit");
         let mut storage = WorldStorage::new(directory.clone());
-        let (chunk, _) = load_or_generate_chunk(&mut storage, false, 0, 0).unwrap();
+        let (chunk, _) = load_or_generate_chunk(
+            &mut storage,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         let surface = crate::chunk::surface_y(&chunk, 0, 0);
 
         let air = crate::chunk::BlockState {
@@ -3938,7 +4334,14 @@ mod tests {
         );
 
         let mut reopened = WorldStorage::new(directory.clone());
-        let (reloaded, source) = load_or_generate_chunk(&mut reopened, false, 0, 0).unwrap();
+        let (reloaded, source) = load_or_generate_chunk(
+            &mut reopened,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(
             reloaded
@@ -3968,11 +4371,25 @@ mod tests {
         }
 
         let mut storage = WorldStorage::new(directory.clone());
-        let (stored, source) = load_or_generate_chunk(&mut storage, true, 0, 0).unwrap();
+        let (stored, source) = load_or_generate_chunk(
+            &mut storage,
+            true,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         assert_eq!(source, ChunkSource::World);
         assert_eq!(stored, flat_chunk(0, 0), "forced reads serve stored chunks");
 
-        let (chunk, source) = load_or_generate_chunk(&mut storage, false, 0, 0).unwrap();
+        let (chunk, source) = load_or_generate_chunk(
+            &mut storage,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            4242,
+        ).unwrap();
         assert_eq!(source, ChunkSource::Generated, "leftover chunk is ignored");
         assert!(
             chunk
@@ -4085,7 +4502,8 @@ mod tests {
 
     #[test]
     fn join_game_rewrites_the_captured_world_state() {
-        let packet = join_game_packet(0, 8, 7).expect("join packet");
+        let packet = join_game_packet(crate::world::Dimension::Overworld, 0, 8, 7)
+            .expect("join packet");
         let mut reader = PacketReader::new(&packet);
         assert_eq!(reader.read_varint().unwrap(), PLAY_JOIN_GAME);
         let _ = reader.read_i32().unwrap();

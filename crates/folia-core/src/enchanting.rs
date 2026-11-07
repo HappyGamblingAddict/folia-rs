@@ -1189,8 +1189,9 @@ impl EnchantingTable {
     ///   both `slot + 1` levels and the offer cost (again unless creative);
     /// * the applied list is re-rolled from `seed + slot` and `cost`, so it is
     ///   identical to the offer's list;
-    /// * `slot + 1` experience levels are debited (clamped at zero) and
-    ///   `slot + 1` lapis lazuli are consumed;
+    /// * `slot + 1` experience levels are debited (clamped at zero, even in
+    ///   creative, matching `Player.onEnchantmentPerformed`) and `slot + 1`
+    ///   lapis lazuli are consumed unless creative;
     /// * books become enchanted books and receive `stored_enchantments`, other
     ///   items receive `enchantments`.
     ///
@@ -1244,17 +1245,19 @@ impl EnchantingTable {
         }
         let application = apply_enchantments(stack, &applied)?;
 
+        let xp_before = *xp_level;
         if !creative {
             lapis.shrink(required_levels);
-            *xp_level = (*xp_level - required_levels).max(0);
         }
+        *xp_level = (*xp_level - required_levels).max(0);
+        let levels_spent = xp_before - *xp_level;
 
         self.seed = next_seed;
         self.offers = generate_offers(stack, self.power, next_seed);
 
         Ok(EnchantOutcome {
             application,
-            levels_spent: if creative { 0 } else { required_levels },
+            levels_spent,
             lapis_spent: if creative { 0 } else { required_levels },
             new_seed: next_seed,
         })
@@ -1279,7 +1282,8 @@ pub struct EnchantmentApplication {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnchantOutcome {
     pub application: EnchantmentApplication,
-    /// Experience levels debited (creative clicks spend none).
+    /// Experience levels actually removed from the counter (vanilla also
+    /// debits them in creative, clamped at zero).
     pub levels_spent: i32,
     /// Lapis lazuli consumed (creative clicks consume none).
     pub lapis_spent: i32,

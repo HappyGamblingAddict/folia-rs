@@ -273,7 +273,7 @@ fn click_rejects_insufficient_lapis_without_mutating_anything() {
 }
 
 #[test]
-fn creative_clicks_do_not_consume_lapis_or_levels() {
+fn creative_clicks_skip_lapis_but_still_debit_levels_like_vanilla() {
     let mut stack = sword();
     let seed = 42;
     let offer = generate_offers(&stack, 15, seed)
@@ -283,15 +283,27 @@ fn creative_clicks_do_not_consume_lapis_or_levels() {
         .unwrap();
     let mut table = EnchantingTable::open(&stack, 15, seed);
     let mut lapis = ItemStack::empty();
+    let mut xp = 5;
+    let outcome = table
+        .enchant(offer.slot, &mut stack, &mut lapis, &mut xp, true, 9)
+        .unwrap();
+    let levels = offer.slot as i32 + 1;
+    assert_eq!(outcome.levels_spent, levels);
+    assert_eq!(outcome.lapis_spent, 0);
+    assert!(lapis.is_empty());
+    assert_eq!(xp, 5 - levels);
+    assert!(!outcome.application.enchantments.is_empty());
+
+    // A creative player with no levels is still allowed to click.
+    let mut stack = sword();
+    let mut table = EnchantingTable::open(&stack, 15, seed);
+    let mut lapis = ItemStack::empty();
     let mut xp = 0;
     let outcome = table
         .enchant(offer.slot, &mut stack, &mut lapis, &mut xp, true, 9)
         .unwrap();
     assert_eq!(outcome.levels_spent, 0);
-    assert_eq!(outcome.lapis_spent, 0);
-    assert!(lapis.is_empty());
     assert_eq!(xp, 0);
-    assert!(!outcome.application.enchantments.is_empty());
 }
 
 #[test]

@@ -38,7 +38,8 @@ Format:
   the stored cost, so the applied list is identical to the offer's list.
   Applying `slot + 1` levels and `slot + 1` lapis matches
   `Player.onEnchantmentPerformed` and `ItemStack.consume`; creative bypasses
-  the requirements and spends nothing.
+  the requirements but still debits experience levels (vanilla does), and only
+  skips lapis consumption.
 - Decision: `apply_enchantments` merges into `minecraft:enchantments` (or
   `minecraft:stored_enchantments` for books), upgrades to the higher level,
   clamps at `max_level`, and rejects a rolled enchantment that conflicts with

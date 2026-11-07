@@ -49,6 +49,38 @@ Format:
 - Workaround / next task: keep `tests/density_parity.rs` as the parity floor
   (exact >= 5891, class >= 6067, ore >= 28). The next ore slice is the 3x3
   feature region; do not claim block-for-block ore parity before it lands.
+## 2026-11-07 — P4.6/P4.7 enchanting table is backend-only
+
+- Status: Not a hard blocker. `item_components::enchanting` now models the
+  shipped definitions, deterministic offers, click validation/consumption, and
+  enchantment merging; 15 `tests/enchanting.rs` tests pass.
+- Not wired (needs menu/inventory/join work outside this slice):
+  - No `EnchantmentMenu` data slots, menu type instance, clientbound menu
+    packet, serverbound button-click dispatch, or inventory slot 0/1 handling.
+    The caller must place the input stack, lapis, experience level, bookshelf
+    power, and enchantment seed into `EnchantingTable` itself.
+  - No `EnchantingTableBlock.BOOKSHELF_OFFSETS` scan or `isValidBookShelf`;
+    power is a caller-supplied count.
+  - Paper `PrepareItemEnchantEvent` and `EnchantItemEvent` are not fired, so
+    plugins cannot adjust costs/hints/result enchantments yet.
+  - Anvil combine/repair, renaming, repair-cost accumulation, anvil durability
+    merging, and anvil damage are an explicit `AnvilError::Unsupported`.
+- Model gaps:
+  - Enchantability is read from `item_prototypes::ItemPrototype::enchantability`
+    (the generated `minecraft:enchantable` value) rather than a patchable
+    `minecraft:enchantable` component, so a plugin-created stack cannot change
+    it through the component map yet.
+  - `apply_enchantments` caps levels at each enchantment's `max_level` and
+    rejects exclusivity conflicts. Vanilla `ItemStack.enchant` clamps only at
+    255 and does not re-check existing exclusivity; this stricter behavior is
+    deliberate for the table path but differs from `/enchant`-style mutation.
+  - Unknown/modded enchantment names in an existing component are preserved but
+    cannot participate in exclusive-set checks.
+  - There is no Java differential fixture for the cost/selection RNG yet; the
+    tests encode the decompiled formulas and seed order directly.
+- Workaround / next task: keep the backend API (`generate_offers`,
+  `enchantment_list`, `EnchantingTable`, `apply_enchantments`) stable and wire
+  menus/packets/events and the bookshelf scan in the inventory/menu slice.
 
 ## 2026-11-07 — P8.2 chat-signing core is not wired into login/status
 

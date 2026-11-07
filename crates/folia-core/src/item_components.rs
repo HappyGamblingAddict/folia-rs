@@ -1339,11 +1339,13 @@ fn enchantment_ids() -> &'static HashMap<&'static str, i32> {
     })
 }
 
-fn enchantment_id(name: &str) -> Option<i32> {
+/// The protocol registry id for a bare or namespaced enchantment name.
+pub fn enchantment_id(name: &str) -> Option<i32> {
     enchantment_ids().get(normalize_key(name).as_str()).copied()
 }
 
-fn enchantment_name(id: i32) -> Option<&'static str> {
+/// The namespaced enchantment name for a protocol registry id.
+pub fn enchantment_name(id: i32) -> Option<&'static str> {
     enchantment_ids()
         .iter()
         .find(|(_, known)| **known == id)
@@ -1614,6 +1616,13 @@ pub fn read_item_stack(reader: &mut PacketReader<'_>) -> Option<ItemStack> {
     }
     Some(stack)
 }
+
+// Enchanting lives in its own source file but is declared here so the slice
+// does not need to touch `lib.rs` (which is shared with other concurrent
+// workers). It can be promoted to `pub mod enchanting;` in `lib.rs` when the
+// branches merge; the path attribute keeps the file at `src/enchanting.rs`.
+#[path = "enchanting.rs"]
+pub mod enchanting;
 
 #[cfg(test)]
 mod tests {

@@ -22,6 +22,8 @@ Last updated: 2026-11-07
   leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
   tickers, region ownership, region tick driver, and live bridge
   chat/time/weather/sound/particles.
+  tickers, enchanting-table offers/application, region ownership, and live
+  bridge chat/time/weather/sound/particles.
 - Major gaps: feature-pool placement and non-village structure templates;
   live session dimension switching; effect/menu packets; shared per-viewer
   entity tracking and live AI goals; full plugin API; true parallel
@@ -106,6 +108,14 @@ Last updated: 2026-11-07
   `SessionEntityTracker` now uses it as its only entity storage. Focused: 15
   `effect_packets` + 8 `shared_tracking` tests; `entity_metadata`, `effects`,
   and `join_entities` stay green; fmt/clippy clean.
+- 2026-11-07: enchanting-table model — `enchanting.rs` (declared from
+  `item_components`) ships all 43 1.21.11 enchantment definitions, the vanilla
+  two-phase seeded offer generation (cost formula, `in_enchanting_table` pool,
+  book single-entry removal), click validation with lapis/XP debit, and
+  merges into `minecraft:enchantments`/`stored_enchantments` with max-level
+  caps and exclusive-set rejection. 15 focused `tests/enchanting.rs` tests.
+  Gaps: menu/packet wiring, anvil combine/repair, Paper prepare/enchant events,
+  and a Java RNG fixture.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

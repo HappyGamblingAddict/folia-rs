@@ -3,10 +3,9 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **980 passing** on the merged gate plus 16 new
-> brewing/consumable tests (0 failed)
+> Test status: **1052 passing** on the full merged gate (0 failed)
 > Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
-> Overall completion estimate: **~27%** (range 20-32% depending on metric)
+> Overall completion estimate: **~28%** (range 20-33% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
 Folia-compatible Rust server that can run unmodified Bukkit/Paper plugins.
@@ -27,23 +26,17 @@ where possible, a differential test against the Java oracle.
 
 | Area | Estimate | Notes |
 |---|---:|---|
-| Foundation (M0–M2) | 90–92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
-| Terrain generation | ~78% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage |
-| Full worldgen | ~72% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw; shipped structure templates and feature-pool placement are missing |
-| Full worldgen | ~72% | 207/224 configured feature types, 888/888 placement modifiers, recursive jigsaw with shipped village templates; feature-pool placement and non-village template families are missing |
-| Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java light fixtures and exact occlusion flags missing |
-| Player simulation | ~38% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability; special movement missing |
-| Entities | ~30% | Metadata packets, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, deterministic join mobs with tracking/cleanup; sensors/brains, armor, shared per-viewer tracking missing |
-| Blocks/redstone/fluids | ~35% | Break/place, shapes, scheduled/random ticks, falling blocks, grass spread, water/lava flow + quenching/fire/bubbles, wire/lever/button/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons/sticky pistons, chest/furnace/sign/spawner/hopper block entities; hopper live transfer, menus, lamps/targets missing |
-| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; chat-signing core landed; TLS, login/status secure-chat wiring, and full packet coverage pending |
-| Plugin compatibility | ~20% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block read/write, player vitals/game mode, inventory, item meta, three cancellable events; live-session packets and most gameplay API unfinished |
+| Foundation (M0-M2) | 90-92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
+| Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
+| Full worldgen | ~73% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
+| Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
+| Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
+| Entities | ~32% | Metadata, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, join tracking, item/XP entities; sensors/brains, shared per-viewer tracking, live AI goals missing |
+| Blocks/redstone/fluids | ~38% | Break/place, shapes, ticks, fluids/quenching/fire/bubbles, wire/repeater/comparator/observer/torch/plates/tripwire/lamps/daylight/doors, pistons, crops/leaves, chest/furnace/brewing/sign/spawner/hopper entities; menus, automation depth, lamps/targets missing |
+| Networking | ~45% offline / ~45% online core | Offline + encrypted online login, chat-signing core, live bridge chat/time/weather/sound/particles; TLS, login secure-chat wiring, full packet coverage pending |
+| Plugin compatibility | ~23% | Lifecycle, events, commands, scheduler, config, permissions, services, world/block, player, inventory, item meta, live chat/effects; most gameplay API unfinished |
 | Folia regionization | ~15% | Per-region task queues/world slices/ownership checks; world, entities, and chunk tickets are still global |
-| Overall rewrite | **~27%** | Foundation-heavy, content-light |
-| Networking | ~45% offline / ~40% online core | Join path works offline; online crypto/auth core wired into the binary; chat-signing core landed; TLS, login/status secure-chat wiring, and full packet coverage pending |
-| Plugin compatibility | ~20% | Lifecycle, events, commands, scheduler, world/block read/write, player vitals/game mode, inventory, basic item meta, three cancellable events; live-session sync and most gameplay API unfinished |
-| Folia regionization | ~15% | Task queues exist; world state is still globally shared |
-| Overall rewrite | **~27%** | Foundation-heavy, content-light |
-
+| Overall rewrite | **~28%** | Foundation-heavy, content-light |
 
 ---
 

@@ -9,59 +9,27 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **980 passing** on the merged gate plus 16 new brewing/consumable
-  tests (0 failed); parity holds at **98.75% block-class / 95.80% exact-name**.
+- Tests: **1052 passing** on the full merged gate (0 failed), 1 ignored
+  (2048-bit secure-chat benchmark); parity is **98.75% block-class / 95.80%
+  exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
-  recursive jigsaw, Nether/End generators, dimension storage and portal math.
-- Tests: **964 passing** on the full merged gate (0 failed); the Nether/End
-  content slice adds 17 focused tests (`nether_content` 7, `end_content` 10)
-  and parity holds at **98.75% block-class / 95.80% exact-name**.
-- Tests: focused bridge gate passes (`join` 20 lib tests, `join` integration,
-  11 `folia-server` tests, 60 `BridgeApiTest` checks); the last full workspace
-  gate was 964, and this slice adds 4 lib tests.
-- Formatting/Clippy: clean; no warnings.
-- Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
-  recursive jigsaw, Nether/End generators plus Nether carvers, structure
-  selection, End spikes/gateways/chorus, dimension storage and portal math.
-- Second/third wave landings: shape collision, incremental/shape-aware light,
-  crafting/furnaces, item prototypes, processors/pools, redstone components,
-  fluids/fire, Nether/End, goals/pathfinding/spawning, online-mode auth, block
-  entities/hoppers, pistons, loot-table drops, join entity tracking, region
-  ownership, armor/status effects, item entities/XP, and daylight detectors.
-- Major gaps: shipped structure-template assets and full village jigsaw data;
-  hopper live pull/push; nether/end portal session wiring and dimension
-  switching; login/status secure-chat wiring; bridge live chat/kick/sound
-  packets; entity AI on live sessions; full plugin API surface; real per-world
-  region tick threading.
-  switching; chat signing; bridge signed/rich chat and effect filtering;
-  entity AI on live sessions; full plugin API surface; real per-world region
-  tick threading.
+  483 shipped village templates, recursive jigsaw, Nether carvers, End
+  spikes/gateways/chorus, dimension storage and portal math.
+- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
+  leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
+  tickers, region ownership, and live bridge chat/time/weather/sound/particles.
+- Major gaps: feature-pool placement and non-village structure templates;
+  live session dimension switching; effect/menu packets; shared per-viewer
+  entity tracking and live AI goals; full plugin API; real region tick threading.
 
 ## Current focus
 
-1. P2.8 shipped structure-template assets, feature-pool placement, and village
-   pipeline completion.
-2. P6 hopper live transfer tick, furnace-lit block state, and brewing
-   block-entity/menu persistence.
-- Major gaps: hopper live pull/push; nether/end portal session wiring and
-  dimension switching; chat signing; bridge live chat/kick/sound packets;
-  entity AI on live sessions; full plugin API surface; real per-world region
-  tick threading; feature-pool/tree placement inside jigsaw villages;
-  texture/entity gaps in structure templates; non-village structure NBT
-  families are not embedded.
-
-## Current focus
-
-1. P2.8 feature-pool placement, terrain adaptation, and non-village structure
-   template families (village assets now ship).
-2. P6 hopper live transfer tick and furnace-lit block state.
-3. P7 portal-driven dimension switching and Nether/End structure generation.
-2. P6 hopper live transfer tick and furnace-lit block state.
-3. P7 portal-driven dimension switching, Nether/End structure templates, and
-   the End dragon fight/end-city pipeline.
-4. P5 live AI goals, armor enchantments, and effect packets.
-5. P9.3 bridge event dispatch and remaining live player state packets.
+1. P2.8 feature-pool placement and the remaining six configured feature types.
+2. P7 portal-driven dimension switching and non-village structure templates.
+3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
+4. P6 container menus/packets and deeper redstone/automation.
+5. P9.3 remaining bridge API surface and secure-chat login wiring.
 
 ## Next queue
 
@@ -69,23 +37,19 @@ Last updated: 2026-11-07
 - [ ] P0.5 reproducible oracle data (deferred).
 - [~] P1.4 components/prototypes (network codecs, hashing, fixtures).
 - [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
-- [~] P1.7 loot/recipes (block drops wired; entity/chest drops next).
+- [~] P1.7 loot/recipes (block/chest drops; entity loot next).
 - [~] P2.1/P2.2 218/224 feature types and all modifiers.
-- [~] P2.8 recursive jigsaw (shipped templates and feature pools remain).
-- [~] P3.5-P3.8 light (shape occlusion; Java light fixtures remain).
-- [~] P3.10 ticks/redstone (lamps/daylight/doors; pistons/hoppers wiring).
-- [~] P4.1-P4.4 physics/breaking/item entities (special movement, XP polish).
-- [~] P4.8 crafting (menus, packets, recipe book; brewing/unconsumed menu wiring).
-- [~] P5.1/P5.2 metadata/AI/effects (live AI and effect packets).
-- [~] P6 block entities (chest/furnace/sign/spawner/hopper, furnaces tick).
+- [~] P2.8 recursive jigsaw + village templates (feature pools/non-village).
+- [~] P3.5-P3.8 light (Java fixtures and exact occlusion columns).
+- [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
+- [~] P4.1-P4.4 physics/breaking/item entities (live hunger and special movement).
+- [~] P4.8 crafting/brewing (menus, packets, recipe book).
+- [~] P5.1/P5.2 metadata/AI/effects (live AI, effect packets, shared tracking).
+- [~] P6 block entities (chest/furnace/brewing/sign/spawner/hopper).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
-- [~] P8.1/P8.2 online-mode and chat-signing core (TLS, login/status wiring).
-- [~] P7.1-P7.4 Nether/End generation/storage/portals (carvers, spikes,
-  gateways, chorus, structure selection done; templates, end cities, dragon
-  fight, and session switching remain).
-- [~] P8.1 online-mode core (TLS and chat signing).
-- [~] P9.2/P9.3 bridge proxies/events (outbound packets, API depth).
-- [~] P10 region ownership (per-region tasks/ownership; world not yet split).
+- [~] P8.1 online/chat-signing core (TLS and login wiring).
+- [~] P9.2/P9.3 bridge proxies/events/live effects (API depth).
+- [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel

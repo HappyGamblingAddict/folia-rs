@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-964 tests passing on the merged tree (full gate)
+1052 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean

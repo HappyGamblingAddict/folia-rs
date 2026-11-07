@@ -1,8 +1,9 @@
-//! Terrain, fluid, and ice features.
+//! Terrain, fluid, ice, and geode features.
 //!
 //! Ports the procedural Overworld/Nether feature types that do not need
 //! structures or block entities: disks, springs, lakes, icebergs, ice spikes,
-//! blue ice, netherrack blobs, basalt columns/pillars, and deltas.
+//! blue ice, netherrack blobs, basalt columns/pillars, deltas, and amethyst
+//! geodes.
 //!
 //! The implementations follow the decompiled 1.21.11 classes in RNG draw
 //! order. `IcebergFeature` and `BasaltColumnsFeature` read the generator sea
@@ -18,6 +19,7 @@ use super::support::{
 use super::{FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
 use crate::tags;
+use crate::worldgen::noise::NormalNoise;
 use folia_math::{BlockPos, Direction};
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
@@ -1386,5 +1388,463 @@ pub(crate) fn parse_delta_config(config: &Value) -> io::Result<Option<DeltaFeatu
         rim: parse_state(required(object, "rim", "delta")?)?,
         rim_size: parse_int_provider_supported(required(object, "rim_size", "delta")?)?,
         size: parse_int_provider_supported(required(object, "size", "delta")?)?,
+    }))
+}
+
+/// `minecraft:geode` block settings (`GeodeBlockSettings`).
+#[derive(Debug, Clone)]
+struct GeodeBlocks {
+    filling: StateProvider,
+    inner_layer: StateProvider,
+    alternate_inner_layer: StateProvider,
+    middle_layer: StateProvider,
+    outer_layer: StateProvider,
+    inner_placements: Vec<BlockState>,
+    cannot_replace: String,
+    invalid_blocks: String,
+}
+
+/// `minecraft:geode` layer radii (`GeodeLayerSettings`).
+#[derive(Debug, Clone, Copy)]
+struct GeodeLayers {
+    filling: f64,
+    inner_layer: f64,
+    middle_layer: f64,
+    outer_layer: f64,
+}
+
+/// `minecraft:geode` crack settings (`GeodeCrackSettings`).
+#[derive(Debug, Clone, Copy)]
+struct GeodeCrack {
+    generate_crack_chance: f64,
+    base_crack_size: f64,
+    crack_point_offset: i32,
+}
+
+/// `GeodeFeature`.
+#[derive(Debug, Clone)]
+pub struct GeodeFeature {
+    blocks: GeodeBlocks,
+    layers: GeodeLayers,
+    crack: GeodeCrack,
+    use_potential_placements_chance: f64,
+    use_alternate_layer0_chance: f64,
+    placements_require_layer0_alternate: bool,
+    outer_wall_distance: IntProvider,
+    outer_wall_max: i32,
+    distribution_points: IntProvider,
+    point_offset: IntProvider,
+    min_gen_offset: i32,
+    max_gen_offset: i32,
+    noise_multiplier: f64,
+    invalid_blocks_threshold: i32,
+}
+
+impl GeodeFeature {
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> bool {
+        let point_count = self
+            .distribution_points
+            .sample(random)
+            .expect("geode distribution_points is a ported int provider");
+        let noise = NormalNoise::create_legacy_seed(level.seed(), -4, &[1.0]);
+
+        let outer_wall_max = f64::from(self.outer_wall_max);
+        let d = f64::from(point_count) / outer_wall_max;
+        let d1 = 1.0 / self.layers.filling.sqrt();
+        let d2 = 1.0 / (self.layers.inner_layer + d).sqrt();
+        let d3 = 1.0 / (self.layers.middle_layer + d).sqrt();
+        let d4 = 1.0 / (self.layers.outer_layer + d).sqrt();
+        let crack_bonus = if point_count > 3 { d } else { 0.0 };
+        let d5 =
+            1.0 / (self.crack.base_crack_size + random.next_double() / 2.0 + crack_bonus).sqrt();
+        let has_crack = f64::from(random.next_float()) < self.crack.generate_crack_chance;
+
+        let mut points = Vec::with_capacity(point_count.max(0) as usize);
+        let mut invalid = 0i32;
+        for _ in 0..point_count {
+            let x = self
+                .outer_wall_distance
+                .sample(random)
+                .expect("geode outer_wall_distance is a ported int provider");
+            let y = self
+                .outer_wall_distance
+                .sample(random)
+                .expect("geode outer_wall_distance is a ported int provider");
+            let z = self
+                .outer_wall_distance
+                .sample(random)
+                .expect("geode outer_wall_distance is a ported int provider");
+            let pos = origin.offset(x, y, z);
+            let invalid_state = level.get_block(pos).is_none_or(|block| {
+                is_air_name(&block.name)
+                    || tags::block_has(&self.blocks.invalid_blocks, &block.name)
+            });
+            if invalid_state {
+                invalid += 1;
+                if invalid > self.invalid_blocks_threshold {
+                    return false;
+                }
+            }
+            let offset = self
+                .point_offset
+                .sample(random)
+                .expect("geode point_offset is a ported int provider");
+            points.push((pos, offset));
+        }
+
+        let mut crack_points = Vec::new();
+        if has_crack {
+            let axis = random.next_int_bound(4);
+            let span = point_count * 2 + 1;
+            if axis == 0 {
+                crack_points.push(origin.offset(span, 7, 0));
+                crack_points.push(origin.offset(span, 5, 0));
+                crack_points.push(origin.offset(span, 1, 0));
+            } else if axis == 1 {
+                crack_points.push(origin.offset(0, 7, span));
+                crack_points.push(origin.offset(0, 5, span));
+                crack_points.push(origin.offset(0, 1, span));
+            } else if axis == 2 {
+                crack_points.push(origin.offset(span, 7, span));
+                crack_points.push(origin.offset(span, 5, span));
+                crack_points.push(origin.offset(span, 1, span));
+            } else {
+                crack_points.push(origin.offset(0, 7, 0));
+                crack_points.push(origin.offset(0, 5, 0));
+                crack_points.push(origin.offset(0, 1, 0));
+            }
+        }
+
+        let air = state("minecraft:air");
+        let mut placement_positions = Vec::new();
+        let min = origin.offset(
+            self.min_gen_offset,
+            self.min_gen_offset,
+            self.min_gen_offset,
+        );
+        let max = origin.offset(
+            self.max_gen_offset,
+            self.max_gen_offset,
+            self.max_gen_offset,
+        );
+        for z in min.z()..=max.z() {
+            for y in min.y()..=max.y() {
+                for x in min.x()..=max.x() {
+                    let pos = BlockPos::new(x, y, z);
+                    let d6 = noise.get_value(f64::from(x), f64::from(y), f64::from(z))
+                        * self.noise_multiplier;
+                    let mut d7 = 0.0;
+                    let mut d8 = 0.0;
+                    for (point, offset) in &points {
+                        d7 += inverse_sqrt(distance_squared(pos, *point) + f64::from(*offset)) + d6;
+                    }
+                    for point in &crack_points {
+                        d8 += inverse_sqrt(
+                            distance_squared(pos, *point)
+                                + f64::from(self.crack.crack_point_offset),
+                        ) + d6;
+                    }
+
+                    if d7 < d4 {
+                        continue;
+                    }
+
+                    if has_crack && d8 >= d5 && d7 < d1 {
+                        safe_set_geode(level, pos, air.clone(), &self.blocks.cannot_replace);
+                        for direction in Direction::ALL {
+                            let neighbour = pos.relative(direction);
+                            if let Some(fluid) = fluid_block_at(level, neighbour) {
+                                level.schedule_tick(neighbour, fluid, 0);
+                            }
+                        }
+                    } else if d7 >= d1 {
+                        if let Some(block) = self.blocks.filling.sample(level, random, pos) {
+                            safe_set_geode(level, pos, block, &self.blocks.cannot_replace);
+                        }
+                    } else if d7 >= d2 {
+                        let alternate =
+                            f64::from(random.next_float()) < self.use_alternate_layer0_chance;
+                        let provider = if alternate {
+                            &self.blocks.alternate_inner_layer
+                        } else {
+                            &self.blocks.inner_layer
+                        };
+                        if let Some(block) = provider.sample(level, random, pos) {
+                            safe_set_geode(level, pos, block, &self.blocks.cannot_replace);
+                        }
+                        if (!self.placements_require_layer0_alternate || alternate)
+                            && f64::from(random.next_float()) < self.use_potential_placements_chance
+                        {
+                            placement_positions.push(pos);
+                        }
+                    } else if d7 >= d3 {
+                        if let Some(block) = self.blocks.middle_layer.sample(level, random, pos) {
+                            safe_set_geode(level, pos, block, &self.blocks.cannot_replace);
+                        }
+                    } else {
+                        if let Some(block) = self.blocks.outer_layer.sample(level, random, pos) {
+                            safe_set_geode(level, pos, block, &self.blocks.cannot_replace);
+                        }
+                    }
+                }
+            }
+        }
+
+        for pos in placement_positions {
+            let index = random.next_int_bound(self.blocks.inner_placements.len() as i32) as usize;
+            let mut placement = self.blocks.inner_placements[index].clone();
+            for direction in Direction::ALL {
+                if placement.properties.iter().any(|(key, _)| key == "facing") {
+                    let _ = super::support::set_property(
+                        &mut placement,
+                        "facing",
+                        direction_name(direction),
+                    );
+                }
+                let neighbour = pos.relative(direction);
+                if placement
+                    .properties
+                    .iter()
+                    .any(|(key, _)| key == "waterlogged")
+                {
+                    let waterlogged = level.get_block(neighbour).is_some_and(is_water_source);
+                    let _ = super::support::set_property(
+                        &mut placement,
+                        "waterlogged",
+                        if waterlogged { "true" } else { "false" },
+                    );
+                }
+                if level
+                    .get_block(neighbour)
+                    .is_some_and(can_cluster_grow_at_state)
+                {
+                    safe_set_geode(level, neighbour, placement, &self.blocks.cannot_replace);
+                    break;
+                }
+            }
+        }
+
+        true
+    }
+}
+
+fn inverse_sqrt(value: f64) -> f64 {
+    1.0 / value.sqrt()
+}
+
+fn distance_squared(left: BlockPos, right: BlockPos) -> f64 {
+    let dx = f64::from(left.x() - right.x());
+    let dy = f64::from(left.y() - right.y());
+    let dz = f64::from(left.z() - right.z());
+    dx * dx + dy * dy + dz * dz
+}
+
+/// `Feature.safeSetBlock`: only replace blocks not in `cannot_replace`.
+fn safe_set_geode(
+    level: &mut dyn FeatureLevel,
+    pos: BlockPos,
+    block: BlockState,
+    cannot_replace: &str,
+) {
+    if level
+        .get_block(pos)
+        .is_none_or(|current| !tags::block_has(cannot_replace, &current.name))
+    {
+        level.set_block(pos, block);
+    }
+}
+
+/// `BuddingAmethystBlock.canClusterGrowAtState`.
+fn can_cluster_grow_at_state(state: &BlockState) -> bool {
+    is_air_name(&state.name) || is_water_source(state)
+}
+
+fn is_water_source(state: &BlockState) -> bool {
+    match state.name.as_str() {
+        "minecraft:water" => state
+            .properties
+            .iter()
+            .find(|(key, _)| key == "level")
+            .is_none_or(|(_, level)| level == "0"),
+        "minecraft:flowing_water" => false,
+        _ => state
+            .properties
+            .iter()
+            .any(|(key, value)| key == "waterlogged" && value == "true"),
+    }
+}
+
+fn fluid_block_at(level: &dyn FeatureLevel, pos: BlockPos) -> Option<&'static str> {
+    let state = level.get_block(pos)?;
+    match state.name.as_str() {
+        "minecraft:water" | "minecraft:flowing_water" => Some("minecraft:water"),
+        "minecraft:lava" | "minecraft:flowing_lava" => Some("minecraft:lava"),
+        _ if state
+            .properties
+            .iter()
+            .any(|(key, value)| key == "waterlogged" && value == "true") =>
+        {
+            Some("minecraft:water")
+        }
+        _ => None,
+    }
+}
+
+fn direction_name(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Down => "down",
+        Direction::Up => "up",
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::East => "east",
+    }
+}
+
+fn double_field(object: &Map<String, Value>, key: &str, kind: &str) -> io::Result<f64> {
+    object
+        .get(key)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| super::invalid(format!("{kind} is missing `{key}`")))
+}
+
+fn optional_double(object: &Map<String, Value>, key: &str, default: f64) -> f64 {
+    object.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+
+fn tag_field(object: &Map<String, Value>, key: &str, kind: &str) -> io::Result<String> {
+    let value = required(object, key, kind)?
+        .as_str()
+        .ok_or_else(|| super::invalid(format!("{kind} `{key}` must be a tag id")))?;
+    Ok(value.trim_start_matches('#').to_owned())
+}
+
+/// The largest value a ported int provider can sample.
+fn int_provider_max(provider: &IntProvider) -> Option<i32> {
+    match provider {
+        IntProvider::Constant(value) => Some(*value),
+        IntProvider::Uniform { max_inclusive, .. }
+        | IntProvider::BiasedToBottom { max_inclusive, .. }
+        | IntProvider::Clamped { max_inclusive, .. } => Some(*max_inclusive),
+        IntProvider::WeightedList(entries) => entries
+            .iter()
+            .filter_map(|entry| int_provider_max(&entry.data))
+            .max(),
+        IntProvider::ClampedNormal { max_inclusive, .. } => Some(*max_inclusive),
+        IntProvider::Unsupported { .. } => None,
+    }
+}
+
+pub(crate) fn parse_geode_config(config: &Value) -> io::Result<Option<GeodeFeature>> {
+    let object = object(config, "geode")?;
+    let block_object = required(object, "blocks", "geode")?
+        .as_object()
+        .ok_or_else(|| super::invalid("geode `blocks` must be an object"))?;
+    let parse_provider = |key: &str| -> io::Result<StateProvider> {
+        StateProvider::parse(required(block_object, key, "geode blocks")?)
+    };
+    let filling = parse_provider("filling_provider")?;
+    let inner_layer = parse_provider("inner_layer_provider")?;
+    let alternate_inner_layer = parse_provider("alternate_inner_layer_provider")?;
+    let middle_layer = parse_provider("middle_layer_provider")?;
+    let outer_layer = parse_provider("outer_layer_provider")?;
+    if !filling.is_supported()
+        || !inner_layer.is_supported()
+        || !alternate_inner_layer.is_supported()
+        || !middle_layer.is_supported()
+        || !outer_layer.is_supported()
+    {
+        return Ok(None);
+    }
+
+    let inner_placements = required(block_object, "inner_placements", "geode blocks")?
+        .as_array()
+        .ok_or_else(|| super::invalid("geode `inner_placements` must be a list"))?;
+    if inner_placements.is_empty() {
+        return Err(super::invalid("geode `inner_placements` must not be empty"));
+    }
+    let inner_placements = inner_placements
+        .iter()
+        .map(parse_state)
+        .collect::<io::Result<Vec<_>>>()?;
+
+    let layer_object = required(object, "layers", "geode")?
+        .as_object()
+        .ok_or_else(|| super::invalid("geode `layers` must be an object"))?;
+    let layers = GeodeLayers {
+        filling: double_field(layer_object, "filling", "geode layers")?,
+        inner_layer: double_field(layer_object, "inner_layer", "geode layers")?,
+        middle_layer: double_field(layer_object, "middle_layer", "geode layers")?,
+        outer_layer: double_field(layer_object, "outer_layer", "geode layers")?,
+    };
+    if layers.filling <= 0.0
+        || layers.inner_layer <= 0.0
+        || layers.middle_layer <= 0.0
+        || layers.outer_layer <= 0.0
+    {
+        return Err(super::invalid("geode layer radii must be positive"));
+    }
+
+    let crack_object = required(object, "crack", "geode")?
+        .as_object()
+        .ok_or_else(|| super::invalid("geode `crack` must be an object"))?;
+    let crack = GeodeCrack {
+        generate_crack_chance: double_field(crack_object, "generate_crack_chance", "geode crack")?,
+        base_crack_size: double_field(crack_object, "base_crack_size", "geode crack")?,
+        crack_point_offset: int_field(crack_object, "crack_point_offset")?,
+    };
+
+    let outer_wall_distance =
+        parse_int_provider_supported(required(object, "outer_wall_distance", "geode")?)?;
+    let Some(outer_wall_max) = int_provider_max(&outer_wall_distance) else {
+        return Ok(None);
+    };
+    if outer_wall_max <= 0 {
+        return Err(super::invalid(
+            "geode outer_wall_distance max must be positive",
+        ));
+    }
+
+    Ok(Some(GeodeFeature {
+        blocks: GeodeBlocks {
+            filling,
+            inner_layer,
+            alternate_inner_layer,
+            middle_layer,
+            outer_layer,
+            inner_placements,
+            cannot_replace: tag_field(block_object, "cannot_replace", "geode blocks")?,
+            invalid_blocks: tag_field(block_object, "invalid_blocks", "geode blocks")?,
+        },
+        layers,
+        crack,
+        use_potential_placements_chance: optional_double(
+            object,
+            "use_potential_placements_chance",
+            0.35,
+        ),
+        use_alternate_layer0_chance: optional_double(object, "use_alternate_layer0_chance", 0.0),
+        placements_require_layer0_alternate: optional_bool(
+            object,
+            "placements_require_layer0_alternate",
+            true,
+        ),
+        outer_wall_distance,
+        outer_wall_max,
+        distribution_points: parse_int_provider_supported(required(
+            object,
+            "distribution_points",
+            "geode",
+        )?)?,
+        point_offset: parse_int_provider_supported(required(object, "point_offset", "geode")?)?,
+        min_gen_offset: int_field(object, "min_gen_offset")?,
+        max_gen_offset: int_field(object, "max_gen_offset")?,
+        noise_multiplier: double_field(object, "noise_multiplier", "geode")?,
+        invalid_blocks_threshold: int_field(object, "invalid_blocks_threshold")?,
     }))
 }

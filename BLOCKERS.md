@@ -1023,45 +1023,41 @@ These are expected gaps, not reasons to stop:
   Do not claim piston parity from this slice.
 - Workaround / next task: keep the explicit `MovingPiston` payload when typed
   block entities land, then add payload NBT and a Java differential fixture.
-## 2026-11-07 - Remaining configured-feature blockers after the end/dungeon/sculk batch
+## 2026-11-07 - Final configured-feature batch (222/224, fossils remain)
 
-- Status: 218/224 configured features execute. The 6 remaining configs are
-  `fossil` (2), `end_spike`, `freeze_top_layer`, `geode`, and `root_system`.
-- `root_system` / `rooted_azalea_tree`: the decompiled 1.21.11
-  `placeDirtAndTree` moves the mutable position up before testing
-  `allowed_tree_position`, but the shipped predicate requires
-  `#minecraft:azalea_grows_on` below that candidate and the feature's first
-  check requires the origin itself to be air. No origin can satisfy both in
-  the current single-chunk region; the feature stays explicitly unsupported
-  rather than shipping a no-op. Needs a Java oracle placement trace to resolve
-  whether the predicate data or bytecode ordering is authoritative.
-- `geode` / `amethyst_geode`: `GeodeFeature` seeds its `NormalNoise` from
-  `worldGenLevel.getSeed()`. `FeatureLevel` has no seed accessor and
-  `generator.rs` is outside this worker's file set, so the feature stays
-  explicit. Add `FeatureLevel::seed` plus generator wiring before porting the
-  noise/crack/layer math.
-- `freeze_top_layer`: needs `Biome.shouldFreeze` / `shouldSnow` through the
-  generator's biome sampler. `FeatureLevel` exposes no biome; a hard-coded
-  snowy assumption would corrupt non-frozen biomes. Add `FeatureLevel::biome_at`
-  and wire the generator's sampler first.
-- `fossil`: needs a `StructureTemplateManager`. The decompiled data tree has
-  `fossil/*.nbt`, but the feature level has no template access and adding the
-  NBT assets is outside this slice's file scope. `FossilFeature` must stay
-  unsupported until a template provider is passed to features.
-- `end_spike`: the shipped config has an empty `spikes` list, so
-  `SpikeFeature.getSpikesForLevel` needs `level.getSeed()`; `placeSpike` also
-  spawns an `EndCrystal` entity through `ServerLevelAccessor.addFreshEntity`.
-  `FeatureLevel` cannot express either capability.
-- `bonus_chest`, `desert_well`, and `monster_room` are now supported: they
-  attach their vanilla `minecraft:chest`, `minecraft:brushable_block`, and
-  `minecraft:mob_spawner` NBT through `FeatureLevel::set_block_entity`. The
-  generator still discards the returned block-entity list; callers that
-  persist generation output must consume it (existing limitation, unchanged
-  by this slice).
-- `sculk_patch` is now supported with the full worldgen spreader. It cannot
-  push entities up when converting a vein to sculk (`Block.pushEntitiesUp`
-  needs an entity layer); no shipped sculk patch placement targets a populated
-  entity column during generation.
+- Status: 222/224 configured features execute. `geode`, `freeze_top_layer`,
+  `end_spike`, and `root_system` are now supported; only `fossil` (2 configs)
+  remains explicit `Unsupported`.
+- `root_system` / `rooted_azalea_tree`: resolved. The shipped placement uses
+  `environment_scan` plus `random_offset y=-1`, so the feature origin is the air
+  block below a solid support; `placeDirtAndTree` then moves up to the real
+  candidate and the `allowed_tree_position` `[0,-1,0]` arm sees the support.
+  `tree.rs` implements the Java draw order for rooted dirt and hanging roots.
+- `geode` / `amethyst_geode`: resolved with `FeatureLevel::seed` and
+  `WorldGenRegion::with_seed`. The default seed comes from
+  `worldgen::generator::configured()`; direct `WorldGenerator::overworld(seed)`
+  harnesses that want a non-zero seed must call `with_seed`. All layer,
+  crack, noise, state-provider, and inner-placement math is ported.
+- `freeze_top_layer`: resolved with `FeatureLevel::biome_at` reading the
+  generated chunk's biome palette. `shouldFreeze`/`shouldSnow` use the ported
+  height-adjusted temperature, the shipped `has_precipitation=false` list,
+  the four-side edge rule, and snow-support tags. Generation-time block light
+  is treated as 0, matching an unlit worldgen region.
+- `end_spike`: resolved with `FeatureLevel::seed` plus `spawn_entity`. The
+  feature writes the pillar/cage/fire blocks and returns an `EndCrystal`
+  descriptor; the generation layer does not instantiate the entity, matching
+  structure-template entity output.
+- `fossil`: still unsupported. `assets/structure_templates.json` ships only
+  `minecraft:village/**` templates; `minecraft:fossil/spine_*` and
+  `minecraft:fossil/skull_*` are absent, and `FeatureLevel` has no
+  `StructureTemplateManager`. The error names both missing capabilities.
+- `bonus_chest`, `desert_well`, and `monster_room` remain supported through
+  `FeatureLevel::set_block_entity`; the generator still discards the returned
+  block-entity list (existing limitation).
+- `sculk_patch` is supported with the full worldgen spreader. It cannot push
+  entities up when converting a vein to sculk (`Block.pushEntitiesUp` needs an
+  entity layer); no shipped sculk patch placement targets a populated entity
+  column during generation.
 
 ## 2026-11-07 - `WorldStorage::tick_hoppers` compatibility shim
 

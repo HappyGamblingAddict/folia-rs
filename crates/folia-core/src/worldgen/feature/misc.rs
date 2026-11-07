@@ -1,16 +1,18 @@
-//! Dungeon, well, and chest feature ports.
+//! Dungeon, well, chest, and freeze feature ports.
 //!
-//! Ports `BonusChestFeature`, `DesertWellFeature`, and `MonsterRoomFeature`
-//! from the decompiled 1.21.11 tree. All three attach their vanilla
-//! block-entity payloads (loot-table chest, brushable sand, mob spawner)
-//! through [`FeatureLevel::set_block_entity`], which the generator already
-//! records for callers that persist them.
+//! Ports `BonusChestFeature`, `DesertWellFeature`, `MonsterRoomFeature`, and
+//! `SnowAndFreezeFeature` from the decompiled 1.21.11 tree. The first three
+//! attach their vanilla block-entity payloads (loot-table chest, brushable
+//! sand, mob spawner) through [`FeatureLevel::set_block_entity`]; the freeze
+//! feature reads the chunk biome through [`FeatureLevel::biome_at`].
 
 use super::placement::Heightmap;
 use super::support::{state, state_with};
 use super::{FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
+use crate::tags;
+use crate::worldgen::surface::height_adjusted_temperature;
 use folia_math::{BlockPos, Direction};
 use folia_random::RandomSource;
 
@@ -441,4 +443,170 @@ fn spawner_nbt(pos: BlockPos, mob: &str) -> Tag {
         ),
         ("SpawnPotentials".to_owned(), Tag::List(Vec::new())),
     ])
+}
+
+/// `SnowAndFreezeFeature` (`minecraft:freeze_top_layer`).
+///
+/// Snow and ice are decided from the generated chunk's biome palette. The
+/// feature runs at generation time, when vanilla's light engine has no block
+/// light above the surface, so `shouldFreeze`/`shouldSnow` see a block light
+/// of 0 (the `< 10` gate is therefore always open).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FreezeTopLayerFeature;
+
+impl FreezeTopLayerFeature {
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        _random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> bool {
+        let sea_level = level.sea_level();
+        let ice = state("minecraft:ice");
+        let snow = state_with("minecraft:snow", &[("layers", "1")]);
+
+        for offset_x in 0..16 {
+            for offset_z in 0..16 {
+                let x = origin.x() + offset_x;
+                let z = origin.z() + offset_z;
+                let Some(height) = level.heightmap(Heightmap::MotionBlocking, x, z) else {
+                    continue;
+                };
+                let pos = BlockPos::new(x, height, z);
+                let below = pos.below();
+                let Some(biome) = level.biome_at(pos).map(str::to_owned) else {
+                    continue;
+                };
+
+                if should_freeze(level, &biome, below, sea_level) {
+                    level.set_block(below, ice.clone());
+                }
+
+                if should_snow(level, &biome, pos, sea_level) {
+                    level.set_block(pos, snow.clone());
+                    if let Some(block) = level.get_block(below)
+                        && block.properties.iter().any(|(key, _)| key == "snowy")
+                    {
+                        let mut snowy = block.clone();
+                        if let Some((_, value)) =
+                            snowy.properties.iter_mut().find(|(key, _)| key == "snowy")
+                        {
+                            *value = "true".to_owned();
+                        }
+                        level.set_block(below, snowy);
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+fn should_freeze(level: &dyn FeatureLevel, biome: &str, pos: BlockPos, sea_level: i32) -> bool {
+    let Some(temperature) =
+        height_adjusted_temperature(biome, pos.x(), pos.y(), pos.z(), sea_level)
+    else {
+        return false;
+    };
+    if temperature >= 0.15 {
+        return false;
+    }
+    if !level.get_block(pos).is_some_and(is_water_block) {
+        return false;
+    }
+    // `mustBeAtEdge`: a water block surrounded on all four horizontal sides is
+    // not frozen.
+    let surrounded = level.get_block(pos.west()).is_some_and(is_water_block)
+        && level.get_block(pos.east()).is_some_and(is_water_block)
+        && level.get_block(pos.north()).is_some_and(is_water_block)
+        && level.get_block(pos.south()).is_some_and(is_water_block);
+    !surrounded
+}
+
+fn should_snow(level: &dyn FeatureLevel, biome: &str, pos: BlockPos, sea_level: i32) -> bool {
+    if !has_precipitation(biome) {
+        return false;
+    }
+    let Some(temperature) =
+        height_adjusted_temperature(biome, pos.x(), pos.y(), pos.z(), sea_level)
+    else {
+        return false;
+    };
+    if temperature >= 0.15 {
+        return false;
+    }
+    let Some(state) = level.get_block(pos) else {
+        return false;
+    };
+    if !(is_air_name(&state.name) || state.name == "minecraft:snow") {
+        return false;
+    }
+    snow_can_survive(level, pos)
+}
+
+fn snow_can_survive(level: &dyn FeatureLevel, pos: BlockPos) -> bool {
+    let Some(below) = level.get_block(pos.below()) else {
+        return false;
+    };
+    if tags::block_has("minecraft:snow_layer_cannot_survive_on", &below.name) {
+        return false;
+    }
+    if tags::block_has("minecraft:snow_layer_can_survive_on", &below.name) {
+        return true;
+    }
+    if below.name == "minecraft:snow"
+        && below
+            .properties
+            .iter()
+            .any(|(key, value)| key == "layers" && value == "8")
+    {
+        return true;
+    }
+    crate::block_shapes::collision_boxes_for_state(below)
+        .iter()
+        .any(|box_| {
+            box_.min_x <= 0.0
+                && box_.max_x >= 1.0
+                && box_.min_z <= 0.0
+                && box_.max_z >= 1.0
+                && box_.max_y >= 1.0
+        })
+}
+
+fn is_water_block(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:water" | "minecraft:flowing_water"
+    ) || state
+        .properties
+        .iter()
+        .any(|(key, value)| key == "waterlogged" && value == "true")
+}
+
+/// `Biome.ClimateSettings.hasPrecipitation` for the shipped 1.21.11 biomes.
+///
+/// Every shipped biome defaults to `true` except these explicit `false`
+/// entries in the data pack; the asset extractor does not carry the flag yet.
+fn has_precipitation(biome: &str) -> bool {
+    !matches!(
+        biome,
+        "minecraft:badlands"
+            | "minecraft:basalt_deltas"
+            | "minecraft:crimson_forest"
+            | "minecraft:desert"
+            | "minecraft:end_barrens"
+            | "minecraft:end_highlands"
+            | "minecraft:end_midlands"
+            | "minecraft:eroded_badlands"
+            | "minecraft:nether_wastes"
+            | "minecraft:savanna"
+            | "minecraft:savanna_plateau"
+            | "minecraft:small_end_islands"
+            | "minecraft:soul_sand_valley"
+            | "minecraft:the_end"
+            | "minecraft:the_void"
+            | "minecraft:warped_forest"
+            | "minecraft:windswept_savanna"
+            | "minecraft:wooded_badlands"
+    )
 }

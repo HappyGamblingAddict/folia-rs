@@ -555,8 +555,8 @@ fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
     assert_eq!(
         data.supported_feature_count(),
-        218,
-        "end/dungeon/well/sculk batch raises configured-feature support"
+        222,
+        "geode/freeze/end_spike/root_system complete the configured-feature set"
     );
     let unsupported = data.unsupported_type_counts();
     for kind in [
@@ -592,6 +592,10 @@ fn shipped_feature_support_snapshot() {
         "minecraft:pale_garden_vegetation",
         "minecraft:warm_ocean_vegetation",
         "minecraft:pointed_dripstone",
+        "minecraft:amethyst_geode",
+        "minecraft:freeze_top_layer",
+        "minecraft:end_spike",
+        "minecraft:rooted_azalea_tree",
     ] {
         assert!(
             data.configured(id)

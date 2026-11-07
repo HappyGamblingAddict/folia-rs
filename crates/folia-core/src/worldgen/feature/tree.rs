@@ -10,15 +10,18 @@
 //! that use any other trunk, foliage, or root placer or decorator load as
 //! unsupported instead of being approximated.
 
-use super::placement::{IntProvider, parse_block_state, parse_int_provider};
-use super::{ConfiguredFeature, FeatureLevel, is_air_name};
+use super::placement::{BlockPredicate, IntProvider, parse_block_state, parse_int_provider};
+use super::support::{StateProvider, is_solid, parse_block_predicate, test_predicate};
+use super::{
+    ConfiguredFeature, FeatureLevel, ResolvedPlacedFeature, UnsupportedFeature, is_air_name,
+};
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
 use crate::worldgen::carver::{mth_cos, mth_sin};
 use folia_math::BlockPos;
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 
 /// A parsed `minecraft:tree` configuration with supported placers.
@@ -56,6 +59,25 @@ pub struct FallenTreeFeature {
     log_length: IntProvider,
     stump_decorators: Vec<TreeDecorator>,
     log_decorators: Vec<TreeDecorator>,
+}
+
+/// `RootSystemFeature`: grows a placed tree and fills the column beneath it
+/// with rooted dirt plus hanging roots.
+#[derive(Debug, Clone)]
+pub struct RootSystemFeature {
+    tree: ResolvedPlacedFeature,
+    required_vertical_space_for_tree: i32,
+    root_radius: i32,
+    root_replaceable: String,
+    root_state_provider: StateProvider,
+    root_placement_attempts: i32,
+    root_column_max_height: i32,
+    hanging_root_radius: i32,
+    hanging_roots_vertical_span: i32,
+    hanging_root_state_provider: StateProvider,
+    hanging_root_placement_attempts: i32,
+    allowed_vertical_water_for_tree: i32,
+    allowed_tree_position: BlockPredicate,
 }
 
 #[derive(Debug, Clone)]
@@ -3500,6 +3522,243 @@ pub fn parse_fallen_tree_config(config: &Value) -> io::Result<Option<FallenTreeF
         stump_decorators,
         log_decorators,
     }))
+}
+
+/// Parses a `minecraft:root_system` configuration.
+///
+/// The shipped `allowed_tree_position` predicate is evaluated against the
+/// candidate position after moving up, exactly like
+/// `RootSystemFeature.placeDirtAndTree`; its `[0, -1, 0]` matching-block-tag
+/// arm therefore sees the block below the candidate, not the feature origin.
+pub(crate) fn parse_root_system_config(
+    config: &Value,
+    configured: &HashMap<String, ConfiguredFeature>,
+    placed: Option<&HashMap<String, super::PlacedFeature>>,
+    id: &str,
+) -> io::Result<Option<RootSystemFeature>> {
+    let object = config
+        .as_object()
+        .ok_or_else(|| invalid("root system config must be an object"))?;
+    let Some(tree) = ResolvedPlacedFeature::parse(
+        id,
+        object
+            .get("feature")
+            .ok_or_else(|| invalid("root system is missing `feature`"))?,
+        configured,
+        placed,
+    )?
+    else {
+        return Ok(None);
+    };
+    let int = |key: &str| -> io::Result<i32> {
+        object
+            .get(key)
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid(format!("root system is missing a valid `{key}`")))
+    };
+    let required_vertical_space_for_tree = int("required_vertical_space_for_tree")?;
+    let root_radius = int("root_radius")?;
+    let root_placement_attempts = int("root_placement_attempts")?;
+    let root_column_max_height = int("root_column_max_height")?;
+    let hanging_root_radius = int("hanging_root_radius")?;
+    let hanging_roots_vertical_span = int("hanging_roots_vertical_span")?;
+    let hanging_root_placement_attempts = int("hanging_root_placement_attempts")?;
+    let allowed_vertical_water_for_tree = int("allowed_vertical_water_for_tree")?;
+    if required_vertical_space_for_tree <= 0
+        || root_radius <= 0
+        || root_placement_attempts <= 0
+        || root_column_max_height <= 0
+        || hanging_root_radius <= 0
+        || hanging_roots_vertical_span <= 0
+        || hanging_root_placement_attempts <= 0
+        || allowed_vertical_water_for_tree <= 0
+    {
+        return Err(invalid("root system integer fields must be positive"));
+    }
+
+    let root_replaceable = object
+        .get("root_replaceable")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("root system is missing `root_replaceable`"))?
+        .trim_start_matches('#')
+        .to_owned();
+    let root_state_provider = StateProvider::parse(
+        object
+            .get("root_state_provider")
+            .ok_or_else(|| invalid("root system is missing `root_state_provider`"))?,
+    )?;
+    let hanging_root_state_provider = StateProvider::parse(
+        object
+            .get("hanging_root_state_provider")
+            .ok_or_else(|| invalid("root system is missing `hanging_root_state_provider`"))?,
+    )?;
+    if !root_state_provider.is_supported() || !hanging_root_state_provider.is_supported() {
+        return Ok(None);
+    }
+    let Some(allowed_tree_position) = parse_block_predicate(
+        object
+            .get("allowed_tree_position")
+            .ok_or_else(|| invalid("root system is missing `allowed_tree_position`"))?,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(RootSystemFeature {
+        tree,
+        required_vertical_space_for_tree,
+        root_radius,
+        root_replaceable,
+        root_state_provider,
+        root_placement_attempts,
+        root_column_max_height,
+        hanging_root_radius,
+        hanging_roots_vertical_span,
+        hanging_root_state_provider,
+        hanging_root_placement_attempts,
+        allowed_vertical_water_for_tree,
+        allowed_tree_position,
+    }))
+}
+
+impl RootSystemFeature {
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> Result<bool, UnsupportedFeature> {
+        if !is_air(level, origin) {
+            return Ok(false);
+        }
+
+        let base = origin;
+        let mut pos = origin;
+        for _ in 0..self.root_column_max_height {
+            pos = pos.above();
+            if !test_predicate(&self.allowed_tree_position, level, pos)
+                || !self.space_for_tree(level, pos)
+            {
+                continue;
+            }
+            let below = pos.below();
+            let lava = level.get_block(below).is_some_and(|state| {
+                matches!(
+                    state.name.as_str(),
+                    "minecraft:lava" | "minecraft:flowing_lava"
+                )
+            });
+            if lava || !is_solid(level, below) {
+                return Ok(false);
+            }
+            if self.tree.place(level, random, pos)? {
+                self.place_dirt(level, random, base, pos.y());
+                self.place_roots(level, random, base);
+                return Ok(true);
+            }
+        }
+        Ok(true)
+    }
+
+    fn space_for_tree(&self, level: &dyn FeatureLevel, pos: BlockPos) -> bool {
+        let mut cursor = pos;
+        for step in 1..=self.required_vertical_space_for_tree {
+            cursor = cursor.above();
+            let Some(state) = level.get_block(cursor) else {
+                return false;
+            };
+            if is_air_name(&state.name) {
+                continue;
+            }
+            let is_water = matches!(
+                state.name.as_str(),
+                "minecraft:water" | "minecraft:flowing_water"
+            );
+            if step + 1 > self.allowed_vertical_water_for_tree || !is_water {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn place_dirt(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        base: BlockPos,
+        max_y: i32,
+    ) {
+        for y in base.y()..max_y {
+            self.place_rooted_dirt(level, random, base.x(), y, base.z());
+        }
+    }
+
+    fn place_rooted_dirt(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) {
+        let radius = self.root_radius;
+        for _ in 0..self.root_placement_attempts {
+            let offset_x = random.next_int_bound(radius) - random.next_int_bound(radius);
+            let offset_z = random.next_int_bound(radius) - random.next_int_bound(radius);
+            let pos = BlockPos::new(x + offset_x, y, z + offset_z);
+            let replaceable = level
+                .get_block(pos)
+                .is_some_and(|state| crate::tags::block_has(&self.root_replaceable, &state.name));
+            if replaceable && let Some(block) = self.root_state_provider.sample(level, random, pos)
+            {
+                level.set_block(pos, block);
+            }
+        }
+    }
+
+    fn place_roots(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        base: BlockPos,
+    ) {
+        let radius = self.hanging_root_radius;
+        let span = self.hanging_roots_vertical_span;
+        for _ in 0..self.hanging_root_placement_attempts {
+            let offset_x = random.next_int_bound(radius) - random.next_int_bound(radius);
+            let offset_y = random.next_int_bound(span) - random.next_int_bound(span);
+            let offset_z = random.next_int_bound(radius) - random.next_int_bound(radius);
+            let pos = base.offset(offset_x, offset_y, offset_z);
+            if !is_air(level, pos) {
+                continue;
+            }
+            let Some(state) = self.hanging_root_state_provider.sample(level, random, pos) else {
+                continue;
+            };
+            if has_full_face_down(level, pos.above())
+                && let Some(above) = level.get_block(pos.above())
+                && above.name != "minecraft:air"
+            {
+                level.set_block(pos, state);
+            }
+        }
+    }
+}
+
+/// `Block.beam`-free full-face check for `isFaceSturdy(..., DOWN)`.
+fn has_full_face_down(level: &dyn FeatureLevel, pos: BlockPos) -> bool {
+    level.get_block(pos).is_some_and(|state| {
+        crate::block_shapes::collision_boxes_for_state(state)
+            .iter()
+            .any(|box_| {
+                box_.min_x <= 0.0
+                    && box_.max_x >= 1.0
+                    && box_.min_z <= 0.0
+                    && box_.max_z >= 1.0
+                    && box_.min_y <= 0.0
+            })
+    })
 }
 
 fn parse_probability(object: &Map<String, Value>, kind: &str) -> io::Result<f32> {

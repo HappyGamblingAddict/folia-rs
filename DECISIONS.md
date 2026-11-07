@@ -6,7 +6,7 @@ re-litigate them. Keep entries short.
 Format:
 
 ```text
-## YYYY-MM-DD â€” Decision title
+## YYYY-MM-DD Ã¢â‚¬â€ Decision title
 - Context:
 - Decision:
 - Why:
@@ -154,6 +154,7 @@ Format:
   equipment is still sent as a full eight-slot snapshot on enter.
 
 ## 2026-11-07 - Chat signing is a verified model with server-issued RSA profile keys
+## 2026-11-07 â€” Chat signing is a verified model with server-issued RSA profile keys
 - Context: 1.21.11 clients sign chat with a profile private key and send a
   `SignedMessageBody` (content, timestamp, salt, last-seen signatures) plus a
   256-byte `MessageSignature`. The task also requires a SHA-256 content hash,
@@ -186,7 +187,7 @@ Format:
   generate off the tick thread or cache a startup key. `join.rs` and `status.rs`
   must call the provisioning/audit APIs before secure chat is user-visible;
   see `BLOCKERS.md`.
-## 2026-11-07 — Nether carvers run after the surface pass
+## 2026-11-07 â€” Nether carvers run after the surface pass
 - Context: vanilla applies carvers before `SurfaceSystem.buildSurface`, but the
   existing Nether generator materializes surfaces from the pre-carve density
   column map. Moving the pass would either need a second full column scan or
@@ -202,7 +203,7 @@ Format:
   netherrack/nylium walls stay exposed at cave mouths. A Java block-for-block
   carver fixture must decide whether the ordering delta is visible.
 
-## 2026-11-07 — Nether structure selection succeeds; start generation fails loudly
+## 2026-11-07 â€” Nether structure selection succeeds; start generation fails loudly
 - Context: `nether_complexes` is a shipped structure set, but the project has
   no fortress piece implementation and no bastion template/pool NBT assets.
 - Decision: `NetherGenerator::structure_at_chunk` exposes the merged
@@ -215,7 +216,7 @@ Format:
 - Consequences: the generator does not write fortress/bastion terrain until
   the template assets and fortress piece port land.
 
-## 2026-11-07 — End content is data-shaped and feature dispatch is id-keyed
+## 2026-11-07 â€” End content is data-shaped and feature dispatch is id-keyed
 - Context: `FeatureData` still classifies `chorus_plant`, `end_gateway`,
   `end_platform`, and `end_spike` as unsupported configured features, and End
   cities/dragon fight state are not implemented.
@@ -231,7 +232,7 @@ Format:
 - Consequences: End cities, natural gateway placement, crystal entities, and
   the dragon fight still need separate slices; a future registry wiring should
   call this dispatch rather than duplicate the algorithms.
-## 2026-11-07 — Structure-template asset is village-scoped and lazy
+## 2026-11-07 â€” Structure-template asset is village-scoped and lazy
 - Context: the decompiled `data/minecraft/structure` tree holds 1,202 gzip NBT
   files (~3.7 MB, ~40.7 MB raw NBT). Per-entry gzip+base64 across the whole tree
   is ~4.9 MB, over the 2.5 MB asset budget, and a solid gzip still exceeds it
@@ -251,7 +252,7 @@ Format:
   SHA-256. Selecting a non-village structure still fails with an explicit
   missing-template error.
 
-## 2026-11-07 — Jigsaw feature pool elements are recorded skips
+## 2026-11-07 â€” Jigsaw feature pool elements are recorded skips
 - Context: village pools contain `feature_pool_element` entries (trees, decor,
   piles). The configured/placed feature context needed to place them is not
   available inside jigsaw expansion, and failing the whole village made real
@@ -266,7 +267,7 @@ Format:
 - Consequences: generated villages currently omit their feature-pool decor
   until a later feature-context slice wires it in.
 
-## 2026-11-07 — Stale `tick_hoppers` call removed to restore the build
+## 2026-11-07 â€” Stale `tick_hoppers` call removed to restore the build
 - Context: `tick_world_with_table` called `WorldStorage::tick_hoppers`, but no
   such method exists anywhere in the tree; the call was added by the leaf-decay
   commit and made the baseline uncompilable. `SimpleBlockEntityTicker` already
@@ -277,7 +278,7 @@ Format:
   ticker. A future dedicated hopper transfer tick should be added with its own
   `WorldStorage` method and tests rather than reintroducing this call.
 
-## 2026-11-07 — `structure::assets` is a new public module
+## 2026-11-07 â€” `structure::assets` is a new public module
 - Context: the task scope lists the new `assets.rs` but not `mod.rs`; Rust
   cannot compile a new child module without a declaration.
 - Decision: add `pub mod assets;` and catalog re-exports to
@@ -285,7 +286,7 @@ Format:
 - Consequences: `mod.rs` carries a few small lines outside the slice's file
   list; no behavior changes beyond exposing the catalog.
 
-## 2026-11-06 — Item entities use a 4-block magnet and 3-block merge
+## 2026-11-06 â€” Item entities use a 4-block magnet and 3-block merge
 - Context: vanilla `ItemEntity` has no in-tick magnet (pickup is a player-box
   inflate), and its merge radius is the spigot `itemMerge` value (default
   `1.0`), while the task requires magnet movement and merge within 3 blocks.
@@ -303,7 +304,7 @@ Format:
   (3-block merges, 4-block magnet). A Java pickup fixture is still required
   before claiming parity.
 
-## 2026-11-06 — Pickup goes through a session-free trait; spawner keeps the loot signature backward-compatible
+## 2026-11-06 â€” Pickup goes through a session-free trait; spawner keeps the loot signature backward-compatible
 - Context: the task forbids `join.rs` edits and requires ground drops from
   block breaking without breaking the existing `stop_with_loot` caller.
 - Decision: add `item_entity::PickupTarget` (`position`/`add_item`/
@@ -321,7 +322,7 @@ Format:
   implements `PickupTarget` for sessions and streams the packets; until then
   `finish_break` in `join.rs` still deposits drops directly.
 
-## 2026-11-06 — Pistons use explicit moving-block payloads
+## 2026-11-06 â€” Pistons use explicit moving-block payloads
 
 - Context: `block_entity.rs` is still a stub with no typed moving-block API, but
   pistons must preserve the moved state across two movement ticks.
@@ -339,7 +340,7 @@ Format:
   block-entity contents are not part of the payload. Entity pushing/velocity
   and Java differential traces remain open.
 
-## 2026-11-06 — Region ownership is enforced on tasks, not yet on world state
+## 2026-11-06 â€” Region ownership is enforced on tasks, not yet on world state
 
 - Context: `region.rs` was a task-queue shim: region ids and per-region
   counters existed, but nothing owned world state and nothing rejected
@@ -363,7 +364,7 @@ Format:
   `RegionOwned`/`OwnedWorld` is checked. Region merge/split, cross-region
   teleports, and entity transfer remain open (P10.2-P10.5, P10.7).
 
-## 2026-11-04 â€” Git is not part of the workflow
+## 2026-11-04 Ã¢â‚¬â€ Git is not part of the workflow
 
 - Context: The working tree contains large uncommitted changes and the user
   asked to ignore Git.
@@ -374,7 +375,7 @@ Format:
 - Consequences: There is no automatic diff history. Snapshots are the rollback
   mechanism, and the agent must avoid destructive edits.
 
-## 2026-11-04 â€” Behavioral parity over literal transliteration
+## 2026-11-04 Ã¢â‚¬â€ Behavioral parity over literal transliteration
 
 - Context: The decompiled Java tree is 6,485 files / 744,058 lines.
 - Decision: Use Java as a specification and prove behavior with Rust tests and
@@ -383,7 +384,7 @@ Format:
 - Consequences: Each subsystem needs a test harness; implementation may use
   different internal structure.
 
-## 2026-11-04 â€” Placement modifiers split at the world boundary
+## 2026-11-04 Ã¢â‚¬â€ Placement modifiers split at the world boundary
 
 - Context: 888 placement modifiers ship across 258 placed features. Most read
   the world (`heightmap`, `biome`, block predicates, surface depth, noise,
@@ -406,19 +407,19 @@ Format:
   entry below raises this to 667. The rest need heightmap access and block
   predicate tags.
 
-## 2026-11-04 â€” Generated terrain instead of flat placeholders
+## 2026-11-04 Ã¢â‚¬â€ Generated terrain instead of flat placeholders
 
 - Context: joins only generated terrain when the level had no `region/`
   directory; with region files present, every stored-missing chunk was a flat
   placeholder, and nothing was sent when the player moved. In practice the
   whole spawn area of this repo's `world/` came from storage and was flat, so
   generated terrain only appeared ~500 blocks out.
-- Decision: stream a 13Ã—13 live column around the player (radius 6), resolving
-  each chunk as `WorldStorage` â†’ noise generator â†’ flat, re-streaming when the
+- Decision: stream a 13Ãƒâ€”13 live column around the player (radius 6), resolving
+  each chunk as `WorldStorage` Ã¢â€ â€™ noise generator Ã¢â€ â€™ flat, re-streaming when the
   player's chunk changes and tracking what was already sent. Stored chunks are
   served only when `world/level.dat` exists, or when `FOLIA_LOAD_STORED=1`
   is set.
-- Why: A level without `level.dat` is not loadable â€” region files beside it are
+- Why: A level without `level.dat` is not loadable Ã¢â‚¬â€ region files beside it are
   leftovers from an earlier flat run, and letting them win hides the generator
   across the entire spawn region. Players expect to walk into terrain, not a
   plane, so the leftovers lose unless explicitly requested.
@@ -429,10 +430,10 @@ Format:
   view distance needs async scheduling (TODO P3.3). No unloading or ticket
   system yet (P3.1), and each player still generates their own copy.
 
-## 2026-11-04 â€” Client chunks are unloaded one chunk past the live radius
+## 2026-11-04 Ã¢â‚¬â€ Client chunks are unloaded one chunk past the live radius
 
 - Context: `sent_chunks` only grew, so a player walking across the map made the
-  client hold every column it had ever seen; joins streamed a fixed 13Ã—13 area.
+  client hold every column it had ever seen; joins streamed a fixed 13Ãƒâ€”13 area.
 - Decision: on every streaming batch, send `ClientboundForgetLevelChunk` (id 37)
   for columns outside `LIVE_CHUNK_RADIUS + UNLOAD_MARGIN` (margin 1) and drop
   them from `sent_chunks`.
@@ -444,10 +445,10 @@ Format:
   ids already captured from real traffic (block update 8, keep alive 43, level
   chunk 44, login 48, position 70, section blocks 82, chunk cache center 92).
 - Consequences: chunks are re-streamed if a player walks back, which costs a
-  region read (or generation only if the chunk was never saved â€” it always is).
+  region read (or generation only if the chunk was never saved Ã¢â‚¬â€ it always is).
   Ticket/reference-count sharing between players is still open (P3.1).
 
-## 2026-11-04 â€” Generated terrain is written back and stamped
+## 2026-11-04 Ã¢â‚¬â€ Generated terrain is written back and stamped
 
 - Context: generated chunks were streamed but never saved, block edits on them
   were silently dropped (`storage` was `None`), and the whole spawn area of this
@@ -465,10 +466,10 @@ Format:
   (ignored by vanilla) chunk field. Unloading, dirty batching, and autosave are
   still open (TODO P3.1/P3.4).
 
-## 2026-11-04 â€” Login lifts players out of solid ground
+## 2026-11-04 Ã¢â‚¬â€ Login lifts players out of solid ground
 
-- Context: the captured play-position packet is `(0.5, -60.0, -2.5)` â€” four
-  blocks above bedrock â€” so every fresh player spawned inside stone, and the
+- Context: the captured play-position packet is `(0.5, -60.0, -2.5)` Ã¢â‚¬â€ four
+  blocks above bedrock Ã¢â‚¬â€ so every fresh player spawned inside stone, and the
   playerdata written from that spawn kept them there on relogin.
 - Decision: on login, if the block at the player's feet is solid, move them to
   the first empty block of their column before sending the position packet.
@@ -478,7 +479,7 @@ Format:
   surface instead of suffocating. Real spawn-point selection (bed, world spawn
   block) is still TODO P4.10.
 
-## 2026-11-04 â€” `biome` filter reads world state through a trait
+## 2026-11-04 Ã¢â‚¬â€ `biome` filter reads world state through a trait
 
 - Context: `BiomeFilter` is the most common modifier (204 of 888) and every
   ore placement ends with it. Vanilla's `BiomeFilter` calls
@@ -507,7 +508,7 @@ Format:
   Python reference of the Java code); `end_platform` now places instead of
   failing.
 
-## 2026-11-04 â€” Feature framework scope and unsupported behavior
+## 2026-11-04 Ã¢â‚¬â€ Feature framework scope and unsupported behavior
 
 - Context: `feature_data.json` has 224 configured features across ~56 vanilla
   types. Porting `Feature`/`ConfiguredFeature`/`PlacedFeature` requires block
@@ -519,7 +520,7 @@ Format:
   `UnsupportedFeature` instead of a silent `false`.
 - Decision: Accept bare names from the dump as `minecraft:` resource
   locations, since all shipped entries are vanilla; validate every
-  placedâ†’configured and biomeâ†’placed reference at load time.
+  placedÃ¢â€ â€™configured and biomeÃ¢â€ â€™placed reference at load time.
 - Decision: The feature write region is the chunk being generated. Vanilla
   uses a multi-chunk `WorldGenRegion`; widening this belongs with the
   chunk-status pipeline (P3.2), not with feature ports.
@@ -528,7 +529,7 @@ Format:
 - Consequences: `PlacedFeature` modifiers are counted but not executed until
   P2.2; features are loaded but not yet run during generation.
 
-## 2026-11-04 â€” Generated assets are guarded by a manifest, not Git
+## 2026-11-04 Ã¢â‚¬â€ Generated assets are guarded by a manifest, not Git
 
 - Context: P0.3 asks for the generated registry/worldgen assets to be tracked,
   but Git is not used for workflow and must not be committed.
@@ -542,7 +543,7 @@ Format:
 - Consequences: Regenerating an asset requires updating the manifest and the
   test constants in the same change; the snapshot is the only off-tree copy.
 
-## 2026-11-04 â€” Autonomy policy
+## 2026-11-04 Ã¢â‚¬â€ Autonomy policy
 
 - Context: The user wants the agent to continue without asking questions.
 - Decision: Prefer the Folia 1.21.11 behavior, choose the simplest testable
@@ -551,7 +552,7 @@ Format:
 - Consequences: Some choices may need later review; the decision log is the
   audit trail.
 
-## 2026-11-04 â€” Write `level.dat` for generated worlds
+## 2026-11-04 Ã¢â‚¬â€ Write `level.dat` for generated worlds
 
 - Context: A world generated by this server had no `level.dat`, so nothing
   recorded the seed, spawn, or that the directory was a saved world; stored
@@ -571,7 +572,7 @@ Format:
   it stays at the values from creation. A client that disconnects mid-stream
   now ends the session normally instead of surfacing an I/O error.
 
-## 2026-11-04 â€” One shared overworld storage
+## 2026-11-04 Ã¢â‚¬â€ One shared overworld storage
 
 - Context: Every login built its own `WorldStorage`, and `entity.rs` kept a
   third one, all over the same `region/*.mca` files. `RegionFile` caches chunks
@@ -588,7 +589,7 @@ Format:
   generation moves to async tasks (P3.3), which should revisit the locking
   granularity per region file.
 
-## 2026-11-04 â€” Terrain flush on a timer instead of per batch
+## 2026-11-04 Ã¢â‚¬â€ Terrain flush on a timer instead of per batch
 
 - Context: `stream_chunks_around` called `flush()` after every batch. A region
   save rewrites the whole `.mca`, so every chunk-border crossing rewrote a
@@ -605,7 +606,7 @@ Format:
   that terrain regenerates deterministically from the saved seed. Per-chunk
   dirty batching inside a region file remains open work in P3.4.
 
-## 2026-11-05 â€” `level.dat` records the session's time on shutdown
+## 2026-11-05 Ã¢â‚¬â€ `level.dat` records the session's time on shutdown
 
 - Context: the level file wrote `Time = 0` and a fixed `DayTime` at creation and
   was never updated, so every restart reset the clock and `LastPlayed`.
@@ -624,12 +625,12 @@ Format:
   flush. Game rules and spawn changes made while running are still not written
   back.
 
-## 2026-11-05 â€” View distance is negotiated per session
+## 2026-11-05 Ã¢â‚¬â€ View distance is negotiated per session
 
 - Context: joins always streamed a fixed 6-chunk radius regardless of
   `server.properties` `view-distance` or the client's request.
 - Decision: use `min(server.view_distance, client.ClientInformation.viewDistance)`
-  clamped to 2â€“16 chunks, with 6 as the fallback when no value is configured or
+  clamped to 2Ã¢â‚¬â€œ16 chunks, with 6 as the fallback when no value is configured or
   sent. The client's byte is parsed from `ClientInformation` during
   configuration.
 - Why: vanilla clamps the client's request to the server's view distance (floor
@@ -643,7 +644,7 @@ Format:
   `tests/view_distance_join.rs` covers a radius-4 session (81 columns, 9 new
   columns per border crossing).
 
-## 2026-11-05 â€” Streaming batches generate columns in parallel
+## 2026-11-05 Ã¢â‚¬â€ Streaming batches generate columns in parallel
 
 - Context: a cold 169-column join generated every column sequentially inside
   the session thread, taking 16.3 s on the probe machine.
@@ -658,19 +659,19 @@ Format:
   batch (rather than a long-lived pool) avoids new shared state and matches the
   scoped session lifetime.
 - Measured: the same fresh 169-column join dropped to 7.7 s (one run each;
-  ~2.1Ã—). The remaining cost is dominated by block-state generation and region
+  ~2.1Ãƒâ€”). The remaining cost is dominated by block-state generation and region
   writes.
 - Consequences: up to 8 threads per joining session, so several simultaneous
   cold joins can oversubscribe the CPU until P3.3's bounded queue exists.
   In-flight dedupe and cancellation are still open; each session still
   generates its own copy of a column.
 
-## 2026-11-05 â€” Block edits preserve chunk fields the model does not decode
+## 2026-11-05 Ã¢â‚¬â€ Block edits preserve chunk fields the model does not decode
 
 - Context: `save_chunk` encoded only `xPos`, `zPos`, and `sections`, so any
   block edit in a stored chunk rewrote the column and silently dropped
   `Status`, `Heightmaps`, `BlockEntities`, `Entities`, `structures`, and
-  `PostProcessing` â€” a vanilla-created or modded chunk lost that data.
+  `PostProcessing` Ã¢â‚¬â€ a vanilla-created or modded chunk lost that data.
 - Decision: `WorldStorage::update_chunk` reads the stored root for the same
   column and copies every top-level field the encoder does not write before
   saving. Fields the server writes always win, and the `folia:written` stamp is
@@ -683,11 +684,11 @@ Format:
 - Consequences: an edited-chunk save costs one extra region read (a miss for
   fresh terrain, so streaming is unaffected), and a stored field whose name
   collides with an encoded field is ignored. Block edits still do not update
-  `Heightmaps` or `BlockEntities` in place â€” they are preserved as-is, so a
+  `Heightmaps` or `BlockEntities` in place Ã¢â‚¬â€ they are preserved as-is, so a
   block entity whose block was removed remains until the port models block
   entities.
 
-## 2026-11-05 â€” Edited blocks drop their block entities
+## 2026-11-05 Ã¢â‚¬â€ Edited blocks drop their block entities
 
 - Context: preserving stored `BlockEntities` kept entries for blocks that no
   longer existed after an edit; vanilla removes the block entity when its block
@@ -702,7 +703,7 @@ Format:
   edit path must supply them. Other block entity state is preserved verbatim,
   not refreshed, and heightmaps are still not recomputed.
 
-## 2026-11-05 â€” Streaming sends columns as they are generated
+## 2026-11-05 Ã¢â‚¬â€ Streaming sends columns as they are generated
 
 - Context: `generate_columns` waited for every missing column of a batch, then
   the session saved and sent them all, so a cold join delivered nothing for the
@@ -722,7 +723,7 @@ Format:
   be trusted because leftover servers answered the probe, so no speedup number
   is claimed.
 
-## 2026-11-05 â€” Playerdata autosaves while a session is idle
+## 2026-11-05 Ã¢â‚¬â€ Playerdata autosaves while a session is idle
 
 - Context: playerdata was written on disconnect and at most every 5 s inside the
   movement branch, so a player who stood still never had their position
@@ -736,7 +737,7 @@ Format:
   can still lose up to 5 s of movement, and playerdata is still only saved by
   the session thread that owns it.
 
-## 2026-11-05 â€” Shutdown writes cached terrain and keeps level.dat_old
+## 2026-11-05 Ã¢â‚¬â€ Shutdown writes cached terrain and keeps level.dat_old
 
 - Context: region saves stay in the in-memory cache until a flush, and only the
   session's disconnect path flushed. A stop while a session was connected could
@@ -753,7 +754,7 @@ Format:
   it can delay exit briefly. `level.dat_old` is only as fresh as the previous
   write; it is not written when no level file exists yet.
 
-## 2026-11-05 â€” Shutdown waits for sessions to save
+## 2026-11-05 Ã¢â‚¬â€ Shutdown waits for sessions to save
 
 - Context: `main` stopped the tick loop and exited while session threads could
   still be connected; their playerdata was written only on disconnect or the
@@ -770,7 +771,7 @@ Format:
   remaining sessions are abandoned and the process exits. The flag is one-shot
   and is never reset because the server exits.
 
-## 2026-11-05 â€” Playerdata stamps the current DataVersion
+## 2026-11-05 Ã¢â‚¬â€ Playerdata stamps the current DataVersion
 
 - Context: saved playerdata had no `DataVersion`, while vanilla stamps it on
   every save; another server reading our file would treat it as unversioned.
@@ -782,7 +783,7 @@ Format:
 - Consequences: loading an older playerdata drops its stored version and the
   next save writes 4788; unknown fields still round-trip unchanged.
 
-## 2026-11-05 â€” A corrupt chunk reads as missing
+## 2026-11-05 Ã¢â‚¬â€ A corrupt chunk reads as missing
 
 - Context: `RegionFile::read_chunk` returned `InvalidData` for a bad length,
   truncated payload, or unknown compression, and `WorldStorage::load_chunk`
@@ -797,7 +798,7 @@ Format:
   visit, losing whatever it held; structural `decode_chunk` errors are still
   reported rather than swallowed.
 
-## 2026-11-05 â€” Chunk rewrites reuse their sectors
+## 2026-11-05 Ã¢â‚¬â€ Chunk rewrites reuse their sectors
 
 - Context: `RegionFile::write_chunk` always appended the new record at the end of
   the region and updated the header, so every save of an edited chunk added a
@@ -813,7 +814,7 @@ Format:
   reclaimed (no compaction or free list yet), so region files can still contain
   dead sectors; a record that outgrows its allocation appends a new copy.
 
-## 2026-11-05 â€” Playerdata keeps survival vitals; chunks carry status
+## 2026-11-05 Ã¢â‚¬â€ Playerdata keeps survival vitals; chunks carry status
 
 - Context: playerdata stored only position, rotation, inventory, slot, and
   dimension; health/hunger/XP stayed in the raw-extras bag, so a new player
@@ -831,7 +832,7 @@ Format:
   status, which is accurate for this generator, and `Status` is no longer
   copied from an older stored root when a chunk is re-encoded.
 
-## 2026-11-05 â€” Regions compact when edits leave too much garbage
+## 2026-11-05 Ã¢â‚¬â€ Regions compact when edits leave too much garbage
 
 - Context: in-place reuse keeps the common edit cheap, but a chunk that outgrows
   its allocation appends a new copy and abandons the old sectors forever; a
@@ -847,7 +848,7 @@ Format:
   disk; records with damaged headers are dropped during compaction rather than
   copied, which matches the corrupt-chunk policy.
 
-## 2026-11-05 â€” Decoded chunks are cached per storage
+## 2026-11-05 Ã¢â‚¬â€ Decoded chunks are cached per storage
 
 - Context: every `load_chunk` decompressed and decoded the same stored column
   again; with more than one reader (a second player, a border revisit, a block
@@ -863,7 +864,7 @@ Format:
   each hit copies the sections; the cache is per storage instance, which is the
   process-wide shared overworld in practice.
 
-## 2026-11-05 â€” Stored chunks include recomputed heightmaps
+## 2026-11-05 Ã¢â‚¬â€ Stored chunks include recomputed heightmaps
 
 - Context: generated and edited chunk NBT carried `Status`/`DataVersion` but no
   `Heightmaps`, so a stored column was incomplete for anything that reads the
@@ -879,7 +880,7 @@ Format:
   888 bytes) in addition to its sections; a chunk whose palette the height
   function cannot interpret still gets the height function's non-air result.
 
-## 2026-11-05 â€” Generation queue is bounded and cancels on drop
+## 2026-11-05 Ã¢â‚¬â€ Generation queue is bounded and cancels on drop
 
 - Context: `send_columns` used an unbounded channel, so workers could generate
   the whole batch even after the session had failed to write a chunk and
@@ -897,7 +898,7 @@ Format:
   not separately timed in a test.
 
 
-## 2026-11-05 â€” Basic movement correction and a legal-step border test
+## 2026-11-05 Ã¢â‚¬â€ Basic movement correction and a legal-step border test
 
 - Context: movement packets were applied verbatim, so one packet could place a
   player anywhere; adding the guard exposed that the view-distance test moved
@@ -914,7 +915,7 @@ Format:
   teleport packet is already ignored, which is sufficient for the correction to
   take effect.
 
-## 2026-11-05 â€” First tree slice: trunk/foliage now, decorators later
+## 2026-11-05 Ã¢â‚¬â€ First tree slice: trunk/foliage now, decorators later
 
 - Context: Forest and plains had no trees because `TreeFeature` and the tree
   placers were unported. A complete tree port needs every trunk/foliage/root
@@ -935,7 +936,7 @@ Format:
   `WorldgenRandom` sequence, so block-for-block Java parity still needs a
   fixture.
 
-## 2026-11-05 â€” Chunk-packet oracle uses an immutable fixture world
+## 2026-11-05 Ã¢â‚¬â€ Chunk-packet oracle uses an immutable fixture world
 
 - Context: `tests/world_chunk_packet.rs` read `world/region/r.0.-1.mca`
   directly. A live server run regenerated that directory with noise terrain,
@@ -950,7 +951,7 @@ Format:
   Live server checks should continue to use a scratch level such as
   `FOLIA_LEVEL_NAME=target/probe-world`.
 
-## 2026-11-05 â€” Shutdown aborts an in-progress chunk batch
+## 2026-11-05 Ã¢â‚¬â€ Shutdown aborts an in-progress chunk batch
 
 - Context: Position is sent before the chunk batch so the client leaves the
   loading screen after the first column. A shutdown requested while the first
@@ -963,7 +964,7 @@ Format:
 - Consequences: A shutdown during the initial stream leaves `sent_chunks`
   incomplete, but the process is exiting; no resume path is needed.
 
-## 2026-11-05 â€” Chunk packet encoding caches palette state ids
+## 2026-11-05 Ã¢â‚¬â€ Chunk packet encoding caches palette state ids
 
 - Context: `build_chunk_data` called `block_state_id` for every block. That
   function builds and sorts a property string, so a 64-column benchmark spent
@@ -981,7 +982,7 @@ Format:
   16-column queue also bounds packet memory. Region saving remains on the
   session thread and is now the largest single-threaded part of a cold join.
 
-## 2026-11-05 â€” Tree decorators are explicit or the tree is unsupported
+## 2026-11-05 Ã¢â‚¬â€ Tree decorators are explicit or the tree is unsupported
 
 - Context: forest/plains selectors default to beehive-decorated oaks, and the
   leaf-litter variants use weighted state providers. Parsing those decorators
@@ -1000,7 +1001,7 @@ Format:
   open. Full block-behavior metadata is still missing, so `is_solid_render`
   recognizes the common surface blocks used by the supported biomes.
 
-## 2026-11-05 â€” Vine and cocoa decorators follow vanilla call order
+## 2026-11-05 Ã¢â‚¬â€ Vine and cocoa decorators follow vanilla call order
 
 - Context: `jungle_tree` and `swamp_oak` already use supported trunk/foliage
   placers, but decorator rejection made both configs unsupported. Their
@@ -1016,7 +1017,7 @@ Format:
   place; remaining attached-to-leaves/pale-moss/creaking-heart/alter-ground
   decorators and non-blob placers remain open.
 
-## 2026-11-05 â€” Spruce and pine foliage follow TreeFeature RNG order
+## 2026-11-05 Ã¢â‚¬â€ Spruce and pine foliage follow TreeFeature RNG order
 
 - Context: `spruce` and `pine` use the already-supported straight trunk, but
   their foliage placers were rejected. Implementing them adds conifer shapes
@@ -1033,7 +1034,7 @@ Format:
   (pine); fancy/dark oak/cherry/mega/mangrove/fallen placers and the remaining
   decorators stay open.
 
-## 2026-11-05 â€” Dark oak uses multi-attachment trunk placement
+## 2026-11-05 Ã¢â‚¬â€ Dark oak uses multi-attachment trunk placement
 
 - Context: dark oak needs a 2x2 trunk, leaning/branch logs, and foliage at
   several attachment points; the existing single-attachment path could not
@@ -1044,7 +1045,7 @@ Format:
 - Consequences: `dark_oak` parses and places (11 logs/126 leaves fixture);
   fancy/cherry/mega/mangrove/fallen placers remain open.
 
-## 2026-11-05 â€” Console commands use a per-session channel
+## 2026-11-05 Ã¢â‚¬â€ Console commands use a per-session channel
 
 - Context: player sessions own their `TcpStream` and read loop, so the terminal
   thread cannot safely write to them directly.
@@ -1054,7 +1055,7 @@ Format:
 - Consequences: console commands work without a global stream lock, but only
   while the session is in its play loop; commands time out after 2 s.
 
-## 2026-11-05 â€” Void death is the first damage slice
+## 2026-11-05 Ã¢â‚¬â€ Void death is the first damage slice
 
 - Context: health was persisted but never changed or sent, so falling below the
   world was harmless.
@@ -1065,7 +1066,7 @@ Format:
   system. Other damage sources, drops, and real respawn-point selection remain
   open.
 
-## 2026-11-05 â€” Acacia uses a forking trunk and acacia foliage
+## 2026-11-05 Ã¢â‚¬â€ Acacia uses a forking trunk and acacia foliage
 
 - Context: acacia is the dominant savanna tree; its forking trunk differs from
   the straight and 2x2 dark oak placers, and its foliage has three explicit
@@ -1075,7 +1076,7 @@ Format:
 - Consequences: `acacia` parses and places (11 logs/73 leaves at seed 7 on the
   flat fixture); fancy/cherry/mega/mangrove/fallen placers remain open.
 
-## 2026-11-05 â€” Fancy oak ports limb placement and clipped height
+## 2026-11-05 Ã¢â‚¬â€ Fancy oak ports limb placement and clipped height
 
 - Context: fancy oak needs a limb-based trunk with axis-tagged logs and a foliage
   shape distinct from blob/dark oak; its config also declares a minimum clipped
@@ -1085,7 +1086,7 @@ Format:
 - Consequences: `fancy_oak` parses and places (8 logs/112 leaves, 2 horizontal
   logs at seed 7); cherry/mega/mangrove/fallen placers remain open.
 
-## 2026-11-05 â€” Cherry uses sampled branch walks and hanging foliage
+## 2026-11-05 Ã¢â‚¬â€ Cherry uses sampled branch walks and hanging foliage
 
 - Context: cherry trees branch in one or two horizontal directions, with
   branch start/end offsets and a foliage canopy that drops hanging leaves.
@@ -1095,7 +1096,7 @@ Format:
 - Consequences: `cherry` parses and places (20 logs/291 leaves and 8 horizontal
   logs at seed 7); mega/mangrove/fallen placers remain open.
 
-## 2026-11-05 â€” Mega spruce/pine share the giant trunk and alter ground
+## 2026-11-05 Ã¢â‚¬â€ Mega spruce/pine share the giant trunk and alter ground
 
 - Context: mega spruce and mega pine both use a 2x2 giant trunk and the
   mega-pine crown foliage, but their only decorator is `alter_ground`, which
@@ -1107,7 +1108,7 @@ Format:
   ground (109 logs/295 leaves and 109/75 at seed 7); mega jungle/mangrove/fallen
   placers remain open.
 
-## 2026-11-05 â€” Mega jungle extends the giant trunk with angled branches
+## 2026-11-05 Ã¢â‚¬â€ Mega jungle extends the giant trunk with angled branches
 
 - Context: mega jungle uses the same giant 2x2 trunk as mega spruce/pine but
   adds a trunk-level branch walk and the `jungle_foliage_placer` registered by
@@ -1117,7 +1118,7 @@ Format:
 - Consequences: `mega_jungle_tree` parses and places (63 logs/287 leaves and
   6 branch logs at seed 7); mangrove/fallen placers remain open.
 
-## 2026-11-05 â€” Attached-to-leaves samples randomized integer states
+## 2026-11-05 Ã¢â‚¬â€ Attached-to-leaves samples randomized integer states
 
 - Context: mangrove's attached propagules use `attached_to_leaves` with a
   `randomized_int_state_provider`, and neither was parsed by the tree loader.
@@ -1129,7 +1130,7 @@ Format:
   synthetic oak fixture (6 propagules at seed 7); mangrove still needs its
   upwards trunk, random-spread foliage, and root placer.
 
-## 2026-11-05 â€” Jungle bush reuses the straight trunk
+## 2026-11-05 Ã¢â‚¬â€ Jungle bush reuses the straight trunk
 
 - Context: `jungle_bush` is a shipped tree with no decorators and uses the
   already-supported straight trunk, but its `bush_foliage_placer` was rejected.
@@ -1138,7 +1139,7 @@ Format:
 - Consequences: `jungle_bush` now parses and places (1 log/32 leaves at seed 7);
   bending/random-spread placers and the remaining decorators stay open.
 
-## 2026-11-05 â€” Azalea uses a bending trunk and weighted foliage
+## 2026-11-05 Ã¢â‚¬â€ Azalea uses a bending trunk and weighted foliage
 
 - Context: `azalea_tree` ships a `bending_trunk_placer` and
   `random_spread_foliage_placer` with a weighted azalea/flowering-azalea
@@ -1152,7 +1153,7 @@ Format:
   leaves/24 flowering azalea leaves at seed 7); pale moss, creaking heart,
   mangrove, and fallen trees remain open.
 
-## 2026-11-05 â€” Mangrove uses the upwards-branching trunk and root placer
+## 2026-11-05 Ã¢â‚¬â€ Mangrove uses the upwards-branching trunk and root placer
 
 - Context: `mangrove` and `tall_mangrove` ship `upwards_branching_trunk_placer`
   and `mangrove_root_placer`, which need two block tags plus waterlogged and
@@ -1165,7 +1166,7 @@ Format:
 - Consequences: `mangrove` and `tall_mangrove` parse and place (10 logs/157
   leaves/17 roots, 7 waterlogged, 7 muddy, 3 moss carpets at seed 7); only the
   fallen placer, pale moss, creaking heart, and beehive occupants remain open.
-## 2026-11-05 â€” Fallen trees reuse the tree decorator context
+## 2026-11-05 Ã¢â‚¬â€ Fallen trees reuse the tree decorator context
 
 - Context: `fallen_tree` is a separate configured feature but shares
   `BlockStateProvider`, `IntProvider`, `TreeDecorator`, `valid_tree_pos`, and
@@ -1182,7 +1183,7 @@ Format:
   horizontal axis) and 4 mushrooms. This is a behavior fixture, not a Java
   block-for-block parity claim; the simple-provider RNG caveat remains.
 
-## 2026-11-06 â€” Creaking heart is ported; pale moss remains unsupported
+## 2026-11-06 Ã¢â‚¬â€ Creaking heart is ported; pale moss remains unsupported
 
 - Context: Both remaining tree decorators were investigated. `creaking_heart`
   is self-contained, while `pale_moss` conditionally delegates its ground pass
@@ -1196,7 +1197,7 @@ Format:
   shipped pale-oak config becomes supported yet. Pale-oak support is gated on
   P1.3 tags and P2.5 vegetation patches.
 
-## 2026-11-06 â€” Ore features land, generator wiring waits for RNG parity
+## 2026-11-06 Ã¢â‚¬â€ Ore features land, generator wiring waits for RNG parity
 
 - Context: `OreFeature` and `ScatteredOreFeature` are self-contained once the
   four shipped target tags are known, but their positions flow through the
@@ -1212,7 +1213,7 @@ Format:
   stream, parameter-order feature indices, and `OreVeinifier`; see the
   "Ore wiring uses a lazy placement stream" entry below.
 
-## 2026-11-06 â€” Tags are flattened at extraction, not resolved at runtime
+## 2026-11-06 Ã¢â‚¬â€ Tags are flattened at extraction, not resolved at runtime
 
 - Context: P1.3 needs block/item/entity/fluid/game-event/damage-type/
   enchantment/POI/worldgen tag membership. The reference tree stores one JSON
@@ -1395,7 +1396,7 @@ Format:
   selector. The remaining 134 configured features keep executing.
 - Consequences: `pale_forest_flowers`, `flower_pale_garden`,
   `clay_with_dripleaves`, and `clay_pool_with_dripleaves` remain unsupported.
-## 2026-11-06 — Structure template foundation is loading/placement only
+## 2026-11-06 â€” Structure template foundation is loading/placement only
 
 - Context: P2.8 needs the vanilla structure NBT model and the
   `StructureTemplate.placeInWorld` coordinate math before starts, pieces,
@@ -1445,7 +1446,7 @@ Format:
   placement fixture remain open. The focused test embeds four shipped gzip
   files so it does not depend on the out-of-tree decompiled data.
 
-## 2026-11-06 — Item component patch representation and network omissions
+## 2026-11-06 â€” Item component patch representation and network omissions
 
 - Context: `ItemStack` only carried `{item, count}`. Vanilla 1.21.11 stores a
   stack as an item, a count, and a `DataComponentPatch` over the item
@@ -1480,7 +1481,7 @@ Format:
   still open. `HashedStack` component hashes are parsed but not reconstructed;
   serverbound click carried-item components remain hints, with the session
   cursor authoritative.
-## 2026-11-06 — P3.10 keeps the vanilla flag word and adds one internal shape bit
+## 2026-11-06 â€” P3.10 keeps the vanilla flag word and adds one internal shape bit
 
 - Context: Vanilla `Block.UPDATE_*` has no positive "shape update" bit; shape
   updates run unless `UPDATE_KNOWN_SHAPE` (16) is set. The task also asks for
@@ -1498,7 +1499,7 @@ Format:
 - Consequences: The queued flags can contain bit 1024, which is not a vanilla
   bit and must not be written to packet/NBT data.
 
-## 2026-11-06 — Neighbour updates are chunk-grouped and insertion-ordered
+## 2026-11-06 â€” Neighbour updates are chunk-grouped and insertion-ordered
 
 - Context: Folia runs neighbour updates per region, and a world-global
   hash-map iteration would make the order depend on process hash seeds.
@@ -1514,7 +1515,7 @@ Format:
   same-source position in a higher chunk, unlike Java's recursive order. The
   queue is world-global for now; `drain_chunk` exists for future region ticks.
 
-## 2026-11-06 — Scheduled ticks are world-global but LevelTicks-ordered
+## 2026-11-06 â€” Scheduled ticks are world-global but LevelTicks-ordered
 
 - Context: Chunk storage cannot yet persist block ticks, and the port has no
   ticket-owned loaded-chunk container set. A world-level queue is enough to
@@ -1530,7 +1531,7 @@ Format:
   callback cannot cancel a sibling already collected for the same tick. These
   gaps are recorded in `BLOCKERS.md`.
 
-## 2026-11-06 — Random ticks use a stable per-chunk hash, not Java Level.random
+## 2026-11-06 â€” Random ticks use a stable per-chunk hash, not Java Level.random
 
 - Context: Java's random ticks draw from the level `RandomSource` sequence,
   which depends on every prior world RNG consumer. Feature/level RNG parity is
@@ -1547,7 +1548,7 @@ Format:
   fixture is still needed. Empty sections are sampled and filtered instead of
   using Folia's per-section ticking-block list, which is simpler but slower.
 
-## 2026-11-06 — The P3.10 behaviour table is hard-coded and explicit
+## 2026-11-06 â€” The P3.10 behaviour table is hard-coded and explicit
 
 - Context: P1.5 block metadata does not exist, so only a small set of blocks
   can implement vanilla neighbour/random behaviour without guessing.
@@ -2212,7 +2213,7 @@ Format:
   extraction, and campfire slot count/lit state must be widened when the
   campfire block entity lands. Furnace fuel crafting remainders are only handled
   for lava buckets (to empty buckets).
-## 2026-11-06 — Item prototypes are a Java dump, not a hand-written table
+## 2026-11-06 â€” Item prototypes are a Java dump, not a hand-written table
 
 - Context: Stack limits, durability, tool rules, food values, equippable slots,
   enchantability, repair ingredients, fire resistance, and rarity were guessed
@@ -2334,7 +2335,7 @@ Format:
   owns spectator/trigger-ignoring filtering.
 - Decision: Redstone-torch burn-out uses vanilla's
   `RedstoneTorchBlock` constants: eight off toggles within 60 ticks, then a
-  160-tick restart delay. The task brief's “60 toggles in 60 ticks” is a
+  160-tick restart delay. The task brief's â€œ60 toggles in 60 ticksâ€ is a
   shorthand; the decompiled source is authoritative. Toggles are kept in
   `TickState::torch_toggles`.
 - Decision: Wire connection shape is recomputed from `getConnectingSide` and
@@ -3213,3 +3214,43 @@ Format:
   20-tick cycle, and four-per-tick refill out of water.
 - `join.rs` does not call it yet; water/eye-submersion detection, water-breathing
   and respiration enchantments, and bubble columns remain open.
+## 2026-11-07 - Final configured features and the level capability hooks
+
+- `FeatureLevel` now exposes three explicit defaults:
+  `seed()` (the globally configured generator's seed, else `0`),
+  `biome_at(pos)` (`None` when the level cannot resolve biomes), and
+  `spawn_entity(FeatureEntity)` (`false` when the level has no entity sink).
+  `WorldGenRegion` overrides all three: `with_seed` pins the geode/end-spike
+  seed, `biome_at` reads the generated chunk's 4x4x4 biome palette, and
+  `spawn_entity` records descriptors next to block-entity payloads.
+  Production startup already installs the generator through
+  `worldgen::generator::configure`, so the seed default reaches the real level
+  seed; direct `WorldGenerator::overworld(seed)` harnesses use `with_seed` when
+  they need a different one.
+- `root_system` is supported. The earlier blocker was a misread of the shipped
+  placement: `rooted_azalea_tree` uses `environment_scan` + `random_offset
+  y=-1`, so the feature origin is the air block *below* a solid support, not
+  the surface air block. Moving up then reaches the real candidate whose
+  `allowed_tree_position` `[0,-1,0]` arm sees that support, exactly as
+  `RootSystemFeature.placeDirtAndTree` does. `tree.rs` preserves the Java draw
+  order for rooted-dirt and hanging-root attempts.
+- `freeze_top_layer` reads `WorldGenRegion`'s chunk biome cells, not a guessed
+  climate. `misc.rs` implements `shouldFreeze`/`shouldSnow` through
+  `height_adjusted_temperature`, the shipped `has_precipitation=false` biome
+  list (the extractor does not carry that flag yet), the four-side
+  `mustBeAtEdge` water rule, and the `snow_layer_can_survive_on` tags.
+  Generation-time block light is `0`; the `<10` gate is documented in the
+  feature.
+- `end_spike` uses `worldgen::end::end_spikes_for_seed(level.seed())` when the
+  config's `spikes` list is empty, writes the same obsidian pillar/cage/fire
+  blocks as `worldgen::end::place_spike`, and queues an `EndCrystal`
+  `FeatureEntity` with `ShowBottom`, `Paper.GeneratedByDragonFight`, optional
+  `beam_target`, and optional `Invulnerable` NBT. The entity itself is not
+  spawned by the generation layer, matching how structure templates return
+  entity descriptors.
+- `fossil` remains explicitly unsupported. `assets/structure_templates.json`
+  contains only `minecraft:village/**`; `minecraft:fossil/spine_*` and
+  `minecraft:fossil/skull_*` are absent, and `FeatureLevel` has no template
+  provider. The error names both missing pieces.
+- Consequence: 222/224 configured features dispatch as supported. The two
+  remaining unsupported configs are `fossil_coal` and `fossil_diamonds`.

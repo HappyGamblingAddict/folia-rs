@@ -48,10 +48,10 @@ use aquatic::{
 };
 use caves::{DripstoneClusterFeature, LargeDripstoneFeature, PointedDripstoneFeature};
 use end::{
-    ChorusPlantFeature, EndGatewayFeature, EndIslandFeature, EndPlatformFeature,
+    ChorusPlantFeature, EndGatewayFeature, EndIslandFeature, EndPlatformFeature, EndSpikeFeature,
     VoidStartPlatformFeature,
 };
-use misc::{BonusChestFeature, DesertWellFeature, MonsterRoomFeature};
+use misc::{BonusChestFeature, DesertWellFeature, FreezeTopLayerFeature, MonsterRoomFeature};
 use mushroom::{
     BlockBlobFeature, FillLayerFeature, GlowstoneFeature, HugeFungusFeature, HugeMushroomFeature,
     NetherForestVegetationFeature, RandomBooleanSelectorFeature,
@@ -59,7 +59,7 @@ use mushroom::{
 use sculk::SculkPatchFeature;
 use terrain::{
     BasaltColumnsFeature, BasaltPillarFeature, BlueIceFeature, DeltaFeature, DiskFeature,
-    IceSpikeFeature, IcebergFeature, LakeFeature, ReplaceBlobsFeature, SpringFeature,
+    GeodeFeature, IceSpikeFeature, IcebergFeature, LakeFeature, ReplaceBlobsFeature, SpringFeature,
 };
 use vegetation::{
     BlockColumnFeature, BlockPileFeature, MultifaceGrowthFeature, RandomPatchFeature,
@@ -71,7 +71,7 @@ pub use placement::{
     BlockPredicate, HeightProvider, Heightmap, IntProvider, PlacementFailure, PlacementModifier,
     PlacementModifierKind, PlacementWorld, UnsupportedModifier, VerticalAnchor, WeightedEntry,
 };
-pub use tree::{FallenTreeFeature, TreeFeature};
+pub use tree::{FallenTreeFeature, RootSystemFeature, TreeFeature};
 
 const FEATURE_DATA: &str = include_str!("../../../assets/feature_data.json");
 
@@ -163,6 +163,33 @@ pub trait FeatureLevel {
     fn height(&self) -> i32;
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState>;
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool;
+
+    /// `Level.getSeed()`.
+    ///
+    /// Levels that do not carry a seed use the globally configured generator's
+    /// seed when startup installed one, otherwise the explicit `0` fallback.
+    /// [`WorldGenRegion`] can pin an exact seed through [`WorldGenRegion::with_seed`].
+    fn seed(&self) -> i64 {
+        crate::worldgen::generator::configured().map_or(0, |generator| generator.seed())
+    }
+
+    /// `LevelReader.getBiome(pos)` as a namespaced biome id.
+    ///
+    /// Most feature levels cannot resolve biomes; they return `None` and
+    /// features that need `Biome.shouldFreeze`/`shouldSnow` fail closed.
+    /// [`WorldGenRegion`] reads the generated chunk's biome palette.
+    fn biome_at(&self, _pos: BlockPos) -> Option<&str> {
+        None
+    }
+
+    /// `ServerLevelAccessor.addFreshEntity` for feature-spawned entities.
+    ///
+    /// Generation is block-first in this port, so levels without an entity
+    /// sink return `false`. [`WorldGenRegion`] records the descriptor for its
+    /// caller instead of pretending the entity exists.
+    fn spawn_entity(&mut self, _entity: FeatureEntity) -> bool {
+        false
+    }
 
     /// `ChunkGenerator.getSeaLevel()`.
     ///
@@ -260,14 +287,30 @@ pub struct FeatureBlockEntity {
     pub nbt: Tag,
 }
 
+/// An entity descriptor produced by a feature.
+///
+/// `nbt` is the entity's saved payload (without the position fields that are
+/// already in `pos`). The caller creates the actual entity, matching how
+/// structure templates return [`crate::worldgen::structure::template::PlacedEntity`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeatureEntity {
+    pub entity_type: String,
+    pub pos: (f64, f64, f64),
+    pub yaw: f32,
+    pub pitch: f32,
+    pub nbt: Option<Tag>,
+}
+
 /// Chunk-bounded `WorldGenLevel` passed to features.
 #[derive(Debug)]
 pub struct WorldGenRegion<'a> {
     chunk: &'a mut Chunk,
     min_y: i32,
     height: i32,
+    seed: Option<i64>,
     scheduled_ticks: ScheduledTickQueue,
     block_entities: Vec<FeatureBlockEntity>,
+    entities: Vec<FeatureEntity>,
 }
 
 impl<'a> WorldGenRegion<'a> {
@@ -276,9 +319,20 @@ impl<'a> WorldGenRegion<'a> {
             chunk,
             min_y,
             height,
+            seed: None,
             scheduled_ticks: ScheduledTickQueue::new(),
             block_entities: Vec::new(),
+            entities: Vec::new(),
         }
+    }
+
+    /// Pins `Level.getSeed()` for features that build seed-derived noise or
+    /// entity layouts. `WorldGenerator` reaches the global registered seed
+    /// through the default [`FeatureLevel::seed`] implementation; this builder
+    /// is for focused harnesses and direct callers.
+    pub fn with_seed(mut self, seed: i64) -> Self {
+        self.seed = Some(seed);
+        self
     }
 
     /// Scheduled ticks queued by this region. Vanilla schedules at the current
@@ -301,6 +355,16 @@ impl<'a> WorldGenRegion<'a> {
     /// Takes the pending block entities so the caller can persist them.
     pub fn take_block_entities(&mut self) -> Vec<FeatureBlockEntity> {
         std::mem::take(&mut self.block_entities)
+    }
+
+    /// Entity descriptors produced through [`FeatureLevel::spawn_entity`].
+    pub fn entities(&self) -> &[FeatureEntity] {
+        &self.entities
+    }
+
+    /// Takes the pending entity descriptors so the caller can spawn them.
+    pub fn take_entities(&mut self) -> Vec<FeatureEntity> {
+        std::mem::take(&mut self.entities)
     }
 
     /// Maps absolute coordinates to chunk-local coordinates, returning `None`
@@ -343,6 +407,22 @@ impl FeatureLevel for WorldGenRegion<'_> {
             return false;
         };
         self.chunk.set_block_state(x, y, z, state);
+        true
+    }
+
+    fn seed(&self) -> i64 {
+        self.seed.unwrap_or_else(|| {
+            crate::worldgen::generator::configured().map_or(0, |generator| generator.seed())
+        })
+    }
+
+    fn biome_at(&self, pos: BlockPos) -> Option<&str> {
+        let (x, y, z) = self.local(pos)?;
+        self.chunk.biome(x, y, z).map(String::as_str)
+    }
+
+    fn spawn_entity(&mut self, entity: FeatureEntity) -> bool {
+        self.entities.push(entity);
         true
     }
 
@@ -444,19 +524,10 @@ impl fmt::Display for UnsupportedFeature {
 /// The exact capability a still-unsupported configured feature needs.
 fn unsupported_capability(vanilla_type: &str) -> Option<&'static str> {
     Some(match vanilla_type {
-        "minecraft:geode" => {
-            "requires FeatureLevel::seed for its NormalNoise; generator wiring is outside this slice"
-        }
-        "minecraft:freeze_top_layer" => {
-            "requires FeatureLevel::biome_at for Biome.shouldFreeze/shouldSnow"
-        }
-        "minecraft:end_spike" => "requires the level seed and EndCrystal entity spawning",
         "minecraft:fossil" => {
-            "requires a StructureTemplateManager; the feature level has no template access"
-        }
-        "minecraft:root_system" => {
-            "requires an origin that is air while the candidate's support is azalea_grows_on, \
-             which the shipped predicate/bytecode order makes unreachable"
+            "requires a StructureTemplateManager and the fossil structure NBT \
+             (`minecraft:fossil/spine_*`, `minecraft:fossil/skull_*`); \
+             assets/structure_templates.json ships only minecraft:village/** templates"
         }
         _ => return None,
     })
@@ -575,6 +646,14 @@ pub enum ConfiguredFeatureKind {
     MonsterRoom(MonsterRoomFeature),
     /// `minecraft:sculk_patch`.
     SculkPatch(Box<SculkPatchFeature>),
+    /// `minecraft:geode`.
+    Geode(Box<GeodeFeature>),
+    /// `minecraft:freeze_top_layer`.
+    FreezeTopLayer(FreezeTopLayerFeature),
+    /// `minecraft:end_spike`.
+    EndSpike(Box<EndSpikeFeature>),
+    /// `minecraft:root_system`.
+    RootSystem(Box<RootSystemFeature>),
     /// Parsed and validated, but the vanilla feature type has no port yet.
     Unsupported {
         vanilla_type: String,
@@ -804,6 +883,10 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::DesertWell(_) => "minecraft:desert_well",
             ConfiguredFeatureKind::MonsterRoom(_) => "minecraft:monster_room",
             ConfiguredFeatureKind::SculkPatch(_) => "minecraft:sculk_patch",
+            ConfiguredFeatureKind::Geode(_) => "minecraft:geode",
+            ConfiguredFeatureKind::FreezeTopLayer(_) => "minecraft:freeze_top_layer",
+            ConfiguredFeatureKind::EndSpike(_) => "minecraft:end_spike",
+            ConfiguredFeatureKind::RootSystem(_) => "minecraft:root_system",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
         }
     }
@@ -863,6 +946,10 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::DesertWell(_)
                 | ConfiguredFeatureKind::MonsterRoom(_)
                 | ConfiguredFeatureKind::SculkPatch(_)
+                | ConfiguredFeatureKind::Geode(_)
+                | ConfiguredFeatureKind::FreezeTopLayer(_)
+                | ConfiguredFeatureKind::EndSpike(_)
+                | ConfiguredFeatureKind::RootSystem(_)
         )
     }
 
@@ -969,6 +1056,12 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::DesertWell(feature) => Ok(feature.place(level, random, origin)),
             ConfiguredFeatureKind::MonsterRoom(feature) => Ok(feature.place(level, random, origin)),
             ConfiguredFeatureKind::SculkPatch(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::Geode(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::FreezeTopLayer(feature) => {
+                Ok(feature.place(level, random, origin))
+            }
+            ConfiguredFeatureKind::EndSpike(feature) => Ok(feature.place(level, random, origin)),
+            ConfiguredFeatureKind::RootSystem(feature) => feature.place(level, random, origin),
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
                 vanilla_type: vanilla_type.clone(),
@@ -1321,6 +1414,7 @@ fn parse_configured(
     let mut simple_selectors = Vec::new();
     let mut vegetation_patches = Vec::new();
     let mut trees = Vec::new();
+    let mut root_systems = Vec::new();
     let mut selectors = Vec::new();
     for (name, entry) in entries {
         let entry = entry
@@ -1347,9 +1441,14 @@ fn parse_configured(
             }
             "minecraft:tree" | "minecraft:fallen_tree" => {
                 // Pale oak trees embed `pale_moss_patch`, which is itself a
-                // vegetation patch, so trees resolve after patches. Root
-                // systems embed a placed tree, so they resolve with trees too.
+                // vegetation patch, so trees resolve after patches.
                 trees.push((id, vanilla_type.to_owned(), entry.clone()));
+                continue;
+            }
+            "minecraft:root_system" => {
+                // Root systems embed a placed tree, so they resolve after the
+                // whole tree group has been parsed.
+                root_systems.push((id, vanilla_type.to_owned(), entry.clone()));
                 continue;
             }
             "minecraft:random_selector" | "minecraft:random_boolean_selector" => {
@@ -1383,6 +1482,11 @@ fn parse_configured(
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
     }
     for (id, vanilla_type, entry) in trees {
+        let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
+            .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
+        configured.insert(id.clone(), ConfiguredFeature { id, kind });
+    }
+    for (id, vanilla_type, entry) in root_systems {
         let kind = parse_configured_kind(&id, &vanilla_type, &entry, &configured, Some(placed))
             .map_err(|error| invalid(format!("configured feature {id}: {error}")))?;
         configured.insert(id.clone(), ConfiguredFeature { id, kind });
@@ -1626,6 +1730,23 @@ fn parse_configured_kind(
             Some(feature) => ConfiguredFeatureKind::SculkPatch(Box::new(feature)),
             None => unsupported(),
         }),
+        "minecraft:geode" => Ok(match terrain::parse_geode_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::Geode(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:freeze_top_layer" => {
+            Ok(ConfiguredFeatureKind::FreezeTopLayer(FreezeTopLayerFeature))
+        }
+        "minecraft:end_spike" => Ok(match end::parse_end_spike_config(config)? {
+            Some(feature) => ConfiguredFeatureKind::EndSpike(Box::new(feature)),
+            None => unsupported(),
+        }),
+        "minecraft:root_system" => Ok(
+            match tree::parse_root_system_config(config, configured, placed, id)? {
+                Some(feature) => ConfiguredFeatureKind::RootSystem(Box::new(feature)),
+                None => unsupported(),
+            },
+        ),
         _ => Ok(unsupported()),
     }
 }
@@ -2256,8 +2377,8 @@ mod tests {
     fn unsupported_features_fail_loudly() {
         let data = FeatureData::vanilla();
         let feature = data
-            .configured("minecraft:freeze_top_layer")
-            .expect("freeze_top_layer is in the dump");
+            .configured("minecraft:fossil_coal")
+            .expect("fossil_coal is in the dump");
         assert!(!feature.is_supported());
         let mut chunk = chunk();
         let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
@@ -2265,9 +2386,26 @@ mod tests {
         let error = feature
             .place(&mut level, &mut random, BlockPos::new(0, 0, 0))
             .expect_err("unported feature must not pretend to place");
-        assert_eq!(error.feature, "minecraft:freeze_top_layer");
-        assert_eq!(error.vanilla_type, "minecraft:freeze_top_layer");
+        assert_eq!(error.feature, "minecraft:fossil_coal");
+        assert_eq!(error.vanilla_type, "minecraft:fossil");
         assert!(level.chunk.sections.is_empty());
+    }
+
+    #[test]
+    fn final_configured_features_are_dispatched_as_supported() {
+        let data = FeatureData::vanilla();
+        for (id, vanilla_type) in [
+            ("minecraft:amethyst_geode", "minecraft:geode"),
+            ("minecraft:freeze_top_layer", "minecraft:freeze_top_layer"),
+            ("minecraft:end_spike", "minecraft:end_spike"),
+            ("minecraft:rooted_azalea_tree", "minecraft:root_system"),
+        ] {
+            let feature = data
+                .configured(id)
+                .unwrap_or_else(|| panic!("{id} is in the dump"));
+            assert!(feature.is_supported(), "{id} should be executable");
+            assert_eq!(feature.vanilla_type(), vanilla_type);
+        }
     }
 
     #[test]

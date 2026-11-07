@@ -1,16 +1,17 @@
 //! End dimension and void feature ports.
 //!
 //! Ports `ChorusPlantFeature`, `EndIslandFeature`, `EndGatewayFeature`,
-//! `EndPlatformFeature`, and `VoidStartPlatformFeature` from the decompiled
-//! 1.21.11 tree. These features write block states only; the gateway's exit
-//! coordinate is attached through the existing [`FeatureLevel`] block-entity
-//! sink. `EndSpikeFeature` stays unsupported because it needs the level seed
-//! plus End-crystal entity spawning.
+//! `EndPlatformFeature`, `VoidStartPlatformFeature`, and `SpikeFeature` from
+//! the decompiled 1.21.11 tree. These features write block states only; the
+//! gateway's exit coordinate is attached through the existing [`FeatureLevel`]
+//! block-entity sink and the end spike's crystal is returned as a
+//! [`super::FeatureEntity`] descriptor.
 
 use super::support::{optional_bool, set_property, state, state_with};
-use super::{FeatureLevel, is_air_name};
+use super::{FeatureEntity, FeatureLevel, is_air_name};
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
+use crate::worldgen::end::{EndSpike, end_spikes_for_seed};
 use folia_math::{BlockPos, Direction};
 use folia_random::RandomSource;
 use serde_json::Value;
@@ -379,4 +380,211 @@ impl VoidStartPlatformFeature {
         }
         true
     }
+}
+
+/// `SpikeFeature` (`minecraft:end_spike`).
+#[derive(Debug, Clone)]
+pub struct EndSpikeFeature {
+    crystal_invulnerable: bool,
+    crystal_beam_target: Option<BlockPos>,
+    spikes: Vec<EndSpike>,
+}
+
+impl EndSpikeFeature {
+    pub(crate) fn place(
+        &self,
+        level: &mut dyn FeatureLevel,
+        random: &mut dyn RandomSource,
+        origin: BlockPos,
+    ) -> bool {
+        let spikes = if self.spikes.is_empty() {
+            end_spikes_for_seed(level.seed())
+        } else {
+            self.spikes.clone()
+        };
+        let chunk_x = origin.x().div_euclid(16);
+        let chunk_z = origin.z().div_euclid(16);
+        for spike in spikes {
+            if spike.chunk_x() == chunk_x && spike.chunk_z() == chunk_z {
+                place_spike(level, random, &spike, self);
+            }
+        }
+        true
+    }
+}
+
+fn place_spike(
+    level: &mut dyn FeatureLevel,
+    random: &mut dyn RandomSource,
+    spike: &EndSpike,
+    config: &EndSpikeFeature,
+) {
+    let radius = spike.radius;
+    let min_x = spike.center_x - radius;
+    let max_x = spike.center_x + radius;
+    let min_z = spike.center_z - radius;
+    let max_z = spike.center_z + radius;
+    let max_y = spike.height + 10;
+
+    let obsidian = state("minecraft:obsidian");
+    let air = state("minecraft:air");
+    for y in level.min_y()..=max_y {
+        for z in min_z..=max_z {
+            for x in min_x..=max_x {
+                let dx = i64::from(x - spike.center_x);
+                let dz = i64::from(z - spike.center_z);
+                let within = dx * dx + dz * dz <= i64::from(radius) * i64::from(radius) + 1;
+                let pos = BlockPos::new(x, y, z);
+                if within && y < spike.height {
+                    level.set_block(pos, obsidian.clone());
+                } else if y > 65 {
+                    level.set_block(pos, air.clone());
+                }
+            }
+        }
+    }
+
+    if spike.guarded {
+        for z_offset in -2i32..=2 {
+            for x_offset in -2i32..=2 {
+                for y_offset in 0..=3 {
+                    let outer_x = x_offset.abs() == 2;
+                    let outer_z = z_offset.abs() == 2;
+                    let top = y_offset == 3;
+                    if !(outer_x || outer_z || top) {
+                        continue;
+                    }
+                    let north_axis = outer_x || top;
+                    let east_axis = outer_z || top;
+                    let bars = state_with(
+                        "minecraft:iron_bars",
+                        &[
+                            ("waterlogged", "false"),
+                            ("north", bool_name(north_axis && z_offset != -2)),
+                            ("south", bool_name(north_axis && z_offset != 2)),
+                            ("west", bool_name(east_axis && x_offset != -2)),
+                            ("east", bool_name(east_axis && x_offset != 2)),
+                        ],
+                    );
+                    let pos = BlockPos::new(
+                        spike.center_x + x_offset,
+                        spike.height + y_offset,
+                        spike.center_z + z_offset,
+                    );
+                    level.set_block(pos, bars);
+                }
+            }
+        }
+    }
+
+    let (crystal_x, crystal_y, crystal_z) = spike.crystal_position();
+    let crystal_pos = BlockPos::new(crystal_x, crystal_y, crystal_z);
+    level.set_block(crystal_pos.below(), state("minecraft:bedrock"));
+    level.set_block(crystal_pos, state("minecraft:fire"));
+    level.spawn_entity(FeatureEntity {
+        entity_type: "minecraft:end_crystal".to_owned(),
+        pos: (
+            f64::from(spike.center_x) + 0.5,
+            f64::from(spike.height) + 1.0,
+            f64::from(spike.center_z) + 0.5,
+        ),
+        yaw: random.next_float() * 360.0,
+        pitch: 0.0,
+        nbt: Some(end_crystal_nbt(config)),
+    });
+}
+
+fn end_crystal_nbt(config: &EndSpikeFeature) -> Tag {
+    let mut fields = vec![
+        ("ShowBottom".to_owned(), Tag::Byte(1)),
+        ("Paper.GeneratedByDragonFight".to_owned(), Tag::Byte(1)),
+    ];
+    if let Some(target) = config.crystal_beam_target {
+        fields.push((
+            "beam_target".to_owned(),
+            Tag::IntArray(vec![target.x(), target.y(), target.z()]),
+        ));
+    }
+    if config.crystal_invulnerable {
+        fields.push(("Invulnerable".to_owned(), Tag::Byte(1)));
+    }
+    Tag::Compound(fields)
+}
+
+fn bool_name(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+pub(crate) fn parse_end_spike_config(config: &Value) -> io::Result<Option<EndSpikeFeature>> {
+    let object = config
+        .as_object()
+        .ok_or_else(|| invalid("end_spike config must be an object"))?;
+    let crystal_invulnerable = optional_bool(object, "crystal_invulnerable", false);
+    let crystal_beam_target = match object.get("crystal_beam_target") {
+        None => None,
+        Some(value) => Some(parse_spike_position(value, "crystal_beam_target")?),
+    };
+    let mut spikes = Vec::new();
+    if let Some(list) = object.get("spikes") {
+        let list = list
+            .as_array()
+            .ok_or_else(|| invalid("end_spike `spikes` must be a list"))?;
+        for value in list {
+            let spike = value
+                .as_object()
+                .ok_or_else(|| invalid("end_spike entry must be an object"))?;
+            let center_x = optional_int(spike, "centerX", 0)?;
+            let center_z = optional_int(spike, "centerZ", 0)?;
+            let radius = optional_int(spike, "radius", 0)?;
+            let height = optional_int(spike, "height", 0)?;
+            if radius < 0 {
+                return Err(invalid("end_spike radius must not be negative"));
+            }
+            spikes.push(EndSpike {
+                center_x,
+                center_z,
+                radius,
+                height,
+                guarded: optional_bool(spike, "guarded", false),
+            });
+        }
+    }
+    Ok(Some(EndSpikeFeature {
+        crystal_invulnerable,
+        crystal_beam_target,
+        spikes,
+    }))
+}
+
+fn optional_int(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: i32,
+) -> io::Result<i32> {
+    match object.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| invalid(format!("end_spike `{key}` must be an i32"))),
+    }
+}
+
+fn parse_spike_position(value: &Value, key: &str) -> io::Result<BlockPos> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid(format!("end_spike `{key}` must be a position list")))?;
+    if values.len() != 3 {
+        return Err(invalid(format!("end_spike `{key}` must have three values")));
+    }
+    let mut coords = [0i32; 3];
+    for (index, value) in values.iter().enumerate() {
+        coords[index] = i32::try_from(
+            value
+                .as_i64()
+                .ok_or_else(|| invalid(format!("end_spike `{key}` must contain integers")))?,
+        )
+        .map_err(|_| invalid(format!("end_spike `{key}` coordinate does not fit in i32")))?;
+    }
+    Ok(BlockPos::new(coords[0], coords[1], coords[2]))
 }

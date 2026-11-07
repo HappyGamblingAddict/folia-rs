@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1141 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1179 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -46,6 +46,14 @@ cargo build --workspace: clean
 native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
+
+Latest merged wave (2026-11-07): fossils, trial-chamber templates, portal-driven
+live dimension switching, target blocks + dispenser/dropper automation, anvil
+combine/repair/rename, Nether fortress and End city pieces, deeper pathfinding,
+and the 3x3 feature biome region. All 224 configured feature types execute and
+the shipped structure catalogs total 1,202 templates. Session writes now poll
+shutdown through short socket timeouts, so a client that stops reading cannot
+delay the save path.
 
 Worldgen parity on the 16-column fixture:
 

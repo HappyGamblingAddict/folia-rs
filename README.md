@@ -40,7 +40,7 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   chunk `(0,-1)` match Java within `1e-9`.
 - Chunk differential: at 16 sampled Java chunk columns, bedrock layers match
   exactly, block-class agreement (solid/air/water/lava) is 98.75%, exact block
-  names are 95.80%, and surface heights differ by 0.62 blocks on average. Exact
+  names are 95.88%, and surface heights differ by 0.62 blocks on average. Exact
   names were 92.04% before ore/vein wiring.
 - Multi-noise biome sampling: the real overworld parameter list and all 1536
   biome cells of chunk `(0,-1)` match the Java server exactly.
@@ -97,8 +97,11 @@ classes. With no plugin jars the server runs fully native and never loads Java.
   foliage providers, and waterlogged mangrove roots are supported.
 - Structure-template foundation: gzip 1.21.11 structure NBT loading (palettes,
   blocks, block-entity NBT, entities), Java mirror/rotation/pivot/origin
-  transforms, and placement through the feature write API. Structure starts and
-  jigsaw expansion are not wired into chunk generation yet.
+  transforms, and placement through the feature write API. Recursive jigsaw
+  placement and feature pools are wired into chunk generation; the shipped
+  catalogs cover 1,202 templates (483 village, 528 non-village, 191 trial
+  chamber), and Nether fortress / End city procedural pieces are ported. Terrain
+  adaptation and exact cross-chunk height sampling remain.
 - Anvil `.mca` region reader/writer with gzip/zlib/uncompressed chunks.
 - Chunk section decoder: block-state and biome palettes, packed indices.
 - Chunk encoder: generated chunks round-trip through Anvil storage.
@@ -236,7 +239,7 @@ add the same TCP 25565 allow rule in AVG's firewall settings.
 Run the core test suite:
 
 ```powershell
-cargo test --workspace    # 1141 tests
+cargo test --workspace    # 1179 tests
 ```
 
 The baseline is clean: `cargo fmt --check` and

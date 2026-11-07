@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1141 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1179 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -28,7 +28,7 @@ where possible, a differential test against the Java oracle.
 |---|---:|---|
 | Foundation (M0-M2) | 90-92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~82% | Density (interpolated veins), biomes, aquifers, surface, carvers, ores, Nether/End generators, dimension storage |
-| Full worldgen | ~76% | 222/224 configured feature types, 888/888 modifiers, recursive jigsaw + feature pools, 1,011 shipped templates; fossils and trial chambers missing |
+| Full worldgen | ~80% | 224/224 configured feature types, 888/888 modifiers, recursive jigsaw + feature pools, 1,202 shipped templates (village, non-village, trial chambers), Nether fortress / End city pieces; terrain adaptation and exact height/start caching missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, shape occlusion, incremental queues, cross-chunk payloads; Java fixtures and exact occlusion columns missing |
 | Player simulation | ~42% | Movement/collision/fall damage, break/tools/drops, hunger, air/drowning, XP curve; live food/air ticks and special movement missing |
 | Entities | ~35% | Metadata, attributes, equipment, effects, damage/death, goals/pathfinding/spawn, join tracking, item/XP entities, shared viewer tracker; live AI and per-type ranges missing |
@@ -42,6 +42,19 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: salvage wave - fossil features now use the shipped catalog
+  (`feature/misc.rs`); `structure_templates_trial.json` ships 191 trial-chamber
+  templates (`assets.rs`, `tests/trial_catalog.rs`, 1,202 templates total);
+  `dimension.rs`/`join.rs` add portal-driven live dimension switching with
+  per-dimension playerdata preservation; `redstone.rs` adds target blocks,
+  dispenser/dropper rising-edge firing, projectile/equipment dispensing, and
+  block-entity preservation across the `triggered` property update;
+  `enchanting.rs` adds anvil combine/repair/rename; `fortress.rs`/`end_city.rs`
+  port the Nether fortress and End city pieces; `entity_ai.rs` adds diagonal
+  moves, doors, and stuck detection; `generator.rs` uses a 3x3 biome region for
+  decoration. CI gate: 1,179 tests, fmt/clippy/release green on Windows +
+  Ubuntu. Session writes poll shutdown via short socket timeouts so a client
+  that stops reading cannot delay the save path.
 - 2026-11-07: P2.3 `NoiseChunk` vein interpolation — `worldgen/density.rs`
   models `minecraft:interpolated` as its own node: direct `compute` keeps
   Java's unwrapped semantics, while `compute_interpolated` samples the wrapped

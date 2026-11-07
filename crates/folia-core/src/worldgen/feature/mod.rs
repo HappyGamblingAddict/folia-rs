@@ -20,6 +20,7 @@ use crate::nbt::Tag;
 use crate::tick::{ScheduledTickQueue, TickPriority};
 use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::biome_zoom::BiomeZoomer;
+use crate::worldgen::structure::template::StructureTemplate;
 use folia_math::BlockPos;
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
@@ -51,7 +52,9 @@ use end::{
     ChorusPlantFeature, EndGatewayFeature, EndIslandFeature, EndPlatformFeature, EndSpikeFeature,
     VoidStartPlatformFeature,
 };
-use misc::{BonusChestFeature, DesertWellFeature, FreezeTopLayerFeature, MonsterRoomFeature};
+use misc::{
+    BonusChestFeature, DesertWellFeature, FossilFeature, FreezeTopLayerFeature, MonsterRoomFeature,
+};
 use mushroom::{
     BlockBlobFeature, FillLayerFeature, GlowstoneFeature, HugeFungusFeature, HugeMushroomFeature,
     NetherForestVegetationFeature, RandomBooleanSelectorFeature,
@@ -189,6 +192,15 @@ pub trait FeatureLevel {
     /// caller instead of pretending the entity exists.
     fn spawn_entity(&mut self, _entity: FeatureEntity) -> bool {
         false
+    }
+
+    /// `StructureTemplateManager.getOrCreate` for template-based features.
+    ///
+    /// Levels without a template manager return `None`; a feature that needs a
+    /// template must then fail explicitly instead of placing nothing.
+    /// [`WorldGenRegion`] resolves ids through the shipped catalogs.
+    fn template(&self, _id: &str) -> Option<&StructureTemplate> {
+        None
     }
 
     /// `ChunkGenerator.getSeaLevel()`.
@@ -426,6 +438,12 @@ impl FeatureLevel for WorldGenRegion<'_> {
         true
     }
 
+    fn template(&self, id: &str) -> Option<&StructureTemplate> {
+        crate::worldgen::structure::assets::StructureTemplateCatalog::shipped()
+            .template(id)
+            .ok()
+    }
+
     fn schedule_tick(&mut self, pos: BlockPos, block: &str, delay: u64) -> bool {
         self.scheduled_ticks
             .schedule_after(0, pos, block, delay, TickPriority::Normal)
@@ -500,37 +518,29 @@ impl Feature for NoOpFeature {
     }
 }
 
-/// A configured feature that has no Rust implementation yet.
+/// A configured feature that cannot execute in the current level.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedFeature {
     pub feature: String,
     pub vanilla_type: String,
+    /// Runtime detail for a supported feature that could not resolve a
+    /// capability (for example a missing structure template). `None` is the
+    /// "vanilla type has no port" case.
+    pub detail: Option<String>,
 }
 
 impl fmt::Display for UnsupportedFeature {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "configured feature {} uses {}, which is not ported yet",
+            "configured feature {} uses {}, which cannot execute here",
             self.feature, self.vanilla_type
         )?;
-        if let Some(capability) = unsupported_capability(&self.vanilla_type) {
-            write!(formatter, " ({capability})")?;
+        if let Some(detail) = &self.detail {
+            write!(formatter, " ({detail})")?;
         }
         Ok(())
     }
-}
-
-/// The exact capability a still-unsupported configured feature needs.
-fn unsupported_capability(vanilla_type: &str) -> Option<&'static str> {
-    Some(match vanilla_type {
-        "minecraft:fossil" => {
-            "requires a StructureTemplateManager and the fossil structure NBT \
-             (`minecraft:fossil/spine_*`, `minecraft:fossil/skull_*`); \
-             assets/structure_templates.json ships only minecraft:village/** templates"
-        }
-        _ => return None,
-    })
 }
 
 impl std::error::Error for UnsupportedFeature {}
@@ -650,6 +660,8 @@ pub enum ConfiguredFeatureKind {
     Geode(Box<GeodeFeature>),
     /// `minecraft:freeze_top_layer`.
     FreezeTopLayer(FreezeTopLayerFeature),
+    /// `minecraft:fossil`.
+    Fossil(Box<FossilFeature>),
     /// `minecraft:end_spike`.
     EndSpike(Box<EndSpikeFeature>),
     /// `minecraft:root_system`.
@@ -758,6 +770,7 @@ impl ResolvedPlacedFeature {
                 .map_err(|unsupported| UnsupportedFeature {
                     feature: self.id.clone(),
                     vanilla_type: unsupported.vanilla_type,
+                    detail: None,
                 })?;
             positions
         };
@@ -885,6 +898,7 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::SculkPatch(_) => "minecraft:sculk_patch",
             ConfiguredFeatureKind::Geode(_) => "minecraft:geode",
             ConfiguredFeatureKind::FreezeTopLayer(_) => "minecraft:freeze_top_layer",
+            ConfiguredFeatureKind::Fossil(_) => "minecraft:fossil",
             ConfiguredFeatureKind::EndSpike(_) => "minecraft:end_spike",
             ConfiguredFeatureKind::RootSystem(_) => "minecraft:root_system",
             ConfiguredFeatureKind::Unsupported { vanilla_type } => vanilla_type,
@@ -948,6 +962,7 @@ impl ConfiguredFeature {
                 | ConfiguredFeatureKind::SculkPatch(_)
                 | ConfiguredFeatureKind::Geode(_)
                 | ConfiguredFeatureKind::FreezeTopLayer(_)
+                | ConfiguredFeatureKind::Fossil(_)
                 | ConfiguredFeatureKind::EndSpike(_)
                 | ConfiguredFeatureKind::RootSystem(_)
         )
@@ -1060,11 +1075,21 @@ impl ConfiguredFeature {
             ConfiguredFeatureKind::FreezeTopLayer(feature) => {
                 Ok(feature.place(level, random, origin))
             }
+            ConfiguredFeatureKind::Fossil(feature) => {
+                feature
+                    .place(level, random, origin)
+                    .map_err(|detail| UnsupportedFeature {
+                        feature: self.id.clone(),
+                        vanilla_type: "minecraft:fossil".to_owned(),
+                        detail: Some(detail),
+                    })
+            }
             ConfiguredFeatureKind::EndSpike(feature) => Ok(feature.place(level, random, origin)),
             ConfiguredFeatureKind::RootSystem(feature) => feature.place(level, random, origin),
             ConfiguredFeatureKind::Unsupported { vanilla_type } => Err(UnsupportedFeature {
                 feature: self.id.clone(),
                 vanilla_type: vanilla_type.clone(),
+                detail: None,
             }),
         }
     }
@@ -1737,6 +1762,9 @@ fn parse_configured_kind(
         "minecraft:freeze_top_layer" => {
             Ok(ConfiguredFeatureKind::FreezeTopLayer(FreezeTopLayerFeature))
         }
+        "minecraft:fossil" => Ok(ConfiguredFeatureKind::Fossil(Box::new(
+            misc::parse_fossil_config(config)?,
+        ))),
         "minecraft:end_spike" => Ok(match end::parse_end_spike_config(config)? {
             Some(feature) => ConfiguredFeatureKind::EndSpike(Box::new(feature)),
             None => unsupported(),

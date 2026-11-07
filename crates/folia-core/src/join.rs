@@ -114,6 +114,8 @@ const VOID_DAMAGE: f32 = 4.0;
 const SERVERBOUND_CHANGE_GAME_MODE: i32 = 4;
 const SERVERBOUND_CHAT_COMMAND: i32 = 6;
 const SERVERBOUND_CHAT_COMMAND_SIGNED: i32 = 7;
+/// `ServerboundInteractPacket` in the 1.21.11 play protocol.
+const SERVERBOUND_INTERACT: i32 = 25;
 
 /// `ClientboundGameEventPacket.CHANGE_GAME_MODE`.
 const GAME_EVENT_CHANGE_GAME_MODE: u8 = 3;
@@ -1858,6 +1860,18 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             eprintln!("[join] command failed: {error}");
                         }
                     }
+                    SERVERBOUND_INTERACT => {
+                        if let Some(target) = parse_attack(&packet)
+                            && let Err(error) = handle_entity_attack(
+                                &mut stream,
+                                &session,
+                                &mut tracked_entities,
+                                target,
+                            )
+                        {
+                            eprintln!("[join] entity attack failed: {error}");
+                        }
+                    }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
                             let portal = {
@@ -2349,6 +2363,65 @@ fn epoch_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// `ServerboundInteractPacket` with action `ATTACK` (`ActionType` 1).
+fn parse_attack(payload: &[u8]) -> Option<i32> {
+    let mut reader = PacketReader::new(payload);
+    if reader.read_varint().ok()? != SERVERBOUND_INTERACT {
+        return None;
+    }
+    let entity_id = reader.read_varint().ok()?;
+    if reader.read_varint().ok()? != 1 {
+        return None;
+    }
+    reader.read_bool().ok()?;
+    Some(entity_id)
+}
+
+/// Apply the held item's attack damage to one session-owned entity. The
+/// vanilla attack-range check is approximated by the player's 3-block reach
+/// plus the target width.
+fn handle_entity_attack(
+    stream: &mut LoginStream,
+    session: &PlayerSession,
+    tracked: &mut SessionEntityTracker,
+    target: i32,
+) -> io::Result<()> {
+    let Some(entity) = tracked.entity(target) else {
+        return Ok(());
+    };
+    let reach = 3.0 + entity.entity.width;
+    let dx = entity.entity.x - session.x;
+    let dy = entity.entity.y - session.y;
+    let dz = entity.entity.z - session.z;
+    if dx * dx + dy * dy + dz * dz > reach * reach {
+        return Ok(());
+    }
+    let damage = held_attack_damage(session);
+    let Some(result) = tracked.damage(target, damage) else {
+        return Ok(());
+    };
+    if !result.damaged {
+        return Ok(());
+    }
+    for packet in &result.packets {
+        write_packet(stream, packet)?;
+    }
+    if result.died {
+        println!("[join] {} killed entity {target}", session.name);
+    }
+    Ok(())
+}
+
+fn held_attack_damage(session: &PlayerSession) -> f32 {
+    session
+        .inventory
+        .get(session.selected_slot.max(0) as usize)
+        .and_then(|stack| crate::item_prototypes::prototype(&stack.item))
+        .and_then(|prototype| prototype.tool.as_ref())
+        .and_then(|tool| tool.attack_damage)
+        .unwrap_or(1.0)
 }
 
 fn system_chat_packet(message: &str) -> io::Result<Vec<u8>> {
@@ -5118,6 +5191,38 @@ mod tests {
 
         // A replay reuses sequence 0, so the remote chain rejects it.
         assert!(handle_plain_chat(&session, &mut remote, &mut last_seen, &payload).is_err());
+    }
+
+    #[test]
+    fn attack_packet_parses_only_the_attack_action() {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(SERVERBOUND_INTERACT).unwrap();
+        writer.write_varint(42).unwrap();
+        writer.write_varint(1).unwrap();
+        writer.write_u8(0).unwrap();
+        assert_eq!(parse_attack(&writer.into_inner()), Some(42));
+
+        let mut writer = PacketWriter::new();
+        writer.write_varint(SERVERBOUND_INTERACT).unwrap();
+        writer.write_varint(42).unwrap();
+        writer.write_varint(0).unwrap();
+        writer.write_varint(0).unwrap(); // hand
+        writer.write_u8(0).unwrap();
+        assert_eq!(parse_attack(&writer.into_inner()), None);
+    }
+
+    #[test]
+    fn held_attack_damage_reads_the_item_prototype() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        assert_eq!(held_attack_damage(&session), 1.0);
+        session.inventory[session.selected_slot.max(0) as usize] =
+            crate::item_components::ItemStack::new("minecraft:diamond_sword", 1);
+        let expected = crate::item_prototypes::prototype("minecraft:diamond_sword")
+            .and_then(|prototype| prototype.tool.as_ref())
+            .and_then(|tool| tool.attack_damage)
+            .expect("diamond sword has attack damage");
+        assert_eq!(held_attack_damage(&session), expected);
+        assert!(expected > 1.0);
     }
 
     /// Chat is broadcast to every registered session, so skip commands that

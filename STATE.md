@@ -13,9 +13,10 @@ Last updated: 2026-11-07
   (2048-bit secure-chat benchmark); parity is **98.75% block-class / 95.80%
   exact-name**.
 - Formatting/Clippy: clean; no warnings.
-- Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
-  483 shipped village templates, recursive jigsaw, Nether carvers, End
-  spikes/gateways/chorus, dimension storage and portal math.
+- Worldgen: 222/224 configured feature types (all except fossil x2), 888/888
+  placement modifiers, 483 shipped village templates, recursive jigsaw, Nether
+  carvers, End spikes/gateways/chorus, geode/freeze/root-system features,
+  dimension storage and portal math.
 - Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
   leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
   tickers, region ownership, and live bridge chat/time/weather/sound/particles.
@@ -25,7 +26,8 @@ Last updated: 2026-11-07
 
 ## Current focus
 
-1. P2.8 feature-pool placement and the remaining six configured feature types.
+1. P2.8 feature-pool placement, non-village templates, and the two fossil
+   configured features (missing template NBT).
 2. P7 portal-driven dimension switching and non-village structure templates.
 3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
 4. P6 container menus/packets and deeper redstone/automation.
@@ -38,7 +40,7 @@ Last updated: 2026-11-07
 - [~] P1.4 components/prototypes (network codecs, hashing, fixtures).
 - [~] P1.5 shapes (support/occlusion/waterlogging/per-state random ticks).
 - [~] P1.7 loot/recipes (block/chest drops; entity loot next).
-- [~] P2.1/P2.2 218/224 feature types and all modifiers.
+- [~] P2.1/P2.2 222/224 feature types and all modifiers; only fossil x2 remain.
 - [~] P2.8 recursive jigsaw + village templates (feature pools/non-village).
 - [~] P3.5-P3.8 light (Java fixtures and exact occlusion columns).
 - [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
@@ -52,6 +54,16 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: final feature batch — `FeatureLevel` gains explicit `seed`,
+  `biome_at`, and `spawn_entity` hooks (with `WorldGenRegion::with_seed` and a
+  chunk-biome override); `terrain.rs` ports `GeodeFeature` layer/noise/crack
+  placement, `misc.rs` ports `SnowAndFreezeFeature`, `end.rs` ports
+  `SpikeFeature` with its EndCrystal descriptor, and `tree.rs` ports
+  `RootSystemFeature` with the real shipped predicate order. **222/224**
+  configured features execute; only `fossil_coal`/`fossil_diamonds` remain
+  explicit unsupported because the fossil NBT is not in the shipped template
+  catalog. Focused: 19 `feature_gaps`, 18 `vegetation`, 75
+  `worldgen::feature` lib tests; fmt/clippy clean.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,
@@ -71,7 +83,8 @@ Last updated: 2026-11-07
   `misc.rs` (bonus chest, desert well with suspicious-sand payloads, monster
   room with loot chests and spawner), and `sculk.rs` (SculkSpreader cursor
   loop, sculk/sculk-vein behavior, multiface vein spreading, catalyst/rare
-  shriekers). 218/224 configured features; 6 explicit unsupported remain.
+  shriekers). 218/224 configured features at that point; the final batch raises
+  the count to 222/224 and leaves only the two fossils unsupported.
   Focused: 15 `feature_gaps`, 18 `vegetation`, 74 `worldgen::feature` lib.
 - 2026-11-07: P8.2 chat signing core — `SignedMessageBody` 1.21.11 wire codec
   (content/timestamp/salt/packed last-seen), `ServerboundChat` parser/builder,

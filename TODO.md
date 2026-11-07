@@ -28,7 +28,7 @@ where possible, a differential test against the Java oracle.
 |---|---:|---|
 | Foundation (M0-M2) | 90-92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
 | Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
-| Full worldgen | ~73% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
+| Full worldgen | ~73% | 222/224 configured feature types (fossil x2 remain), 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
 | Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
 | Entities | ~32% | Metadata, attributes, equipment, raw damage/death, goals/pathfinding/spawn foundations, join tracking, item/XP entities; sensors/brains, shared per-viewer tracking, live AI goals missing |
@@ -49,6 +49,14 @@ where possible, a differential test against the Java oracle.
   custom effects to `StatusEffectSet`; `item_prototypes.rs` adds `FoodData`,
   consumable eat time/animation/use remainders, and food/potion consumption with
   creative no-consume. 16 `tests/brewing.rs` tests.
+- 2026-11-07: final configured-feature batch - `FeatureLevel` gains explicit
+  `seed`, `biome_at`, and `spawn_entity` hooks; `terrain.rs` ports `geode`,
+  `misc.rs` ports `freeze_top_layer`, `end.rs` ports `end_spike`, and `tree.rs`
+  ports `root_system` with the shipped predicate order. **222/224** configured
+  features execute; only `fossil_coal`/`fossil_diamonds` remain explicit
+  `Unsupported` because `assets/structure_templates.json` ships only village
+  templates. Focused: 19 `tests/feature_gaps.rs`, 18 `tests/vegetation.rs`, 75
+  `worldgen::feature` lib tests.
 - 2026-11-07: P2.5 feature completion batch - `feature/end.rs` ports
   `chorus_plant` (chorus plant/flower recursion with connection states),
   `end_island`, `end_gateway` (both shipped configs, including the
@@ -59,7 +67,8 @@ where possible, a differential test against the Java oracle.
   `feature/sculk.rs` ports `sculk_patch` via the full `SculkSpreader` cursor
   loop, sculk/sculk-vein charge behavior, `MultifaceSpreader` same-space/plane/
   wrap spreading, vein regrowth, charge decay, catalyst, and rare shrieker
-  growth. **218/224** configured features execute; the 6 remaining configs are
+  growth. **218/224** configured features execute at that point; the 6
+  remaining configs there are
   explicit `Unsupported` (`root_system`, `geode`, `freeze_top_layer`,
   `end_spike`, fossil x2). Focused: 15 `tests/feature_gaps.rs`, 18
   `tests/vegetation.rs`, 74 `worldgen::feature` lib tests; generator
@@ -1013,7 +1022,8 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   inline placed branch, and `simple_block.schedule_tick` queues a one-tick block
   tick through `crate::tick::ScheduledTickQueue`. 171/224 configured features
   executed after this batch; later selector/terrain slices raise that to
-  207/224, and the 2026-11-07 end/dungeon/sculk batch raises it to 218/224.
+  207/224, the 2026-11-07 end/dungeon/sculk batch raises it to 218/224, and the
+  final feature batch raises it to 222/224.
   Cactus and sugar cane already
   run through `block_column`, and lily pads through `simple_block`.
 - **Still open:** `random_selector`/`simple_random_selector` branch resolution
@@ -1051,9 +1061,10 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   and basalt/blackstone blobs; `caves.rs` ports pointed dripstone, dripstone
   clusters, and large dripstone. Cave vines, glow lichen, spore blossoms, and
   moss/clay patches were already covered by `multiface_growth` /
-  `vegetation_patch`. 12 of the 18 shipped cave/special configs now execute.
-  `root_system`, `sculk_patch`, and `geode` remain explicit unsupported paths;
-  see `BLOCKERS.md` for the exact missing primitives.
+  `vegetation_patch`. 12 of the 18 shipped cave/special configs executed at
+  that point. The 2026-11-07 final batch adds `root_system` and `geode`;
+  `sculk_patch` was already ported. Only the two fossil configs remain explicit
+  unsupported (missing fossil NBT); see `BLOCKERS.md`.
 
 ### P2.7 Lakes, springs, disks, and freeze layer `[~]` `M`
 
@@ -1066,11 +1077,10 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   `DiskFeature.java`, `SnowAndFreezeFeature.java`.
 - **Done when:** Water/lava counts and frozen surfaces match Java on the
   fixture.
-- **Progress (2026-11-06):** `terrain.rs` ports all five disks, all six springs,
-  and the shipped `lake_lava` config (tick-queued cave-air ceiling and stone
-  barrier passes). `freeze_top_layer` remains unsupported because the feature
-  needs `Biome.shouldFreeze`/`shouldSnow`, which the current `FeatureLevel`
-  cannot observe; see `BLOCKERS.md`.
+- **Progress (2026-11-07):** `terrain.rs` ports all five disks, all six springs,
+  the shipped `lake_lava` config, and `freeze_top_layer` (via the chunk biome
+  palette plus `Biome.shouldFreeze`/`shouldSnow`). `FeatureLevel::biome_at`
+  reads the generated chunk's biome cells; levels without biomes fail closed.
 
 ### P2.8 Structure framework and templates `[~]` `XL`
 

@@ -1,9 +1,9 @@
 //! Configured-feature gap coverage for the terrain, selector, and cave batch.
 
-use folia_core::chunk::{BlockState, Chunk};
+use folia_core::chunk::{BlockState, Chunk, PalettedContainer};
 use folia_core::random::LegacyRandomSource;
 use folia_core::tick::ScheduledTick;
-use folia_core::worldgen::feature::{FeatureData, WorldGenRegion};
+use folia_core::worldgen::feature::{FeatureData, FeatureEntity, WorldGenRegion};
 use folia_math::BlockPos;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -91,6 +91,44 @@ fn count_blocks(chunk: &Chunk, name: &str) -> usize {
         .count()
 }
 
+/// Runs a feature at an explicit level seed and vertical range, returning the
+/// entity descriptors it queued.
+#[allow(clippy::too_many_arguments)]
+fn place_seeded_in(
+    data: &FeatureData,
+    id: &str,
+    chunk: &mut Chunk,
+    seed: i64,
+    origin: BlockPos,
+    level_seed: i64,
+    min_y: i32,
+    height: i32,
+) -> (bool, Vec<FeatureEntity>) {
+    let feature = data.configured(id).expect("configured feature exists");
+    let mut level = WorldGenRegion::new(chunk, min_y, height).with_seed(level_seed);
+    let mut random = LegacyRandomSource::new(seed);
+    let placed = feature
+        .place(&mut level, &mut random, origin)
+        .expect("feature should be executable");
+    (placed, level.take_entities())
+}
+
+fn set_biome(chunk: &mut Chunk, biome: &str) {
+    // A generated chunk has a section for every vertical layer. Test chunks
+    // are sparse, so create the missing layers before replacing the palettes.
+    for y in (MIN_Y..MIN_Y + HEIGHT).step_by(16) {
+        if chunk.block_state(0, y, 0).is_none() {
+            chunk.set_block_state(0, y, 0, block("minecraft:air"));
+        }
+    }
+    for section in &mut chunk.sections {
+        section.biomes = Some(PalettedContainer {
+            palette: vec![biome.to_owned()],
+            indices: vec![0; 64],
+        });
+    }
+}
+
 fn data_with(configured: Value, placed: Value) -> FeatureData {
     FeatureData::parse(
         &json!({
@@ -127,16 +165,8 @@ fn assert_places_for_some_seed(
 #[test]
 fn unsupported_feature_inventory_is_explicit() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 218);
-    let expected: BTreeMap<&str, usize> = [
-        ("minecraft:end_spike", 1),
-        ("minecraft:fossil", 2),
-        ("minecraft:freeze_top_layer", 1),
-        ("minecraft:geode", 1),
-        ("minecraft:root_system", 1),
-    ]
-    .into_iter()
-    .collect();
+    assert_eq!(data.supported_feature_count(), 222);
+    let expected: BTreeMap<&str, usize> = [("minecraft:fossil", 2)].into_iter().collect();
     assert_eq!(data.unsupported_type_counts(), expected);
 }
 
@@ -697,14 +727,264 @@ fn shipped_sculk_patches_place_deterministically() {
 }
 
 #[test]
+fn shipped_geode_places_deterministically_from_the_level_seed() {
+    let data = FeatureData::vanilla();
+    let geode = data
+        .configured("minecraft:amethyst_geode")
+        .expect("amethyst geode");
+    assert!(geode.is_supported(), "geode must be executable");
+
+    let mut first = flat_chunk(64, "minecraft:stone");
+    let (placed, _) = place_seeded_in(
+        data,
+        "minecraft:amethyst_geode",
+        &mut first,
+        7,
+        BlockPos::new(8, 24, 8),
+        1234,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert!(placed);
+    assert!(
+        count_blocks(&first, "minecraft:amethyst_block") > 0
+            && count_blocks(&first, "minecraft:calcite") > 0
+            && count_blocks(&first, "minecraft:smooth_basalt") > 0,
+        "geode must write its inner, middle, and outer layers"
+    );
+
+    let mut replay = flat_chunk(64, "minecraft:stone");
+    place_seeded_in(
+        data,
+        "minecraft:amethyst_geode",
+        &mut replay,
+        7,
+        BlockPos::new(8, 24, 8),
+        1234,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert_eq!(
+        first, replay,
+        "geode must replay from the pinned level seed"
+    );
+}
+
+#[test]
+fn shipped_freeze_top_layer_snows_and_freezes_from_the_chunk_biome() {
+    let data = FeatureData::vanilla();
+    let feature = data
+        .configured("minecraft:freeze_top_layer")
+        .expect("freeze_top_layer");
+    assert!(
+        feature.is_supported(),
+        "freeze_top_layer must use FeatureLevel::biome_at"
+    );
+
+    let mut snowy = flat_chunk(63, "minecraft:grass_block");
+    let grass = BlockState {
+        name: "minecraft:grass_block".to_owned(),
+        properties: vec![("snowy".to_owned(), "false".to_owned())],
+    };
+    for x in 0..16 {
+        for z in 0..16 {
+            snowy.set_block_state(x, 63, z, grass.clone());
+        }
+    }
+    set_biome(&mut snowy, "minecraft:snowy_plains");
+    let (placed, _) = place_seeded_in(
+        data,
+        "minecraft:freeze_top_layer",
+        &mut snowy,
+        7,
+        BlockPos::new(0, 64, 0),
+        0,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert!(placed);
+    assert_eq!(
+        count_blocks(&snowy, "minecraft:snow"),
+        256,
+        "every snowy column gets one snow layer"
+    );
+    for x in 0..16 {
+        for z in 0..16 {
+            let grass = snowy.block_state(x, 63, z).expect("grass layer at y=63");
+            assert_eq!(
+                grass.properties.iter().find(|(key, _)| key == "snowy"),
+                Some(&("snowy".to_owned(), "true".to_owned())),
+                "snowy dirt must flip its property at ({x}, {z})"
+            );
+        }
+    }
+
+    let mut water = flat_chunk(62, "minecraft:stone");
+    water.set_block_state(8, 63, 8, block("minecraft:water"));
+    set_biome(&mut water, "minecraft:frozen_ocean");
+    let (placed, _) = place_seeded_in(
+        data,
+        "minecraft:freeze_top_layer",
+        &mut water,
+        7,
+        BlockPos::new(0, 64, 0),
+        0,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert!(placed);
+    assert_eq!(
+        count_blocks(&water, "minecraft:ice"),
+        1,
+        "a lone water block below the surface freezes"
+    );
+
+    // Warm biomes must not freeze or snow.
+    let mut warm = flat_chunk(63, "minecraft:grass_block");
+    set_biome(&mut warm, "minecraft:desert");
+    place_seeded_in(
+        data,
+        "minecraft:freeze_top_layer",
+        &mut warm,
+        7,
+        BlockPos::new(0, 64, 0),
+        0,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert_eq!(count_blocks(&warm, "minecraft:snow"), 0);
+    assert_eq!(count_blocks(&warm, "minecraft:ice"), 0);
+}
+
+#[test]
+fn shipped_end_spike_uses_the_level_seed_and_queues_its_crystal() {
+    let data = FeatureData::vanilla();
+    assert!(
+        data.configured("minecraft:end_spike")
+            .expect("end_spike")
+            .is_supported()
+    );
+
+    let seed = 0;
+    let spike = folia_core::worldgen::end::end_spikes_for_seed(seed)
+        .into_iter()
+        .next()
+        .expect("every seed has ten spikes");
+    let chunk_x = spike.chunk_x();
+    let chunk_z = spike.chunk_z();
+
+    let mut chunk = Chunk {
+        x: chunk_x,
+        z: chunk_z,
+        sections: Vec::new(),
+    };
+    let (placed, entities) = place_seeded_in(
+        data,
+        "minecraft:end_spike",
+        &mut chunk,
+        7,
+        BlockPos::new(chunk_x * 16, 64, chunk_z * 16),
+        seed,
+        0,
+        256,
+    );
+    assert!(placed);
+    assert!(count_blocks(&chunk, "minecraft:obsidian") > 0);
+    assert!(count_blocks(&chunk, "minecraft:bedrock") > 0);
+    assert!(count_blocks(&chunk, "minecraft:fire") > 0);
+
+    let crystal = entities
+        .iter()
+        .find(|entity| entity.entity_type == "minecraft:end_crystal")
+        .expect("end crystal descriptor");
+    assert_eq!(
+        crystal.pos,
+        (
+            f64::from(spike.center_x) + 0.5,
+            f64::from(spike.height) + 1.0,
+            f64::from(spike.center_z) + 0.5
+        )
+    );
+
+    let mut replay = Chunk {
+        x: chunk_x,
+        z: chunk_z,
+        sections: Vec::new(),
+    };
+    place_seeded_in(
+        data,
+        "minecraft:end_spike",
+        &mut replay,
+        7,
+        BlockPos::new(chunk_x * 16, 64, chunk_z * 16),
+        seed,
+        0,
+        256,
+    );
+    assert_eq!(chunk, replay, "end_spike must replay from the pinned seed");
+}
+
+#[test]
+fn shipped_root_system_places_the_embedded_azalea_tree_and_rooted_dirt() {
+    let data = FeatureData::vanilla();
+    assert!(
+        data.configured("minecraft:rooted_azalea_tree")
+            .expect("rooted_azalea_tree")
+            .is_supported()
+    );
+
+    let make_chunk = || {
+        let mut chunk = flat_chunk(62, "minecraft:stone");
+        // An air cell under a grass shelf: the shipped placement's
+        // environment_scan + y-1 offset produces exactly this shape.
+        chunk.set_block_state(8, 64, 8, block("minecraft:grass_block"));
+        chunk
+    };
+    let mut first = make_chunk();
+    let (placed, _) = place_seeded_in(
+        data,
+        "minecraft:rooted_azalea_tree",
+        &mut first,
+        7,
+        BlockPos::new(8, 63, 8),
+        0,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert!(placed);
+    assert!(
+        count_blocks(&first, "minecraft:oak_log") > 0,
+        "the embedded azalea_tree must grow"
+    );
+    assert!(
+        count_blocks(&first, "minecraft:azalea_leaves") > 0,
+        "azalea foliage must be placed"
+    );
+    assert!(
+        count_blocks(&first, "minecraft:rooted_dirt") > 0,
+        "the support block must become rooted dirt"
+    );
+
+    let mut second = make_chunk();
+    place_seeded_in(
+        data,
+        "minecraft:rooted_azalea_tree",
+        &mut second,
+        7,
+        BlockPos::new(8, 63, 8),
+        0,
+        MIN_Y,
+        HEIGHT,
+    );
+    assert_eq!(first, second, "root system must replay deterministically");
+}
+
+#[test]
 fn unsupported_features_name_the_missing_capability() {
     let data = FeatureData::vanilla();
     for (id, capability) in [
-        ("minecraft:amethyst_geode", "FeatureLevel::seed"),
-        ("minecraft:freeze_top_layer", "FeatureLevel::biome_at"),
-        ("minecraft:end_spike", "EndCrystal entity spawning"),
         ("minecraft:fossil_coal", "StructureTemplateManager"),
-        ("minecraft:rooted_azalea_tree", "azalea_grows_on"),
+        ("minecraft:fossil_diamonds", "structure_templates.json"),
     ] {
         let feature = data.configured(id).expect("configured feature");
         assert!(!feature.is_supported(), "{id} must stay explicit");

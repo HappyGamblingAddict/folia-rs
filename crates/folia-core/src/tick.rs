@@ -1729,6 +1729,7 @@ pub fn tick_world_with_table(
             crate::loot::RecipeCatalog::global(),
         );
         storage.tick_block_entities(&mut ticker);
+        storage.tick_hoppers()?;
     }
 
     let drained = process_pending_updates(storage)?;

@@ -555,7 +555,7 @@ fn shipped_feature_support_snapshot() {
     let data = FeatureData::vanilla();
     assert_eq!(
         data.supported_feature_count(),
-        222,
+        224,
         "geode/freeze/end_spike/root_system complete the configured-feature set"
     );
     let unsupported = data.unsupported_type_counts();

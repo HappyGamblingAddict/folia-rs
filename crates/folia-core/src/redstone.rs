@@ -2725,9 +2725,16 @@ impl BlockBehavior for DispenserBehavior {
         let triggered = is_triggered(state);
         if powered && !triggered {
             world.schedule(pos, state.name.clone(), DISPENSER_TRIGGER_TICKS);
-            world.set_block(pos, with_triggered(state, true))?;
-        } else if !powered && triggered {
-            world.set_block(pos, with_triggered(state, false))?;
+        }
+        if (powered && !triggered) || (!powered && triggered) {
+            let entity_pos = crate::block_entity::BlockEntityPos::new(pos.x(), pos.y(), pos.z());
+            let entity = world.block_entity(entity_pos)?;
+            world.set_block(pos, with_triggered(state, powered))?;
+            // Changing `triggered` keeps the same block; the block-entity
+            // removal in the generic edit path must not delete the dispenser.
+            if let Some(entity) = entity {
+                world.insert_block_entity(entity)?;
+            }
         }
         Ok(())
     }

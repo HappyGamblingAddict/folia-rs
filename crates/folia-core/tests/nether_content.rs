@@ -159,20 +159,18 @@ fn nether_complex_structure_selection_is_pinned_for_seed_12345() {
 }
 
 #[test]
-fn nether_structure_starts_fail_loudly_without_templates() {
+fn nether_structure_starts_port_fortress_and_reject_missing_bastion_templates() {
     let generator = NetherGenerator::new(SEED).unwrap();
 
     let fortress = generator.structure_at_chunk(6, -32).unwrap().unwrap();
-    let error = generator
+    let start = generator
         .structure_start(&fortress)
-        .expect_err("fortress starts have no procedural piece port");
-    assert!(matches!(
-        error,
-        StructureError::UnsupportedStructureType {
-            structure,
-            type_name,
-        } if structure == "minecraft:fortress" && type_name == "minecraft:fortress"
-    ));
+        .expect("fortress procedural pieces are ported");
+    let fortress_start = start.fortress().expect("fortress start data");
+    assert!(
+        fortress_start.pieces().len() > 1,
+        "fortress should expand into multiple pieces"
+    );
 
     let bastion = generator.structure_at_chunk(12, 20).unwrap().unwrap();
     let error = generator

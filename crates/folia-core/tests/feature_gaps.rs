@@ -6,7 +6,6 @@ use folia_core::tick::ScheduledTick;
 use folia_core::worldgen::feature::{FeatureData, FeatureEntity, WorldGenRegion};
 use folia_math::BlockPos;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 const MIN_Y: i32 = -64;
 const HEIGHT: i32 = 384;
@@ -165,9 +164,11 @@ fn assert_places_for_some_seed(
 #[test]
 fn unsupported_feature_inventory_is_explicit() {
     let data = FeatureData::vanilla();
-    assert_eq!(data.supported_feature_count(), 222);
-    let expected: BTreeMap<&str, usize> = [("minecraft:fossil", 2)].into_iter().collect();
-    assert_eq!(data.unsupported_type_counts(), expected);
+    assert_eq!(data.supported_feature_count(), 224);
+    assert!(
+        data.unsupported_type_counts().is_empty(),
+        "all shipped configured features should be supported"
+    );
 }
 
 #[test]
@@ -982,21 +983,15 @@ fn shipped_root_system_places_the_embedded_azalea_tree_and_rooted_dirt() {
 #[test]
 fn unsupported_features_name_the_missing_capability() {
     let data = FeatureData::vanilla();
-    for (id, capability) in [
-        ("minecraft:fossil_coal", "StructureTemplateManager"),
-        ("minecraft:fossil_diamonds", "structure_templates.json"),
-    ] {
-        let feature = data.configured(id).expect("configured feature");
-        assert!(!feature.is_supported(), "{id} must stay explicit");
-        let mut chunk = flat_chunk(63, "minecraft:stone");
-        let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
-        let mut random = LegacyRandomSource::new(7);
-        let error = feature
-            .place(&mut level, &mut random, BlockPos::new(8, 64, 8))
-            .expect_err("unsupported feature must fail loudly");
-        assert!(
-            error.to_string().contains(capability),
-            "{id} error should name {capability}: {error}"
-        );
-    }
+    assert!(
+        data.configured("minecraft:fossil_coal")
+            .expect("configured feature")
+            .is_supported(),
+        "fossils now use the shipped template catalog"
+    );
+    assert!(
+        data.configured("minecraft:fossil_diamonds")
+            .expect("configured feature")
+            .is_supported()
+    );
 }

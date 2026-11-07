@@ -324,7 +324,7 @@ fn dropper_moves_one_item_into_the_container_in_front() {
     );
     insert_chest(&mut storage, chest_pos, &[]);
 
-    let mut tick_number = trigger_pulse(&mut storage, BlockPos::new(-1, -60, 0), 0);
+    let mut tick_number = trigger_pulse(&mut storage, BlockPos::new(0, -60, 1), 0);
     let moved = storage
         .block_entity(be_pos(chest_pos))
         .unwrap()
@@ -470,7 +470,7 @@ fn projectile_dispense_uses_the_injected_sink_and_preserves_components() {
     assert_eq!(sink.shots.len(), 1);
     let (projectile, position, velocity, shot) = &sink.shots[0];
     assert_eq!(*projectile, DispensedProjectile::Arrow);
-    assert_eq!(*position, [1.2, 0.6, 0.5]);
+    assert_eq!(*position, [1.2, -59.4, 0.5]);
     assert_eq!(*velocity, [1.1, 0.0, 0.0]);
     assert_eq!(shot.count, 1);
     assert_eq!(shot.components, components);

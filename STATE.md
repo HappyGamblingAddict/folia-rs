@@ -52,6 +52,7 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: Unbreaking durability rolls; 4 integration tests.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

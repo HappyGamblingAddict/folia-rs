@@ -3059,3 +3059,10 @@ Format:
   `tick_world_with_table` call. It pushes one ready hopper item into the
   container below after the block-entity ticker has advanced the cooldown;
   hopper pull, locking, and menu packets remain open.
+
+## 2026-11-07 - Unbreaking needs a level RNG
+
+- `apply_block_durability_with_rng` takes an explicit `RandomSource` and skips
+  wear when `nextInt(level + 1) != 0`, matching `ItemStack.hurtAndBreak`.
+- The old `apply_block_durability` wrapper uses a fixed legacy RNG so existing
+  no-enchant callers and tests stay stable; production should pass the level RNG.

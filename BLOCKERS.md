@@ -1133,3 +1133,9 @@ These are expected gaps, not reasons to stop:
   `PlayerKickEvent`, cannot run async, and has no reason-component styling.
 - Hopper automation is still a one-way push pass. Pull from the container
   above, locking, menus, and block-entity update packets remain open.
+
+## 2026-11-07 - Durability boundaries
+
+- Mending, Unbreaking on armor, item break sounds/particles, and XP repair are
+  not modeled; the live break path must call the RNG variant to get Unbreaking.
+- No Java durability fixture yet; tests pin the formula and distribution band.

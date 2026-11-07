@@ -354,10 +354,12 @@ impl Default for MiningContext {
 }
 
 fn efficiency_level(held: Option<&ItemStack>) -> i32 {
-    match held.and_then(|stack| stack.get_component("minecraft:enchantments")) {
-        Some(ComponentValue::Enchantments(map)) => {
-            map.get("minecraft:efficiency").copied().unwrap_or(0).max(0)
-        }
+    held.map_or(0, |stack| enchantment_level(stack, "minecraft:efficiency"))
+}
+
+fn enchantment_level(stack: &ItemStack, name: &str) -> i32 {
+    match stack.get_component("minecraft:enchantments") {
+        Some(ComponentValue::Enchantments(map)) => map.get(name).copied().unwrap_or(0).max(0),
         _ => 0,
     }
 }
@@ -683,12 +685,27 @@ impl ToolWear {
 /// Apply `Item.mineBlock`'s durability cost to the held stack.
 ///
 /// Creative mode (`instabuild`) and zero-hardness blocks never wear a tool.
-/// `Unbreaking` is not modelled yet (it needs a random draw); tools always wear
-/// by `damage_per_block` like an unenchanted tool.
+/// This wrapper uses a fixed legacy RNG for callers that do not have a level
+/// RNG; use [`apply_block_durability_with_rng`] when `Unbreaking` should roll.
 pub fn apply_block_durability(
     held: &mut ItemStack,
     creative: bool,
     block_hardness: f32,
+) -> ToolWear {
+    apply_block_durability_with_rng(
+        held,
+        creative,
+        block_hardness,
+        &mut LegacyRandomSource::new(0),
+    )
+}
+
+/// [`apply_block_durability`] with an explicit random source for `Unbreaking`.
+pub fn apply_block_durability_with_rng(
+    held: &mut ItemStack,
+    creative: bool,
+    block_hardness: f32,
+    random: &mut dyn RandomSource,
 ) -> ToolWear {
     let none = ToolWear {
         damage: 0,
@@ -710,6 +727,13 @@ pub fn apply_block_durability(
         return none;
     };
     if damage_per_block <= 0 {
+        return none;
+    }
+
+    // `ItemStack.hurtAndBreak`: Unbreaking skips the wear when
+    // `random.nextInt(level + 1) != 0`.
+    let unbreaking = enchantment_level(held, "minecraft:unbreaking");
+    if unbreaking > 0 && random.next_int_bound(unbreaking + 1) != 0 {
         return none;
     }
 

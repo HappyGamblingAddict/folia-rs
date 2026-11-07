@@ -447,10 +447,10 @@ fn books_become_enchanted_books_and_use_stored_enchantments() {
 }
 
 #[test]
-fn anvil_combine_is_explicitly_unsupported() {
+fn anvil_combine_rejects_a_plain_book_and_sword() {
     let result = folia_core::item_components::enchanting::combine_in_anvil(&sword(), &book());
     assert!(matches!(
         result,
-        Err(folia_core::item_components::enchanting::AnvilError::Unsupported(_))
+        Err(folia_core::item_components::enchanting::AnvilError::IncompatibleItems { .. })
     ));
 }

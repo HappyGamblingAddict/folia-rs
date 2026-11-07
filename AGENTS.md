@@ -196,7 +196,9 @@ A task is done only when:
 
 The current active queue is:
 
-1. `P2.8` - recursive jigsaw connection and structure generator wiring.
+1. `P2.8` - recursive jigsaw and feature-pool placement are landed; non-village
+   structure templates, terrain adaptation, and exact cross-chunk height/start
+   caching remain.
 2. `P6` - typed block entities (chest/furnace/sign/spawner/hopper, brewing
    stand state/menu) and pistons.
 3. `P5` - join-session entity spawning/tracking and AI tick integration.

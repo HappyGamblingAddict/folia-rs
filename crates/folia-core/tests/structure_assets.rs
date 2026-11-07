@@ -11,6 +11,7 @@ use folia_core::region::ChunkPos;
 use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureGenerator;
 use folia_core::worldgen::structure::assets::{CatalogError, StructureTemplateCatalog};
+use folia_core::worldgen::structure::pool::PoolElement;
 use folia_core::worldgen::structure::set::{
     StructureBiomeLookup, StructureDimension, StructureSetRegistry,
 };
@@ -295,22 +296,21 @@ fn real_catalog_drives_recursive_village_generation_deterministically() {
         start.jigsaw_pieces().len() > 1,
         "recursive placement produced only the start piece"
     );
-    assert_eq!(start.jigsaw_pieces().len(), 48);
+    assert_eq!(start.jigsaw_pieces().len(), 101);
     let bounds = start.pieces_bounding_box().expect("village bounds");
     assert_eq!(bounds.min_y(), 63);
     assert_eq!(bounds.max_y(), 75);
-    let skipped = start
-        .jigsaw()
-        .expect("jigsaw payload")
-        .skipped_feature_elements();
+    let jigsaw = start.jigsaw().expect("jigsaw payload");
     assert!(
-        !skipped.is_empty(),
-        "feature pool elements must be recorded as skipped, not silently ignored"
+        jigsaw.skipped_feature_elements().is_empty(),
+        "feature pool elements are placed as real pieces, not skipped"
     );
     assert!(
-        skipped
+        jigsaw
+            .pieces()
             .iter()
-            .all(|feature| feature.starts_with("minecraft:"))
+            .any(|piece| matches!(piece.element, PoolElement::Feature { .. })),
+        "the village must select at least one feature-pool piece"
     );
 
     let again = definition

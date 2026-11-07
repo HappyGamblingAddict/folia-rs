@@ -9,9 +9,11 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **1052 passing** on the full merged gate (0 failed), 1 ignored
-  (2048-bit secure-chat benchmark); parity is **98.75% block-class / 95.80%
-  exact-name**.
+- Tests: **1052 passing** on the last full merged gate, 1 ignored
+  (2048-bit secure-chat benchmark), plus 6 new `density_parity` tests in this
+  worktree (focused runs green; full gate not re-run here). Parity is
+  **98.75% block-class (6067/6144) / 95.88% exact-name (5891/6144)**; 28 of 33
+  fixture ore blocks match.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
   483 shipped village templates, recursive jigsaw, Nether carvers, End
@@ -30,6 +32,9 @@ Last updated: 2026-11-07
 3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
 4. P6 container menus/packets and deeper redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
+6. P2.3 ore parity — `NoiseChunk` vein interpolation is landed; remaining gaps
+   are the 3x3-chunk feature write region, ellipsoid/vein edges, and the
+   `disk_*`/`underwater_magma` entries in the `underground_ores` step.
 
 ## Next queue
 
@@ -52,6 +57,16 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: P2.3 `NoiseChunk` vein interpolation — `density.rs` adds an
+  `Interpolated` node that samples its argument on the vanilla 4x8x4 cell grid
+  and trilinearly interpolates with `Mth.lerp3` (`compute_interpolated`),
+  while direct `compute` keeps Java's unwrapped `DensityFunction` semantics.
+  `OreVeinifier` now samples `vein_toggle` and both interpolated arguments
+  inside `vein_ridged` through it; `vein_gap` stays per-block as shipped.
+  `tests/density_parity.rs` pins the Java router dump, all 1225 density-oracle
+  corners, trilinear values, 170 changed vein-edge positions, determinism, and
+  the 16-column parity floor. Exact-name rose 5886 -> 5891/6144 (95.80% ->
+  95.88%), matched ore blocks 26 -> 28/33; block-class stays 6067/6144.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

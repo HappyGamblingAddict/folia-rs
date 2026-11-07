@@ -252,14 +252,19 @@ impl WorldgenData {
                 id: next_cache_id(),
                 argument: self.build_field(object, "argument", cache)?,
             }),
-            // `interpolated` is applied by the generator's 4x8x4 grid,
-            // `cache_all_in_cell` is a per-cell marker, and `blend_density`
+            // Java's `NoiseChunk` wraps every `interpolated` marker in a
+            // `NoiseInterpolator`, so the argument is only evaluated at the
+            // 4x8x4 cell corners and trilinearly interpolated per block.
+            "minecraft:interpolated" => Arc::new(DensityFunction::Interpolated {
+                id: next_cache_id(),
+                origin_y: self.min_y(),
+                argument: self.build_field(object, "argument", cache)?,
+            }),
+            // `cache_all_in_cell` is a per-cell marker and `blend_density`
             // only wraps the blended function during blending passes.
-            "minecraft:interpolated"
-            | "minecraft:cache_all_in_cell"
-            | "minecraft:blend_density" => Arc::new(DensityFunction::Marker(
-                self.build_field(object, "argument", cache)?,
-            )),
+            "minecraft:cache_all_in_cell" | "minecraft:blend_density" => Arc::new(
+                DensityFunction::Marker(self.build_field(object, "argument", cache)?),
+            ),
             "minecraft:blend_alpha" => Arc::new(DensityFunction::Constant(1.0)),
             "minecraft:blend_offset" => Arc::new(DensityFunction::Constant(0.0)),
             "minecraft:old_blended_noise" => {
@@ -405,6 +410,13 @@ impl NoiseRouter {
         Ok(self.function(name)?.compute(x, y, z))
     }
 
+    /// Evaluates a router function the way `NoiseChunk` does: every
+    /// `interpolated` marker is sampled on the 4x8x4 cell grid and trilinearly
+    /// interpolated for the queried block position.
+    pub fn compute_interpolated(&self, name: &str, x: i32, y: i32, z: i32) -> io::Result<f64> {
+        Ok(self.function(name)?.compute_interpolated(x, y, z))
+    }
+
     pub fn final_density(&self) -> &Arc<DensityFunction> {
         self.functions
             .get("final_density")
@@ -460,6 +472,15 @@ pub enum DensityFunction {
         when_out_of_range: Arc<DensityFunction>,
     },
     Marker(Arc<DensityFunction>),
+    /// `DensityFunctions.Marker.Type.Interpolated`: `NoiseChunk` evaluates the
+    /// argument on the 4x8x4 cell grid and trilinearly interpolates between
+    /// the corners. Direct `compute` remains the unwrapped evaluation, matching
+    /// Java's `DensityFunction.compute` outside `NoiseChunk`.
+    Interpolated {
+        id: u64,
+        origin_y: i32,
+        argument: Arc<DensityFunction>,
+    },
     /// `DensityFunctions.Cache2D` / `FlatCache`: the wrapped function depends
     /// only on x/z, so its last value is reused while the column does not move.
     Cache2D {
@@ -487,7 +508,21 @@ pub enum DensityFunction {
 }
 
 impl DensityFunction {
+    /// Direct block-position evaluation with `interpolated` markers treated as
+    /// pass-through wrappers. This matches Java's `DensityFunction.compute`
+    /// outside a `NoiseChunk` (the grid oracle samples corners, where direct and
+    /// interpolated values are equal).
     pub fn compute(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.compute_with(x, y, z, false)
+    }
+
+    /// `NoiseChunk` evaluation: every `interpolated` marker is sampled on the
+    /// 4x8x4 cell grid and trilinearly interpolated at the block position.
+    pub fn compute_interpolated(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.compute_with(x, y, z, true)
+    }
+
+    fn compute_with(&self, x: i32, y: i32, z: i32, interpolate: bool) -> f64 {
         match self {
             DensityFunction::Constant(value) => *value,
             DensityFunction::Noise {
@@ -507,46 +542,52 @@ impl DensityFunction {
                 y_scale,
                 noise,
             } => noise.get_value(
-                f64::from(x) * xz_scale + shift_x.compute(x, y, z),
-                f64::from(y) * y_scale + shift_y.compute(x, y, z),
-                f64::from(z) * xz_scale + shift_z.compute(x, y, z),
+                f64::from(x) * xz_scale + shift_x.compute_with(x, y, z, interpolate),
+                f64::from(y) * y_scale + shift_y.compute_with(x, y, z, interpolate),
+                f64::from(z) * xz_scale + shift_z.compute_with(x, y, z, interpolate),
             ),
             DensityFunction::ShiftX(noise) => shift_value(noise, f64::from(x), 0.0, f64::from(z)),
             DensityFunction::ShiftZ(noise) => shift_value(noise, f64::from(z), f64::from(x), 0.0),
             DensityFunction::Shift(noise) => {
                 shift_value(noise, f64::from(x), f64::from(y), f64::from(z))
             }
-            DensityFunction::Add(first, second) => first.compute(x, y, z) + second.compute(x, y, z),
-            DensityFunction::Mul(first, second) => first.compute(x, y, z) * second.compute(x, y, z),
-            DensityFunction::Min(first, second) => {
-                first.compute(x, y, z).min(second.compute(x, y, z))
+            DensityFunction::Add(first, second) => {
+                first.compute_with(x, y, z, interpolate) + second.compute_with(x, y, z, interpolate)
             }
-            DensityFunction::Max(first, second) => {
-                first.compute(x, y, z).max(second.compute(x, y, z))
+            DensityFunction::Mul(first, second) => {
+                first.compute_with(x, y, z, interpolate) * second.compute_with(x, y, z, interpolate)
             }
-            DensityFunction::Abs(input) => input.compute(x, y, z).abs(),
+            DensityFunction::Min(first, second) => first
+                .compute_with(x, y, z, interpolate)
+                .min(second.compute_with(x, y, z, interpolate)),
+            DensityFunction::Max(first, second) => first
+                .compute_with(x, y, z, interpolate)
+                .max(second.compute_with(x, y, z, interpolate)),
+            DensityFunction::Abs(input) => input.compute_with(x, y, z, interpolate).abs(),
             DensityFunction::Square(input) => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 value * value
             }
             DensityFunction::Cube(input) => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 value * value * value
             }
             DensityFunction::HalfNegative(input) => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 if value > 0.0 { value } else { value * 0.5 }
             }
             DensityFunction::QuarterNegative(input) => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 if value > 0.0 { value } else { value * 0.25 }
             }
-            DensityFunction::Invert(input) => 1.0 / input.compute(x, y, z),
+            DensityFunction::Invert(input) => 1.0 / input.compute_with(x, y, z, interpolate),
             DensityFunction::Squeeze(input) => {
-                let value = input.compute(x, y, z).clamp(-1.0, 1.0);
+                let value = input.compute_with(x, y, z, interpolate).clamp(-1.0, 1.0);
                 value / 2.0 - value * value * value / 24.0
             }
-            DensityFunction::Clamp { input, min, max } => input.compute(x, y, z).clamp(*min, *max),
+            DensityFunction::Clamp { input, min, max } => {
+                input.compute_with(x, y, z, interpolate).clamp(*min, *max)
+            }
             DensityFunction::YClampedGradient {
                 from_y,
                 to_y,
@@ -566,19 +607,30 @@ impl DensityFunction {
                 when_in_range,
                 when_out_of_range,
             } => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 if value >= *min && value < *max {
-                    when_in_range.compute(x, y, z)
+                    when_in_range.compute_with(x, y, z, interpolate)
                 } else {
-                    when_out_of_range.compute(x, y, z)
+                    when_out_of_range.compute_with(x, y, z, interpolate)
                 }
             }
-            DensityFunction::Marker(input) => input.compute(x, y, z),
+            DensityFunction::Marker(input) => input.compute_with(x, y, z, interpolate),
+            DensityFunction::Interpolated {
+                id,
+                origin_y,
+                argument,
+            } => {
+                if interpolate {
+                    interpolated_value(*id, *origin_y, argument, x, y, z)
+                } else {
+                    argument.compute_with(x, y, z, false)
+                }
+            }
             DensityFunction::Cache2D { id, argument } => {
                 if let Some(value) = cache_2d_get(*id, x, z) {
                     return value;
                 }
-                let value = argument.compute(x, y, z);
+                let value = argument.compute_with(x, y, z, interpolate);
                 cache_2d_set(*id, x, z, value);
                 value
             }
@@ -586,7 +638,7 @@ impl DensityFunction {
                 if let Some(value) = cache_once_get(*id, x, y, z) {
                     return value;
                 }
-                let value = argument.compute(x, y, z);
+                let value = argument.compute_with(x, y, z, interpolate);
                 cache_once_set(*id, x, y, z, value);
                 value
             }
@@ -599,27 +651,29 @@ impl DensityFunction {
                 lower_bound,
                 cell_height,
             } => {
-                let upper = (upper_bound.compute(x, y, z) / f64::from(*cell_height)).floor() as i32
+                let upper = (upper_bound.compute_with(x, y, z, interpolate)
+                    / f64::from(*cell_height))
+                .floor() as i32
                     * *cell_height;
                 if upper <= *lower_bound {
                     return f64::from(*lower_bound);
                 }
                 let mut level = upper;
                 while level >= *lower_bound {
-                    if density.compute(x, level, z) > 0.0 {
+                    if density.compute_with(x, level, z, interpolate) > 0.0 {
                         return f64::from(level);
                     }
                     level -= *cell_height;
                 }
                 f64::from(*lower_bound)
             }
-            DensityFunction::Spline(spline) => f64::from(spline.apply(x, y, z)),
+            DensityFunction::Spline(spline) => f64::from(spline.apply_with(x, y, z, interpolate)),
             DensityFunction::WeirdScaledSampler {
                 input,
                 noise,
                 rarity,
             } => {
-                let value = input.compute(x, y, z);
+                let value = input.compute_with(x, y, z, interpolate);
                 let rarity = rarity.map(value);
                 rarity
                     * noise
@@ -632,6 +686,98 @@ impl DensityFunction {
             }
         }
     }
+}
+
+/// `NoiseChunk` cell width/height for the overworld noise settings
+/// (`size_horizontal: 1`, `size_vertical: 2`, each multiplied by four).
+const INTERPOLATION_CELL_WIDTH: i32 = 4;
+const INTERPOLATION_CELL_HEIGHT: i32 = 8;
+
+#[derive(Clone, Copy)]
+struct InterpolatedCell {
+    origin_x: i32,
+    origin_y: i32,
+    origin_z: i32,
+    values: [f64; 8],
+}
+
+thread_local! {
+    static INTERPOLATED_CELLS: RefCell<HashMap<u64, InterpolatedCell>> =
+        RefCell::new(HashMap::new());
+}
+
+fn interpolated_value(
+    id: u64,
+    min_y: i32,
+    argument: &DensityFunction,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> f64 {
+    let origin_x = x.div_euclid(INTERPOLATION_CELL_WIDTH) * INTERPOLATION_CELL_WIDTH;
+    let origin_y =
+        min_y + (y - min_y).div_euclid(INTERPOLATION_CELL_HEIGHT) * INTERPOLATION_CELL_HEIGHT;
+    let origin_z = z.div_euclid(INTERPOLATION_CELL_WIDTH) * INTERPOLATION_CELL_WIDTH;
+
+    let cached = INTERPOLATED_CELLS.with(|cache| {
+        cache
+            .borrow()
+            .get(&id)
+            .filter(|cell| {
+                cell.origin_x == origin_x && cell.origin_y == origin_y && cell.origin_z == origin_z
+            })
+            .map(|cell| cell.values)
+    });
+    let values = cached.unwrap_or_else(|| {
+        let x1 = origin_x + INTERPOLATION_CELL_WIDTH;
+        let y1 = origin_y + INTERPOLATION_CELL_HEIGHT;
+        let z1 = origin_z + INTERPOLATION_CELL_WIDTH;
+        let values = [
+            argument.compute_with(origin_x, origin_y, origin_z, true),
+            argument.compute_with(x1, origin_y, origin_z, true),
+            argument.compute_with(origin_x, y1, origin_z, true),
+            argument.compute_with(x1, y1, origin_z, true),
+            argument.compute_with(origin_x, origin_y, z1, true),
+            argument.compute_with(x1, origin_y, z1, true),
+            argument.compute_with(origin_x, y1, z1, true),
+            argument.compute_with(x1, y1, z1, true),
+        ];
+        INTERPOLATED_CELLS.with(|cache| {
+            cache.borrow_mut().insert(
+                id,
+                InterpolatedCell {
+                    origin_x,
+                    origin_y,
+                    origin_z,
+                    values,
+                },
+            );
+        });
+        values
+    });
+
+    let delta_x = f64::from(x - origin_x) / f64::from(INTERPOLATION_CELL_WIDTH);
+    let delta_y = f64::from(y - origin_y) / f64::from(INTERPOLATION_CELL_HEIGHT);
+    let delta_z = f64::from(z - origin_z) / f64::from(INTERPOLATION_CELL_WIDTH);
+    // `Mth.lerp3` argument order: x0y0z0, x1y0z0, x0y1z0, x1y1z0,
+    // x0y0z1, x1y0z1, x0y1z1, x1y1z1.
+    lerp(
+        delta_z,
+        lerp2(delta_x, delta_y, values[0], values[1], values[2], values[3]),
+        lerp2(delta_x, delta_y, values[4], values[5], values[6], values[7]),
+    )
+}
+
+fn lerp(delta: f64, start: f64, end: f64) -> f64 {
+    start + delta * (end - start)
+}
+
+fn lerp2(delta1: f64, delta2: f64, start1: f64, end1: f64, start2: f64, end2: f64) -> f64 {
+    lerp(
+        delta2,
+        lerp(delta1, start1, end1),
+        lerp(delta1, start2, end2),
+    )
 }
 
 static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -749,24 +895,24 @@ pub enum SplineValue {
 }
 
 impl SplineValue {
-    fn apply(&self, x: i32, y: i32, z: i32) -> f32 {
+    fn apply_with(&self, x: i32, y: i32, z: i32, interpolate: bool) -> f32 {
         match self {
             SplineValue::Constant(value) => *value,
-            SplineValue::Spline(spline) => spline.apply(x, y, z),
+            SplineValue::Spline(spline) => spline.apply_with(x, y, z, interpolate),
         }
     }
 }
 
 impl Spline {
-    fn apply(&self, x: i32, y: i32, z: i32) -> f32 {
-        let location = self.coordinate.compute(x, y, z) as f32;
+    fn apply_with(&self, x: i32, y: i32, z: i32, interpolate: bool) -> f32 {
+        let location = self.coordinate.compute_with(x, y, z, interpolate) as f32;
         let start = find_interval_start(&self.locations, location);
         let last = self.locations.len() - 1;
         if start < 0 {
             return linear_extend(
                 location,
                 &self.locations,
-                self.values[0].apply(x, y, z),
+                self.values[0].apply_with(x, y, z, interpolate),
                 &self.derivatives,
                 0,
             );
@@ -776,7 +922,7 @@ impl Spline {
             return linear_extend(
                 location,
                 &self.locations,
-                self.values[last].apply(x, y, z),
+                self.values[last].apply_with(x, y, z, interpolate),
                 &self.derivatives,
                 last,
             );
@@ -785,8 +931,8 @@ impl Spline {
         let first_location = self.locations[start];
         let second_location = self.locations[start + 1];
         let delta = (location - first_location) / (second_location - first_location);
-        let first_value = self.values[start].apply(x, y, z);
-        let second_value = self.values[start + 1].apply(x, y, z);
+        let first_value = self.values[start].apply_with(x, y, z, interpolate);
+        let second_value = self.values[start + 1].apply_with(x, y, z, interpolate);
         let first_derivative = self.derivatives[start];
         let second_derivative = self.derivatives[start + 1];
         let d8 =

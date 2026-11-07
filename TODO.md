@@ -3,8 +3,10 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1052 passing** on the full merged gate (0 failed)
-> Worldgen parity: **98.75% block-class / 95.80% exact-name** on the 16-column fixture
+> Test status: **1052 passing** on the full merged gate (0 failed), plus 6 new
+> `density_parity` tests in the vein-interpolation worktree.
+> Worldgen parity: **98.75% block-class (6067/6144) / 95.88% exact-name
+> (5891/6144)** on the 16-column fixture (28/33 Java ore blocks matched).
 > Overall completion estimate: **~28%** (range 20-33% depending on metric)
 
 This is the ordered plan from the completed foundation to a production-usable,
@@ -27,7 +29,7 @@ where possible, a differential test against the Java oracle.
 | Area | Estimate | Notes |
 |---|---:|---|
 | Foundation (M0-M2) | 90-92% | Protocol, NBT, Anvil, chunks, login, inventory, physics, scheduler, registries, tags |
-| Terrain generation | ~80% | Density, biomes, aquifers, surface rules, carvers, ore pass, vein filler, Nether/End generators, dimension storage, Nether carvers |
+| Terrain generation | ~81% | Density (incl. `NoiseChunk` vein interpolation), biomes, aquifers, surface rules, carvers, ore pass, Nether/End generators, dimension storage, Nether carvers |
 | Full worldgen | ~73% | 218/224 configured feature types, 888/888 placement modifiers, recursive jigsaw, 483 shipped village templates; feature-pool placement and non-village templates missing |
 | Lighting | ~50% | Nibble storage/NBT, sky+block BFS, per-state behaviour, outline shape occlusion, incremental decrease/increase, sky columns, cross-chunk propagation, dirty-section payloads; Java fixtures and exact occlusion flags missing |
 | Player simulation | ~40% | Movement physics, multi-box shape collision, fall damage, break progress/tools/drops/durability, hunger/regen/starvation; special movement and live food tick missing |
@@ -42,6 +44,22 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P2.3 `NoiseChunk` vein interpolation — `worldgen/density.rs`
+  models `minecraft:interpolated` as its own node: direct `compute` keeps
+  Java's unwrapped semantics, while `compute_interpolated` samples the wrapped
+  argument at the enclosing 4x8x4 cell corners and applies `Mth.lerp3`. A
+  thread-local one-cell cache per function keeps corner evaluation bounded.
+  `OreVeinifier::block_at` samples `vein_toggle` and the two interpolated
+  arguments inside `vein_ridged` through the interpolated path; `vein_gap` is
+  direct, as in the shipped router. `block_at_with(VeinSampling::Direct)` keeps
+  the old per-block path for differential tests. New `tests/density_parity.rs`
+  (6 tests) pins the Java `worldgen-dump.txt` vein values, all 1225
+  `java-density-grid.txt` corners, trilinear values, 170 changed vein-edge
+  positions in chunk (0,-1), determinism, and the parity floor. Exact-name
+  parity 5886 -> 5891/6144 (95.80% -> 95.88%), Java ore blocks matched 26 -> 28
+  of 33; block-class stays 6067/6144 (98.75%). Remaining mismatches: 253 exact
+  / 77 class, dominated by stone/deepslate vs granite/tuff/clay/andesite/
+  diorite and 5 ore positions (ellipsoid edges, 3x3 feature write region).
 - 2026-11-07: P4.8/P4.9 brewing and consumables - `crafting.rs` models the
   brewing stand's five slots, blaze-powder fuel charges, 400-tick brew timer,
   ingredient-change abort, all vanilla potion mixes and the two container mixes;
@@ -509,7 +527,8 @@ These are the checkpoints that should be preserved while building forward.
 - [x] Differential armor-stand physics trace.
 - [x] Overworld noise/density/aquifer/biome/surface/carver generation.
 - [x] Exact 1225/1225 density grid, 1536/1536 biome cells, exact bedrock.
-- [x] 98.75% block-class / 95.80% exact-name agreement on the 16-column fixture.
+- [x] 98.75% block-class / 95.88% exact-name agreement on the 16-column fixture
+  (vein interpolation landed 2026-11-07; was 95.80%).
 - [x] Full block/item/entity/biome registry tables (Nov 3, uncommitted).
 - [x] Feature metadata extracted to `assets/feature_data.json` (supported types wired).
 
@@ -810,11 +829,12 @@ remaining worldgen gap is almost entirely **what is placed on top of the
 terrain**: ores, trees, plants, cave decoration, lakes, and structures. This is
 also what makes worlds look and play like Minecraft rather than empty terrain.
 
-**Current state:** 98.75% block-class and 95.80% exact-name agreement on a
-16-column fixture. 171 of 224 configured features execute, including ores,
-scattered ore, the vein filler, the aquatic/vine/mushroom batch, and the
-pale-forest/dripleaf batch; remaining errors are concentrated in unported
-lush-cave, special, and structure features. `feature_data.json` is consumed by
+**Current state:** 98.75% block-class and 95.88% exact-name agreement on a
+16-column fixture. 218 of 224 configured features execute, including ores,
+scattered ore, the `NoiseChunk`-interpolated vein filler, the
+aquatic/vine/mushroom batch, and the pale-forest/dripleaf batch; remaining
+errors are concentrated in `root_system`, `geode`, `freeze_top_layer`,
+`end_spike`, and the two fossil configs. `feature_data.json` is consumed by
 `worldgen/feature/mod.rs` and drives the decoration steps.
 
 ### P2.1 Feature framework core `[~]` `L`
@@ -919,11 +939,10 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   parameter-order indices, ore features, and the vein filler, exact-name parity
   is 95.80% (5886/6144) and block-class 98.75% (6067/6144), up from
   92.01%/98.71%; the no-ore-step baseline with veins is 92.37% (5675/6144).
-  26 of the fixture's 33 Java ore blocks match exactly. Remaining: vein noise
-  interpolation (`NoiseChunk` wraps `vein_toggle`/`vein_ridged` in
-  `interpolated`, while the port evaluates them exactly), the 3x3-chunk biome
-  union and out-of-chunk feature writes, a few ore ellipsoid/shape edge
-  differences, and the block-for-block Java fixture.
+  The later `NoiseChunk` vein interpolation raises the current fixture to
+  95.88% (5891/6144) and matches 28 of 33 Java ore blocks. Remaining: the
+  3x3-chunk biome union and out-of-chunk feature writes, a few ore
+  ellipsoid/shape edge differences, and the block-for-block Java fixture.
 
 ### P2.4 Tree features and tree placers `[~]` `L`
 
@@ -1031,8 +1050,9 @@ lush-cave, special, and structure features. `feature_data.json` is consumed by
   slice moved it to 98.71% / 92.02% (5654/6144): one tall-seagrass pair lands
   on a column where Rust terrain already differs from Java, so the feature is
   faithful to the world this port generated but cannot match the Java block.
-  The later ore/vein wiring raises the current fixture to 98.75% / 95.80%
-  (6067/5886 of 6144); keep this paragraph as slice history, not current state.
+  The later ore/vein wiring and `NoiseChunk` vein interpolation raise the
+  current fixture to 98.75% / 95.88% (6067/5891 of 6144); keep this paragraph as
+  slice history, not current state.
 
 ### P2.6 Cave, dripstone, sculk, and special features `[~]` `L`
 

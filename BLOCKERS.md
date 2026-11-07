@@ -14,6 +14,42 @@ Format:
 - Workaround / next task:
 ```
 
+## 2026-11-07 — P2.3 ore parity after NoiseChunk vein interpolation
+
+- Status: the documented vein interpolation gap is closed.
+  `vein_toggle` and the two interpolated arguments inside `vein_ridged` are now
+  sampled on `NoiseChunk`'s 4x8x4 grid and trilinearly interpolated
+  (`density::DensityFunction::compute_interpolated`,
+  `OreVeinifier::block_at`). `vein_gap` remains per-block, matching the shipped
+  router. Direct evaluation is still available and matches the Java
+  `worldgen-dump.txt` router values.
+- Parity: exact-name on the 16-column fixture rose from 5886/6144 (95.80%) to
+  **5891/6144 (95.88%)**; matched Java ore blocks rose from 26 to **28/33**.
+  Block-class is unchanged at **6067/6144 (98.75%)**.
+- Interpolation delta: over chunk `(0,-1)` the vein pass changes 170 positions
+  versus the direct path (119 added, 51 removed, 0 type replacements; 554
+  direct versus 622 interpolated vein positions). The fixture delta is small
+  because only 16 of 256 columns are sampled and surface/carvers overwrite some
+  vein blocks.
+- Remaining exact mismatches (253/6144) are dominated by
+  deepslate->tuff 37, stone->granite 23, deepslate->clay 21,
+  stone->andesite 15, stone->water 14, andesite->stone 12,
+  stone->diorite 12, deepslate->air 11, deepslate->moss_block 10,
+  air->deepslate 7, tuff->clay 7, and deepslate->gravel 6.
+- Remaining class mismatches (77/6144): solid->air 22, solid->water 21,
+  air->solid 20, water->solid 14.
+- Remaining ore mismatches (5/33): Java deepslate diamond ore at `(4,-60,-4)`
+  and `(4,-59,-4)` (Rust clay), and copper ore at `(8,46,-4)`, `(8,47,-4)`,
+  `(12,45,-8)` (Rust diorite/stone). These are ore-feature ellipsoid edges and
+  the 3x3-chunk feature write region, not the vein pass.
+- Still open (not hard blockers): the generator reads only the centre chunk's
+  biomes and rejects out-of-chunk writes, so vanilla's 3x3 `WorldGenRegion`
+  placement/exposure checks differ at borders; the `underground_ores` step still
+  omits `disk_*` and `underwater_magma`; feature-pool placement remains open.
+- Workaround / next task: keep `tests/density_parity.rs` as the parity floor
+  (exact >= 5891, class >= 6067, ore >= 28). The next ore slice is the 3x3
+  feature region; do not claim block-for-block ore parity before it lands.
+
 ## 2026-11-07 — P8.2 chat-signing core is not wired into login/status
 
 - Status: Not a hard blocker for the model/codec slice. `crypto.rs` now has
@@ -472,16 +508,16 @@ These are expected gaps, not reasons to stop:
   Fixing both plus `OreVeinifier` raises exact-name parity from 92.01% to
   95.80% (5886/6144) and block-class from 98.71% to 98.75% (6067/6144).
 - Still open (not a hard blocker):
-  - `NoiseChunk` wraps `vein_toggle` and `vein_ridged` in `interpolated`, so
-    Java evaluates them on the 4x8x4 interpolation grid. `OreVeinifier` here
-    computes them exactly per block; a few vein edge blocks differ. Wiring
-    interpolation belongs in `density.rs` (outside this slice).
+  - ~~`NoiseChunk` wraps `vein_toggle` and `vein_ridged` in `interpolated`~~
+    (resolved 2026-11-07: `density::compute_interpolated` samples the 4x8x4
+    grid and `OreVeinifier` uses it; see the entry above).
   - Vanilla builds the active biome set from a 3x3 chunk region and features
     may write into that whole region. This generator reads the center chunk's
     biomes and rejects out-of-chunk writes, so border placements and air
     exposure checks can differ.
-  - 26 of the fixture's 33 Java ore blocks match exactly. Remaining deltas are
-    small ellipsoid-edge/vein-edge differences and out-of-chunk writes.
+  - 26 of the fixture's 33 Java ore blocks matched at that time; the vein
+    interpolation slice raised this to 28/33. Remaining deltas are small
+    ellipsoid-edge/vein-edge differences and out-of-chunk writes.
   - The `underground_ores` step also contains `disk_*` and
     `underwater_magma`; the generator deliberately runs only ore/scattered-ore
     types until those are wired with their own surface/cave rules.

@@ -11,6 +11,8 @@ use crate::region::ChunkPos;
 use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use crate::worldgen::structure::StructureError;
 use crate::worldgen::structure::assets::StructureTemplateCatalog;
+use crate::worldgen::structure::end_city::EndCityStart;
+use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
 use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
@@ -83,6 +85,8 @@ pub enum BiomeSet {
 pub enum StructureKind {
     Igloo,
     DesertPyramid,
+    Fortress,
+    EndCity,
     Jigsaw {
         start_pool: String,
         start_jigsaw_name: Option<String>,
@@ -142,6 +146,8 @@ impl StructureDefinition {
         let kind = match type_name {
             "minecraft:igloo" => StructureKind::Igloo,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
+            "minecraft:fortress" => StructureKind::Fortress,
+            "minecraft:end_city" => StructureKind::EndCity,
             "minecraft:jigsaw" => {
                 if root.contains_key("pool_aliases")
                     && root
@@ -232,6 +238,30 @@ impl StructureDefinition {
             StructureKind::Igloo => {
                 IglooStructure::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::Fortress => {
+                let fortress = FortressStart::generate(
+                    context.seed,
+                    context.chunk_pos.x,
+                    context.chunk_pos.z,
+                );
+                Ok(StructureStart::new_fortress(
+                    &self.name,
+                    context.chunk_pos,
+                    context.references,
+                    fortress,
+                    self.terrain_adaptation,
+                ))
+            }
+            StructureKind::EndCity => match EndCityStart::generate(&self.name, context)? {
+                Some(end_city) => Ok(StructureStart::new_end_city(
+                    &self.name,
+                    context.chunk_pos,
+                    context.references,
+                    end_city,
+                    self.terrain_adaptation,
+                )),
+                None => Ok(StructureStart::invalid()),
+            },
             StructureKind::Jigsaw {
                 start_pool,
                 start_jigsaw_name,
@@ -360,6 +390,8 @@ pub struct StructureStart {
     pieces: Vec<StructurePiece>,
     jigsaw: Option<JigsawStart>,
     desert_pyramid: Option<DesertPyramidPiece>,
+    fortress: Option<FortressStart>,
+    end_city: Option<EndCityStart>,
     terrain_adaptation: TerrainAdjustment,
 }
 
@@ -378,6 +410,8 @@ impl StructureStart {
             pieces,
             jigsaw: None,
             desert_pyramid: None,
+            fortress: None,
+            end_city: None,
             terrain_adaptation,
         }
     }
@@ -396,6 +430,8 @@ impl StructureStart {
             pieces: Vec::new(),
             jigsaw: Some(jigsaw),
             desert_pyramid: None,
+            fortress: None,
+            end_city: None,
             terrain_adaptation,
         }
     }
@@ -414,6 +450,48 @@ impl StructureStart {
             pieces: Vec::new(),
             jigsaw: None,
             desert_pyramid: Some(piece),
+            fortress: None,
+            end_city: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_fortress(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        fortress: FortressStart,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            desert_pyramid: None,
+            fortress: Some(fortress),
+            end_city: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_end_city(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        end_city: EndCityStart,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            desert_pyramid: None,
+            fortress: None,
+            end_city: Some(end_city),
             terrain_adaptation,
         }
     }
@@ -427,6 +505,8 @@ impl StructureStart {
             pieces: Vec::new(),
             jigsaw: None,
             desert_pyramid: None,
+            fortress: None,
+            end_city: None,
             terrain_adaptation: TerrainAdjustment::None,
         }
     }
@@ -446,6 +526,16 @@ impl StructureStart {
     /// Jigsaw payload, if this is a jigsaw start.
     pub fn jigsaw(&self) -> Option<&JigsawStart> {
         self.jigsaw.as_ref()
+    }
+
+    /// Nether-fortress payload, if this is a fortress start.
+    pub fn fortress(&self) -> Option<&FortressStart> {
+        self.fortress.as_ref()
+    }
+
+    /// End-city payload, if this is an End-city start.
+    pub fn end_city(&self) -> Option<&EndCityStart> {
+        self.end_city.as_ref()
     }
 
     pub fn jigsaw_pieces(&self) -> &[crate::worldgen::structure::jigsaw::JigsawPiece] {
@@ -478,6 +568,14 @@ impl StructureStart {
         !self.pieces.is_empty()
             || self.jigsaw.as_ref().is_some_and(JigsawStart::is_valid)
             || self.desert_pyramid.is_some()
+            || self
+                .fortress
+                .as_ref()
+                .is_some_and(|fortress| !fortress.pieces().is_empty())
+            || self
+                .end_city
+                .as_ref()
+                .is_some_and(|end_city| !end_city.pieces().is_empty())
     }
 
     /// `StructureStart.getBoundingBox` before `Structure.adjustBoundingBox`.
@@ -494,6 +592,16 @@ impl StructureStart {
         }
         if let Some(pyramid) = &self.desert_pyramid {
             boxes.push(pyramid.bounding_box());
+        }
+        if let Some(fortress) = &self.fortress
+            && let Some(bounding_box) = fortress.bounding_box()
+        {
+            boxes.push(bounding_box);
+        }
+        if let Some(end_city) = &self.end_city
+            && let Some(bounding_box) = end_city.bounding_box()
+        {
+            boxes.push(bounding_box);
         }
         BoundingBox::encapsulating(boxes)
     }
@@ -524,7 +632,32 @@ impl StructureStart {
         let max_y = level.min_y() + level.height() - 1;
         let chunk_box =
             BoundingBox::new(min_x, level.min_y(), min_z, min_x + 15, max_y, min_z + 15);
-        self.place_in_box(level, chunk_box)
+        let mut random = LegacyRandomSource::new(
+            (i64::from(chunk_pos.x) << 32) ^ i64::from(chunk_pos.z),
+        );
+        self.place_in_box_with_random(level, chunk_box, &mut random)
+    }
+
+    /// Placement with an explicit structure random, matching Java's
+    /// `StructureStart.placeInChunk(... RandomSource)` call. Fortress chest
+    /// seeds and End-city chest seeds consume this stream.
+    pub fn place_in_chunk_with_random(
+        &self,
+        level: &mut dyn FeatureLevel,
+        chunk_pos: ChunkPos,
+        random: &mut dyn RandomSource,
+    ) -> Result<StartPlacement, StructureError> {
+        if self.jigsaw.is_some() {
+            return Err(StructureError::JigsawRequiresTemplates {
+                structure: self.structure_id.clone(),
+            });
+        }
+        let min_x = chunk_pos.x << 4;
+        let min_z = chunk_pos.z << 4;
+        let max_y = level.min_y() + level.height() - 1;
+        let chunk_box =
+            BoundingBox::new(min_x, level.min_y(), min_z, min_x + 15, max_y, min_z + 15);
+        self.place_in_box_with_random(level, chunk_box, random)
     }
 
     /// Placement with an explicit chunk/region box, useful for tests and for a
@@ -533,6 +666,19 @@ impl StructureStart {
         &self,
         level: &mut dyn FeatureLevel,
         chunk_box: BoundingBox,
+    ) -> Result<StartPlacement, StructureError> {
+        let mut random = LegacyRandomSource::new(
+            (i64::from(chunk_box.min_x()) << 32) ^ i64::from(chunk_box.min_z()),
+        );
+        self.place_in_box_with_random(level, chunk_box, &mut random)
+    }
+
+    /// Box placement with the caller's structure random.
+    pub fn place_in_box_with_random(
+        &self,
+        level: &mut dyn FeatureLevel,
+        chunk_box: BoundingBox,
+        random: &mut dyn RandomSource,
     ) -> Result<StartPlacement, StructureError> {
         let mut result = StartPlacement::default();
         for piece in &self.pieces {
@@ -547,6 +693,12 @@ impl StructureStart {
                 }
                 None => result.skipped_pieces += 1,
             }
+        }
+        if let Some(fortress) = &self.fortress {
+            merge_placement(&mut result, fortress.place(level, chunk_box, random)?);
+        }
+        if let Some(end_city) = &self.end_city {
+            merge_placement(&mut result, end_city.place(level, chunk_box, random)?);
         }
         if let Some(pyramid) = &self.desert_pyramid {
             let placement = pyramid.place(level, chunk_box)?;
@@ -606,6 +758,22 @@ impl StructureStart {
             None => Ok(StartPlacement::default()),
         }
     }
+}
+
+fn merge_placement(result: &mut StartPlacement, placement: StartPlacement) {
+    result.placed_pieces += placement.placed_pieces;
+    result.skipped_pieces += placement.skipped_pieces;
+    result.written += placement.written;
+    result.rejected += placement.rejected;
+    result.written_blocks.extend(placement.written_blocks);
+    result.feature_elements += placement.feature_elements;
+    result.feature_placements += placement.feature_placements;
+    result.feature_written += placement.feature_written;
+    result.feature_rejected += placement.feature_rejected;
+    result.feature_blocks.extend(placement.feature_blocks);
+    result.block_entities.extend(placement.block_entities);
+    result.entities.extend(placement.entities);
+    result.data_markers.extend(placement.data_markers);
 }
 
 /// `DesertPyramidStructure` + `DesertPyramidPiece`.

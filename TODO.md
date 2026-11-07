@@ -47,6 +47,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P9.9 live bridge packets - `join` now owns a UUID/name session
+  command registry; bridge chat, kick, teleport, world time, weather game
+  events, sound, and simple particles are encoded as 1.21.11 play packets and
+  written by the play loop. 3 lib `join` tests plus a hopper-push world test,
+  8 new Java effect/argument checks; `bridge.jar` rebuilt. A live wire probe
+  decoded chat 119, sound 115, particle 46, time 111, weather events 38, and
+  kick disconnect 32 with the expected bodies.
 - 2026-11-07: P6 daylight detectors - `WorldStorage::sky_light_at` exposes
   cached sky-light values; the daylight-detector behavior samples the cell above
   every 20 ticks and drives the `power` property (normal and inverted). 1 more
@@ -2312,9 +2319,12 @@ count/damage/name/lore/unbreakable/enchantments. Three block/interact events are
 host-callable with cancellation. The bridge now also has a Rust-backed flat YAML
 config, Rust-owned permission attachments with operator defaults,
 `ServicesManager`, persisted world time/weather/spawn, and a scheduler test
-seam. Still missing: live-session sync for health/food/inventory/teleport/
-messages/kick, live event dispatch from `join.rs`, armor/off-hand slots, PDC
-persistence, entity APIs, client sound/particle packets, and NMS shims.
+seam. Live play sessions now receive chat, kick, teleport, time, weather game
+events, sound, and simple particles through a UUID/name command registry. Still
+missing: signed/rich chat, action-bar overlay, live health/food/inventory
+packets, distance-filtered effects, option-carrying particles, live event
+dispatch from `join.rs`, armor/off-hand slots, PDC persistence, entity APIs, and
+NMS shims.
 
 ### P9.1 Formalize the Rust↔Java ABI `[~]` `M`
 
@@ -2360,12 +2370,13 @@ persistence, entity APIs, client sound/particle packets, and NMS shims.
 - **Progress (2026-11-06):** `World`/`Block`/`BlockData`/`BlockState`/`Chunk`
   proxies cover block type, location, highest-Y, biome, sky/block light, and
   stored/cached block edits. `Player` covers world/location/inventory/game
-  mode/messages/teleport/health/food/saturation; `setGameMode` forwards to a
-  live session, while the rest persists through `PlayerSession` playerdata.
-  `PlayerInventory` covers slots 0-35; `ItemStack`/`ItemMeta` cover
-  type/count/damage/name/lore/unbreakable. Live-session sync, armor/off-hand,
-  entities, `LivingEntity`, full chunk snapshots, and persistent-data containers
-  remain open.
+  mode/messages/teleport/health/food/saturation; `setGameMode`, messages,
+  teleport, and kick now reach a live session, while the rest persists through
+  `PlayerSession` playerdata. `PlayerInventory` covers slots 0-35;
+  `ItemStack`/`ItemMeta` cover type/count/damage/name/lore/unbreakable.
+  Live-session health/food/inventory sync, armor/off-hand, entities,
+  `LivingEntity`, full chunk snapshots, and persistent-data containers remain
+  open.
 
 ### P9.4 Scheduler parity `[~]` `M`
 
@@ -2448,10 +2459,13 @@ persistence, entity APIs, client sound/particle packets, and NMS shims.
   from `WorldStorage`; block edits persist and broadcast. World time,
   isDayTime, storm/thunder flags and durations, and spawn location are
   persisted in `run/world_state.txt`; `setTime` uses Bukkit's 24,000-tick
-  margin rule. Time/weather changes do not reach a live client yet.
-  `playSound`/`spawnParticle` are explicit no-ops, and entity spawn/query,
-  explosions, weather packets, and on-demand chunk generation remain open.
-  World reads/writes only cover stored or currently cached columns.
+  margin rule. Time changes now send `ClientboundSetTime`; storm/thunder
+  changes send the vanilla start/stop/rain-level/thunder-level game events to
+  live sessions. `playSound` broadcasts an inline sound event and
+  `spawnParticle` sends simple particle types; option-carrying particles and
+  distance filtering remain open. Entity spawn/query, explosions,
+  on-demand chunk generation, and periodic time/weather synchronization remain
+  open. World reads/writes only cover stored or currently cached columns.
 
 ### P9.10 NMS/CraftBukkit shims `[ ]` `XL` long tail
 

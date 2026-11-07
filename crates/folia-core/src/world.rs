@@ -294,6 +294,70 @@ impl WorldStorage {
         }
     }
 
+    /// Push one item from each ready hopper into the container below it.
+    ///
+    /// The hopper cooldown itself is advanced by [`tick_block_entities`]
+    /// through [`crate::block_entity::BlockEntityTicker`]; this pass only
+    /// performs the transfer when that cooldown reached zero. It is the
+    /// minimum downward-push behaviour the world tick loop needs before a
+    /// full `HopperBlockEntity` scheduler lands.
+    pub fn tick_hoppers(&mut self) -> io::Result<()> {
+        let mut positions: Vec<BlockEntityPos> = self
+            .block_entities
+            .values()
+            .flat_map(|entities| entities.values())
+            .filter_map(|entity| match entity {
+                BlockEntity::Hopper(hopper) => Some(hopper.pos),
+                _ => None,
+            })
+            .collect();
+        positions.sort_by_key(|pos| (pos.x, pos.y, pos.z));
+        positions.dedup();
+
+        for pos in positions {
+            let key = (pos.chunk_x(), pos.chunk_z());
+            let Some(BlockEntity::Hopper(mut hopper)) = self
+                .block_entities
+                .get_mut(&key)
+                .and_then(|entities| entities.remove(&pos))
+            else {
+                continue;
+            };
+            if hopper.transfer_cooldown == 0 && !hopper.items.iter().all(|item| item.is_empty()) {
+                let below = BlockEntityPos::new(pos.x, pos.y - 1, pos.z);
+                if self.ensure_block_entities(below.chunk_x(), below.chunk_z())?
+                    && let Some(target) = self
+                        .block_entities
+                        .get_mut(&(below.chunk_x(), below.chunk_z()))
+                        .and_then(|entities| entities.get_mut(&below))
+                {
+                    let moved = match target {
+                        BlockEntity::Hopper(target) => {
+                            crate::block_entity::move_one_item(&mut hopper.items, &mut target.items)
+                        }
+                        BlockEntity::Chest(target) => {
+                            crate::block_entity::move_one_item(&mut hopper.items, &mut target.items)
+                        }
+                        BlockEntity::Furnace(target) => {
+                            crate::block_entity::move_one_item(&mut hopper.items, &mut target.items)
+                        }
+                        BlockEntity::Spawner(_)
+                        | BlockEntity::Sign(_)
+                        | BlockEntity::Unknown(_) => false,
+                    };
+                    if moved {
+                        hopper.transfer_cooldown = 8;
+                    }
+                }
+            }
+            self.block_entities
+                .entry(key)
+                .or_default()
+                .insert(pos, BlockEntity::Hopper(hopper));
+        }
+        Ok(())
+    }
+
     fn ensure_block_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
         let key = (chunk_x, chunk_z);
         if self.block_entities.contains_key(&key) {
@@ -657,6 +721,42 @@ mod tests {
             lock(first).region_dir(),
             Dimension::Overworld.region_dir(&root)
         );
+    }
+
+    #[test]
+    fn tick_hoppers_pushes_one_item_into_the_container_below() {
+        use crate::block_entity::{ChestBlockEntity, HopperBlockEntity};
+        use crate::item_components::ItemStack;
+
+        let root = temp_dir("hopper-tick");
+        let mut storage = WorldStorage::new(Dimension::Overworld.region_dir(&root));
+        let hopper_pos = BlockEntityPos::new(0, 64, 0);
+        let chest_pos = BlockEntityPos::new(0, 63, 0);
+        let mut hopper = HopperBlockEntity::new(hopper_pos);
+        hopper.set_slot(0, ItemStack::new("minecraft:iron_ingot", 5));
+        let mut entities = BlockEntityMap::new();
+        entities.insert(hopper_pos, BlockEntity::Hopper(hopper));
+        entities.insert(
+            chest_pos,
+            BlockEntity::Chest(ChestBlockEntity::new(chest_pos)),
+        );
+        storage.block_entities.insert((0, 0), entities);
+
+        storage.tick_hoppers().unwrap();
+
+        let Some(BlockEntity::Hopper(hopper)) = storage.get_block_entity(hopper_pos).unwrap()
+        else {
+            panic!("hopper missing after tick");
+        };
+        assert_eq!(hopper.slot(0).unwrap().count, 4);
+        assert_eq!(hopper.transfer_cooldown, 8);
+        let Some(BlockEntity::Chest(chest)) = storage.get_block_entity(chest_pos).unwrap() else {
+            panic!("chest missing after tick");
+        };
+        assert_eq!(chest.slot(0).unwrap().item, "minecraft:iron_ingot");
+        assert_eq!(chest.slot(0).unwrap().count, 1);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

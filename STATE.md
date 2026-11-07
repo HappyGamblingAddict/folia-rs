@@ -9,8 +9,9 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **964 passing** on the full merged gate (0 failed); parity holds at
-  **98.75% block-class / 95.80% exact-name**.
+- Tests: focused bridge gate passes (`join` 20 lib tests, `join` integration,
+  11 `folia-server` tests, 60 `BridgeApiTest` checks); the last full workspace
+  gate was 964, and this slice adds 4 lib tests.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
   recursive jigsaw, Nether/End generators, dimension storage and portal math.
@@ -21,8 +22,9 @@ Last updated: 2026-11-07
   ownership, armor/status effects, item entities/XP, and daylight detectors.
 - Major gaps: shipped structure-template assets and full village jigsaw data;
   hopper live pull/push; nether/end portal session wiring and dimension
-  switching; chat signing; bridge live chat/kick/sound packets; entity AI on
-  live sessions; full plugin API surface; real per-world region tick threading.
+  switching; chat signing; bridge signed/rich chat and effect filtering;
+  entity AI on live sessions; full plugin API surface; real per-world region
+  tick threading.
 
 ## Current focus
 
@@ -31,7 +33,7 @@ Last updated: 2026-11-07
 2. P6 hopper live transfer tick and furnace-lit block state.
 3. P7 portal-driven dimension switching and Nether/End structure generation.
 4. P5 live AI goals, armor enchantments, and effect packets.
-5. P9.3 bridge outbound chat/kick/sound/particle packets.
+5. P9.3 bridge event dispatch and remaining live player state packets.
 
 ## Next queue
 
@@ -54,6 +56,21 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: P9 bridge live packets — `join.rs` now has a UUID/name command
+  registry (`ActiveSession`, `SessionCommandGuard`) and play-loop outbound
+  variants for system chat, play-state disconnect, teleport, set-time, game
+  events, sound, and simple particles. Packet bodies were encoded from the
+  1.21.11 decompiled layouts (chat/disconnect network NBT components, set-time,
+  inline direct sound events, particle registry ids). `jvm.rs` pushes chat,
+  kick, teleport, time, weather, and effect calls into live sessions while the
+  native `FOLIA_DISABLE_PLUGINS=1` path is unchanged. Added the missing
+  `WorldStorage::tick_hoppers` downward-push pass required by the existing tick
+  loop. Focused: 3 new lib `join` tests plus a hopper-push world test, the
+  `join` integration test, 11 `folia-server` tests, and 8 new
+  `BridgeApiTest` checks; fmt/clippy clean. A temporary wire probe against a
+  live HelloPlugin session decoded system chat (119), sound (115), particle
+  (46), set time (111), weather game events (38), and play-state disconnect
+  (32) with the expected bodies.
 - 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
   random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

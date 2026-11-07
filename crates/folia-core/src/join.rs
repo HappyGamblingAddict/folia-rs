@@ -78,6 +78,17 @@ const PLAY_PLAYER_ABILITIES: i32 = 62;
 const PLAY_SET_HEALTH: i32 = 102;
 const PLAY_PLAYER_COMBAT_KILL: i32 = 66;
 const PLAY_RESPAWN: i32 = 80;
+/// `ClientboundDisconnectPacket` in the play protocol (common packet id 32).
+const PLAY_DISCONNECT: i32 = 32;
+/// `ClientboundSetTimePacket` (game time, day time, tick-day-time flag).
+const PLAY_SET_TIME: i32 = 111;
+/// `ClientboundSoundPacket` (direct sound event, source, position, volume,
+/// pitch, seed).
+const PLAY_SOUND: i32 = 115;
+/// `ClientboundLevelParticlesPacket`.
+const PLAY_LEVEL_PARTICLES: i32 = 46;
+/// `ClientboundSystemChatPacket` (component NBT, overlay flag).
+const PLAY_SYSTEM_CHAT: i32 = 119;
 
 /// `ClientboundPlayerCombatKill`/`SetHealth`/`Respawn` IDs are the live
 /// 1.21.11 IDs; `PLAY_SET_HEALTH` is also present in the captured join stream.
@@ -182,56 +193,360 @@ enum SessionCommand {
         mode: i32,
         reply: mpsc::Sender<Result<(), String>>,
     },
+    /// `ClientboundSystemChat` with a plain-text component.
+    Chat { message: String },
+    /// Play-state disconnect with a text component reason.
+    Disconnect { reason: String },
+    /// Authoritative move; the play loop writes `ClientboundPlayerPosition`.
+    Teleport {
+        x: f64,
+        y: f64,
+        z: f64,
+        yaw: f32,
+        pitch: f32,
+    },
+    /// `ClientboundSetTime` (game time, day time, tick-day-time flag).
+    SetTime {
+        game_time: i64,
+        day_time: i64,
+        tick_day_time: bool,
+    },
+    /// `ClientboundGameEvent` (rain start/stop, rain level, thunder level, ...).
+    GameEvent { event: u8, param: f32 },
+    /// `ClientboundSound` using an inline (direct) sound event, so no sound
+    /// registry id table is needed. The name must already be namespaced.
+    Sound {
+        sound: String,
+        category: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+        volume: f32,
+        pitch: f32,
+        seed: i64,
+    },
+    /// `ClientboundLevelParticles` for a simple particle type.
+    Particle {
+        particle: String,
+        x: f64,
+        y: f64,
+        z: f64,
+        offset_x: f32,
+        offset_y: f32,
+        offset_z: f32,
+        speed: f32,
+        count: i32,
+        force: bool,
+    },
 }
 
-struct ActiveConsoleSession {
+struct ActiveSession {
+    /// Unique per connection, so a reconnect with the same UUID cannot have its
+    /// registration removed by the previous connection's guard.
+    id: u64,
     name: String,
-    uuid: [u8; 16],
     sender: mpsc::Sender<SessionCommand>,
 }
 
-static CONSOLE_SESSIONS: LazyLock<Mutex<Vec<ActiveConsoleSession>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
+static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
+static SESSIONS: LazyLock<Mutex<HashMap<[u8; 16], ActiveSession>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static OPERATORS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static OPS_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-struct ConsoleSessionGuard {
+/// Registration for one live play session. Dropping it removes the session
+/// from the registry, so the bridge can never push commands to a closed socket.
+struct SessionCommandGuard {
+    id: u64,
     uuid: [u8; 16],
 }
 
-impl ConsoleSessionGuard {
+impl SessionCommandGuard {
     fn register(name: &str, uuid: [u8; 16]) -> (Self, mpsc::Receiver<SessionCommand>) {
+        let id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst) as u64;
         let (sender, receiver) = mpsc::channel();
-        CONSOLE_SESSIONS
+        SESSIONS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(ActiveConsoleSession {
-                name: name.to_owned(),
+            .insert(
                 uuid,
-                sender,
-            });
-        (Self { uuid }, receiver)
+                ActiveSession {
+                    id,
+                    name: name.to_owned(),
+                    sender,
+                },
+            );
+        (Self { id, uuid }, receiver)
     }
 }
 
-impl Drop for ConsoleSessionGuard {
+impl Drop for SessionCommandGuard {
     fn drop(&mut self) {
-        CONSOLE_SESSIONS
+        let mut sessions = SESSIONS
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|session| session.uuid != self.uuid);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if sessions
+            .get(&self.uuid)
+            .is_some_and(|session| session.id == self.id)
+        {
+            sessions.remove(&self.uuid);
+        }
     }
+}
+
+fn session_sender(uuid: [u8; 16]) -> Option<mpsc::Sender<SessionCommand>> {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&uuid)
+        .map(|session| session.sender.clone())
+}
+
+fn session_sender_by_name(name: &str) -> Option<mpsc::Sender<SessionCommand>> {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .find(|session| session.name.eq_ignore_ascii_case(name))
+        .map(|session| session.sender.clone())
 }
 
 fn active_session_names() -> Vec<String> {
-    let mut names: Vec<String> = CONSOLE_SESSIONS
+    let mut names: Vec<String> = SESSIONS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
+        .values()
         .map(|session| session.name.clone())
         .collect();
     names.sort();
     names
+}
+
+/// Push one command to the live session for `uuid`. Returns false when the
+/// player is not connected (or the session has already closed its channel).
+pub fn send_player_chat(uuid: [u8; 16], message: &str) -> bool {
+    session_sender(uuid).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Chat {
+                message: message.to_owned(),
+            })
+            .is_ok()
+    })
+}
+
+/// Name-keyed variant for callers that only have a player name.
+pub fn send_player_chat_by_name(name: &str, message: &str) -> bool {
+    session_sender_by_name(name).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Chat {
+                message: message.to_owned(),
+            })
+            .is_ok()
+    })
+}
+
+/// Ask the live session to write a play-state disconnect and close. Returns
+/// false when the player is not connected.
+pub fn kick_player(uuid: [u8; 16], reason: &str) -> bool {
+    session_sender(uuid).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Disconnect {
+                reason: reason.to_owned(),
+            })
+            .is_ok()
+    })
+}
+
+/// Teleport the live session. The play loop sets the authoritative position,
+/// writes `ClientboundPlayerPosition` and re-streams chunks when the column
+/// changed. Returns false when the player is not connected or the target is
+/// not finite.
+pub fn teleport_player(uuid: [u8; 16], x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> bool {
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() || !yaw.is_finite() || !pitch.is_finite()
+    {
+        return false;
+    }
+    session_sender(uuid).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Teleport {
+                x,
+                y,
+                z,
+                yaw,
+                pitch,
+            })
+            .is_ok()
+    })
+}
+
+/// Broadcast `ClientboundSetTime` to every live session. Returns the number of
+/// commands queued.
+pub fn broadcast_world_time(game_time: i64, day_time: i64, tick_day_time: bool) -> usize {
+    broadcast_command(|_| {
+        Some(SessionCommand::SetTime {
+            game_time,
+            day_time,
+            tick_day_time,
+        })
+    })
+}
+
+/// Broadcast one `ClientboundGameEvent` value to every live session.
+pub fn broadcast_game_event(event: u8, param: f32) -> usize {
+    broadcast_command(|_| Some(SessionCommand::GameEvent { event, param }))
+}
+
+/// Broadcast a sound to every live session. The sound event is sent inline
+/// (direct holder), which the 1.21.11 client resolves by its resource location.
+#[allow(clippy::too_many_arguments)]
+pub fn broadcast_sound(
+    sound: &str,
+    category: i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    volume: f32,
+    pitch: f32,
+    seed: i64,
+) -> usize {
+    broadcast_command(|_| {
+        Some(SessionCommand::Sound {
+            sound: namespaced_sound(sound)?,
+            category,
+            x,
+            y,
+            z,
+            volume,
+            pitch,
+            seed,
+        })
+    })
+}
+
+/// Send a sound to one live session only (player-level `playSound`).
+#[allow(clippy::too_many_arguments)]
+pub fn send_player_sound(
+    uuid: [u8; 16],
+    sound: &str,
+    category: i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    volume: f32,
+    pitch: f32,
+    seed: i64,
+) -> bool {
+    let Some(sound) = namespaced_sound(sound) else {
+        return false;
+    };
+    session_sender(uuid).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Sound {
+                sound,
+                category,
+                x,
+                y,
+                z,
+                volume,
+                pitch,
+                seed,
+            })
+            .is_ok()
+    })
+}
+
+/// Send a simple particle to one live session only.
+#[allow(clippy::too_many_arguments)]
+pub fn send_player_particle(
+    uuid: [u8; 16],
+    particle: &str,
+    x: f64,
+    y: f64,
+    z: f64,
+    offset_x: f32,
+    offset_y: f32,
+    offset_z: f32,
+    speed: f32,
+    count: i32,
+    force: bool,
+) -> bool {
+    let particle = particle.to_owned();
+    session_sender(uuid).is_some_and(|sender| {
+        sender
+            .send(SessionCommand::Particle {
+                particle,
+                x,
+                y,
+                z,
+                offset_x,
+                offset_y,
+                offset_z,
+                speed,
+                count,
+                force,
+            })
+            .is_ok()
+    })
+}
+
+/// Broadcast a simple particle to every live session. Names outside the simple
+/// particle table are rejected loudly by the play loop.
+#[allow(clippy::too_many_arguments)]
+pub fn broadcast_particle(
+    particle: &str,
+    x: f64,
+    y: f64,
+    z: f64,
+    offset_x: f32,
+    offset_y: f32,
+    offset_z: f32,
+    speed: f32,
+    count: i32,
+    force: bool,
+) -> usize {
+    broadcast_command(|_| {
+        Some(SessionCommand::Particle {
+            particle: particle.to_owned(),
+            x,
+            y,
+            z,
+            offset_x,
+            offset_y,
+            offset_z,
+            speed,
+            count,
+            force,
+        })
+    })
+}
+
+fn broadcast_command(mut command: impl FnMut(&ActiveSession) -> Option<SessionCommand>) -> usize {
+    let sessions = SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut sent = 0;
+    for session in sessions.values() {
+        if let Some(command) = command(session)
+            && session.sender.send(command).is_ok()
+        {
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// Sound identifiers are resource locations. Bare Bukkit names are treated as
+/// `minecraft:` keys; an already namespaced key is passed through.
+fn namespaced_sound(sound: &str) -> Option<String> {
+    let sound = sound.trim();
+    if sound.is_empty() {
+        return None;
+    }
+    Some(if sound.contains(':') {
+        sound.to_owned()
+    } else {
+        format!("minecraft:{sound}")
+    })
 }
 
 pub fn configure_operators(path: impl Into<PathBuf>) {
@@ -384,10 +699,10 @@ pub fn execute_console_command(line: &str) -> Vec<String> {
                         .to_owned(),
                 ];
             };
-            let sender = CONSOLE_SESSIONS
+            let sender = SESSIONS
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .iter()
+                .values()
                 .find(|session| session.name.eq_ignore_ascii_case(&target))
                 .map(|session| session.sender.clone());
             let Some(sender) = sender else {
@@ -1032,6 +1347,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 | PLAY_CHUNK_CACHE_CENTER
                 | PLAY_PLAYER_ABILITIES
                 | PLAY_SET_HEALTH
+                | PLAY_SET_TIME
+                | PLAY_SYSTEM_CHAT
         ) {
             continue;
         }
@@ -1117,7 +1434,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let play_started = Instant::now();
     let mut dig = DigState::default();
     let (_console_guard, console_commands) =
-        ConsoleSessionGuard::register(&session.name, session.uuid);
+        SessionCommandGuard::register(&session.name, session.uuid);
 
     loop {
         if shutdown_requested() {
@@ -1155,6 +1472,112 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     let result = apply_game_mode(&mut stream, &mut session, mode)
                         .map_err(|error| error.to_string());
                     let _ = reply.send(result);
+                }
+                SessionCommand::Chat { message } => {
+                    write_packet(&mut stream, &system_chat_packet(&message)?)?;
+                }
+                SessionCommand::Disconnect { reason } => {
+                    write_packet(&mut stream, &disconnect_packet(&reason)?)?;
+                    tracked_entities.clear();
+                    if let Err(error) = session.save(playerdata_dir()) {
+                        eprintln!("[join] could not save playerdata before kick: {error}");
+                    }
+                    if let Err(error) = crate::world::lock(world.storage).flush() {
+                        eprintln!("[join] could not flush terrain before kick: {error}");
+                    }
+                    println!("[join] {} kicked: {reason}", start.name);
+                    return Ok(());
+                }
+                SessionCommand::Teleport {
+                    x,
+                    y,
+                    z,
+                    yaw,
+                    pitch,
+                } => {
+                    session.teleport(x, y, z, true);
+                    session.yaw = yaw;
+                    session.pitch = pitch;
+                    session.physics.yaw = yaw;
+                    session.physics.pitch = pitch;
+                    teleport_id += 1;
+                    write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                    let new_x = (session.x.floor() as i32).div_euclid(16);
+                    let new_z = (session.z.floor() as i32).div_euclid(16);
+                    if (new_x, new_z) != (center_x, center_z) {
+                        center_x = new_x;
+                        center_z = new_z;
+                        stream_chunks_around(
+                            &mut stream,
+                            world.storage,
+                            world.trust_stored,
+                            radius,
+                            center_x,
+                            center_z,
+                            &mut sent_chunks,
+                        )?;
+                        for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
+                            write_packet(&mut stream, &packet)?;
+                        }
+                    }
+                    if let Err(error) = session.save(playerdata_dir()) {
+                        eprintln!("[join] could not save teleport: {error}");
+                    }
+                    println!(
+                        "[join] {} teleported to ({:.1}, {:.1}, {:.1})",
+                        start.name, session.x, session.y, session.z
+                    );
+                }
+                SessionCommand::SetTime {
+                    game_time,
+                    day_time,
+                    tick_day_time,
+                } => {
+                    write_packet(
+                        &mut stream,
+                        &set_time_packet(game_time, day_time, tick_day_time),
+                    )?;
+                }
+                SessionCommand::GameEvent { event, param } => {
+                    write_packet(&mut stream, &game_event_packet(event, param))?;
+                }
+                SessionCommand::Sound {
+                    sound,
+                    category,
+                    x,
+                    y,
+                    z,
+                    volume,
+                    pitch,
+                    seed,
+                } => {
+                    write_packet(
+                        &mut stream,
+                        &sound_packet(&sound, category, x, y, z, volume, pitch, seed)?,
+                    )?;
+                }
+                SessionCommand::Particle {
+                    particle,
+                    x,
+                    y,
+                    z,
+                    offset_x,
+                    offset_y,
+                    offset_z,
+                    speed,
+                    count,
+                    force,
+                } => {
+                    match particle_packet(
+                        &particle, x, y, z, offset_x, offset_y, offset_z, speed, count, force,
+                    ) {
+                        Some(packet) => write_packet(&mut stream, &packet)?,
+                        None => eprintln!(
+                            "[join] refusing unsupported particle '{particle}' for {}: \
+                             no simple 1.21.11 particle registry id",
+                            start.name
+                        ),
+                    }
                 }
             }
         }
@@ -1567,6 +1990,208 @@ fn game_event_is_change_game_mode(packet: &[u8]) -> bool {
     let mut reader = PacketReader::new(packet);
     reader.read_varint().ok() == Some(PLAY_GAME_EVENT)
         && reader.read_u8().ok() == Some(GAME_EVENT_CHANGE_GAME_MODE)
+}
+
+/// 1.21.11 component serialization is a single network NBT tag (no name), where
+/// a literal component may be either a string or `{ text: "..." }`.
+fn component_nbt(message: &str) -> io::Result<Vec<u8>> {
+    let tag = Tag::Compound(vec![("text".into(), Tag::String(message.to_owned()))]);
+    let mut encoded = Vec::new();
+    crate::nbt::write_any_tag(&mut encoded, &tag)?;
+    Ok(encoded)
+}
+
+fn system_chat_packet(message: &str) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_SYSTEM_CHAT)?;
+    writer.write_bytes(&component_nbt(message)?);
+    writer.write_u8(0)?; // overlay = false (chat box)
+    Ok(writer.into_inner())
+}
+
+fn disconnect_packet(reason: &str) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_DISCONNECT)?;
+    writer.write_bytes(&component_nbt(reason)?);
+    Ok(writer.into_inner())
+}
+
+fn set_time_packet(game_time: i64, day_time: i64, tick_day_time: bool) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_SET_TIME).unwrap();
+    writer.write_i64(game_time).unwrap();
+    writer.write_i64(day_time).unwrap();
+    writer.write_u8(u8::from(tick_day_time)).unwrap();
+    writer.into_inner()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sound_packet(
+    sound: &str,
+    category: i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    volume: f32,
+    pitch: f32,
+    seed: i64,
+) -> io::Result<Vec<u8>> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_SOUND)?;
+    // Holder.direct: id 0 followed by SoundEvent.DIRECT_STREAM_CODEC
+    // (resource location + optional fixed range).
+    writer.write_varint(0)?;
+    writer.write_string(sound)?;
+    writer.write_u8(0)?; // no fixed range
+    writer.write_varint(category)?;
+    writer.write_i32((x * 8.0) as i32)?;
+    writer.write_i32((y * 8.0) as i32)?;
+    writer.write_i32((z * 8.0) as i32)?;
+    writer.write_f32(volume)?;
+    writer.write_f32(pitch)?;
+    writer.write_i64(seed)?;
+    Ok(writer.into_inner())
+}
+
+/// Simple particle registry ids from the 1.21.11 built-in `particle_type`
+/// registration order (`ParticleTypes`). Particles that carry option payloads
+/// are intentionally absent: sending only their id would be a malformed packet,
+/// so callers get an explicit unsupported error instead of a guess.
+fn particle_registry_id(name: &str) -> Option<i32> {
+    let path = name
+        .trim()
+        .split_once(':')
+        .map_or(name.trim(), |(_, path)| path);
+    match path {
+        "angry_villager" => Some(0),
+        "bubble" => Some(3),
+        "cloud" => Some(4),
+        "copper_fire_flame" => Some(5),
+        "crit" => Some(6),
+        "damage_indicator" => Some(7),
+        "dripping_lava" => Some(9),
+        "falling_lava" => Some(10),
+        "landing_lava" => Some(11),
+        "dripping_water" => Some(12),
+        "falling_water" => Some(13),
+        "elder_guardian" => Some(17),
+        "enchanted_hit" => Some(18),
+        "enchant" => Some(19),
+        "end_rod" => Some(20),
+        "explosion_emitter" => Some(22),
+        "explosion" => Some(23),
+        "gust" => Some(24),
+        "small_gust" => Some(25),
+        "gust_emitter_large" => Some(26),
+        "gust_emitter_small" => Some(27),
+        "sonic_boom" => Some(28),
+        "firework" => Some(30),
+        "fishing" => Some(31),
+        "flame" => Some(32),
+        "infested" => Some(33),
+        "cherry_leaves" => Some(34),
+        "pale_oak_leaves" => Some(35),
+        "sculk_soul" => Some(37),
+        "sculk_charge_pop" => Some(39),
+        "soul_fire_flame" => Some(40),
+        "soul" => Some(41),
+        "happy_villager" => Some(43),
+        "composter" => Some(44),
+        "heart" => Some(45),
+        "item_slime" => Some(50),
+        "item_cobweb" => Some(51),
+        "item_snowball" => Some(52),
+        "large_smoke" => Some(53),
+        "lava" => Some(54),
+        "mycelium" => Some(55),
+        "note" => Some(56),
+        "poof" => Some(57),
+        "portal" => Some(58),
+        "rain" => Some(59),
+        "smoke" => Some(60),
+        "white_smoke" => Some(61),
+        "sneeze" => Some(62),
+        "spit" => Some(63),
+        "squid_ink" => Some(64),
+        "sweep_attack" => Some(65),
+        "totem_of_undying" => Some(66),
+        "underwater" => Some(67),
+        "splash" => Some(68),
+        "witch" => Some(69),
+        "bubble_pop" => Some(70),
+        "current_down" => Some(71),
+        "bubble_column_up" => Some(72),
+        "nautilus" => Some(73),
+        "dolphin" => Some(74),
+        "campfire_cosy_smoke" => Some(75),
+        "campfire_signal_smoke" => Some(76),
+        "dripping_honey" => Some(77),
+        "falling_honey" => Some(78),
+        "landing_honey" => Some(79),
+        "falling_nectar" => Some(80),
+        "falling_spore_blossom" => Some(81),
+        "ash" => Some(82),
+        "crimson_spore" => Some(83),
+        "warped_spore" => Some(84),
+        "spore_blossom_air" => Some(85),
+        "dripping_obsidian_tear" => Some(86),
+        "falling_obsidian_tear" => Some(87),
+        "landing_obsidian_tear" => Some(88),
+        "reverse_portal" => Some(89),
+        "white_ash" => Some(90),
+        "small_flame" => Some(91),
+        "snowflake" => Some(92),
+        "dripping_dripstone_lava" => Some(93),
+        "falling_dripstone_lava" => Some(94),
+        "dripping_dripstone_water" => Some(95),
+        "falling_dripstone_water" => Some(96),
+        "glow_squid_ink" => Some(97),
+        "glow" => Some(98),
+        "wax_on" => Some(99),
+        "wax_off" => Some(100),
+        "electric_spark" => Some(101),
+        "scrape" => Some(102),
+        "egg_crack" => Some(104),
+        "dust_plume" => Some(105),
+        "trial_spawner_detection" => Some(106),
+        "trial_spawner_detection_ominous" => Some(107),
+        "vault_connection" => Some(108),
+        "ominous_spawning" => Some(110),
+        "raid_omen" => Some(111),
+        "trial_omen" => Some(112),
+        "firefly" => Some(114),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn particle_packet(
+    particle: &str,
+    x: f64,
+    y: f64,
+    z: f64,
+    offset_x: f32,
+    offset_y: f32,
+    offset_z: f32,
+    speed: f32,
+    count: i32,
+    force: bool,
+) -> Option<Vec<u8>> {
+    let id = particle_registry_id(particle)?;
+    let mut writer = PacketWriter::new();
+    writer.write_varint(PLAY_LEVEL_PARTICLES).unwrap();
+    writer.write_u8(0).unwrap(); // override limiter = false
+    writer.write_u8(u8::from(force)).unwrap(); // always show
+    writer.write_f64(x).unwrap();
+    writer.write_f64(y).unwrap();
+    writer.write_f64(z).unwrap();
+    writer.write_f32(offset_x).unwrap();
+    writer.write_f32(offset_y).unwrap();
+    writer.write_f32(offset_z).unwrap();
+    writer.write_f32(speed).unwrap();
+    writer.write_i32(count).unwrap();
+    writer.write_varint(id).unwrap();
+    Some(writer.into_inner())
 }
 
 fn game_mode_name(mode: i32) -> &'static str {
@@ -3259,7 +3884,7 @@ mod tests {
     }
     #[test]
     fn console_gamemode_reaches_a_registered_session() {
-        let (guard, receiver) = ConsoleSessionGuard::register("ConsoleTarget", [0x9a; 16]);
+        let (guard, receiver) = SessionCommandGuard::register("ConsoleTarget", [0x9a; 16]);
         let worker =
             std::thread::spawn(
                 move || match receiver.recv_timeout(Duration::from_secs(2)) {
@@ -3278,5 +3903,184 @@ mod tests {
         );
         worker.join().unwrap();
         drop(guard);
+    }
+
+    #[test]
+    fn bridge_commands_reach_the_registered_live_session() {
+        let uuid = [0x9b; 16];
+        let (guard, receiver) = SessionCommandGuard::register("BridgeQueue", uuid);
+
+        assert!(send_player_chat(uuid, "hello"));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Chat { message }) if message == "hello"
+        ));
+
+        assert!(send_player_chat_by_name("bridgequeue", "by name"));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Chat { message }) if message == "by name"
+        ));
+
+        assert!(teleport_player(uuid, 1.5, 70.0, -2.5, 90.0, 10.0));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Teleport { x, y, z, yaw, pitch })
+                if (x, y, z, yaw, pitch) == (1.5, 70.0, -2.5, 90.0, 10.0)
+        ));
+        assert!(!teleport_player(uuid, f64::NAN, 0.0, 0.0, 0.0, 0.0));
+
+        assert!(kick_player(uuid, "bye"));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Disconnect { reason }) if reason == "bye"
+        ));
+
+        assert!(broadcast_world_time(6_000, 18_000, true) >= 1);
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::SetTime {
+                game_time: 6_000,
+                day_time: 18_000,
+                tick_day_time: true
+            })
+        ));
+
+        assert!(broadcast_game_event(1, 0.5) >= 1);
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::GameEvent { event: 1, param }) if param == 0.5
+        ));
+
+        assert!(broadcast_sound("block.note_block.pling", 0, 1.0, 2.0, 3.0, 1.0, 1.0, 7) >= 1);
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Sound { sound, seed, .. })
+                if sound == "minecraft:block.note_block.pling" && seed == 7
+        ));
+
+        assert!(broadcast_particle("END_ROD", 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1, false) >= 1);
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(SessionCommand::Particle { particle, count: 1, .. }) if particle == "END_ROD"
+        ));
+
+        drop(guard);
+        assert!(!send_player_chat(uuid, "after close"));
+    }
+
+    #[test]
+    fn system_chat_and_disconnect_packets_use_component_nbt() {
+        let packet = system_chat_packet("Hello, bridge").expect("chat packet");
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_SYSTEM_CHAT);
+        let tag = reader.read_nbt_any().unwrap();
+        assert_eq!(tag.get("text").and_then(Tag::as_str), Some("Hello, bridge"));
+        assert!(!reader.read_bool().unwrap(), "system chat is not overlay");
+        assert!(reader.is_empty());
+
+        let packet = disconnect_packet("Kicked by a plugin").expect("disconnect packet");
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_DISCONNECT);
+        let tag = reader.read_nbt_any().unwrap();
+        assert_eq!(
+            tag.get("text").and_then(Tag::as_str),
+            Some("Kicked by a plugin")
+        );
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn time_game_event_sound_and_particle_packets_pin_their_wire_layout() {
+        let packet = set_time_packet(12_345, 6_000, true);
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_SET_TIME);
+        assert_eq!(reader.read_i64().unwrap(), 12_345);
+        assert_eq!(reader.read_i64().unwrap(), 6_000);
+        assert!(reader.read_bool().unwrap());
+        assert!(reader.is_empty());
+
+        let packet = game_event_packet(8, 0.75);
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_GAME_EVENT);
+        assert_eq!(reader.read_u8().unwrap(), 8);
+        assert_eq!(reader.read_f32().unwrap(), 0.75);
+        assert!(reader.is_empty());
+
+        let packet = sound_packet(
+            "minecraft:block.note_block.pling",
+            1,
+            1.0,
+            -2.0,
+            3.5,
+            0.8,
+            1.2,
+            42,
+        )
+        .expect("sound packet");
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_SOUND);
+        assert_eq!(reader.read_varint().unwrap(), 0, "direct sound holder");
+        assert_eq!(
+            reader.read_string().unwrap(),
+            "minecraft:block.note_block.pling"
+        );
+        assert!(!reader.read_bool().unwrap(), "no fixed range");
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_i32().unwrap(), 8);
+        assert_eq!(reader.read_i32().unwrap(), -16);
+        assert_eq!(reader.read_i32().unwrap(), 28);
+        assert_eq!(reader.read_f32().unwrap(), 0.8);
+        assert_eq!(reader.read_f32().unwrap(), 1.2);
+        assert_eq!(reader.read_i64().unwrap(), 42);
+        assert!(reader.is_empty());
+
+        let packet = particle_packet(
+            "minecraft:end_rod",
+            1.0,
+            2.0,
+            3.0,
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            5,
+            true,
+        )
+        .expect("simple particle packet");
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_LEVEL_PARTICLES);
+        assert!(
+            !reader.read_bool().unwrap(),
+            "override limiter defaults off"
+        );
+        assert!(reader.read_bool().unwrap(), "force maps to always-show");
+        assert_eq!(reader.read_f64().unwrap(), 1.0);
+        assert_eq!(reader.read_f64().unwrap(), 2.0);
+        assert_eq!(reader.read_f64().unwrap(), 3.0);
+        assert_eq!(reader.read_f32().unwrap(), 0.1);
+        assert_eq!(reader.read_f32().unwrap(), 0.2);
+        assert_eq!(reader.read_f32().unwrap(), 0.3);
+        assert_eq!(reader.read_f32().unwrap(), 0.4);
+        assert_eq!(reader.read_i32().unwrap(), 5);
+        assert_eq!(reader.read_varint().unwrap(), 20, "minecraft:end_rod id");
+        assert!(reader.is_empty());
+
+        assert!(
+            particle_packet(
+                "minecraft:dust",
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1,
+                false
+            )
+            .is_none(),
+            "option-carrying particles fail loudly"
+        );
     }
 }

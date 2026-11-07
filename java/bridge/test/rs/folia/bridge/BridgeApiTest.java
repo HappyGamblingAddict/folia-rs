@@ -1,6 +1,9 @@
 package rs.folia.bridge;
 
 import org.bukkit.Material;
+import org.bukkit.Location;
+import org.bukkit.Particle;
+import org.bukkit.SoundCategory;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
@@ -45,6 +48,7 @@ public final class BridgeApiTest {
         testServicesManager();
         testSchedulerContract();
         testItemEnchantCodec();
+        testEffectArgumentParsing();
         if (failures == 0) {
             System.out.println("BridgeApiTest: all checks passed");
             return;
@@ -220,6 +224,43 @@ public final class BridgeApiTest {
         ItemStack legacy = BridgeItemStack.decode("minecraft:stone\t2\t0\t\t0");
         check(legacy.getType() == Material.STONE && legacy.getAmount() == 2,
                 "legacy v1 item payload still decodes");
+    }
+
+    private static void testEffectArgumentParsing() {
+        Location location = new Location(null, 1.5D, 64.0D, -2.5D);
+        BridgeEffects.PlaySound sound = BridgeEffects.playSound(new Object[]{
+                location, "block.note_block.pling", SoundCategory.BLOCKS, 0.8F, 1.2F});
+        check(sound != null && "minecraft:block.note_block.pling".equals(sound.sound()),
+                "sound key receives the minecraft namespace");
+        check(sound != null && sound.category() == SoundCategory.BLOCKS.ordinal(),
+                "sound category forwards its ordinal");
+        check(sound != null && Math.abs(sound.volume() - 0.8F) < 0.001F
+                        && Math.abs(sound.pitch() - 1.2F) < 0.001F,
+                "sound volume and pitch are preserved");
+
+        BridgeEffects.PlaySound seeded = BridgeEffects.playSound(new Object[]{
+                location, "minecraft:ui.button.click", SoundCategory.MASTER, 1.0F, 1.0F, 99L});
+        check(seeded != null && seeded.seed() == 99L, "explicit sound seed is preserved");
+
+        BridgeEffects.SpawnParticle particle = BridgeEffects.spawnParticle(
+                null,
+                new Object[]{Particle.END_ROD, location, 3, 0.1D, 0.2D, 0.3D, 0.4D, true});
+        check(particle != null && "minecraft:end_rod".equals(particle.particle()),
+                "particle key receives the minecraft namespace");
+        check(particle != null && particle.count() == 3 && particle.force(),
+                "particle count and force flag are parsed");
+        check(particle != null && Math.abs(particle.offsetX() - 0.1D) < 0.001D
+                        && Math.abs(particle.speed() - 0.4D) < 0.001D,
+                "particle offsets and speed are parsed");
+
+        BridgeEffects.SpawnParticle coordinates = BridgeEffects.spawnParticle(
+                null,
+                new Object[]{Particle.END_ROD, 1.0D, 2.0D, 3.0D, 4, 0.0D, 0.0D, 0.0D, 0.0D, false});
+        check(coordinates != null && coordinates.location().getX() == 1.0D
+                        && coordinates.location().getY() == 2.0D
+                        && coordinates.location().getZ() == 3.0D
+                        && coordinates.count() == 4,
+                "particle coordinate overload is parsed");
     }
 
     private interface GreetingService {

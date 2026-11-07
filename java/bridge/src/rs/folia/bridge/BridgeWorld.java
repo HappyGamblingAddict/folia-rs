@@ -379,9 +379,33 @@ final class BridgeWorld implements InvocationHandler {
                  "getChunkCount" -> 0;
             case "spawnEntity", "spawn", "createEntity", "dropItem", "dropItemNaturally",
                  "strikeLightning", "strikeLightningEffect", "spawnArrow" -> null;
-            case "playSound", "playEffect", "spawnParticle", "stopSound", "stopAllSounds" -> {
-                Bridge.logger().fine(() -> "Ignoring client-only effect " + method.getName()
-                        + " on " + name + ": the bridge has no packet queue for it yet");
+            case "playSound" -> {
+                BridgeEffects.PlaySound sound = BridgeEffects.playSound(args);
+                if (sound != null) {
+                    Bridge.nativeWorldPlaySound(
+                            name, sound.sound(), sound.category(),
+                            sound.location().getX(), sound.location().getY(),
+                            sound.location().getZ(), sound.volume(), sound.pitch(),
+                            sound.seed());
+                }
+                yield null;
+            }
+            case "spawnParticle" -> {
+                BridgeEffects.SpawnParticle particle = BridgeEffects.spawnParticle(proxy, args);
+                if (particle != null) {
+                    Bridge.nativeWorldSpawnParticle(
+                            name, particle.particle(),
+                            particle.location().getX(), particle.location().getY(),
+                            particle.location().getZ(),
+                            (float) particle.offsetX(), (float) particle.offsetY(),
+                            (float) particle.offsetZ(), (float) particle.speed(),
+                            particle.count(), particle.force());
+                }
+                yield null;
+            }
+            case "playEffect", "stopSound", "stopAllSounds" -> {
+                Bridge.logger().fine(() -> "Ignoring unsupported effect " + method.getName()
+                        + " on " + name + ": no matching client packet is modeled");
                 yield null;
             }
             case "generateTree", "hasStructureAt", "lineOfSightExists", "hasCollisionsIn",

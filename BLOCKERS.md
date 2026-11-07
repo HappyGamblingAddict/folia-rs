@@ -930,3 +930,22 @@ These are expected gaps, not reasons to stop:
   the block state) and has no Java differential fixture.
 - Mangrove propagules, azalea/flowering leaves, and waterlogged leaves decay
   through the same tag rule; special-source support is not differentiated.
+
+## 2026-11-07 - Bridge live-packet boundaries
+
+- Chat is plain text only: the Java proxy still flattens Adventure components
+  to `PlainTextComponentSerializer` output, so colors, hover/click events, and
+  signed player chat are not carried. Action-bar/overlay chat is sent as normal
+  system chat.
+- World sound/particle calls broadcast to every live play session and do not
+  apply the vanilla distance/volume cutoff. `playSound(adventure Sound, ...)`
+  shapes without a Bukkit `Sound`/`String` are skipped.
+- `spawnParticle` supports simple particle types only. `BLOCK`, `DUST`, `ITEM`,
+  `VIBRATION`, and the other option-carrying particle types are rejected with an
+  explicit log because their option payload is not encoded yet.
+- World time has no separate game-time clock in the bridge; `ClientboundSetTime`
+  uses the persisted day time for both fields and is not resent periodically.
+- Kick sends the play-state disconnect packet but does not fire
+  `PlayerKickEvent`, cannot run async, and has no reason-component styling.
+- Hopper automation is still a one-way push pass. Pull from the container
+  above, locking, menus, and block-entity update packets remain open.

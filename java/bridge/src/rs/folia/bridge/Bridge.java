@@ -76,6 +76,18 @@ public final class Bridge {
 
     public static native boolean nativeWorldSetSpawn(String world, double x, double y, double z);
 
+    /** Broadcasts a sound to live sessions; the sound event is sent inline. */
+    public static native boolean nativeWorldPlaySound(
+            String world, String sound, int category,
+            double x, double y, double z, float volume, float pitch, long seed);
+
+    /** Broadcasts a simple particle to live sessions. */
+    public static native boolean nativeWorldSpawnParticle(
+            String world, String particle,
+            double x, double y, double z,
+            float offsetX, float offsetY, float offsetZ,
+            float speed, int count, boolean force);
+
     // ---- Plugin config ------------------------------------------------------
 
     /** Raw flat-YAML contents of {@code run/<plugin>/config.yml}. */
@@ -113,6 +125,18 @@ public final class Bridge {
     public static native void nativePlayerSetGameMode(String uuid, int gameMode);
 
     public static native void nativePlayerSendMessage(String uuid, String message);
+
+    /** Sends a sound to one live player session. */
+    public static native boolean nativePlayerPlaySound(
+            String uuid, String sound, int category,
+            double x, double y, double z, float volume, float pitch, long seed);
+
+    /** Sends a simple particle to one live player session. */
+    public static native boolean nativePlayerSpawnParticle(
+            String uuid, String particle,
+            double x, double y, double z,
+            float offsetX, float offsetY, float offsetZ,
+            float speed, int count, boolean force);
 
     public static native void nativePlayerSave(String uuid);
 
@@ -154,7 +178,7 @@ public final class Bridge {
     public static native boolean nativePlayerPermissionUnset(
             String uuid, int attachment, String permission);
 
-    /** Requests a disconnect; the live transport hook is not exposed yet. */
+    /** Queues a play-state disconnect on the live session and returns whether one was found. */
     public static native boolean nativePlayerKick(String uuid, String reason);
 
     public static void boot(String pluginsDirectory, String dataDirectory) throws Exception {

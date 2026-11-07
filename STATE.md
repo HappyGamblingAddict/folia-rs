@@ -9,26 +9,30 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **1052 passing** on the full merged gate (0 failed), 1 ignored
-  (2048-bit secure-chat benchmark); parity is **98.75% block-class / 95.80%
-  exact-name**.
+- Tests: **1065 passing** expected on the next full gate (1052 prior full gate
+  + 11 new `tests/menus.rs` + 1 join lib menu-wire test + 1 block-entity lib
+  container-helper test; focused suites green), 1 ignored (2048-bit
+  secure-chat benchmark); parity is **98.75% block-class / 95.80% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 218/224 configured feature types, 888/888 placement modifiers,
   483 shipped village templates, recursive jigsaw, Nether carvers, End
   spikes/gateways/chorus, dimension storage and portal math.
-- Gameplay: brewing/potions/food, hunger, chat signing, armor/effects, crops,
-  leaf decay, chest loot, item/XP entities, hoppers, pistons, block-entity
-  tickers, region ownership, and live bridge chat/time/weather/sound/particles.
+- Gameplay: chest/furnace/brewing container menus, brewing/potions/food,
+  hunger, chat signing, armor/effects, crops, leaf decay, chest loot, item/XP
+  entities, hoppers, pistons, block-entity tickers, region ownership, and live
+  bridge chat/time/weather/sound/particles.
 - Major gaps: feature-pool placement and non-village structure templates;
-  live session dimension switching; effect/menu packets; shared per-viewer
-  entity tracking and live AI goals; full plugin API; real region tick threading.
+  live session dimension switching; effect packets and hopper/dispenser/
+  crafting-table menus; shared per-viewer entity tracking and live AI goals;
+  full plugin API; real region tick threading.
 
 ## Current focus
 
 1. P2.8 feature-pool placement and the remaining six configured feature types.
 2. P7 portal-driven dimension switching and non-village structure templates.
 3. P5 live AI goals, effect packets, and shared per-viewer entity tracking.
-4. P6 container menus/packets and deeper redstone/automation.
+4. P6 remaining container menus (hopper/dispenser/crafting table) and deeper
+   redstone/automation.
 5. P9.3 remaining bridge API surface and secure-chat login wiring.
 
 ## Next queue
@@ -43,15 +47,23 @@ Last updated: 2026-11-07
 - [~] P3.5-P3.8 light (Java fixtures and exact occlusion columns).
 - [~] P3.10 ticks/redstone (leaf/crop ticks; automation/menus remain).
 - [~] P4.1-P4.4 physics/breaking/item entities (live hunger and special movement).
-- [~] P4.8 crafting/brewing (menus, packets, recipe book).
+- [~] P4.8 crafting/brewing (recipe book/advancement unlocks).
 - [~] P5.1/P5.2 metadata/AI/effects (live AI, effect packets, shared tracking).
-- [~] P6 block entities (chest/furnace/brewing/sign/spawner/hopper).
+- [~] P6 block entities and menus (chest/furnace/brewing/sign/spawner/hopper;
+  remaining menu types).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
 - [~] P8.1 online/chat-signing core (TLS and login wiring).
 - [~] P9.2/P9.3 bridge proxies/events/live effects (API depth).
 - [~] P10 region ownership (per-region tasks/ownership; world not split).
 
 ## Recently completed
+- 2026-11-07: container menus — `inventory.rs` adds `MenuKind`/`OpenMenu`/
+  `SessionMenus` (chest 63 slots, furnace 39, brewing 41), Open Screen (57),
+  Set Content (18), Set Data (19), close (17), and click handling with
+  per-session state ids and cursor; `join.rs` wires right-click opening and
+  `open_menu`/`open_menu_at`, persists through `WorldStorage`, and closes on
+  break/disconnect. 11 `tests/menus.rs`; the captured join sequence is
+  byte-identical.
 - 2026-11-07: brewing-stand block entity — persisted slots/brew time/fuel
   and live tick; 2 integration tests.
 - 2026-11-07: player hunger — saturation-first exhaustion, eating caps,

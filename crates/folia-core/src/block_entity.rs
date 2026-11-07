@@ -113,6 +113,45 @@ impl BlockEntity {
         }
     }
 
+    /// Item slots of a block entity that can back a container menu. Returns
+    /// `None` for sign, spawner, and unknown entities.
+    pub fn container_items(&self) -> Option<Vec<ItemStack>> {
+        match self {
+            Self::Chest(chest) => Some(chest.items.clone()),
+            Self::Hopper(hopper) => Some(hopper.items.clone()),
+            Self::BrewingStand(stand) => Some(stand.state.slots().to_vec()),
+            Self::Furnace(furnace) => Some(furnace.items.clone()),
+            Self::Sign(_) | Self::Spawner(_) | Self::Unknown(_) => None,
+        }
+    }
+
+    /// Replace the item slots of a container block entity. Returns `false` when
+    /// this type is not a container or the slot count does not match, leaving
+    /// the entity unchanged.
+    pub fn set_container_items(&mut self, items: &[ItemStack]) -> bool {
+        match self {
+            Self::Chest(chest) if chest.items.len() == items.len() => {
+                chest.items = items.to_vec();
+                true
+            }
+            Self::Hopper(hopper) if hopper.items.len() == items.len() => {
+                hopper.items = items.to_vec();
+                true
+            }
+            Self::BrewingStand(stand) if stand.state.slots().len() == items.len() => {
+                for (index, stack) in items.iter().cloned().enumerate() {
+                    stand.state.set_slot(index, stack);
+                }
+                true
+            }
+            Self::Furnace(furnace) if furnace.items.len() == items.len() => {
+                furnace.items = items.to_vec();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Decode one entry of the chunk's `block_entities` list.
     pub fn from_nbt(tag: &Tag) -> io::Result<Self> {
         let fields = tag
@@ -386,6 +425,18 @@ impl BrewingStandBlockEntity {
         self.state.tick();
     }
 
+    /// Wire values for `BrewingStandMenu` data slots. Vanilla wraps the block
+    /// entity data so slot 0 is `400 * brewTime / recipeBrewTime`; slot 1 is
+    /// the stored fuel charge.
+    pub fn menu_data(&self) -> [i16; 2] {
+        let brew_time = if self.state.recipe_brew_time > 0 {
+            400 * self.state.brew_time / self.state.recipe_brew_time
+        } else {
+            0
+        };
+        [clamp_short(brew_time), clamp_short(self.state.fuel)]
+    }
+
     fn from_fields(pos: BlockEntityPos, extras: Vec<(String, Tag)>) -> io::Result<Self> {
         let mut state = BrewingStandState::new();
         for (index, stack) in decode_items(&extras, BREWING_SLOT_COUNT)?
@@ -538,6 +589,18 @@ impl FurnaceBlockEntity {
         state.experience = self.experience;
         state.recipes_used = self.recipes_used.clone();
         state
+    }
+
+    /// Wire values for `FurnaceMenu` data slots, in the vanilla
+    /// `AbstractFurnaceBlockEntity` order: `litTimeRemaining`, `litTotalTime`,
+    /// `cookingTimer`, `cookingTotalTime`.
+    pub fn menu_data(&self) -> [i16; 4] {
+        [
+            clamp_short(self.lit_time_remaining),
+            clamp_short(self.lit_total_time),
+            clamp_short(self.cooking_time_spent),
+            clamp_short(self.cooking_total_time),
+        ]
     }
 
     /// Copy a behaviour-model state back into the persisted fields.
@@ -1086,6 +1149,10 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+fn clamp_short(value: i32) -> i16 {
+    value.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
 fn normalize_key(key: &str) -> String {
     if key.contains(':') {
         key.to_owned()
@@ -1433,6 +1500,33 @@ mod tests {
             root.get(BLOCK_ENTITIES_KEY),
             second.get(BLOCK_ENTITIES_KEY),
             "an unmodified unknown entity is byte-identical after a save"
+        );
+    }
+
+    #[test]
+    fn container_item_helpers_preserve_brewing_timers() {
+        let mut stand = BrewingStandBlockEntity::new(pos());
+        stand.state.brew_time = 123;
+        stand.state.fuel = 7;
+        let items = vec![
+            ItemStack::new("minecraft:potion", 1),
+            ItemStack::empty(),
+            ItemStack::empty(),
+            ItemStack::empty(),
+            ItemStack::empty(),
+        ];
+        let mut entity = BlockEntity::BrewingStand(Box::new(stand));
+
+        assert!(entity.set_container_items(&items));
+        let BlockEntity::BrewingStand(stand) = &entity else {
+            panic!("brewing stand lost its variant");
+        };
+        assert_eq!(stand.slot(0).unwrap().item, "minecraft:potion");
+        assert_eq!(stand.state.brew_time, 123);
+        assert_eq!(stand.state.fuel, 7);
+        assert_eq!(
+            entity.container_items().expect("container items")[0].item,
+            "minecraft:potion"
         );
     }
 

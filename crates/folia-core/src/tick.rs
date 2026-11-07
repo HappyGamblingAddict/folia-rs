@@ -1715,6 +1715,16 @@ pub fn tick_world_with_table(
         report.random_ticks += applied;
     }
 
+    {
+        // Furnaces/spawners tick through their persisted block entities. The
+        // catalog is the shipped 1,470-recipe static, so this does not allocate
+        // a catalog per tick.
+        let mut ticker = crate::block_entity::SimpleBlockEntityTicker::with_recipes(
+            crate::loot::RecipeCatalog::global(),
+        );
+        storage.tick_block_entities(&mut ticker);
+    }
+
     let drained = process_pending_updates(storage)?;
     report.block_changes += drained.len();
     report.neighbor_updates = storage.tick_state().last_neighbor_updates.len();

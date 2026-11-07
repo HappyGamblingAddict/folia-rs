@@ -2770,3 +2770,11 @@ Format:
 - Daylight detectors expose the signal math but are not registered as a
   behaviour because chunk light has no public getter yet. Note blocks expose
   pitch frequency without audio.
+
+## 2026-11-07 - Block entities tick after random ticks
+
+- `tick_world_with_table` runs the persisted furnace/spawner ticker after the
+  random-tick pass and before the final neighbour drain. This keeps any block
+  changes queued by a ticker in the same tick and makes the order deterministic.
+- The ticker uses `RecipeCatalog::global()` rather than allocating a catalog per
+  world, and it only sees block entities that have been loaded into storage.

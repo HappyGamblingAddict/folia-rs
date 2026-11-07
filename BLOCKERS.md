@@ -900,3 +900,12 @@ These are expected gaps, not reasons to stop:
   linked across blocks.
 - Daylight detectors, target blocks, note-block audio, tripwire hooks, and
   comparator output persistence remain open.
+
+## 2026-11-07 - Block-entity ticker boundaries
+
+- Hoppers and other container automation are not modeled yet; chests/furnaces
+  are containers but have no transfer ticker.
+- Smithing/cooking menu packets, block-entity animation packets, furnace-lit
+  block state updates, and spawner entity creation are not wired.
+- Block entities only tick once their chunk is loaded; no chunk-ticket-driven
+  ticking exists.

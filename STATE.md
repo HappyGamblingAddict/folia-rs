@@ -126,6 +126,9 @@ Last updated: 2026-11-06
 - [ ] P10 Folia region ownership.
 
 ## Recently completed
+- 2026-11-07: block-entity ticker wiring — furnaces/spawners advance through
+  `tick_world` with the shipped recipe catalog; furnace cooking/fuel is tested
+  across 220 ticks. 2 integration tests.
 - 2026-11-07: redstone lamp/openable slice — lamp light/unlight, powered
   doors/trapdoors/fence gates, daylight signal, note pitch; 5 integration tests.
 - 2026-11-07: dimension storage slice — Nether/End region files, generate-on-miss,

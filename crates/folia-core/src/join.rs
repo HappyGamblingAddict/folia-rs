@@ -45,7 +45,7 @@ use std::net::{IpAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The login/configuration/play connection. Encryption is enabled in place
@@ -3210,7 +3210,7 @@ fn generation_workers(pending: usize) -> usize {
 fn send_columns(
     stream: &mut LoginStream,
     storage: &mut WorldStorage,
-    generator: Option<&crate::worldgen::generator::WorldGenerator>,
+    generator: Option<Arc<crate::worldgen::generator::WorldGenerator>>,
     dimension: crate::world::Dimension,
     seed: i64,
     pending: &[(usize, i32, i32)],
@@ -3249,96 +3249,98 @@ fn send_columns(
         return Ok(());
     }
 
-    let next = AtomicUsize::new(0);
-    let next = &next;
+    let pending: Arc<Vec<(usize, i32, i32)>> = Arc::new(pending.to_vec());
+    let next = Arc::new(AtomicUsize::new(0));
     let workers = generation_workers(pending.len());
-    std::thread::scope(|scope| -> io::Result<()> {
-        // The receiver is dropped as soon as this closure returns, even on an
-        // early shutdown return, so workers blocked on a full queue see the
-        // disconnect and can exit before `thread::scope` joins them.
-        let (sender, receiver) = std::sync::mpsc::sync_channel(GENERATION_QUEUE);
-        for _ in 0..workers {
-            let sender = sender.clone();
-            scope.spawn(move || {
-                loop {
-                    if shutdown_requested() {
-                        break;
-                    }
-                    let position = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(&(index, chunk_x, chunk_z)) = pending.get(position) else {
-                        break;
-                    };
-                    let result = match overworld_generator {
-                        Some(generator) => {
-                            generator
-                                .generate_chunk(chunk_x, chunk_z)
-                                .and_then(|chunk| {
-                                    let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
-                                    Ok((index, chunk, packet))
-                                })
-                        }
-                        None => crate::worldgen::generator::generate_dimension(
-                            dimension::generator_dimension(dimension),
-                            chunk_x,
-                            chunk_z,
-                            seed,
-                        )
-                        .and_then(|chunk| {
-                            let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
-                            Ok((index, chunk, packet))
-                        }),
-                    };
-                    if sender.send(result).is_err() {
-                        break;
-                    }
+    let generation: Option<Arc<crate::worldgen::generator::WorldGenerator>> = overworld_generator;
+    // Generation is detached: a chunk that is already being generated cannot
+    // be cancelled, and shutdown must not wait for it. The bounded channel
+    // still applies backpressure, and a dropped receiver wakes every worker.
+    let (sender, receiver) = mpsc::sync_channel(GENERATION_QUEUE);
+    for _ in 0..workers {
+        let sender = sender.clone();
+        let pending = Arc::clone(&pending);
+        let next = Arc::clone(&next);
+        let generator = generation.clone();
+        std::thread::spawn(move || {
+            loop {
+                if shutdown_requested() {
+                    break;
                 }
-            });
-        }
-        drop(sender);
-
-        let mut finished: HashMap<usize, (Chunk, Vec<u8>)> = HashMap::new();
-        for (index, column) in loaded.iter_mut().enumerate() {
-            // The player already has a position, so a shutdown can arrive while
-            // this first batch is still generating. Do not make shutdown wait
-            // for hundreds of columns nobody will receive.
-            if shutdown_requested() {
-                return Ok(());
+                let position = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&(index, chunk_x, chunk_z)) = pending.get(position) else {
+                    break;
+                };
+                let result = match generator.as_deref() {
+                    Some(generator) => {
+                        generator
+                            .generate_chunk(chunk_x, chunk_z)
+                            .and_then(|chunk| {
+                                let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
+                                Ok((index, chunk, packet))
+                            })
+                    }
+                    None => crate::worldgen::generator::generate_dimension(
+                        dimension::generator_dimension(dimension),
+                        chunk_x,
+                        chunk_z,
+                        seed,
+                    )
+                    .and_then(|chunk| {
+                        let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
+                        Ok((index, chunk, packet))
+                    }),
+                };
+                if sender.send(result).is_err() {
+                    break;
+                }
             }
-            let (packet, source) = match column.take() {
-                Some((chunk, source)) => (ChunkPacketTemplate::build_dynamic(&chunk)?, source),
-                None => {
-                    let (chunk, packet) = loop {
-                        if let Some(ready) = finished.remove(&index) {
-                            break ready;
-                        }
-                        match receiver.recv_timeout(SESSION_TICK_INTERVAL) {
-                            Ok(Ok((produced, chunk, packet))) => {
-                                finished.insert(produced, (chunk, packet));
-                            }
-                            Ok(Err(error)) => return Err(error),
-                            Err(mpsc::RecvTimeoutError::Timeout) if shutdown_requested() => {
-                                return Ok(());
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(mpsc::RecvTimeoutError::Disconnected) if shutdown_requested() => {
-                                return Ok(());
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "chunk generation workers stopped before the batch finished",
-                                ));
-                            }
-                        }
-                    };
-                    storage.save_chunk(&chunk, Compression::Zlib)?;
-                    (packet, ChunkSource::Generated)
-                }
-            };
-            record_and_send(stream, batch, source, &packet)?;
+        });
+    }
+    drop(sender);
+
+    let mut finished: HashMap<usize, (Chunk, Vec<u8>)> = HashMap::new();
+    for (index, column) in loaded.iter_mut().enumerate() {
+        // The player already has a position, so a shutdown can arrive while
+        // this first batch is still generating. Do not make shutdown wait
+        // for hundreds of columns nobody will receive.
+        if shutdown_requested() {
+            return Ok(());
         }
-        Ok(())
-    })
+        let (packet, source) = match column.take() {
+            Some((chunk, source)) => (ChunkPacketTemplate::build_dynamic(&chunk)?, source),
+            None => {
+                let (chunk, packet) = loop {
+                    if let Some(ready) = finished.remove(&index) {
+                        break ready;
+                    }
+                    match receiver.recv_timeout(SESSION_TICK_INTERVAL) {
+                        Ok(Ok((produced, chunk, packet))) => {
+                            finished.insert(produced, (chunk, packet));
+                        }
+                        Ok(Err(error)) => return Err(error),
+                        Err(mpsc::RecvTimeoutError::Timeout) if shutdown_requested() => {
+                            return Ok(());
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) if shutdown_requested() => {
+                            return Ok(());
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "chunk generation workers stopped before the batch finished",
+                            ));
+                        }
+                    }
+                };
+                storage.save_chunk(&chunk, Compression::Zlib)?;
+                (packet, ChunkSource::Generated)
+            }
+        };
+        record_and_send(stream, batch, source, &packet)?;
+    }
+    Ok(())
 }
 
 fn record_and_send(
@@ -3728,7 +3730,7 @@ fn stream_chunks_around(
         loaded.push(None);
         pending.push((index, chunk_x, chunk_z));
     }
-    let generator = crate::worldgen::generator::configured().map(|generator| generator.as_ref());
+    let generator = crate::worldgen::generator::configured().cloned();
     send_columns(
         stream,
         storage,

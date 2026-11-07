@@ -3217,6 +3217,9 @@ fn send_columns(
     loaded: &mut [Option<(Chunk, ChunkSource)>],
     batch: &mut ChunkBatch,
 ) -> io::Result<()> {
+    if shutdown_requested() {
+        return Ok(());
+    }
     let overworld_generator = if dimension == crate::world::Dimension::Overworld {
         generator
     } else {
@@ -3308,13 +3311,19 @@ fn send_columns(
                         if let Some(ready) = finished.remove(&index) {
                             break ready;
                         }
-                        match receiver.recv() {
+                        match receiver.recv_timeout(SESSION_TICK_INTERVAL) {
                             Ok(Ok((produced, chunk, packet))) => {
                                 finished.insert(produced, (chunk, packet));
                             }
                             Ok(Err(error)) => return Err(error),
-                            Err(_) if shutdown_requested() => return Ok(()),
-                            Err(_) => {
+                            Err(mpsc::RecvTimeoutError::Timeout) if shutdown_requested() => {
+                                return Ok(());
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) if shutdown_requested() => {
+                                return Ok(());
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 return Err(io::Error::new(
                                     io::ErrorKind::UnexpectedEof,
                                     "chunk generation workers stopped before the batch finished",
@@ -3705,6 +3714,12 @@ fn stream_chunks_around(
     let mut loaded: Vec<Option<(Chunk, ChunkSource)>> = Vec::with_capacity(columns.len());
     let mut pending = Vec::new();
     for (index, (chunk_x, chunk_z)) in columns.iter().copied().enumerate() {
+        // Checking every 16 columns keeps shutdown responsive even when the
+        // region files are slow to inspect; the normal send loop checks every
+        // column.
+        if index % 16 == 0 && shutdown_requested() {
+            return Ok(ChunkBatch::default());
+        }
         let trusted = trust_stored || (generated && storage.is_written_chunk(chunk_x, chunk_z)?);
         if trusted && let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? {
             loaded.push(Some((chunk, ChunkSource::World)));

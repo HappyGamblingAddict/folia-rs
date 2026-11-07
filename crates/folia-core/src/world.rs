@@ -61,6 +61,61 @@ impl Dimension {
                 .join("region"),
         }
     }
+
+    /// Canonical resource-location name used by the dimension registry and the
+    /// playerdata `Dimension` field.
+    pub const fn resource_name(self) -> &'static str {
+        match self {
+            Dimension::Overworld => "minecraft:overworld",
+            Dimension::Nether => "minecraft:the_nether",
+            Dimension::End => "minecraft:the_end",
+        }
+    }
+
+    /// Parses a namespaced dimension name. Unknown names fall back to the
+    /// overworld, matching a missing playerdata dimension field.
+    pub fn from_resource_name(name: &str) -> Self {
+        match name.trim() {
+            "minecraft:the_nether" | "minecraft:nether" => Dimension::Nether,
+            "minecraft:the_end" | "minecraft:end" => Dimension::End,
+            _ => Dimension::Overworld,
+        }
+    }
+
+    /// `minecraft:dimension_type` registry id for 1.21.11.
+    pub const fn type_id(self) -> i32 {
+        match self {
+            Dimension::Overworld => 0,
+            Dimension::Nether => 3,
+            Dimension::End => 2,
+        }
+    }
+
+    /// Dimension type sea level (`CommonPlayerSpawnInfo.seaLevel`).
+    pub const fn sea_level(self) -> i32 {
+        match self {
+            Dimension::Overworld => 63,
+            Dimension::Nether => 32,
+            Dimension::End => 0,
+        }
+    }
+
+    /// Logical build height used to bound arrivals and void checks.
+    pub const fn logical_height(self) -> i32 {
+        match self {
+            Dimension::Overworld => 384,
+            Dimension::Nether => 128,
+            Dimension::End => 256,
+        }
+    }
+
+    /// Minimum build Y.
+    pub const fn min_y(self) -> i32 {
+        match self {
+            Dimension::Overworld => -64,
+            Dimension::Nether | Dimension::End => 0,
+        }
+    }
 }
 
 /// NBT key stamped on every chunk this server writes.
@@ -74,6 +129,31 @@ pub const WRITTEN_MARKER: &str = "folia:written";
 const CHUNK_CACHE_LIMIT: usize = 256;
 
 static SHARED_OVERWORLD: OnceLock<Mutex<WorldStorage>> = OnceLock::new();
+static SHARED_NETHER: OnceLock<Mutex<WorldStorage>> = OnceLock::new();
+static SHARED_END: OnceLock<Mutex<WorldStorage>> = OnceLock::new();
+
+/// The process-wide storage for one dimension.
+///
+/// Like [`shared_overworld`], each dimension has exactly one instance per
+/// process: a region file is rewritten as a whole file when it is saved, so two
+/// independent `WorldStorage` values over the same directory silently drop each
+/// other's chunk writes. The first directory wins per dimension.
+pub fn shared_dimension(
+    world_root: impl Into<PathBuf>,
+    dimension: Dimension,
+) -> &'static Mutex<WorldStorage> {
+    let root = world_root.into();
+    match dimension {
+        Dimension::Overworld => SHARED_OVERWORLD.get_or_init(|| {
+            Mutex::new(WorldStorage::for_dimension(root, Dimension::Overworld))
+        }),
+        Dimension::Nether => SHARED_NETHER
+            .get_or_init(|| Mutex::new(WorldStorage::for_dimension(root, Dimension::Nether))),
+        Dimension::End => {
+            SHARED_END.get_or_init(|| Mutex::new(WorldStorage::for_dimension(root, Dimension::End)))
+        }
+    }
+}
 
 /// The process-wide overworld storage.
 ///
@@ -84,12 +164,7 @@ static SHARED_OVERWORLD: OnceLock<Mutex<WorldStorage>> = OnceLock::new();
 /// instance. The first directory wins, which matches a server that serves a
 /// single level.
 pub fn shared_overworld(world_root: impl Into<PathBuf>) -> &'static Mutex<WorldStorage> {
-    SHARED_OVERWORLD.get_or_init(|| {
-        Mutex::new(WorldStorage::for_dimension(
-            world_root.into(),
-            Dimension::Overworld,
-        ))
-    })
+    shared_dimension(world_root, Dimension::Overworld)
 }
 
 /// Lock the shared storage, recovering from a poisoned mutex.
@@ -99,15 +174,22 @@ pub fn lock(storage: &Mutex<WorldStorage>) -> MutexGuard<'_, WorldStorage> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Flush the process-wide overworld storage if a session ever opened it.
+/// Flush every process-wide dimension storage that a session opened.
 ///
 /// Terrain saved during a session stays in the region cache until a flush;
 /// shutdown calls this so an orderly stop does not leave cached chunks behind.
 pub fn flush_shared() -> io::Result<()> {
-    let Some(storage) = SHARED_OVERWORLD.get() else {
-        return Ok(());
-    };
-    lock(storage).flush()
+    for storage in [
+        SHARED_OVERWORLD.get(),
+        SHARED_NETHER.get(),
+        SHARED_END.get(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        lock(storage).flush()?;
+    }
+    Ok(())
 }
 
 /// Cached Anvil storage for one dimension.

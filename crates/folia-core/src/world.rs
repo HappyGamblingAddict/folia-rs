@@ -295,6 +295,7 @@ impl WorldStorage {
         }
     }
 
+<<<<<<< HEAD
     /// The item slots of a chest, hopper, or furnace at `position`, if one is
     /// loaded. Other block-entity types return `None`.
     pub fn container_items(

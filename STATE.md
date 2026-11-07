@@ -9,8 +9,8 @@ Last updated: 2026-11-07
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-- Tests: **964 passing** on the full merged gate (0 failed); parity holds at
-  **98.75% block-class / 95.80% exact-name**.
+- Tests: **980 passing** on the merged gate plus 16 new brewing/consumable
+  tests (0 failed); parity holds at **98.75% block-class / 95.80% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: 207/224 configured feature types, 888/888 placement modifiers,
   recursive jigsaw, Nether/End generators, dimension storage and portal math.
@@ -28,7 +28,8 @@ Last updated: 2026-11-07
 
 1. P2.8 shipped structure-template assets, feature-pool placement, and village
    pipeline completion.
-2. P6 hopper live transfer tick and furnace-lit block state.
+2. P6 hopper live transfer tick, furnace-lit block state, and brewing
+   block-entity/menu persistence.
 3. P7 portal-driven dimension switching and Nether/End structure generation.
 4. P5 live AI goals, armor enchantments, and effect packets.
 5. P9.3 bridge outbound chat/kick/sound/particle packets.
@@ -45,7 +46,7 @@ Last updated: 2026-11-07
 - [~] P3.5-P3.8 light (shape occlusion; Java light fixtures remain).
 - [~] P3.10 ticks/redstone (lamps/daylight/doors; pistons/hoppers wiring).
 - [~] P4.1-P4.4 physics/breaking/item entities (special movement, XP polish).
-- [~] P4.8 crafting (menus, packets, recipe book).
+- [~] P4.8 crafting (menus, packets, recipe book; brewing/unconsumed menu wiring).
 - [~] P5.1/P5.2 metadata/AI/effects (live AI and effect packets).
 - [~] P6 block entities (chest/furnace/sign/spawner/hopper, furnaces tick).
 - [~] P7.1-P7.4 Nether/End generation/storage/portals (session switching).
@@ -54,6 +55,12 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (per-region tasks/ownership; world not yet split).
 
 ## Recently completed
+- 2026-11-07: brewing/consumables — `crafting.rs` adds `BrewingStandState`
+  (3 bottle slots, ingredient, 20-charge blaze fuel, 400-tick brew, full vanilla
+  potion mix table and container mixes), potion component helpers, and the 1.21.11
+  potion effect table in `effects.rs`; `item_prototypes.rs` adds `FoodData`,
+  consumable resolution (eat time/animation/use remainder), and complete
+  food/potion use with creative no-consume. 16 `tests/brewing.rs` tests.
 - 2026-11-07: leaf decay — distance/persistent properties, BFS log support,
   random-tick decay; 4 integration tests.
 - 2026-11-07: daylight detector — sky-light accessor plus 20-tick analog power

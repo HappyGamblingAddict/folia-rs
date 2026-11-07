@@ -2804,3 +2804,36 @@ Format:
 - Placement and neighbour updates only recalculate distance; only the random
   tick may destroy a distance-7 non-persistent leaf, matching vanilla's decay
   gate.
+
+## 2026-11-07 - Brewing preserves the bottle component patch
+
+- Context: vanilla `PotionBrewing.mix` builds the result through
+  `PotionContents.createItemStack`, which starts from a fresh stack and therefore
+  drops a bottle's custom name, color, and custom effects. The slice acceptance
+  criteria require component preservation, and `PotionContents` already models
+  those fields.
+- Decision: `crafting::brew_result` copies the input bottle stack, changes only
+  the item id and the `potion` field of its `PotionContents`, and keeps every
+  other component (including `custom_effects`). Both potion mixes and container
+  mixes (gunpowder/dragon breath) use this rule. This is an explicit,
+  documented extension over `PotionContents.createItemStack`.
+- Why: preserves the typed potion component the task requires and keeps the
+  existing crafting/smithing component-preservation contract.
+- Consequences: a Java differential fixture will show a component-patch
+  difference when a decorated bottle is brewed. If strict Java parity wins later,
+  change `potion_result` to build a fresh `PotionContents::new` stack.
+
+## 2026-11-07 - Brewing and consumables are state models, not menus
+
+- Brewing state lives in `crafting::BrewingStandState` rather than
+  `block_entity.rs` because the brewing stand block entity/menu is still open.
+  It owns five slots, `brew_time`, `recipe_brew_time`, `fuel`, the
+  ingredient-change guard, and dropped remainders, but no block-entity NBT or
+  menu packets yet.
+- `item_prototypes::consume` mutates a hand `ItemStack` and a `FoodData` and
+  returns instant effect events plus an overflow remainder. It deliberately does
+  not own player health: the caller applies instant healing/damage and inserts
+  the overflow remainder. Creative is modeled by the caller flag, matching
+  `LivingEntity.hasInfiniteMaterials`.
+- The `#minecraft:brewing_fuel` tag table is used instead of hardcoding blaze
+  powder so datapack additions work through the shipped tag asset.

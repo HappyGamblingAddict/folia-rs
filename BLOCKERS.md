@@ -891,3 +891,12 @@ These are expected gaps, not reasons to stop:
   overworld; no dimension switch path or per-dimension level.dat.
 - Nether/End carvers, fortresses, bastions, End cities, gateways, and the dragon
   arena remain unported.
+
+## 2026-11-07 - Redstone lamp/openable boundaries
+
+- Lamps are immediate; scheduled off-delay behavior and light packet updates are
+  not separately modeled.
+- Double doors, iron-trapdoor hand interaction, and fence-gate wall state are not
+  linked across blocks.
+- Daylight detectors, target blocks, note-block audio, tripwire hooks, and
+  comparator output persistence remain open.

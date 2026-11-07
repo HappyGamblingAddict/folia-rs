@@ -24,12 +24,14 @@
 //! * redstone torches: lit/unlit inversion, floor/wall attachment, and vanilla's
 //!   8-toggles-in-60-ticks burn-out with a 160-tick restart delay;
 //! * pressure plates and tripwire: an entity-occupancy input API, pressed state,
-//!   and scheduled release; wooden, stone, and weighted pressure plates.
+//!   and scheduled release; wooden, stone, and weighted pressure plates;
+//! * redstone lamps, powered doors/trapdoors/fence gates, daylight-detector
+//!   signal math, and note-block pitch math.
 //!
-//! Not implemented: pistons, tripwire-hook signal chains, target blocks,
-//! redstone lamps, analog block outputs other than registered containers (item
-//! frames, daylight detectors, lecterns, …), and NBT persistence for comparator
-//! outputs or scheduled ticks. Those stay explicit gaps in `BLOCKERS.md`.
+//! Not implemented: pistons, tripwire-hook signal chains, target blocks, analog
+//! block outputs other than registered containers (item frames, lecterns, ...),
+//! and NBT persistence for comparator outputs or scheduled ticks. Those stay
+//! explicit gaps in `BLOCKERS.md`.
 
 use crate::block_behaviour;
 use crate::block_update;
@@ -1943,6 +1945,152 @@ impl BlockBehavior for TripwireBehavior {
         }
         Ok(())
     }
+}
+
+/// `true` for the lit/unlit redstone lamp block.
+pub fn is_redstone_lamp(state: &BlockState) -> bool {
+    state.name == "minecraft:redstone_lamp"
+}
+
+/// `true` for door, trapdoor, and fence-gate blocks whose `powered` property
+/// drives their `open` property.
+pub fn is_powered_openable(state: &BlockState) -> bool {
+    state.name.ends_with("_door")
+        || state.name.ends_with("_trapdoor")
+        || state.name.ends_with("_fence_gate")
+}
+
+/// Weak power entering `pos` from any horizontal or vertical neighbour.
+pub fn neighbor_power(storage: &WorldStorage, pos: BlockPos) -> i32 {
+    let reader = SignalReader::world(storage);
+    Direction::ALL
+        .iter()
+        .map(|direction| reader.signal(pos.relative(*direction), *direction))
+        .max()
+        .unwrap_or(0)
+}
+
+fn update_lamp(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> io::Result<()> {
+    if !is_redstone_lamp(state) {
+        return Ok(());
+    }
+    let powered = neighbor_power(world.storage(), pos) > 0;
+    let lit = property(state, "lit") == Some("true");
+    if powered != lit {
+        world.set_block(
+            pos,
+            with_property(state, "lit", if powered { "true" } else { "false" }),
+        )?;
+    }
+    Ok(())
+}
+
+/// `RedstoneLampBlock`: lights while any neighbour supplies power and goes dark
+/// as soon as the power is removed.
+pub struct RedstoneLampBehavior;
+
+pub static REDSTONE_LAMP_BEHAVIOR: RedstoneLampBehavior = RedstoneLampBehavior;
+
+impl BlockBehavior for RedstoneLampBehavior {
+    fn neighbor_changed(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _source: BlockPos,
+    ) -> io::Result<()> {
+        update_lamp(world, pos, state)
+    }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        update_lamp(world, pos, state)
+    }
+
+    fn on_place(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        update_lamp(world, pos, state)
+    }
+}
+
+fn update_powered_openable(
+    world: &mut TickWorld<'_>,
+    pos: BlockPos,
+    state: &BlockState,
+) -> io::Result<()> {
+    if !is_powered_openable(state) {
+        return Ok(());
+    }
+    let powered = neighbor_power(world.storage(), pos) > 0;
+    let current = property(state, "powered") == Some("true");
+    if powered == current {
+        return Ok(());
+    }
+    let powered_value = if powered { "true" } else { "false" };
+    let mut next = with_property(state, "powered", powered_value);
+    if property(state, "open").is_some() {
+        next = with_property(&next, "open", powered_value);
+    }
+    world.set_block(pos, next)?;
+    Ok(())
+}
+
+/// Doors, trapdoors, and fence gates open while powered. Double-door halves are
+/// updated independently until the shape-update slice links them.
+pub struct PoweredOpenableBehavior;
+
+pub static POWERED_OPENABLE_BEHAVIOR: PoweredOpenableBehavior = PoweredOpenableBehavior;
+
+impl BlockBehavior for PoweredOpenableBehavior {
+    fn neighbor_changed(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _source: BlockPos,
+    ) -> io::Result<()> {
+        update_powered_openable(world, pos, state)
+    }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        update_powered_openable(world, pos, state)
+    }
+
+    fn on_place(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        update_powered_openable(world, pos, state)
+    }
+}
+
+/// `DaylightDetectorBlock` analog output for a sky-light value. The inverted
+/// variant reports the complement.
+pub fn daylight_signal(sky_light: u8, inverted: bool) -> i32 {
+    let base = i32::from(sky_light.min(15));
+    if inverted { 15 - base } else { base }
+}
+
+/// `NoteBlock.getPitchFromNote`: `0 -> 0.5`, `12 -> 1.0`, `24 -> 2.0`.
+pub fn note_frequency(note: u8) -> f32 {
+    2.0_f32.powf((f32::from(note) - 12.0) / 12.0)
 }
 
 /// Finds a property value on a block state.

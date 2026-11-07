@@ -2759,3 +2759,14 @@ Format:
 - Coordinate scaling floors toward negative infinity for Overworld -> Nether,
   matching Java's `Mth.floor`; the End transition always uses the fixed
   obsidian platform.
+
+## 2026-11-07 - Lamps and openables use immediate neighbour power
+
+- `neighbor_power` queries all six directions through `SignalReader`, which
+  preserves the existing weak/strong power rules. Lamps and doors update on the
+  neighbour/shape update already queued by `block_update::set_block`.
+- Double-door halves are updated independently; linking both halves belongs to
+  the shape-update slice.
+- Daylight detectors expose the signal math but are not registered as a
+  behaviour because chunk light has no public getter yet. Note blocks expose
+  pitch frequency without audio.

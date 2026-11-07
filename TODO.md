@@ -52,6 +52,10 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-07: P6 redstone lamps/openables - `redstone.rs` adds redstone-lamp
+  lighting from neighbour power, powered doors/trapdoors/fence gates, daylight
+  detector signal math, note-block pitch math, and `neighbor_power`. Registered
+  in the production tick table; 5 `tests/redstone_extra.rs` tests.
 - 2026-11-07: P7 dimension storage/portals - `dimension.rs` adds a
   `DimensionStorages` cache using vanilla `DIM-1`/`DIM1` paths, generate-on-miss
   through the merged Nether/End generators, Nether 8:1 portal scaling, the End

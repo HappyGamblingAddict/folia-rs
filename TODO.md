@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1191 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1193 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,12 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: void-save recovery - `unstick_player` now snaps an Overworld
+  position outside the column (for example a saved `y = -10628` void fall) to
+  the surface instead of returning, `restore_join_vitals` repairs a playerdata
+  file saved at zero health, and `apply_void_damage` drives the death/respawn
+  flow directly when a zero-health player is already below the void line. 2
+  focused tests. 1,193 tests.
 - 2026-11-08: goal-driven live mobs and attacks - the session zombie now owns
   the real `AiAgent` goal set (float, melee, stroll, look, hurt-by-target);
   navigation writes horizontal movement into the tracked entity and physics

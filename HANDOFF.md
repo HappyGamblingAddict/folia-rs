@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1191 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1193 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -47,7 +47,10 @@ native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
 
-Latest merged wave (2026-11-08): the session zombie now runs the real goal set
+Latest merged wave (2026-11-08): sessions saved below the world or at zero
+health now recover on join — out-of-column positions snap to the surface,
+zero-health playerdata is repaired, and a zero-health void fall enters the
+death/respawn flow. The session zombie now runs the real goal set
 (float, melee, stroll, look, hurt-by-target) with navigation-driven movement,
 and player interact attacks apply held-item damage through the session tracker.
 Session AI also reads the real collider's water/lava/ground state. Live

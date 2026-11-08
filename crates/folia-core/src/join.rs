@@ -1265,6 +1265,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     if session.game_mode < 0 {
         session.game_mode = default_game_mode();
     }
+    if session.health <= 0.0 {
+        println!(
+            "[join] {} saved no health; restoring a valid join state",
+            start.name
+        );
+        restore_join_vitals(&mut session);
+    }
     let data_dir = playerdata_dir();
     let initial_dimension = dimension::playerdata_dimension(&data_dir, &uuid);
     let mut dimension_state = SessionDimensionState::new(initial_dimension);
@@ -2746,6 +2753,18 @@ fn floating_snap(y: f64, surface: i32, may_snap: bool) -> Option<f64> {
     }
 }
 
+/// A playerdata file can hold `health = 0` when the player disconnected on the
+/// death screen or after a void fall. Vanilla resumes that state through the
+/// respawn flow; this server has no persisted death screen, so restore a valid
+/// join state instead of leaving a zero-health session stuck in the void.
+fn restore_join_vitals(session: &mut PlayerSession) {
+    session.health = 20.0;
+    session.food_level = 20;
+    session.food_saturation = 5.0;
+    session.food_exhaustion = 0.0;
+    session.air = 300;
+}
+
 fn health_packet(session: &PlayerSession) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(PLAY_SET_HEALTH).unwrap();
@@ -2958,6 +2977,14 @@ fn apply_void_damage(
     session: &mut PlayerSession,
     last_damage: &mut Instant,
 ) -> io::Result<bool> {
+    if session.y < VOID_DAMAGE_Y && session.health <= 0.0 {
+        // A player restored from a zero-health playerdata file can already be
+        // below the void line. `hurt` rejects zero-health entities, so drive
+        // the death/respawn flow directly instead of falling forever.
+        *last_damage = Instant::now();
+        write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
+        return Ok(true);
+    }
     if void_damage_health(session.health, session.y, session.game_mode).is_none() {
         return Ok(false);
     }
@@ -3517,6 +3544,19 @@ fn unstick_player(
         return;
     };
     let Some(state) = chunk.block_state(local_x, feet, local_z) else {
+        // A saved position outside the column (for example after falling far
+        // below the world) cannot be inspected. Overworld survivors and
+        // creative players return to the column surface; spectators keep
+        // their position.
+        if dimension == crate::world::Dimension::Overworld && !matches!(session.game_mode, 3) {
+            let surface = crate::chunk::surface_y(&chunk, local_x, local_z);
+            println!(
+                "[join] settle {}: saved y={:.1} is outside the world; moved to the surface at y={surface}",
+                session.name, session.y
+            );
+            session.y = f64::from(surface);
+            session.on_ground = true;
+        }
         return;
     };
     if crate::chunk::is_air_state(state) {
@@ -4870,6 +4910,52 @@ mod tests {
             None,
             "creative and spectator players may fly"
         );
+    }
+
+    #[test]
+    fn a_saved_position_below_the_world_is_settled_onto_the_surface() {
+        crate::worldgen::generator::configure(99).expect("configure generator");
+        let seed = crate::worldgen::generator::configured()
+            .expect("generator")
+            .seed();
+        let directory = temp_region_dir("below-world");
+        let mut storage =
+            WorldStorage::for_dimension(directory.clone(), crate::world::Dimension::Overworld);
+        let (chunk, _) = load_or_generate_chunk(
+            &mut storage,
+            false,
+            crate::world::Dimension::Overworld,
+            0,
+            0,
+            seed,
+        )
+        .expect("generate spawn chunk");
+        let surface = crate::chunk::surface_y(&chunk, 8, 8);
+        let storage = Mutex::new(storage);
+        let mut session = PlayerSession::new("Void".into(), [0x94; 16], 8.5, -10_628.0, 8.5);
+        unstick_player(
+            &mut session,
+            &storage,
+            false,
+            crate::world::Dimension::Overworld,
+            seed,
+        );
+        assert_eq!(session.y, f64::from(surface));
+        assert!(session.on_ground);
+    }
+
+    #[test]
+    fn zero_health_join_state_is_restored() {
+        let mut session = PlayerSession::new("Revive".into(), [0x95; 16], 0.0, 0.0, 0.0);
+        session.health = 0.0;
+        session.food_level = 0;
+        session.food_saturation = 0.0;
+        session.air = 0;
+        restore_join_vitals(&mut session);
+        assert_eq!(session.health, 20.0);
+        assert_eq!(session.food_level, 20);
+        assert_eq!(session.food_saturation, 5.0);
+        assert_eq!(session.air, 300);
     }
     #[test]
     fn void_damage_applies_below_the_world_and_spares_spectators() {

@@ -1261,3 +1261,17 @@ These are expected gaps, not reasons to stop:
   standalone `ChestBlockEntity::fill_loot` API does that.
 - Dropped items from throw/outside-slot clicks are discarded, because item
   entities are not spawned by this slice. No drop/pickup event path exists yet.
+
+## 2026-11-08 - P2.8 cross-chunk feature writes / tree clipping
+
+- Blocker: features place through a one-chunk `WorldGenRegion`, so a tree whose
+  canopy crosses a chunk border is clipped at x/z = 0/15. The biome window is
+  3x3, but the writable region is still the center chunk.
+- What was tried: the 3x3 `FeatureBiomeRegion` only widens biome selection; it
+  does not allow writes into neighbours.
+- What is needed: a generation-time 3x3 writable region (or a deferred
+  cross-chunk write cache keyed by neighbour chunk) and a merge/relight step
+  when the neighbour is saved. Validate against vanilla tree seams.
+- Workaround / next task: treat visible seams as a known limitation; prefer
+  testing trees away from chunk borders. Do not regenerate stamps for this
+  alone until the write path is ready.

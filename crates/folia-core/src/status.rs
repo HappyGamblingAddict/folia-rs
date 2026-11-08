@@ -61,7 +61,9 @@ pub fn serve(listener: TcpListener, config: Arc<StatusConfig>) -> io::Result<()>
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                if let Err(error) = handle_connection(stream, &config) {
+                if let Err(error) = handle_connection(stream, &config)
+                    && !is_disconnect(&error)
+                {
                     eprintln!("[status] connection error: {error}");
                 }
             }
@@ -71,6 +73,20 @@ pub fn serve(listener: TcpListener, config: Arc<StatusConfig>) -> io::Result<()>
         }
     }
     Ok(())
+}
+
+/// Server-list pings are often opened and closed by clients, monitors, and
+/// port scanners without completing a handshake. Those are not server errors.
+fn is_disconnect(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::TimedOut
+    )
 }
 
 pub fn serve_addr(address: &str, config: Arc<StatusConfig>) -> io::Result<()> {
@@ -162,5 +178,18 @@ mod tests {
         assert_eq!(value["version"]["name"], "1.21.11");
         assert_eq!(value["description"]["text"], "Folia-RS");
         assert_eq!(value["players"]["max"], 20);
+    }
+
+    #[test]
+    fn status_probe_disconnects_are_not_server_errors() {
+        for kind in [
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            assert!(is_disconnect(&io::Error::from(kind)), "{kind:?}");
+        }
+        assert!(!is_disconnect(&io::Error::from(io::ErrorKind::InvalidData)));
     }
 }

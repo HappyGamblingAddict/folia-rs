@@ -125,6 +125,22 @@ impl Dimension {
 /// `level.dat`; vanilla ignores unknown chunk fields.
 pub const WRITTEN_MARKER: &str = "folia:written";
 
+/// Generation capability version stored in [`WRITTEN_MARKER`].
+///
+/// Bumped when the generator starts writing content an older chunk cannot
+/// contain (decorations, ores, structures). A chunk stamped by an older build
+/// is regenerated instead of served, so stale featureless terrain cannot
+/// survive an upgrade. This intentionally discards block edits in chunks that
+/// predate the current generation version.
+pub const GENERATION_VERSION: i8 = 2;
+
+fn marker_is_current(tag: &crate::nbt::Tag) -> bool {
+    matches!(
+        tag.get(WRITTEN_MARKER),
+        Some(crate::nbt::Tag::Byte(version)) if *version == GENERATION_VERSION
+    )
+}
+
 /// How many decoded chunks one storage keeps before evicting the oldest.
 const CHUNK_CACHE_LIMIT: usize = 256;
 
@@ -776,7 +792,7 @@ impl WorldStorage {
         let region = self.region_mut(position)?;
         Ok(
             read_stored_chunk(region, local_x, local_z, chunk_x, chunk_z)?
-                .is_some_and(|tag| tag.get(WRITTEN_MARKER).is_some()),
+                .is_some_and(|tag| marker_is_current(&tag)),
         )
     }
 
@@ -886,7 +902,7 @@ fn stamp_chunk(mut tag: Tag, chunk: &Chunk) -> Tag {
             "Heightmaps".into(),
             crate::chunk_packet::heightmap_nbt(chunk),
         ));
-        entries.push((WRITTEN_MARKER.into(), Tag::Byte(1)));
+        entries.push((WRITTEN_MARKER.into(), Tag::Byte(GENERATION_VERSION)));
     }
     tag
 }
@@ -1105,7 +1121,7 @@ mod tests {
                     Tag::LongArray(vec![7; 37]),
                 )]),
             ));
-            entries.push((WRITTEN_MARKER.into(), Tag::Byte(1)));
+            entries.push((WRITTEN_MARKER.into(), Tag::Byte(GENERATION_VERSION)));
         }
 
         {
@@ -1171,7 +1187,10 @@ mod tests {
             "an untouched block entity survives"
         );
         assert!(tag.get("Heightmaps").is_some());
-        assert_eq!(tag.get(WRITTEN_MARKER), Some(&Tag::Byte(1)));
+        assert_eq!(
+            tag.get(WRITTEN_MARKER),
+            Some(&Tag::Byte(GENERATION_VERSION))
+        );
         let chunk = reopened.load_chunk(0, 0).unwrap().unwrap();
         assert_eq!(chunk.block_state(0, 64, 0).unwrap().name, "minecraft:dirt");
 
@@ -1338,5 +1357,13 @@ mod tests {
         storage.unload_region(RegionPos::from_chunk(3, 4)).unwrap();
         assert!(storage.chunks.is_empty(), "unloading drops cached chunks");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_generation_markers_are_not_trusted() {
+        let tag = |version: i8| Tag::Compound(vec![(WRITTEN_MARKER.into(), Tag::Byte(version))]);
+        assert!(marker_is_current(&tag(GENERATION_VERSION)));
+        assert!(!marker_is_current(&tag(GENERATION_VERSION - 1)));
+        assert!(!marker_is_current(&Tag::Compound(Vec::new())));
     }
 }

@@ -1,3 +1,5 @@
+# Example runtime configuration. Copy this file to server.properties before
+# running the server; the real server.properties is ignored by git.
 # Empty or 0.0.0.0 = all IPv4 interfaces. Use :: for IPv6-only.
 # On this machine localhost resolves to ::1 first; connect with 127.0.0.1 or the LAN IP.
 server-ip=

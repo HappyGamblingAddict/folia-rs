@@ -8,5 +8,8 @@ capture/
 dist/
 snapshots/
 logs/
+plugins/
+world/
+server.properties
 *.log
 

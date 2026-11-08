@@ -136,15 +136,16 @@ pub fn generate_flat_bedrock() -> bool {
 }
 
 /// `online-mode` for the login path. `FOLIA_ONLINE_MODE` overrides the file so
-/// tests and dedicated captures can pin the mode; absent configuration follows
-/// vanilla's default of `true`.
+/// tests and dedicated captures can pin the mode. A missing
+/// `server.properties` means offline mode: running without copying
+/// `server.properties.example` must not silently require Mojang auth.
 pub fn online_mode() -> bool {
     static SETTING: OnceLock<bool> = OnceLock::new();
     *SETTING.get_or_init(|| {
         if let Ok(value) = std::env::var("FOLIA_ONLINE_MODE") {
             return parse_bool(&value);
         }
-        read_server_properties().is_none_or(|properties| properties.online_mode)
+        read_server_properties().is_some_and(|properties| properties.online_mode)
     })
 }
 

@@ -189,7 +189,6 @@ enum HeightKind {
 pub fn heightmap_bytes(chunk: &Chunk) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(3).unwrap();
-    let maximum = highest_block_y(chunk);
     for (kind, key) in [
         (HeightKind::MotionBlocking, 4),
         (HeightKind::MotionBlockingNoLeaves, 5),
@@ -198,7 +197,7 @@ pub fn heightmap_bytes(chunk: &Chunk) -> Vec<u8> {
         let mut values = Vec::with_capacity(256);
         for z in 0..16 {
             for x in 0..16 {
-                let height = column_height(chunk, x, z, kind, maximum);
+                let height = column_height(chunk, x, z, kind);
                 values.push((height - OVERWORLD_MIN_Y) as u16);
             }
         }
@@ -215,7 +214,6 @@ pub fn heightmap_bytes(chunk: &Chunk) -> Vec<u8> {
 /// The same heightmap values the chunk packet carries, in the NBT shape a
 /// stored chunk uses (three named 9-bit long arrays).
 pub fn heightmap_nbt(chunk: &Chunk) -> Tag {
-    let maximum = highest_block_y(chunk);
     let mut entries = Vec::with_capacity(3);
     for (kind, name) in [
         (HeightKind::MotionBlocking, "MOTION_BLOCKING"),
@@ -227,7 +225,7 @@ pub fn heightmap_nbt(chunk: &Chunk) -> Tag {
     ] {
         let values: Vec<u16> = (0..256)
             .map(|index| {
-                let height = column_height(chunk, index % 16, index / 16, kind, maximum);
+                let height = column_height(chunk, index % 16, index / 16, kind);
                 (height - OVERWORLD_MIN_Y) as u16
             })
             .collect();
@@ -259,8 +257,8 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
 /// column, so it stays cheap for large join batches.
 const FALLBACK_ATTENUATION_DEPTH: i32 = 8;
 
-fn column_sky_light(chunk: &Chunk, x: usize, z: usize, maximum: i32) -> Vec<u8> {
-    let height = column_height(chunk, x, z, HeightKind::WorldSurface, maximum);
+fn column_sky_light(chunk: &Chunk, x: usize, z: usize) -> Vec<u8> {
+    let height = column_height(chunk, x, z, HeightKind::WorldSurface);
     let mut levels = vec![0u8; OVERWORLD_HEIGHT];
     let mut light = 15u8;
     for y in (OVERWORLD_MIN_Y..OVERWORLD_MIN_Y + OVERWORLD_HEIGHT as i32).rev() {
@@ -288,9 +286,8 @@ fn column_sky_light(chunk: &Chunk, x: usize, z: usize, maximum: i32) -> Vec<u8> 
 /// the per-column sky walk, which keeps captured flat-world packets
 /// byte-identical while real layers take precedence.
 fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
-    let maximum = highest_block_y(chunk);
     let columns: Vec<Vec<u8>> = (0..256)
-        .map(|index| column_sky_light(chunk, index % 16, index / 16, maximum))
+        .map(|index| column_sky_light(chunk, index % 16, index / 16))
         .collect();
     let max_sky_index = max_sky_index(chunk);
 
@@ -354,9 +351,8 @@ fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
 }
 
 fn height_light_bytes(chunk: &Chunk) -> Vec<u8> {
-    let maximum = highest_block_y(chunk);
     let columns: Vec<Vec<u8>> = (0..256)
-        .map(|index| column_sky_light(chunk, index % 16, index / 16, maximum))
+        .map(|index| column_sky_light(chunk, index % 16, index / 16))
         .collect();
     let max_sky_index = max_sky_index(chunk);
 
@@ -454,12 +450,9 @@ fn highest_block_section(chunk: &Chunk) -> i8 {
         .unwrap_or(OVERWORLD_MIN_SECTION)
 }
 
-fn highest_block_y(chunk: &Chunk) -> i32 {
-    (i32::from(highest_block_section(chunk)) + 1) * 16 - 1
-}
-
-fn column_height(chunk: &Chunk, x: usize, z: usize, kind: HeightKind, maximum: i32) -> i32 {
+fn column_height(chunk: &Chunk, x: usize, z: usize, kind: HeightKind) -> i32 {
     let minimum = OVERWORLD_MIN_Y;
+    let maximum = OVERWORLD_MIN_Y + OVERWORLD_HEIGHT as i32 - 1;
     for y in (minimum..=maximum).rev() {
         let Some(state) = chunk.block_state(x, y, z) else {
             continue;
@@ -649,7 +642,7 @@ mod tests {
                 ],
             },
         );
-        let column = column_sky_light(&chunk, 0, 0, highest_block_y(&chunk));
+        let column = column_sky_light(&chunk, 0, 0);
         let level = |y: i32| column[(y - OVERWORLD_MIN_Y) as usize];
         assert_eq!(level(-59), 15, "open sky above the leaf");
         assert_eq!(level(-60), 14, "leaf attenuates by one level");

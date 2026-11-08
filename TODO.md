@@ -2580,6 +2580,20 @@ chat signing.
 - **Why:** Prevents lag/DoS from a single connection.
 - **Done when:** Malformed/hostile clients cannot stall the server.
 
+### P8.4a Progressive initial chunk streaming `[ ]` `M`
+
+- **What:** Send the nearest N columns before entering the play loop, then top
+  up to the requested view distance in bounded batches between movement
+  packets. Today a large `view-distance` (441 columns at 10) generates and sends
+  the whole batch synchronously; a debug/CPU-bound server leaves the client
+  standing at the batch edge and walking into unloaded space.
+- **Why:** The client must be able to move and see new chunks while generation
+  continues; a visible straight world edge is the most common "world stops
+  loading" report.
+- **Done when:** A join with `view-distance=10` streams the near ring first,
+  keeps reading movement while the outer rings fill, and never shows a gap
+  inside the advertised radius.
+
 ### P8.5 Configuration-phase completeness `[ ]` `M`
 
 - **What:** Generate registries/tags/feature flags/known packs from Rust rather

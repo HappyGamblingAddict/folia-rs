@@ -33,11 +33,12 @@ Last updated: 2026-11-07
 
 ## Current focus
 
-1. P8.2 signed-command validation, Mojang trust roots, and plugin chat events.
-2. P5 mob attack damage/knockback, per-viewer ranges, and shared mob state.
-3. P2.8 structure terrain adaptation and cross-chunk height/start caching.
-4. P9.3 plugin API/event breadth and remaining bridge depth.
-5. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
+1. P8.4a progressive initial chunk streaming (nearest ring first, then top up).
+2. P8.2 signed-command validation, Mojang trust roots, and plugin chat events.
+3. P5 mob attack damage/knockback, per-viewer ranges, and shared mob state.
+4. P2.8 structure terrain adaptation and cross-chunk feature writes.
+5. P9.3 plugin API/event breadth and remaining bridge depth.
+6. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
 
 ## Next queue
 

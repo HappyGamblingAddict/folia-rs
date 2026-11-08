@@ -3339,3 +3339,19 @@ Format:
 - `QUICK_CRAFT` drag and generalized double-click collection are not modelled;
   only chest, furnace/blast furnace/smoker, and brewing stand menus are
   supported in this slice.
+
+## 2026-11-08 Versioned written-chunk marker invalidates stale terrain
+- Context: chunks written by earlier builds carried `folia:written = 1` and
+  were trusted forever, so a world created before decorations/ores were wired
+  kept featureless grass and water even after the generator improved.
+- Decision: store `GENERATION_VERSION` (currently 2) in the marker. A chunk
+  whose marker is missing or older is regenerated; only the current version is
+  trusted. The check lives in `world::marker_is_current` and is used by
+  `is_written_chunk`; both stamp sites write the current version.
+- Why: correctness of freshly generated terrain outweighs old test-world
+  contents; a featureless chunk cannot be repaired by re-running decoration
+  without double-placing or guessing.
+- Consequences: upgrading the generation version discards block edits in all
+  older stamped chunks. This is intentional for pre-1.0 worlds. Do not bump the
+  version for changes that only affect feature internals; bump it only when
+  already-stored chunks would be visibly wrong.

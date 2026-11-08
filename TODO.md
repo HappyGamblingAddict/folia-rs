@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1193 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1194 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,12 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: versioned chunk generation - `world::GENERATION_VERSION` (2) is
+  stamped into `folia:written`; chunks with a missing or older marker are
+  regenerated instead of trusted. This fixes worlds created before
+  decorations/ores were wired (plain grass/water with no trees, grass, or ore).
+  `marker_is_current` is unit-tested. 1,194 tests. Existing worlds keep the
+  old regions until the next server start, when those chunks regenerate.
 - 2026-11-08: void-save recovery - `unstick_player` now snaps an Overworld
   position outside the column (for example a saved `y = -10628` void fall) to
   the surface instead of returning, `restore_join_vitals` repairs a playerdata

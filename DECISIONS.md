@@ -3355,3 +3355,14 @@ Format:
   older stamped chunks. This is intentional for pre-1.0 worlds. Do not bump the
   version for changes that only affect feature internals; bump it only when
   already-stored chunks would be visibly wrong.
+
+## 2026-11-08 Missing server.properties defaults to offline mode
+- Context: runtime `server.properties` is no longer tracked, so fresh checkouts
+  and CI have no file. The old fallback treated a missing file as online mode,
+  which made every login test receive an encryption request instead of Login
+  Success.
+- Decision: `config::online_mode()` returns `false` when no properties file
+  exists; `FOLIA_ONLINE_MODE` still overrides it. `main.rs` continues to use the
+  parsed file when present.
+- Consequences: running without copying `server.properties.example` starts
+  offline. Copy the example and set `online-mode=true` to require Mojang auth.

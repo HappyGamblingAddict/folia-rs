@@ -60,6 +60,10 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-08: offline default + runtime-file cleanup — missing
+  `server.properties` now means offline mode, and `world/`, `logs/`,
+  `server.properties`, and `plugins/` are untracked with a checked-in
+  `server.properties.example`. CI green at 1,195 tests.
 - 2026-11-08: fallback canopy lighting — heightmap plus an 8-block opacity
   walk; avoids a full light BFS per generated chunk. Runtime world/config/log
   files are now untracked. 1 test.

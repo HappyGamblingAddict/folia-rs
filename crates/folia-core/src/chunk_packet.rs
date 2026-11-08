@@ -245,17 +245,49 @@ pub fn light_bytes(chunk: &Chunk) -> Vec<u8> {
     }
 }
 
+/// Per-column sky light computed from the heightmap plus a short attenuation
+/// walk through the blocks directly below it. This is the fallback for chunks
+/// that do not have stored light layers yet: unlike the old heightmap-only
+/// approximation it keeps a soft shadow under tree canopies instead of making
+/// the ground pitch black.
+///
+/// The walk is limited to [`FALLBACK_ATTENUATION_DEPTH`] blocks; deeper light
+/// (caves, deep water) is dark until the chunk passes through the real light
+/// engine. The cost is one heightmap scan plus at most eight block lookups per
+/// column, so it stays cheap for large join batches.
+const FALLBACK_ATTENUATION_DEPTH: i32 = 8;
+
+fn column_sky_light(chunk: &Chunk, x: usize, z: usize) -> Vec<u8> {
+    let height = column_height(chunk, x, z, HeightKind::WorldSurface);
+    let mut levels = vec![0u8; OVERWORLD_HEIGHT];
+    let mut light = 15u8;
+    for y in (OVERWORLD_MIN_Y..OVERWORLD_MIN_Y + OVERWORLD_HEIGHT as i32).rev() {
+        let index = (y - OVERWORLD_MIN_Y) as usize;
+        if y >= height {
+            levels[index] = 15;
+            continue;
+        }
+        if y < height - FALLBACK_ATTENUATION_DEPTH {
+            levels[index] = 0;
+            continue;
+        }
+        let opacity = chunk
+            .block_state(x, y, z)
+            .map(|state| crate::light::light_block(crate::registry::block_state_id(state)))
+            .unwrap_or(0);
+        light = light.saturating_sub(opacity);
+        levels[index] = light;
+    }
+    levels
+}
+
 /// Build the light payload from the chunk's stored/computed layers. Sections
 /// without stored layers inside the height approximation's range fall back to
-/// the old per-column sky light, which keeps captured flat-world packets
+/// the per-column sky walk, which keeps captured flat-world packets
 /// byte-identical while real layers take precedence.
 fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
-    let heights: Vec<i32> = (0..256)
-        .map(|index| {
-            let x = index % 16;
-            let z = index / 16;
-            column_height(chunk, x, z, HeightKind::WorldSurface)
-        })
+    let columns: Vec<Vec<u8>> = (0..256)
+        .map(|index| column_sky_light(chunk, index % 16, index / 16))
         .collect();
     let max_sky_index = max_sky_index(chunk);
 
@@ -278,7 +310,7 @@ fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
 
         let (sky, sky_from_fallback) = match stored_sky {
             Some(layer) => (layer.clone(), false),
-            None => (fallback_sky_layer(&heights, section_y), true),
+            None => (fallback_sky_layer(&columns, section_y), true),
         };
         let block = match stored_block {
             Some(layer) => layer.clone(),
@@ -319,12 +351,8 @@ fn stored_light_bytes(chunk: &Chunk) -> Vec<u8> {
 }
 
 fn height_light_bytes(chunk: &Chunk) -> Vec<u8> {
-    let heights: Vec<i32> = (0..256)
-        .map(|index| {
-            let x = index % 16;
-            let z = index / 16;
-            column_height(chunk, x, z, HeightKind::WorldSurface)
-        })
+    let columns: Vec<Vec<u8>> = (0..256)
+        .map(|index| column_sky_light(chunk, index % 16, index / 16))
         .collect();
     let max_sky_index = max_sky_index(chunk);
 
@@ -336,7 +364,7 @@ fn height_light_bytes(chunk: &Chunk) -> Vec<u8> {
 
     for index in 0..LIGHT_SECTION_COUNT {
         let section_y = i32::from(OVERWORLD_MIN_SECTION) - 1 + index as i32;
-        let layer = fallback_sky_layer(&heights, section_y);
+        let layer = fallback_sky_layer(&columns, section_y);
         let all_zero = layer.is_empty();
         let all_full = layer.is_filled_with(15);
 
@@ -366,15 +394,23 @@ fn height_light_bytes(chunk: &Chunk) -> Vec<u8> {
     writer.into_inner()
 }
 
-fn fallback_sky_layer(heights: &[i32], section_y: i32) -> crate::light::DataLayer {
+fn fallback_sky_layer(columns: &[Vec<u8>], section_y: i32) -> crate::light::DataLayer {
     let mut layer = crate::light::DataLayer::new();
     for z in 0..16 {
         for x in 0..16 {
-            let height = heights[x + z * 16];
+            let column = &columns[x + z * 16];
             for local_y in 0..16 {
                 let world_y = section_y * 16 + local_y;
-                if world_y >= height {
-                    layer.set(x, local_y as usize, z, 15);
+                let index = world_y - OVERWORLD_MIN_Y;
+                let light = if index >= OVERWORLD_HEIGHT as i32 {
+                    15
+                } else if index < 0 {
+                    0
+                } else {
+                    column[index as usize]
+                };
+                if light > 0 {
+                    layer.set(x, local_y as usize, z, light);
                 }
             }
         }
@@ -588,6 +624,29 @@ mod tests {
         assert_eq!(biome_id("minecraft:ocean"), 35);
         assert_eq!(biome_id("minecraft:plains"), 40);
         assert_eq!(biome_id("minecraft:the_void"), 57);
+    }
+
+    #[test]
+    fn column_sky_light_attenuates_through_leaves() {
+        let mut chunk = flat_chunk(0, 0);
+        chunk.set_block_state(
+            0,
+            -60,
+            0,
+            BlockState {
+                name: "minecraft:oak_leaves".into(),
+                properties: vec![
+                    ("distance".into(), "7".into()),
+                    ("persistent".into(), "false".into()),
+                    ("waterlogged".into(), "false".into()),
+                ],
+            },
+        );
+        let column = column_sky_light(&chunk, 0, 0);
+        let level = |y: i32| column[(y - OVERWORLD_MIN_Y) as usize];
+        assert_eq!(level(-59), 15, "open sky above the leaf");
+        assert_eq!(level(-60), 14, "leaf attenuates by one level");
+        assert_eq!(level(-61), 0, "solid ground below the canopy");
     }
 
     #[test]

@@ -138,8 +138,14 @@ and exercises every one of those paths.
 
 ```powershell
 cd folia-rs
-cargo run                  # runs natively until Ctrl+C (no Java needed)
+cargo run --release        # playable speed: release noise generation is far faster
+cargo run                  # debug build, fine for protocol tests but slow to generate
 ```
+
+World generation is CPU-bound. Use `--release` for real play; the debug build
+is typically several times slower. `view-distance` in `server.properties`
+controls how far chunks stream (the current hard cap is 16); a larger radius
+trades join/generation time for a wider visible world.
 
 To use `.jar` plugins, build the compatibility layer once and put plugin jars
 in `plugins/`:

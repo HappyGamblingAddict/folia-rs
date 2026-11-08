@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1195 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1197 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: time-scaled movement catch-up - the movement guard now scales
+  its allowed distance with the time since the last movement packet (base 10
+  blocks + 32 blocks/s, capped at 300s). A client that walked while the server
+  was stalled generating the initial batch is resynced instead of being
+  teleported back forever; the normal 10-block guard still rejects instant
+  teleports. `POSITION_TOLERANCE` is now vanilla's 0.0625 to avoid tiny
+  simulation differences rubber-banding. 1 focused test. 1,197 tests.
 - 2026-11-08: canopy-aware fallback lighting + repo cleanup - chunks without
   stored light now compute sky light from the heightmap plus an 8-block
   attenuation walk, so canopies produce soft shadows instead of pitch-black

@@ -11,7 +11,7 @@ Last updated: 2026-11-07
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green on `6d18821` (Ubuntu + Windows: fmt, clippy, 1,179 tests,
   release build).
-- Tests: **1195 passing** on the full merged gate (0 failed, 1 ignored
+- Tests: **1197 passing** on the full merged gate (0 failed, 1 ignored
   benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -61,6 +61,10 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-08: time-scaled movement catch-up — large legitimate moves after a
+  server stall are accepted (10 blocks + 32/s, 300s cap) and the normal guard
+  still rejects instant teleports; tolerance raised to vanilla's 0.0625.
+  1 test. CI green at 1,197 tests.
 - 2026-11-08: offline default + runtime-file cleanup — missing
   `server.properties` now means offline mode, and `world/`, `logs/`,
   `server.properties`, and `plugins/` are untracked with a checked-in

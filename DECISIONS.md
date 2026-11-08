@@ -3366,3 +3366,18 @@ Format:
   parsed file when present.
 - Consequences: running without copying `server.properties.example` starts
   offline. Copy the example and set `online-mode=true` to require Mojang auth.
+
+## 2026-11-08 Time-scaled movement catch-up
+- Context: the initial chunk batch can block the session thread for minutes on
+  a slow build. The client keeps walking; its first queued movement packet was
+  hundreds of blocks away and was rejected by the fixed 10-block guard. The
+  resulting correction loop teleported the player back to the stale position
+  forever and no new chunks streamed.
+- Decision: scale the allowed movement distance by the time since the last
+  movement packet: `10 + elapsed_seconds * 32` blocks, capped at 300 seconds.
+  Normal spacing stays ~11 blocks; an instant 500-block teleport is still
+  rejected. `POSITION_TOLERANCE` is vanilla's 0.0625 instead of 1 mm.
+- Consequences: a stalled client resyncs and streams the chunks around its real
+  position. The catch-up budget is per packet, so a cheater with a long idle
+  period can move far once; acceptable for this pre-1.0 server. Progressive
+  initial streaming remains the proper long-term fix (P8.4a).

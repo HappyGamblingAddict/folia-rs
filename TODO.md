@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1194 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1195 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,13 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-08: canopy-aware fallback lighting + repo cleanup - chunks without
+  stored light now compute sky light from the heightmap plus an 8-block
+  attenuation walk, so canopies produce soft shadows instead of pitch-black
+  columns, without the 10x cost of a full BFS on every generated chunk.
+  `column_sky_light` is unit-tested. Runtime `world/`, `logs/`,
+  `server.properties`, and `plugins/` are now git-ignored; a tracked
+  `server.properties.example` documents the config. 1,195 tests.
 - 2026-11-08: versioned chunk generation - `world::GENERATION_VERSION` (2) is
   stamped into `folia:written`; chunks with a missing or older marker are
   regenerated instead of trusted. This fixes worlds created before

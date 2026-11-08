@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1194 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1195 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -47,11 +47,15 @@ native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
 
-Latest merged wave (2026-11-08): written chunks are now versioned
-(`GENERATION_VERSION = 2`), so terrain saved by older builds — plain grass and
-water with no trees, grass, or ores — regenerates with the current
-decorations/ores on the next start. Sessions saved below the world or at zero
-health now recover on join. The session zombie runs the real goal set
+Latest merged wave (2026-11-08): fallback chunk lighting now attenuates sky
+light through tree canopies (heightmap plus an 8-block opacity walk) instead of
+using a binary heightmap shadow, without running a full light BFS on every
+generated chunk. Runtime `world/`, `logs/`, `server.properties`, and `plugins/`
+are untracked; `server.properties.example` is the checked-in template. Written
+chunks are versioned (`GENERATION_VERSION = 2`), so terrain saved by older
+builds regenerates with current decorations/ores on the next start. Sessions
+saved below the world or at zero health recover on join. The session zombie
+runs the real goal set
 (float, melee, stroll, look, hurt-by-target) with navigation-driven movement,
 and player interact attacks apply held-item damage through the session tracker.
 Session AI also reads the real collider's water/lava/ground state. Live

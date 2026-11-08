@@ -50,6 +50,12 @@ fn main() -> Result<()> {
         ),
         Err(error) => eprintln!("[rust] could not initialize world generator: {error}"),
     }
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "[rust] WARNING: this is a debug build; chunk generation is much slower. \
+             Run `cargo run --release` for normal play."
+        );
+    }
     // The shared overworld storage owns the scheduled/random tick queues, so
     // seed its sampler before any session can edit terrain.
     {

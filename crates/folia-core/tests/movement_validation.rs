@@ -81,7 +81,9 @@ fn an_oversized_move_is_reverted_and_corrected() {
         }
     };
 
-    // 500 blocks in a single movement packet is far beyond the 10-block guard.
+    // Refresh the movement catch-up clock without moving; the 500-block jump
+    // below is then measured by the normal per-packet guard.
+    write_packet(&mut client, &rotation_packet(0.0, 0.0)).unwrap();
     write_packet(
         &mut client,
         &move_packet(accepted_x + 500.0, accepted_y, accepted_z),
@@ -126,6 +128,15 @@ fn move_packet(x: f64, y: f64, z: f64) -> Vec<u8> {
     writer.write_f64(x).unwrap();
     writer.write_f64(y).unwrap();
     writer.write_f64(z).unwrap();
+    writer.write_u8(0).unwrap();
+    writer.into_inner()
+}
+
+fn rotation_packet(yaw: f32, pitch: f32) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(31).unwrap();
+    writer.write_f32(yaw).unwrap();
+    writer.write_f32(pitch).unwrap();
     writer.write_u8(0).unwrap();
     writer.into_inner()
 }

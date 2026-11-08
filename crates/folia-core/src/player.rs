@@ -1054,6 +1054,22 @@ impl PlayerSession {
         packet: &[u8],
         world: &mut impl PhysicsWorld,
     ) -> io::Result<MovementOutcome> {
+        self.apply_movement_with_allowance(
+            packet,
+            world,
+            crate::player_physics::MAX_MOVEMENT_DISTANCE_SQUARED,
+        )
+    }
+
+    /// [`Self::apply_movement`] with a caller-provided catch-up distance
+    /// budget. The play loop raises it when the server has not read a movement
+    /// packet for a while (for example while the initial chunk batch streams).
+    pub fn apply_movement_with_allowance(
+        &mut self,
+        packet: &[u8],
+        world: &mut impl PhysicsWorld,
+        max_distance_squared: f64,
+    ) -> io::Result<MovementOutcome> {
         let Some(update) = parse_movement(packet)? else {
             return Ok(MovementOutcome::not_movement());
         };
@@ -1074,7 +1090,9 @@ impl PlayerSession {
                     yaw,
                     pitch,
                 };
-                let reconciliation = self.physics.reconcile(world, &client);
+                let reconciliation =
+                    self.physics
+                        .reconcile_with_allowance(world, &client, max_distance_squared);
                 self.x = self.physics.x;
                 self.y = self.physics.y;
                 self.z = self.physics.z;

@@ -305,6 +305,30 @@ fn a_small_move_through_a_wall_is_rejected_and_corrects_the_client() {
 }
 
 #[test]
+fn a_stalled_client_can_catch_up_with_the_time_scaled_budget() {
+    let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+    physics.on_ground = true;
+    let mut world = FlatPhysicsWorld::new(0);
+
+    let rejected = physics.reconcile(&mut world, &client_move(500.0, 0.0, 0.5));
+    assert!(matches!(
+        rejected.correction,
+        Some(MovementCorrection::TooFar { .. })
+    ));
+
+    let accepted = physics.reconcile_with_allowance(
+        &mut world,
+        &client_move(500.0, 0.0, 0.5),
+        1_000.0 * 1_000.0,
+    );
+    assert!(
+        !matches!(accepted.correction, Some(MovementCorrection::TooFar { .. })),
+        "a long stall may legitimately move hundreds of blocks"
+    );
+    assert!((physics.x - 500.0).abs() < 1.0e-9);
+}
+
+#[test]
 fn burst_moves_validate_the_destination_and_lift_out_of_terrain() {
     let mut physics = PlayerPhysics::new(2.7, 0.0, 0.5);
     physics.on_ground = true;

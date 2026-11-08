@@ -62,7 +62,7 @@ pub const TERMINAL_VELOCITY: f64 = -3.92;
 pub const MAX_MOVEMENT_DISTANCE_SQUARED: f64 = 100.0;
 /// A client claim and the simulation closer than this are treated as the same
 /// position.
-pub const POSITION_TOLERANCE: f64 = 1.0e-3;
+pub const POSITION_TOLERANCE: f64 = 0.0625;
 /// Moves longer than this in one packet are treated as a client-side lag burst:
 /// the destination is validated, but the intermediate path is not replayed
 /// tick-by-tick. Vanilla's fastest grounded horizontal movement is well below
@@ -578,6 +578,21 @@ impl PlayerPhysics {
         world: &mut impl PhysicsWorld,
         client: &ClientMove,
     ) -> Reconciliation {
+        self.reconcile_with_allowance(world, client, MAX_MOVEMENT_DISTANCE_SQUARED)
+    }
+
+    /// [`Self::reconcile`] with an explicit movement budget.
+    ///
+    /// The normal budget is 10 blocks per packet. After a long server stall
+    /// (for example the initial chunk batch finishing) the client can legitimately
+    /// be hundreds of blocks away; callers scale this budget by the elapsed
+    /// time so the server can resync instead of entering a correction loop.
+    pub fn reconcile_with_allowance(
+        &mut self,
+        world: &mut impl PhysicsWorld,
+        client: &ClientMove,
+        max_distance_squared: f64,
+    ) -> Reconciliation {
         if let Some(yaw) = client.yaw {
             self.yaw = yaw;
         }
@@ -589,7 +604,7 @@ impl PlayerPhysics {
         let dy = client.y - self.reported_y;
         let dz = client.z - self.reported_z;
         let distance_squared = dx * dx + dy * dy + dz * dz;
-        if !distance_squared.is_finite() || distance_squared > MAX_MOVEMENT_DISTANCE_SQUARED {
+        if !distance_squared.is_finite() || distance_squared > max_distance_squared {
             self.reported_x = self.x;
             self.reported_y = self.y;
             self.reported_z = self.z;

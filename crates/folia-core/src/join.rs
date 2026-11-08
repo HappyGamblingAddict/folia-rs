@@ -111,6 +111,14 @@ const VOID_DAMAGE_Y: f64 = -128.0;
 const VOID_DAMAGE_INTERVAL: Duration = Duration::from_millis(500);
 const VOID_DAMAGE: f32 = 4.0;
 
+/// Movement catch-up budget after a server stall. A client that has not sent a
+/// movement packet for `elapsed` seconds may legitimately be this far away.
+/// The base 10 blocks matches the normal per-packet guard; the rate covers
+/// sprinting, creative flight, and most elytra travel without letting an
+/// instant teleport through.
+const CATCH_UP_BLOCKS_PER_SECOND: f64 = 32.0;
+const MAX_CATCH_UP_SECONDS: f64 = 300.0;
+
 const SERVERBOUND_CHANGE_GAME_MODE: i32 = 4;
 const SERVERBOUND_CHAT_COMMAND: i32 = 6;
 const SERVERBOUND_CHAT_COMMAND_SIGNED: i32 = 7;
@@ -1445,6 +1453,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     // disconnects a client that accepts no bytes for 15 seconds.
     stream.set_write_timeout(Some(SESSION_TICK_INTERVAL))?;
     write_packet(&mut stream, &position_packet(&session, 1000))?;
+    // Movement catch-up starts counting here: the initial chunk batch can run
+    // for a long time on a slow build, and the first queued movement packet may
+    // report a large but legitimate distance.
+    let mut last_move_at = Instant::now();
     // Session-owned mobs are announced between the position and the chunk
     // batch. The client keeps them until their columns arrive, and the join
     // test's captured chunk loop ignores non-chunk packets.
@@ -1988,14 +2000,24 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     _ => {
+                        let elapsed = last_move_at
+                            .elapsed()
+                            .as_secs_f64()
+                            .clamp(0.05, MAX_CATCH_UP_SECONDS);
+                        let allowance = (10.0 + elapsed * CATCH_UP_BLOCKS_PER_SECOND).powi(2);
                         let outcome = {
                             let storage = &mut *crate::world::lock(current_storage);
                             let mut collider = StoragePhysicsWorld::new(storage);
-                            session.apply_movement(&packet, &mut collider)?
+                            session.apply_movement_with_allowance(
+                                &packet,
+                                &mut collider,
+                                allowance,
+                            )?
                         };
                         if !outcome.was_movement {
                             continue;
                         }
+                        last_move_at = Instant::now();
                         if let Some(correction) = outcome.correction {
                             teleport_id += 1;
                             write_packet(&mut stream, &position_packet(&session, teleport_id))?;

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1198 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1199 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,11 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-12: retaliating session mobs - damaging a session zombie marks the
+  player (actor id 0) as its target; `AiEvent::Attack` damage is summed into
+  `SessionEntityTick::player_damage` and applied through the living-entity
+  damage path, including the melee death message and 2-second respawn flow.
+  1 focused test. 1,199 tests.
 - 2026-11-12: progressive join streaming - the initial join sends the nearest
   64 columns, then the play loop tops up 24 columns every 50 ms until the full
   view radius is sent. Movement packets are read between batches, so a slow

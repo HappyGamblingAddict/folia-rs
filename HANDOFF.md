@@ -38,7 +38,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1198 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1199 tests passing on the merged tree (full gate, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -47,19 +47,20 @@ native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
 
-Latest merged wave (2026-11-12): joins are now progressive — the nearest 64
-columns are sent first and the play loop tops up 24 columns every 50 ms until
-the full view radius is filled, reading movement between batches. This removes
-the hard batch edge that made the world look like it stopped loading. Rust
-1.100 Clippy/rustfmt lints are fixed. The previous wave made movement catch-up
-time-scaled, so a client that walked during a long initial batch is resynced
-instead of being teleported back forever; the normal 10-block guard still
-rejects instant teleports, and the position tolerance is vanilla's 0.0625.
-Fallback chunk lighting attenuates sky light through tree canopies (heightmap
-plus an 8-block opacity walk) without a full light BFS per generated chunk.
-Runtime `world/`, `logs/`, `server.properties`, and `plugins/` are untracked;
-`server.properties.example` is the checked-in template. Written chunks are
-versioned (`GENERATION_VERSION = 2`), so terrain saved by older
+Latest merged wave (2026-11-12): damaged session zombies retaliate — they
+target the player, their melee events flow through the living-entity damage
+path, and a melee death enters the 2-second respawn flow. Joins are progressive:
+the nearest 64 columns are sent first and the play loop tops up 24 columns
+every 50 ms until the full view radius is filled, reading movement between
+batches. Rust 1.100 Clippy/rustfmt lints are fixed. The previous wave made
+movement catch-up time-scaled, so a client that walked during a long initial
+batch is resynced instead of being teleported back forever; the normal 10-block
+guard still rejects instant teleports, and the position tolerance is vanilla's
+0.0625. Fallback chunk lighting attenuates sky light through tree canopies
+(heightmap plus an 8-block opacity walk) without a full light BFS per generated
+chunk. Runtime `world/`, `logs/`, `server.properties`, and `plugins/` are
+untracked; `server.properties.example` is the checked-in template. Written
+chunks are versioned (`GENERATION_VERSION = 2`), so terrain saved by older
 builds regenerates with current decorations/ores on the next start. Sessions
 saved below the world or at zero health recover on join. The session zombie
 runs the real goal set

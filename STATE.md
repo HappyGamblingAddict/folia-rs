@@ -11,7 +11,7 @@ Last updated: 2026-11-07
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green on `6d18821` (Ubuntu + Windows: fmt, clippy, 1,179 tests,
   release build).
-- Tests: **1198 passing** on the full merged gate (0 failed, 1 ignored
+- Tests: **1199 passing** on the full merged gate (0 failed, 1 ignored
   benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -60,6 +60,9 @@ Last updated: 2026-11-07
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-12: retaliating session mobs — hurt zombies target the player and
+  melee damage flows through the living-entity path with death/respawn.
+  1 test. CI green at 1,199 tests.
 - 2026-11-12: progressive join streaming — initial 64 nearest columns, then
   24-column top-ups every 50 ms; movement is read between batches. Rust 1.100
   Clippy/rustfmt fixes. 1 test; CI green at 1,198 tests.

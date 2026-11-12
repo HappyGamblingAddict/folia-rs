@@ -3381,3 +3381,18 @@ Format:
   position. The catch-up budget is per packet, so a cheater with a long idle
   period can move far once; acceptable for this pre-1.0 server. Progressive
   initial streaming remains the proper long-term fix (P8.4a).
+
+## 2026-11-12 Progressive join streaming
+- Context: the initial view-distance batch was generated and sent synchronously
+  before the play loop. At `view-distance=10` that is 441 columns; a debug
+  server could spend minutes on it while the client walked beyond the batch and
+  saw a hard world edge.
+- Decision: send the nearest 64 columns at login, then top up 24 columns every
+  50 ms from the play loop. `stream_chunks_around` takes a column budget and
+  only marks processed columns as sent, so unsent columns are retried on the
+  next call. The nearest-first sort keeps the player's feet covered.
+- Consequences: login reaches play sooner; movement is read between batches.
+  Chunk packets are spread over several ticks, and the client sees the world
+  fill in. A slow batch still briefly blocks the loop, but the movement
+  catch-up policy keeps the client resynced. Tune `INITIAL_STREAM_BATCH` and
+  `STREAM_TOPUP_BATCH` in `join.rs` if join latency/fill time needs changing.

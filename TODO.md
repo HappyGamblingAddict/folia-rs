@@ -3,7 +3,7 @@
 > Last updated: 2026-11-07
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1197 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1198 passing** on the full merged gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -42,6 +42,12 @@ where possible, a differential test against the Java oracle.
 
 # Baseline: what is already done
 
+- 2026-11-12: progressive join streaming - the initial join sends the nearest
+  64 columns, then the play loop tops up 24 columns every 50 ms until the full
+  view radius is sent. Movement packets are read between batches, so a slow
+  debug join no longer pins the player at the batch edge. Also fixed the Rust
+  1.100 `needless_range_loop` lints in AES/limb multiplication and brewing.
+  1,198 tests.
 - 2026-11-08: time-scaled movement catch-up - the movement guard now scales
   its allowed distance with the time since the last movement packet (base 10
   blocks + 32 blocks/s, capped at 300s). A client that walked while the server
@@ -2587,19 +2593,19 @@ chat signing.
 - **Why:** Prevents lag/DoS from a single connection.
 - **Done when:** Malformed/hostile clients cannot stall the server.
 
-### P8.4a Progressive initial chunk streaming `[ ]` `M`
+### P8.4a Progressive initial chunk streaming `[x]` `M`
 
 - **What:** Send the nearest N columns before entering the play loop, then top
   up to the requested view distance in bounded batches between movement
-  packets. Today a large `view-distance` (441 columns at 10) generates and sends
-  the whole batch synchronously; a debug/CPU-bound server leaves the client
-  standing at the batch edge and walking into unloaded space.
+  packets. The initial join now sends 64 nearest columns, and the play loop
+  fills the remaining radius 24 columns at a time every 50 ms.
 - **Why:** The client must be able to move and see new chunks while generation
   continues; a visible straight world edge is the most common "world stops
   loading" report.
 - **Done when:** A join with `view-distance=10` streams the near ring first,
   keeps reading movement while the outer rings fill, and never shows a gap
-  inside the advertised radius.
+  inside the advertised radius. Landed 2026-11-12; `join`, `worldgen_join`,
+  `movement_validation`, and `shutdown_sessions` exercise the split batch.
 
 ### P8.5 Configuration-phase completeness `[ ]` `M`
 

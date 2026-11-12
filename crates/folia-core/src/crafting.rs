@@ -1859,9 +1859,9 @@ impl BrewingStandState {
 
     fn do_brew(&mut self) {
         let ingredient = self.slots[BREWING_INGREDIENT_SLOT].clone();
-        for index in 0..BREWING_BOTTLE_SLOTS {
-            if let Some(result) = brew_result(&ingredient, &self.slots[index]) {
-                self.slots[index] = result;
+        for slot in self.slots[..BREWING_BOTTLE_SLOTS].iter_mut() {
+            if let Some(result) = brew_result(&ingredient, slot) {
+                *slot = result;
             }
         }
 

@@ -538,11 +538,11 @@ impl Aes128 {
 
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
         add_round_key(block, &self.round_keys[0]);
-        for round in 1..10 {
+        for round_key in &self.round_keys[1..10] {
             sub_bytes(block);
             shift_rows(block);
             mix_columns(block);
-            add_round_key(block, &self.round_keys[round]);
+            add_round_key(block, round_key);
         }
         sub_bytes(block);
         shift_rows(block);
@@ -792,13 +792,14 @@ impl BigUint {
             return Self::zero();
         }
         let mut limbs = vec![0u32; self.limbs.len() + other.limbs.len() + 1];
-        for i in 0..self.limbs.len() {
+        for (i, &self_limb) in self.limbs.iter().enumerate() {
             let mut carry = 0u64;
-            for j in 0..other.limbs.len() {
+            for (j, &other_limb) in other.limbs.iter().enumerate() {
                 let index = i + j;
-                let product = u64::from(self.limbs[i]) * u64::from(other.limbs[j])
-                    + u64::from(limbs[index])
-                    + carry;
+                let product =
+                    u64::from(self_limb) * u64::from(other_limb)
+                        + u64::from(limbs[index])
+                        + carry;
                 limbs[index] = product as u32;
                 carry = product >> 32;
             }

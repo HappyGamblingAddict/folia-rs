@@ -1,6 +1,6 @@
 use crate::block_shapes::Aabb;
 use crate::chunk::{BlockState, Chunk};
-use crate::entity_ai::{ActorView, AiAgent, MemoryWorld};
+use crate::entity_ai::{ActorView, AiAgent, AiEvent, MemoryWorld};
 use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
 use crate::math::Vec3;
 use crate::protocol::PacketWriter;
@@ -377,6 +377,8 @@ impl std::fmt::Debug for TrackedEntity {
 pub struct SessionEntityTick {
     pub packets: Vec<Vec<u8>>,
     pub removed: Vec<i32>,
+    /// Sum of melee damage the session mobs dealt to the player this tick.
+    pub player_damage: f32,
 }
 
 /// Last position packet payload sent to one viewer for one entity.
@@ -836,6 +838,14 @@ impl SessionEntityTracker {
                     self.game_time,
                     &mut events,
                 );
+                for event in &events {
+                    if let AiEvent::Attack {
+                        target: 0, damage, ..
+                    } = event
+                    {
+                        out.player_damage += damage;
+                    }
+                }
                 // Navigation writes horizontal movement; physics below owns
                 // gravity and collision.
                 tracked.entity.x = agent.mob.pos.x();
@@ -870,6 +880,12 @@ impl SessionEntityTracker {
             agent.mob.health = health;
             if tracked.living.dead {
                 agent.mob.alive = false;
+            } else if result.damaged {
+                // The only attacker modeled in a session is the player
+                // (network actor id 0); make the mob retaliate.
+                agent.mob.last_hurt_by = Some(0);
+                agent.mob.last_hurt_by_timestamp = 0;
+                agent.mob.target = Some(0);
             }
         }
         Some(result)
@@ -1354,6 +1370,46 @@ mod tests {
             "zombie did not wander: {start:?} -> {end:?}"
         );
         assert!(synced, "wandering must emit position syncs");
+    }
+
+    #[test]
+    fn damaged_session_zombie_retaliates_against_the_player() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let mut zombie = None;
+        for id in tracker.entities.ids() {
+            if tracker
+                .entity(id)
+                .is_some_and(|tracked| tracked.ai.is_some())
+            {
+                zombie = Some(id);
+                break;
+            }
+        }
+        let zombie = zombie.expect("session tracker spawns a zombie");
+        let result = tracker.damage(zombie, 1.0).expect("zombie takes damage");
+        assert!(result.damaged);
+        assert_eq!(
+            tracker
+                .entity(zombie)
+                .and_then(|tracked| tracked.ai.as_ref())
+                .and_then(|agent| agent.mob.target),
+            Some(0),
+            "a hurt zombie targets the session player"
+        );
+
+        let player = {
+            let entity = &tracker.entity(zombie).expect("zombie").entity;
+            (entity.x, entity.y, entity.z)
+        };
+        let mut collider = FlatCollider { ground_y: 63 };
+        let mut damage = 0.0;
+        for _ in 0..80 {
+            damage += tracker.tick(player, &mut collider).player_damage;
+        }
+        assert!(
+            damage > 0.0,
+            "a retaliating zombie should deal melee damage"
+        );
     }
 
     fn packet_id(packet: &[u8]) -> i32 {

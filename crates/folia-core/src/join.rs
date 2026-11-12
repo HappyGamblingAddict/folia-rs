@@ -1571,6 +1571,31 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     return Err(error);
                 }
             }
+            if tick.player_damage > 0.0 && !awaiting_respawn {
+                let result = damage_player(&mut session, player_entity, tick.player_damage);
+                for packet in &result.packets {
+                    write_packet(&mut stream, packet)?;
+                }
+                if result.died {
+                    write_packet(
+                        &mut stream,
+                        &combat_kill_packet("Player was slain by a zombie"),
+                    )?;
+                    awaiting_respawn = true;
+                    death_at = Some(Instant::now());
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                    {
+                        eprintln!("[join] could not save melee death: {error}");
+                    }
+                    println!("[join] {} was slain by a zombie", start.name);
+                } else if result.damaged {
+                    println!(
+                        "[join] {} took {:.1} melee damage; health {:.0}",
+                        start.name, tick.player_damage, session.health
+                    );
+                }
+            }
             last_entity_tick = Instant::now();
         }
         while let Ok(command) = console_commands.try_recv() {

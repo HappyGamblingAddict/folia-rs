@@ -797,9 +797,7 @@ impl BigUint {
             for (j, &other_limb) in other.limbs.iter().enumerate() {
                 let index = i + j;
                 let product =
-                    u64::from(self_limb) * u64::from(other_limb)
-                        + u64::from(limbs[index])
-                        + carry;
+                    u64::from(self_limb) * u64::from(other_limb) + u64::from(limbs[index]) + carry;
                 limbs[index] = product as u32;
                 carry = product >> 32;
             }

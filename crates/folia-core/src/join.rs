@@ -134,6 +134,15 @@ const UNLOAD_MARGIN: i32 = 1;
 /// View distance used when neither the server nor the client asks for one.
 const DEFAULT_VIEW_DISTANCE: i32 = 6;
 
+/// How many columns the initial join sends before entering the play loop. The
+/// nearest columns go first; the rest are topped up while the client can move.
+const INITIAL_STREAM_BATCH: usize = 64;
+/// Columns generated/sent per play-loop top-up. Small enough that movement
+/// packets are read between batches even on a slow debug build.
+const STREAM_TOPUP_BATCH: usize = 24;
+/// How often the play loop fills the remaining view-distance columns.
+const CHUNK_TOPUP_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Vanilla's floor for a requested view distance.
 const MIN_VIEW_DISTANCE: i32 = 2;
 
@@ -1485,6 +1494,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         center_x,
         center_z,
         &mut sent_chunks,
+        INITIAL_STREAM_BATCH,
     )?;
     let chunk_count = streamed.streamed;
     let counts = streamed.counts;
@@ -1521,6 +1531,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut awaiting_respawn = false;
     let mut death_at: Option<Instant> = None;
     let play_started = Instant::now();
+    let mut last_chunk_topup = Instant::now();
     let mut dig = DigState::default();
     let mut menus = inventory::SessionMenus::new();
     let mut remote_chat: Option<RemoteChatSession> = None;
@@ -1642,6 +1653,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             center_x,
                             center_z,
                             &mut sent_chunks,
+                            STREAM_TOPUP_BATCH,
                         )?;
                         for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
                             write_packet(&mut stream, &packet)?;
@@ -1781,6 +1793,29 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 eprintln!("[join] could not save void death: {error}");
             }
             println!("[join] {} died in the void", start.name);
+        }
+        if last_chunk_topup.elapsed() >= CHUNK_TOPUP_INTERVAL
+            && has_unsent_columns(&sent_chunks, center_x, center_z, radius)
+        {
+            let batch = stream_chunks_around(
+                &mut stream,
+                current_storage,
+                world.trust_stored,
+                dimension_state.current(),
+                world.seed,
+                radius,
+                center_x,
+                center_z,
+                &mut sent_chunks,
+                STREAM_TOPUP_BATCH,
+            )?;
+            last_chunk_topup = Instant::now();
+            if batch.streamed > 0 && !has_unsent_columns(&sent_chunks, center_x, center_z, radius) {
+                println!(
+                    "[join] view distance filled: {} chunks around ({center_x}, {center_z})",
+                    sent_chunks.len()
+                );
+            }
         }
         while let Ok(update) = updates.try_recv() {
             if !entity_packet_visible(&update, &tracked_entities) {
@@ -2077,6 +2112,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 center_x,
                                 center_z,
                                 &mut sent_chunks,
+                                STREAM_TOPUP_BATCH,
                             ) {
                                 Ok(batch) => batch,
                                 // Clients close the connection mid-stream all the
@@ -3068,6 +3104,7 @@ fn respawn_player(
         *center_x,
         *center_z,
         sent_chunks,
+        usize::MAX,
     )?;
     if batch.streamed > 0 || batch.unloaded > 0 {
         println!(
@@ -3172,6 +3209,7 @@ fn switch_dimension(
         *center_x,
         *center_z,
         sent_chunks,
+        usize::MAX,
     )?;
     *tracked = {
         let mut storage = crate::world::lock(new_storage);
@@ -3814,6 +3852,7 @@ fn stream_chunks_around(
     center_x: i32,
     center_z: i32,
     sent: &mut HashSet<(i32, i32)>,
+    max_columns: usize,
 ) -> io::Result<ChunkBatch> {
     let storage = &mut *crate::world::lock(storage);
     write_packet(stream, &chunk_cache_center(center_x, center_z))?;
@@ -3824,13 +3863,14 @@ fn stream_chunks_around(
         batch.unloaded += 1;
     }
 
-    // Columns that go out with this batch, in send order.
+    // Columns that go out with this batch, in send order. Do not mark them as
+    // sent until the budget is applied, or a truncated batch would leave holes.
     let mut columns = Vec::new();
     for dz in -radius..=radius {
         for dx in -radius..=radius {
             let chunk_x = center_x + dx;
             let chunk_z = center_z + dz;
-            if sent.insert((chunk_x, chunk_z)) {
+            if !sent.contains(&(chunk_x, chunk_z)) {
                 columns.push((chunk_x, chunk_z));
             }
         }
@@ -3842,6 +3882,12 @@ fn stream_chunks_around(
         let dz = chunk_z - center_z;
         (dx * dx + dz * dz, dz, dx)
     });
+    if max_columns != usize::MAX && columns.len() > max_columns {
+        columns.truncate(max_columns.max(1));
+    }
+    for &(chunk_x, chunk_z) in &columns {
+        sent.insert((chunk_x, chunk_z));
+    }
 
     // Stored terrain first; everything else is generated on worker threads so a
     // cold batch uses more than one core. Non-overworld dimensions always
@@ -3880,6 +3926,22 @@ fn stream_chunks_around(
     // flush: a region file is rewritten as a whole file, so flushing per batch
     // would rewrite the same multi-megabyte file on every border crossing.
     Ok(batch)
+}
+
+fn has_unsent_columns(
+    sent: &HashSet<(i32, i32)>,
+    center_x: i32,
+    center_z: i32,
+    radius: i32,
+) -> bool {
+    for dz in -radius..=radius {
+        for dx in -radius..=radius {
+            if !sent.contains(&(center_x + dx, center_z + dz)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Columns the client still holds that are more than `radius + UNLOAD_MARGIN`
@@ -5299,6 +5361,19 @@ mod tests {
 
         // A replay reuses sequence 0, so the remote chain rejects it.
         assert!(handle_plain_chat(&session, &mut remote, &mut last_seen, &payload).is_err());
+    }
+
+    #[test]
+    fn unsent_columns_cover_the_requested_radius() {
+        let mut sent = HashSet::new();
+        assert!(has_unsent_columns(&sent, 0, 0, 1));
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                sent.insert((dx, dz));
+            }
+        }
+        assert!(!has_unsent_columns(&sent, 0, 0, 1));
+        assert!(has_unsent_columns(&sent, 1, 0, 1));
     }
 
     #[test]

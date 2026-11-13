@@ -299,3 +299,110 @@ fn move_axis(
     pos[axis as usize] += allowed;
     blocked
 }
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ProjectileStoreTick {
+    pub packets: Vec<Vec<u8>>,
+    pub hits: Vec<ProjectileHit>,
+    pub removed: Vec<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectileStore {
+    projectiles: Vec<Projectile>,
+    next_id: i32,
+}
+
+impl ProjectileStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.projectiles.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.projectiles.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.projectiles.clear();
+    }
+
+    pub fn projectiles(&self) -> &[Projectile] {
+        &self.projectiles
+    }
+
+    pub fn spawn(
+        &mut self,
+        kind: ProjectileKind,
+        owner_id: Option<i32>,
+        position: [f64; 3],
+        velocity: [f64; 3],
+    ) -> Vec<Vec<u8>> {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let projectile = Projectile::spawn(
+            kind,
+            id,
+            owner_id,
+            position[0],
+            position[1],
+            position[2],
+            velocity,
+        );
+        let packets = vec![projectile.add_packet(), projectile.metadata_packet()];
+        self.projectiles.push(projectile);
+        packets
+    }
+
+    pub fn tick(
+        &mut self,
+        collider: &mut impl crate::entity::BlockCollider,
+        targets: &[(i32, crate::block_shapes::Aabb)],
+    ) -> ProjectileStoreTick {
+        let mut packets = Vec::new();
+        let mut hits = Vec::new();
+        let mut removed = Vec::new();
+        let mut kept = Vec::with_capacity(self.projectiles.len());
+
+        for mut projectile in self.projectiles.drain(..) {
+            let tick = projectile.tick(collider);
+            if tick.hit_block {
+                if tick.moved {
+                    packets.push(projectile.position_sync_packet());
+                }
+                kept.push(projectile);
+            } else if let Some(hit) = projectile.try_hit(targets) {
+                hits.push(hit);
+                removed.push(projectile.id);
+                packets.push(crate::entity::remove_entities_packet(&[projectile.id]));
+            } else if projectile.should_despawn() {
+                removed.push(projectile.id);
+                packets.push(crate::entity::remove_entities_packet(&[projectile.id]));
+            } else {
+                if tick.moved {
+                    packets.push(projectile.position_sync_packet());
+                }
+                kept.push(projectile);
+            }
+        }
+
+        self.projectiles = kept;
+        ProjectileStoreTick {
+            packets,
+            hits,
+            removed,
+        }
+    }
+}
+
+impl Default for ProjectileStore {
+    fn default() -> Self {
+        Self {
+            projectiles: Vec::new(),
+            next_id: 30_000,
+        }
+    }
+}

@@ -1763,9 +1763,7 @@ pub fn write_lp_vec3(velocity: [f64; 3]) -> Vec<u8> {
     let continuation = if (scale & 0x3) != scale { 1u64 } else { 0u64 };
     let low_scale = (scale & 0x3) as u64;
     let bits = low_scale | (continuation << 2) | (px << 3) | (py << 18) | (pz << 33);
-    let mut out = Vec::with_capacity(6);
-    out.push(bits as u8);
-    out.push((bits >> 8) as u8);
+    let mut out = vec![bits as u8, (bits >> 8) as u8];
     out.extend_from_slice(&((bits >> 16) as u32).to_be_bytes());
     if continuation == 1 {
         crate::varint::write_varint(&mut out, (scale >> 2) as i32).unwrap();
@@ -1828,6 +1826,66 @@ pub fn read_set_entity_motion(data: &[u8]) -> io::Result<(i32, [f64; 3])> {
         return Err(invalid("trailing bytes"));
     }
     Ok((entity_id, velocity))
+}
+
+pub const SERVERBOUND_USE_ITEM: i32 = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ServerboundUseItem {
+    pub hand: i32,
+    pub sequence: i32,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+pub fn parse_serverbound_use_item(data: &[u8]) -> io::Result<ServerboundUseItem> {
+    let mut reader = PacketReader::new(data);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_USE_ITEM {
+        return Err(invalid("wrong packet id"));
+    }
+    let hand = reader.read_varint()?;
+    if hand != 0 && hand != 1 {
+        return Err(invalid("invalid hand"));
+    }
+    let sequence = reader.read_varint()?;
+    if reader.remaining() < 8 {
+        return Err(invalid("use item is truncated"));
+    }
+    let yaw = f32::from_be_bytes([
+        reader.read_u8()?,
+        reader.read_u8()?,
+        reader.read_u8()?,
+        reader.read_u8()?,
+    ]);
+    let pitch = f32::from_be_bytes([
+        reader.read_u8()?,
+        reader.read_u8()?,
+        reader.read_u8()?,
+        reader.read_u8()?,
+    ]);
+    if reader.remaining() != 0 {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok(ServerboundUseItem {
+        hand,
+        sequence,
+        yaw,
+        pitch,
+    })
+}
+
+pub fn build_serverbound_use_item(use_item: &ServerboundUseItem) -> io::Result<Vec<u8>> {
+    if use_item.hand != 0 && use_item.hand != 1 {
+        return Err(invalid("invalid hand"));
+    }
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_USE_ITEM)?;
+    writer.write_varint(use_item.hand)?;
+    writer.write_varint(use_item.sequence)?;
+    writer.write_f32(use_item.yaw)?;
+    writer.write_f32(use_item.pitch)?;
+    Ok(writer.into_inner())
 }
 
 #[cfg(test)]

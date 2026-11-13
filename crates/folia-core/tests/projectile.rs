@@ -1,6 +1,6 @@
 use folia_core::block_shapes::Aabb;
 use folia_core::entity::FlatCollider;
-use folia_core::projectile::{Projectile, ProjectileKind};
+use folia_core::projectile::{Projectile, ProjectileKind, ProjectileStore};
 
 #[test]
 fn arrow_gravity_and_drag_follow_the_model() {
@@ -131,4 +131,69 @@ fn packet_builders_use_registry_type_ids() {
         folia_core::registry::entity_type_id("minecraft:arrow").unwrap()
     );
     assert_eq!(projectile.metadata_packet()[0], 97);
+}
+
+#[test]
+fn projectile_store_spawn_emits_add_and_metadata() {
+    let mut store = ProjectileStore::new();
+    let packets = store.spawn(ProjectileKind::Arrow, None, [0.0, 64.0, 0.0], [0.0; 3]);
+    assert_eq!(store.len(), 1);
+    assert_eq!(packets.len(), 2);
+    assert_eq!(packets[0][0], 1);
+    assert_eq!(packets[1][0], 97);
+}
+
+#[test]
+fn projectile_store_tick_emits_position_sync() {
+    let mut store = ProjectileStore::new();
+    store.spawn(
+        ProjectileKind::Arrow,
+        None,
+        [0.5, 64.5, 0.5],
+        [1.0, 0.0, 0.0],
+    );
+    let mut collider = FlatCollider { ground_y: -1000 };
+    let tick = store.tick(&mut collider, &[]);
+    assert_eq!(tick.hits.len(), 0);
+    assert_eq!(tick.removed.len(), 0);
+    assert!(!tick.packets.is_empty());
+}
+
+#[test]
+fn projectile_store_try_hit_removes_and_reports() {
+    let mut store = ProjectileStore::new();
+    store.spawn(ProjectileKind::Arrow, None, [0.5, 64.5, 0.5], [0.0; 3]);
+    let aabb = Aabb::new(0.0, 64.0, 0.0, 1.0, 65.0, 1.0);
+    let mut collider = FlatCollider { ground_y: -1000 };
+    let tick = store.tick(&mut collider, &[(7, aabb)]);
+    assert_eq!(tick.hits.len(), 1);
+    assert_eq!(tick.hits[0].target_id, 7);
+    assert_eq!(tick.removed.len(), 1);
+    assert!(tick.packets.iter().any(|packet| packet[0] == 75));
+    assert!(store.is_empty());
+}
+
+#[test]
+fn projectile_store_despawn_removal() {
+    let mut store = ProjectileStore::new();
+    store.spawn(ProjectileKind::Arrow, None, [0.0, 0.0, 0.0], [0.0; 3]);
+    let mut collider = FlatCollider { ground_y: -1000 };
+    let mut removed = false;
+    for _ in 0..1201 {
+        let tick = store.tick(&mut collider, &[]);
+        if !tick.removed.is_empty() {
+            removed = true;
+            break;
+        }
+    }
+    assert!(removed);
+    assert!(store.is_empty());
+}
+
+#[test]
+fn projectile_store_clear() {
+    let mut store = ProjectileStore::new();
+    store.spawn(ProjectileKind::Arrow, None, [0.0, 0.0, 0.0], [0.0; 3]);
+    store.clear();
+    assert!(store.is_empty());
 }

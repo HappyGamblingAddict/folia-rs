@@ -33,7 +33,7 @@ impl AttackCooldown {
     }
 
     pub fn cooldown_ticks(&self) -> i32 {
-        (20.0 / self.attack_speed).ceil() as i32
+        ((20.0 / self.attack_speed).ceil() as i64).clamp(1, i64::from(i32::MAX)) as i32
     }
 
     pub fn strength_scale(&self, partial_ticks: f32) -> f32 {
@@ -51,8 +51,17 @@ impl AttackCooldown {
     }
 }
 
+fn sanitize_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 pub fn damage_scale(strength_scale: f32) -> f32 {
-    0.2 + strength_scale.clamp(0.0, 1.0).powi(2) * 0.8
+    let scale = sanitize_scale(strength_scale);
+    0.2 + scale.powi(2) * 0.8
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +76,7 @@ pub struct CriticalConditions {
 }
 
 pub fn is_critical(strength_scale: f32, conditions: &CriticalConditions) -> bool {
-    strength_scale > 0.9
+    sanitize_scale(strength_scale) > 0.9
         && conditions.falling
         && !conditions.on_ground
         && !conditions.in_water

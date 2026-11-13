@@ -51,6 +51,17 @@ fn strength_scale_partial_ticks_are_clamped() {
 }
 
 #[test]
+fn reset_restores_zero_strength() {
+    let mut cooldown = AttackCooldown::new(4.0);
+    for _ in 0..cooldown.cooldown_ticks() {
+        cooldown.tick();
+    }
+    assert_eq!(cooldown.strength_scale(0.0), 1.0);
+    cooldown.reset();
+    assert_eq!(cooldown.strength_scale(0.0), 0.0);
+}
+
+#[test]
 fn damage_scale_values() {
     assert!((damage_scale(0.0) - 0.2).abs() < 1e-6);
     assert!((damage_scale(1.0) - 1.0).abs() < 1e-6);
@@ -109,4 +120,17 @@ fn attack_damage_values() {
     assert!((attack_damage(7.0, 1.0, true) - 10.5).abs() < 1e-6);
     assert!((attack_damage(7.0, 0.0, false) - 1.4).abs() < 1e-6);
     assert_eq!(attack_damage(f32::NAN, 1.0, false), 0.0);
+}
+
+#[test]
+fn attack_damage_nan_scale_and_base() {
+    assert_eq!(attack_damage(f32::NAN, 1.0, false), 0.0);
+    assert!((attack_damage(7.0, f32::NAN, false) - 1.4).abs() < 1e-6);
+    assert!((attack_damage(7.0, f32::INFINITY, false) - 7.0).abs() < 1e-6);
+}
+
+#[test]
+fn extreme_attack_speed_cooldown_is_clamped() {
+    let cooldown = AttackCooldown::new(1e-30);
+    assert_eq!(cooldown.cooldown_ticks(), i32::MAX);
 }

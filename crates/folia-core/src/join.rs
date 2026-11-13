@@ -2483,6 +2483,9 @@ fn handle_entity_attack(
     cooldown: &mut AttackCooldown,
     target: i32,
 ) -> io::Result<()> {
+    if session.health <= 0.0 {
+        return Ok(());
+    }
     let Some(entity) = tracked.entity(target) else {
         return Ok(());
     };
@@ -2494,12 +2497,13 @@ fn handle_entity_attack(
         return Ok(());
     }
     let (damage, knockback_strength, _critical) = resolve_player_attack(session, cooldown);
-    let Some(result) = (if knockback_strength > 0.0 {
+    let attack_result = if knockback_strength > 0.0 {
         let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
         tracked.damage_with_knockback(target, damage, knockback_strength, knockback_x, knockback_z)
     } else {
         tracked.damage(target, damage)
-    }) else {
+    };
+    let Some(result) = attack_result else {
         return Ok(());
     };
     if !result.damaged {
@@ -2524,8 +2528,9 @@ fn resolve_player_attack(
         .and_then(|stack| crate::item_prototypes::prototype(&stack.item))
         .and_then(|prototype| prototype.tool.as_ref())
         .and_then(|tool| tool.attack_speed)
+        .map(|modifier| f64::from(modifier) + 4.0)
         .unwrap_or(4.0);
-    cooldown.set_attack_speed(f64::from(speed));
+    cooldown.set_attack_speed(speed);
     let scale = cooldown.strength_scale(0.5);
     let conditions = crate::combat::CriticalConditions {
         falling: session.physics.fall_distance > 0.0,
@@ -5527,7 +5532,7 @@ mod tests {
         equip_diamond_sword(&mut session);
         let mut cooldown = AttackCooldown::new(4.0);
         let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
-        assert!((damage - 1.456).abs() < 1e-5, "damage {damage}");
+        assert!((damage - 1.2071006).abs() < 1e-5, "damage {damage}");
         assert!(knockback.abs() < 1e-5, "knockback {knockback}");
         assert!(!critical);
     }
@@ -5536,12 +5541,12 @@ mod tests {
     fn fully_charged_sword_deals_full_damage_and_knockback() {
         let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
         equip_diamond_sword(&mut session);
-        let mut cooldown = AttackCooldown::new(4.0);
-        for _ in 0..5 {
+        let mut cooldown = AttackCooldown::new(1.6);
+        for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
         let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
-        assert!((damage - 7.0).abs() < 1e-5, "damage {damage}");
+        assert!((damage - 6.0).abs() < 1e-5, "damage {damage}");
         assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
         assert!(!critical);
     }
@@ -5554,8 +5559,8 @@ mod tests {
             std::collections::BTreeMap::from([("minecraft:knockback".to_string(), 2)]),
         ));
         session.inventory[session.selected_slot.max(0) as usize] = sword;
-        let mut cooldown = AttackCooldown::new(4.0);
-        for _ in 0..5 {
+        let mut cooldown = AttackCooldown::new(1.6);
+        for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
         let (_damage, knockback, _critical) = resolve_player_attack(&session, &mut cooldown);
@@ -5569,13 +5574,13 @@ mod tests {
         session.physics.fall_distance = 1.0;
         session.physics.on_ground = false;
         session.physics.sprinting = false;
-        let mut cooldown = AttackCooldown::new(4.0);
-        for _ in 0..5 {
+        let mut cooldown = AttackCooldown::new(1.6);
+        for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
         let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
         assert!(critical, "expected critical");
-        assert!((damage - 10.5).abs() < 1e-5, "damage {damage}");
+        assert!((damage - 9.0).abs() < 1e-5, "damage {damage}");
         assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
     }
 
@@ -5586,25 +5591,25 @@ mod tests {
         session.physics.fall_distance = 1.0;
         session.physics.on_ground = false;
         session.physics.sprinting = true;
-        let mut cooldown = AttackCooldown::new(4.0);
-        for _ in 0..5 {
+        let mut cooldown = AttackCooldown::new(1.6);
+        for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
         let (damage, _knockback, critical) = resolve_player_attack(&session, &mut cooldown);
         assert!(!critical, "sprinting should cancel critical");
-        assert!((damage - 7.0).abs() < 1e-5, "damage {damage}");
+        assert!((damage - 6.0).abs() < 1e-5, "damage {damage}");
     }
 
     #[test]
     fn resolve_resets_the_cooldown() {
         let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
         equip_diamond_sword(&mut session);
-        let mut cooldown = AttackCooldown::new(4.0);
-        for _ in 0..5 {
+        let mut cooldown = AttackCooldown::new(1.6);
+        for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
         let _ = resolve_player_attack(&session, &mut cooldown);
-        assert!((cooldown.strength_scale(0.5) - 0.1).abs() < 1e-5);
+        assert!((cooldown.strength_scale(0.5) - 0.03846154).abs() < 1e-5);
     }
 
     /// Chat is broadcast to every registered session, so skip commands that

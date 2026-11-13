@@ -2187,6 +2187,13 @@ are still open.
   retention, entity loot conditions (`entity_properties` etc. unsupported),
   player knockback/armor.
 
+- **Progress (2026-11-13):** projectile model — new `projectile.rs` with
+  Arrow/Snowball/Egg kinds, gravity/drag, axis-swept block collision,
+  sticking, `ceil(speed*2)` arrow damage (critical doubles), 1200-tick
+  despawn, registry type ids, and add/metadata/position packets. 8
+  `tests/projectile.rs`. Not wired to bows/use-item yet (use-item packet
+  handling is still open). CI green at 8871081 (1,280 tests).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,
@@ -2279,6 +2286,14 @@ are still open.
   7 knockback lib tests + 9 `tests/combat.rs`. CI green at ba8ea95 (1,246
   tests). Remaining: player knockback via `Set Entity Motion`, armor/enchantment
   damage reduction, sprint-attack rules, and Java damage traces.
+- **Progress (2026-11-13):** server-side armor mitigation —
+  `PlayerSession.armor: [ItemStack;4]` (`[feet, legs, chest, head]`) loaded/
+  saved at playerdata slots 100..=103; `damage_player` applies
+  `armor_values_from_equipment` + `damage_after_armor` + resistance before
+  `hurt`, so a full diamond set turns 10 raw damage into 3. 4
+  `tests/armor.rs`. Still open: armor equipment sync to clients, armor slot
+  clicks in the player inventory menu, armor durability, Protection
+  enchantments. CI green at 8871081 (1,280 tests).
 
 ### P5.12 Natural spawning and spawners `[~]` `L`
 

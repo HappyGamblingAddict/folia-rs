@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `0ea7816` (Ubuntu + Windows: fmt, clippy, 1,268 tests,
+  CI is green at `8871081` (Ubuntu + Windows: fmt, clippy, 1,280 tests,
   release build).
-- Tests: **1,268 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,280 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -32,7 +32,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 live block/entity drops and XP orbs are wired; remaining is the XP/progress packet, chunk/dimension retention, entity loot conditions, player knockback/armor, and per-viewer ranges/shared mob state.
+1. P5 armor is server-side only (equipment sync/menu slots open) and projectile join wiring remains; remaining is the XP/progress packet, chunk/dimension retention, entity loot conditions, player knockback, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +59,19 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: player armor — `PlayerSession.armor: [ItemStack;4]`
+  (`[feet, legs, chest, head]`) loaded/saved at playerdata slots 100..=103;
+  `damage_player` now applies `armor_values_from_equipment` +
+  `damage_after_armor` + resistance before `hurt`, so a full diamond set turns
+  10 raw damage into 3. 4 `tests/armor.rs`. Still open: armor equipment sync
+  to clients, armor slot clicks in the player inventory menu, armor durability,
+  Protection enchantments. (b922c52)
+- 2026-11-13: projectile model — new `projectile.rs` with Arrow/Snowball/Egg
+  kinds, gravity/drag, axis-swept block collision, sticking,
+  `ceil(speed*2)` arrow damage (critical doubles), 1200-tick despawn,
+  registry type ids, and add/metadata/position packets. 8
+  `tests/projectile.rs`. Not wired to bows/use-item yet (use-item packet
+  handling is still open). (8871081)
 - 2026-11-13: live chat commands — `join.rs` parses
   `SERVERBOUND_CHAT_COMMAND` (6) and `_SIGNED` (7) with the new codecs,
   validates/applies the last-seen update, then runs the existing `/op`,

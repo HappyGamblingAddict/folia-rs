@@ -25,7 +25,8 @@ use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
 use crate::entity::{SessionEntityTracker, WorldCollider};
 use crate::inventory;
-use crate::math::BlockPos;
+use crate::item_entity::{DropEntityStore, PickupTarget};
+use crate::math::{BlockPos, Vec3};
 use crate::nbt::Tag;
 use crate::player::{
     ChatPublicKey, PlayerSession, ProfilePublicKey, RemoteChatSession, SignedMessage, uuid_string,
@@ -40,6 +41,7 @@ use crate::protocol::{
     parse_serverbound_chat_session_update,
 };
 use crate::world::WorldStorage;
+use folia_random::LegacyRandomSource;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpStream};
@@ -1539,12 +1541,19 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
     let mut next_chat_index = 0i32;
     let mut attack_cooldown = AttackCooldown::new(4.0);
+    let mut drop_entities = DropEntityStore::new();
+    let seed = crate::worldgen::generator::configured()
+        .map(|g| g.seed())
+        .unwrap_or(0)
+        ^ i64::from_le_bytes(session.uuid[..8].try_into().expect("uuid half"));
+    let mut drop_rng = LegacyRandomSource::new(seed);
     let (_console_guard, console_commands) =
         SessionCommandGuard::register(&session.name, session.uuid);
 
     loop {
         if shutdown_requested() {
             tracked_entities.clear();
+            drop_entities.clear();
             menus.on_disconnect();
             if let Err(error) =
                 dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -1559,20 +1568,48 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let tick = {
+            let (tick, drop_tick, inventory_before) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
-                tracked_entities.tick((session.x, session.y, session.z), &mut collider)
+                let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
+                let inventory_before = session.inventory.clone();
+                let drop_tick = drop_entities.tick(&mut collider, &mut session);
+                (tick, drop_tick, inventory_before)
             };
             for packet in &tick.packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {
                         tracked_entities.clear();
+                        drop_entities.clear();
                         finish_disconnected(&session, current_storage, &start.name, &error);
                         return Ok(());
                     }
                     return Err(error);
                 }
+            }
+            for packet in &drop_tick.packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        drop_entities.clear();
+                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            if drop_tick.picked_items {
+                for slot in 0..session.inventory.len() {
+                    if session.inventory[slot] != inventory_before[slot] {
+                        write_packet(
+                            &mut stream,
+                            &inventory::inventory_packet(slot as i32, &session.inventory[slot]),
+                        )?;
+                    }
+                }
+            }
+            if drop_tick.picked_experience {
+                // TODO: send experience/progress packet when wired.
             }
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player(&mut session, player_entity, tick.player_damage);
@@ -1640,6 +1677,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 SessionCommand::Disconnect { reason } => {
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
                     tracked_entities.clear();
+                    drop_entities.clear();
                     menus.on_disconnect();
                     if let Err(error) =
                         dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -1991,6 +2029,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut menus,
                             &mut dig,
                             play_started,
+                            &mut drop_entities,
+                            &mut drop_rng,
                             &packet,
                             id,
                         ) {
@@ -2198,6 +2238,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     &mut menus,
                     &mut dig,
                     play_started,
+                    &mut drop_entities,
+                    &mut drop_rng,
                 ) {
                     eprintln!("[join] delayed block break failed: {tick_error}");
                 }
@@ -3774,6 +3816,23 @@ fn finish_disconnected(
     println!("[join] {name} disconnected: {error}");
 }
 
+impl PickupTarget for PlayerSession {
+    fn position(&self) -> Vec3 {
+        Vec3::new(self.x, self.y, self.z)
+    }
+
+    fn add_item(
+        &mut self,
+        stack: crate::item_components::ItemStack,
+    ) -> crate::item_components::ItemStack {
+        crate::inventory::add_stack(&mut self.inventory, stack)
+    }
+
+    fn add_experience(&mut self, amount: i32) {
+        PlayerSession::add_experience(self, amount);
+    }
+}
+
 /// Everything a session needs from the level directory.
 struct WorldContext {
     /// World root; per-dimension storages hang off this directory.
@@ -4326,6 +4385,8 @@ fn handle_block_action(
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     play_started: Instant,
+    drop_entities: &mut DropEntityStore,
+    drop_rng: &mut LegacyRandomSource,
     packet: &[u8],
     id: i32,
 ) -> io::Result<()> {
@@ -4360,7 +4421,18 @@ fn handle_block_action(
                     let context = mining_context(session, storage);
                     match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
                         DigStart::Instant => {
-                            finish_break(storage, session, pos, &state, held.as_ref())?;
+                            let packets = finish_break(
+                                storage,
+                                session,
+                                pos,
+                                &state,
+                                held.as_ref(),
+                                drop_entities,
+                                drop_rng,
+                            )?;
+                            for packet in &packets {
+                                write_packet(stream, packet)?;
+                            }
                             close_menu_for_block(stream, menus, pos)?;
                             if !creative {
                                 send_container_content(stream, session)?;
@@ -4384,7 +4456,18 @@ fn handle_block_action(
                     let creative = session.game_mode == 1;
                     match dig.stop(pos, &state, held.as_ref(), &context, now) {
                         DigStop::Destroyed => {
-                            finish_break(storage, session, pos, &state, held.as_ref())?;
+                            let packets = finish_break(
+                                storage,
+                                session,
+                                pos,
+                                &state,
+                                held.as_ref(),
+                                drop_entities,
+                                drop_rng,
+                            )?;
+                            for packet in &packets {
+                                write_packet(stream, packet)?;
+                            }
                             close_menu_for_block(stream, menus, pos)?;
                             if !creative {
                                 send_container_content(stream, session)?;
@@ -4402,7 +4485,18 @@ fn handle_block_action(
                             // time instead of insta-mining.
                             match dig.start(pos, creative, &state, held.as_ref(), &context, now) {
                                 DigStart::Instant => {
-                                    finish_break(storage, session, pos, &state, held.as_ref())?;
+                                    let packets = finish_break(
+                                        storage,
+                                        session,
+                                        pos,
+                                        &state,
+                                        held.as_ref(),
+                                        drop_entities,
+                                        drop_rng,
+                                    )?;
+                                    for packet in &packets {
+                                        write_packet(stream, packet)?;
+                                    }
                                     close_menu_for_block(stream, menus, pos)?;
                                     if !creative {
                                         send_container_content(stream, session)?;
@@ -4413,7 +4507,18 @@ fn handle_block_action(
                                     if dig.stop(pos, &state, held.as_ref(), &context, now)
                                         == DigStop::Destroyed
                                     {
-                                        finish_break(storage, session, pos, &state, held.as_ref())?;
+                                        let packets = finish_break(
+                                            storage,
+                                            session,
+                                            pos,
+                                            &state,
+                                            held.as_ref(),
+                                            drop_entities,
+                                            drop_rng,
+                                        )?;
+                                        for packet in &packets {
+                                            write_packet(stream, packet)?;
+                                        }
                                         close_menu_for_block(stream, menus, pos)?;
                                         send_container_content(stream, session)?;
                                         save_after_break(session);
@@ -4516,18 +4621,19 @@ fn mining_context(session: &PlayerSession, storage: &mut WorldStorage) -> Mining
 /// Finish a block break: clear the world block, broadcast the existing block
 /// update, apply tool durability, and capture the drops.
 ///
-/// Vanilla spawns `ItemEntity`s. This port has no item entities yet, so drops
-/// are inserted into the player's inventory; anything that does not fit is
-/// logged instead of silently vanishing.
+/// Vanilla spawns `ItemEntity`s. Drops are spawned into the session drop
+/// store and their add/metadata packets are returned for the caller to send.
 fn finish_break(
     storage: &mut WorldStorage,
     session: &mut PlayerSession,
     pos: BlockPos,
     state: &BlockState,
     held: Option<&crate::inventory::ItemStack>,
-) -> io::Result<()> {
+    drop_entities: &mut DropEntityStore,
+    drop_rng: &mut LegacyRandomSource,
+) -> io::Result<Vec<Vec<u8>>> {
     let creative = session.game_mode == 1;
-    let drops = if creative {
+    let rolled = if creative {
         block_breaking::BlockDrops::empty()
     } else {
         block_breaking::block_drops(state, held, None)
@@ -4539,12 +4645,12 @@ fn finish_break(
     };
     let Some(change) = crate::block_update::set_block(storage, pos.x(), pos.y(), pos.z(), air)?
     else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     storage.remove_block_entity(BlockEntityPos::new(pos.x(), pos.y(), pos.z()))?;
     crate::block_update::broadcast_change(&change);
     if creative {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     if let Some(stack) = session
@@ -4561,22 +4667,13 @@ fn finish_break(
         }
     }
 
-    for drop in drops.items {
-        let leftover = inventory::add_stack(&mut session.inventory, drop);
-        if !leftover.is_empty() {
-            eprintln!(
-                "[join] {}: inventory full, could not collect {} x{} (item entities are not modelled)",
-                session.name, leftover.item, leftover.count
-            );
-        }
-    }
-    // `drops.experience` is returned for a future experience-orb path; orbs do
-    // not exist in this port yet, so no XP is granted here.
-    Ok(())
+    let packets = drop_entities.spawn(pos, &rolled, drop_rng);
+    Ok(packets)
 }
 
 /// Continue a vanilla `hasDelayedDestroy` target when the client stopped
 /// before its local progress reached the server's 0.7 threshold.
+#[allow(clippy::too_many_arguments)]
 fn tick_delayed_destroy(
     storage: &Mutex<WorldStorage>,
     stream: &mut LoginStream,
@@ -4584,6 +4681,8 @@ fn tick_delayed_destroy(
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     play_started: Instant,
+    drop_entities: &mut DropEntityStore,
+    drop_rng: &mut LegacyRandomSource,
 ) -> io::Result<()> {
     let Some(pos) = dig.delayed_target() else {
         return Ok(());
@@ -4600,7 +4699,18 @@ fn tick_delayed_destroy(
     let held = session.selected_item().cloned();
     let context = mining_context(session, storage);
     if dig.tick_delayed(&state, held.as_ref(), &context, mining_tick(play_started)) {
-        finish_break(storage, session, pos, &state, held.as_ref())?;
+        let packets = finish_break(
+            storage,
+            session,
+            pos,
+            &state,
+            held.as_ref(),
+            drop_entities,
+            drop_rng,
+        )?;
+        for packet in &packets {
+            write_packet(stream, packet)?;
+        }
         close_menu_for_block(stream, menus, pos)?;
         send_container_content(stream, session)?;
         save_after_break(session);
@@ -5610,6 +5720,29 @@ mod tests {
         }
         let _ = resolve_player_attack(&session, &mut cooldown);
         assert!((cooldown.strength_scale(0.5) - 0.03846154).abs() < 1e-5);
+    }
+
+    #[test]
+    fn pickup_target_moves_items_into_the_session_inventory() {
+        let mut session = PlayerSession::new("Collector".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        let leftover = PickupTarget::add_item(
+            &mut session,
+            crate::item_components::ItemStack::new("minecraft:stone", 5),
+        );
+        assert!(leftover.is_empty());
+        assert!(
+            session
+                .inventory
+                .iter()
+                .any(|stack| stack.item == "minecraft:stone" && stack.count == 5)
+        );
+    }
+
+    #[test]
+    fn pickup_target_adds_experience() {
+        let mut session = PlayerSession::new("Collector".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        PickupTarget::add_experience(&mut session, 7);
+        assert_eq!(session.xp_total, 7);
     }
 
     /// Chat is broadcast to every registered session, so skip commands that

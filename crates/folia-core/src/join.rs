@@ -1652,11 +1652,33 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
             }
             for hit in &projectile_tick.hits {
+                let target_info = tracked_entities.entity(hit.target_id).map(|tracked| {
+                    (
+                        crate::registry::entity_type_name(tracked.entity.entity_type)
+                            .map(str::to_owned),
+                        BlockPos::new(
+                            tracked.entity.x.floor() as i32,
+                            tracked.entity.y.floor() as i32,
+                            tracked.entity.z.floor() as i32,
+                        ),
+                    )
+                });
                 if let Some(result) = tracked_entities.damage(hit.target_id, hit.damage) {
                     for packet in &result.packets {
                         write_packet(&mut stream, packet)?;
                     }
-                    // Projectile-kill death loot/XP can be a later slice.
+                    if result.died
+                        && let Some((Some(entity_type), pos)) = target_info
+                    {
+                        spawn_mob_death_rewards(
+                            &mut stream,
+                            &mut drop_entities,
+                            &mut drop_rng,
+                            &session,
+                            pos,
+                            &entity_type,
+                        )?;
+                    }
                 }
             }
             if tick.player_damage > 0.0 && !awaiting_respawn {
@@ -2759,23 +2781,15 @@ fn handle_entity_attack(
         write_packet(stream, packet)?;
     }
     if result.died {
-        if let Some(entity_type) = entity_type_name.as_deref()
-            && let Some(roll) = entity_loot_roll(session, entity_type, drop_rng)
-        {
-            let packets = drop_entities.spawn_stacks(entity_pos, &roll.stacks, drop_rng);
-            for packet in &packets {
-                write_packet(stream, packet)?;
-            }
-        }
         if let Some(entity_type) = entity_type_name.as_deref() {
-            let xp_packets = drop_entities.spawn_experience(
-                entity_pos,
-                entity_experience_reward(entity_type, drop_rng),
+            spawn_mob_death_rewards(
+                stream,
+                drop_entities,
                 drop_rng,
-            );
-            for packet in &xp_packets {
-                write_packet(stream, packet)?;
-            }
+                session,
+                entity_pos,
+                entity_type,
+            )?;
         }
         println!("[join] {} killed entity {target}", session.name);
     }
@@ -2803,6 +2817,36 @@ fn entity_experience_reward(entity_type: &str, rng: &mut dyn folia_random::Rando
         "minecraft:cow" | "minecraft:pig" => 1 + rng.next_int_bound(3),
         _ => 0,
     }
+}
+
+fn entity_death_rewards(
+    session: &PlayerSession,
+    entity_type: &str,
+    rng: &mut dyn folia_random::RandomSource,
+) -> (Vec<crate::item_components::ItemStack>, i32) {
+    let stacks = entity_loot_roll(session, entity_type, rng)
+        .map(|roll| roll.stacks)
+        .unwrap_or_default();
+    let experience = entity_experience_reward(entity_type, rng);
+    (stacks, experience)
+}
+
+fn spawn_mob_death_rewards(
+    stream: &mut LoginStream,
+    drops: &mut DropEntityStore,
+    rng: &mut LegacyRandomSource,
+    session: &PlayerSession,
+    pos: BlockPos,
+    entity_type: &str,
+) -> io::Result<()> {
+    let (stacks, xp) = entity_death_rewards(session, entity_type, rng);
+    for packet in drops.spawn_stacks(pos, &stacks, rng) {
+        write_packet(stream, &packet)?;
+    }
+    for packet in drops.spawn_experience(pos, xp, rng) {
+        write_packet(stream, &packet)?;
+    }
+    Ok(())
 }
 
 fn resolve_player_attack(
@@ -6621,6 +6665,40 @@ mod tests {
         assert!(velocity[1].abs() < 1e-6);
         assert!(velocity[2].abs() < 1e-6);
         assert!(!consume);
+    }
+
+    #[test]
+    fn entity_death_rewards_for_cow_has_items_and_xp() {
+        let session = PlayerSession::new("Killer".to_string(), [0xE1; 16], 0.0, 64.0, 0.0);
+        let mut saw_items = false;
+        let mut saw_xp = false;
+        let mut saw_both = false;
+        for seed in 0i64..64 {
+            let mut rng = folia_random::LegacyRandomSource::new(seed);
+            let (stacks, xp) = entity_death_rewards(&session, "minecraft:cow", &mut rng);
+            if !stacks.is_empty() {
+                saw_items = true;
+            }
+            if (1..=3).contains(&xp) {
+                saw_xp = true;
+            }
+            if !stacks.is_empty() && (1..=3).contains(&xp) {
+                saw_both = true;
+                break;
+            }
+        }
+        assert!(saw_items, "expected some cow seed to yield item stacks");
+        assert!(saw_xp, "expected cow xp in 1..=3");
+        assert!(saw_both, "expected some seed to yield both items and xp");
+    }
+
+    #[test]
+    fn entity_death_rewards_for_unknown_is_empty() {
+        let session = PlayerSession::new("Killer".to_string(), [0xE2; 16], 0.0, 64.0, 0.0);
+        let mut rng = folia_random::LegacyRandomSource::new(1);
+        let (stacks, xp) = entity_death_rewards(&session, "minecraft:not_a_real_mob", &mut rng);
+        assert!(stacks.is_empty());
+        assert_eq!(xp, 0);
     }
 
     #[test]

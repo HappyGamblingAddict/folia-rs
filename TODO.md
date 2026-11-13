@@ -2203,6 +2203,13 @@ are still open.
   resets level/progress/total to 0. 2 + 1 join lib tests. CI green at
   693c55b (1,292 tests).
 
+- **Progress (2026-11-13):** use-item codec + projectile store —
+  `SERVERBOUND_USE_ITEM = 64` parse/build (`hand` 0/1, sequence, yaw, pitch),
+  4 `tests/use_item.rs`; `ProjectileStore`/`ProjectileStoreTick` in
+  projectile.rs with deterministic id-ordered spawn/tick/removal, hits, and
+  despawn, plus 5 new projectile tests. Join wiring for bows/snowballs/eggs is
+  not done yet. CI for a66e894 was pending at brief time. (a66e894)
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,
@@ -2697,6 +2704,11 @@ chat signing.
   a real 1.21.11 unsigned command body. 4 join lib tests. CI green at 0ea7816
   (1,268 tests). Remaining: signature/argument validation for signed
   commands, broader command registry.
+- **Progress (2026-11-13):** `/xp add <points>` — operator-only
+  `handle_command` branch adds points via `PlayerSession::add_experience`,
+  sends `ClientboundSetExperience`, and persists playerdata; 1 join lib test. CI
+  green at 45f55c4 (1,293 tests). Still open: `/xp set`, levels mode, broader
+  command registry/permissions.
 - **Remaining:** wired into the live session on 2026-11-08: `join.rs` parses
   `ServerboundChatSessionUpdate` (remote session id + DER key + expiry) and
   `ServerboundChat`, maintains the 20-entry `LastSeenValidator` window, verifies

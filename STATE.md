@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `693c55b` (Ubuntu + Windows: fmt, clippy, 1,292 tests,
+  CI is green at `45f55c4` (Ubuntu + Windows: fmt, clippy, 1,293 tests,
   release build).
-- Tests: **1,292 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,293 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -65,6 +65,16 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: `/xp add <points>` command — operator-only
+  `handle_command` branch adds points via `PlayerSession::add_experience`,
+  sends `ClientboundSetExperience`, and persists playerdata; 1 join lib test.
+  Still open: `/xp set`, levels mode, broader command registry/permissions.
+  (45f55c4)
+- 2026-11-13: use-item codec + projectile store — `SERVERBOUND_USE_ITEM = 64`
+  parse/build (`hand` 0/1, sequence, yaw, pitch) with 4 tests/use_item.rs;
+  `ProjectileStore`/`ProjectileStoreTick` in projectile.rs with deterministic
+  id-ordered spawn/tick/removal, hits, despawn, and 5 new projectile tests.
+  Join wiring for bows/snowballs/eggs is not done yet. (a66e894; CI pending)
 - 2026-11-13: join equipment/XP + death drops/XP —
   `handle_login` now sends `ClientboundSetEquipment` for the player's four
   armor slots + main hand and `ClientboundSetExperience` with the session XP

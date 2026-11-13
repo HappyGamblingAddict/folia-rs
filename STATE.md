@@ -9,10 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green on `6d18821` (Ubuntu + Windows: fmt, clippy, 1,179 tests,
+  CI is green at `c856b5e` (Ubuntu + Windows: fmt, clippy, 1,237 tests,
   release build).
-- Tests: **1,206 passing** on the full merged gate (0 failed, 1 ignored
-  benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,237 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -33,8 +32,8 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 mob attack damage/knockback, per-viewer ranges, and shared mob state.
-2. P8.2 signed-command validation, Mojang trust roots, and plugin chat events.
+1. P5 wire the new combat model into `handle_entity_attack` and player knockback via Set Entity Motion, plus per-viewer ranges/shared mob state.
+2. P8.2 join command dispatch after codecs, signed-command validation, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
 5. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
@@ -60,11 +59,28 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
-- 2026-11-13: melee knockback — `LivingEntity.knockback` is ported on
-  `Entity` (halved delta, normalized direction, grounded lift, resistance),
-  `SessionEntityTracker::damage_with_knockback` applies it from player
-  attacks, and `handle_entity_attack` uses the vanilla yaw direction with
-  `0.4 + 0.5 * minecraft:knockback`. 7 lib tests.
+- 2026-11-13: attack cooldown/critical model — `combat.rs` adds
+  `AttackCooldown` (attack-speed-derived cooldown, saturating ticks,
+  `strength_scale`), `damage_scale`, `CriticalConditions`/`is_critical`
+  (`scale > 0.9` plus vetoes), `CRITICAL_MULTIPLIER`, and `attack_damage`.
+  7 tests. Join wiring remains open. (commit c856b5e)
+- 2026-11-13: signed command packet codecs — `protocol.rs` adds
+  `SERVERBOUND_CHAT_COMMAND=6`, `SERVERBOUND_CHAT_COMMAND_SIGNED=7`,
+  `MAX_COMMAND_LENGTH=256`, and `ServerboundChatCommand`/
+  `SignedCommandArgument`/`ServerboundChatCommandSigned` parse/build with
+  bounds, duplicate-name and trailing-byte rejection; `tests/chat_signing.rs`
+  adds 10 tests. `join.rs` wiring remains open. (34f7a43, fixed by 942ede0)
+- 2026-11-13: mob despawn rules — `spawn.rs` adds `DespawnDecision`/
+  `MobDespawnState::check_despawn` matching `Mob.checkDespawn` (peaceful,
+  persistence, category distance, strict `>`, `noActionTime > 600` with
+  `nextInt(800)==0`, 32-block reset); Java does not early-return after the
+  distance branch so the RNG draw still happens. 4 tests pin RNG
+  consumption/threshold/1024 boundary, 14 total. (076a53a + 6778e8c)
+- 2026-11-13: melee knockback — `Entity::knockback` ports
+  `LivingEntity.knockback` (halved delta, normalized direction, grounded
+  lift, resistance), `SessionEntityTracker::damage_with_knockback` applies
+  victim knockback resistance, and `handle_entity_attack` uses yaw direction
+  with `0.4 + 0.5 * minecraft:knockback`. 7 tests. (9a8d2e7)
 - 2026-11-12: retaliating session mobs — hurt zombies target the player and
   melee damage flows through the living-entity path with death/respawn.
   1 test. CI green at 1,199 tests.

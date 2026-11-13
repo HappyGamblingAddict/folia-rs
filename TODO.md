@@ -1,9 +1,9 @@
 # Folia-RS Master TODO & Roadmap
 
-> Last updated: 2026-11-07
+> Last updated: 2026-11-13
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1199 passing** on the full merged gate (0 failed, 1 ignored benchmark)
+> Test status: **1,237 passing** on the full merged gate (0 failed, 1 ignored benchmark); CI green at c856b5e
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2224,9 +2224,14 @@ are still open.
   `minecraft:knockback_resistance` before the push, and `handle_entity_attack`
   passes the vanilla player direction `(sin(yaw), -cos(yaw))` with strength
   `0.4 + 0.5 * knockback enchantment level`. `ItemStack::enchantment_level`
-  exposes held-enchantment lookups. Focused: 7 lib tests. Remaining: player
-  knockback via `Set Entity Motion`, critical/sprint attacks, attack cooldown,
-  armor/enchantment damage reduction, and Java damage traces.
+  exposes held-enchantment lookups. `combat.rs` models `AttackCooldown`
+  (attack-speed-derived cooldown, saturating ticks, `strength_scale`),
+  `damage_scale`, `CriticalConditions`/`is_critical` (`scale > 0.9` plus
+  vetoes), `CRITICAL_MULTIPLIER`, and `attack_damage`. Focused: 7 knockback
+  lib tests + 7 `tests/combat.rs`. CI green at c856b5e (1,237 tests).
+  Remaining: wire cooldown/critical into `handle_entity_attack` and player
+  knockback via `Set Entity Motion`, critical/sprint attacks, armor/enchantment
+  damage reduction, and Java damage traces.
 
 ### P5.12 Natural spawning and spawners `[~]` `L`
 
@@ -2238,9 +2243,16 @@ are still open.
 - **Progress (2026-11-06):** `spawn.rs` ports `MobCategory` caps, global
   `SpawnState` caps, vanilla light/grass/water/lava placement rules, player
   distance gates, weighted biome spawn lists, real entity-type ids, 3x3x3 pack
-  placement, and a per-chunk `NaturalSpawner` cycle. Still open: persistence,
-  despawn, spawn eggs, monster spawners, breeding, village spawning, structure
-  spawn overrides, and a Java spawn-count fixture.
+  placement, and a per-chunk `NaturalSpawner` cycle.
+- **Progress (2026-11-13):** `spawn.rs` adds `DespawnDecision`/
+  `MobDespawnState::check_despawn` matching `Mob.checkDespawn` (peaceful,
+  persistence, category distance, strict `>`, `noActionTime > 600` with
+  `nextInt(800)==0`, 32-block reset); Java does not early-return after the
+  distance branch, so the RNG draw still happens (4 tests pin RNG
+  consumption/threshold/1024 boundary). 14 tests total (076a53a + 6778e8c).
+  CI green at c856b5e (1,237 tests). Still open: integrate into the live mob
+  tick, persistence flags, spawn eggs, monster spawners, breeding, village
+  spawning, structure spawn overrides, and a Java spawn-count fixture.
 
 ### P5.13 Entity tracking and packets `[~]` `M`
 
@@ -2580,6 +2592,12 @@ chat signing.
   rejects it. `enforces-secure-chat` parses with a `false` default and emits a
   startup audit log when enabled. 15 focused integration tests (1 ignored
   release benchmark) and 2 crypto lib tests.
+- **Progress (2026-11-13):** `protocol.rs` adds serverbound chat-command codecs
+  `SERVERBOUND_CHAT_COMMAND=6`, `SERVERBOUND_CHAT_COMMAND_SIGNED=7`,
+  `MAX_COMMAND_LENGTH=256`, `ServerboundChatCommand`,
+  `SignedCommandArgument`, and `ServerboundChatCommandSigned` parse/build with
+  bounds, duplicate-name and trailing-byte rejection; `tests/chat_signing.rs`
+  adds 10 tests (34f7a43, fixed by 942ede0). CI green at c856b5e (1,237 tests).
 - **Remaining:** wired into the live session on 2026-11-08: `join.rs` parses
   `ServerboundChatSessionUpdate` (remote session id + DER key + expiry) and
   `ServerboundChat`, maintains the 20-entry `LastSeenValidator` window, verifies
@@ -2587,9 +2605,9 @@ chat signing.
   `ClientboundPlayerChat` (63) and unsigned messages as
   `ClientboundDisguisedChat` (33) with the `minecraft:chat` bound. `status.rs`
   advertises the parsed `enforces-secure-chat` flag through `main.rs`. Still
-  open: Mojang profile-key trust roots, signed-command validation, chat
-  filtering/reporting, plugin `AsyncChatEvent` dispatch, and a live two-client
-  wire test.
+  open: join command dispatch and signed-command validation for the new codecs,
+  Mojang profile-key trust roots, chat filtering/reporting, plugin
+  `AsyncChatEvent` dispatch, and a live two-client wire test.
 
 ### P8.3 Full play-packet coverage `[ ]` `XL`
 

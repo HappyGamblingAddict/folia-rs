@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `45f55c4` (Ubuntu + Windows: fmt, clippy, 1,293 tests,
+  CI is green at `f7bed49` (Ubuntu + Windows: fmt, clippy, 1,307 tests,
   release build).
-- Tests: **1,293 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,307 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -38,7 +38,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 join equipment/XP and death drops/XP are wired; remaining is armor durability/protection, armor equipment/menu clicks, mob motion packets, Java traces, chunk/dimension retention, entity loot conditions, and per-viewer ranges/shared mob state.
+1. P5 live projectiles are wired (use-item, spawn, tick, mob hits); remaining is bow charge/ammo consumption, projectile kill loot/XP, tipped/spectral arrows, block-hit effects, client sequence acknowledgement, armor durability/protection, armor equipment/menu clicks, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -65,6 +65,16 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: live projectiles — `SERVERBOUND_USE_ITEM = 64` codec;
+  `ProjectileStore` in projectile.rs (deterministic id-ordered spawn/tick/
+  removal, hits, despawn); join accepts use-item, updates session yaw/pitch,
+  fires arrows from bows (`look*3.0`), snowballs/eggs (`look*1.5`, consume
+  one item), ticks projectiles each session tick against
+  `SessionEntityTracker::collision_targets()`, and applies projectile damage to
+  tracked mobs. 4 use_item tests + 5 projectile-store tests + 1
+  collision-targets test + 4 join use-item tests. Still open: bow charge/ammo
+  consumption, projectile kill loot/XP, tipped/spectral arrows, block-hit
+  effects, client sequence acknowledgement. (a66e894, f7bed49)
 - 2026-11-13: `/xp add <points>` command — operator-only
   `handle_command` branch adds points via `PlayerSession::add_experience`,
   sends `ClientboundSetExperience`, and persists playerdata; 1 join lib test.

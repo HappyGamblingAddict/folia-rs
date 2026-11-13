@@ -2210,6 +2210,16 @@ are still open.
   despawn, plus 5 new projectile tests. Join wiring for bows/snowballs/eggs is
   not done yet. CI for a66e894 was pending at brief time. (a66e894)
 
+- **Progress (2026-11-13):** live projectiles — join accepts use-item,
+  updates session yaw/pitch, fires arrows from bows (`look*3.0`), snowballs/
+  eggs (`look*1.5`, consume one item), ticks projectiles each session tick
+  against `SessionEntityTracker::collision_targets()`, and applies projectile
+  damage to tracked mobs. 4 use_item tests + 5 projectile-store tests + 1
+  collision-targets test + 4 join use-item tests. Still open: bow charge/ammo
+  consumption (bows currently fire without arrows and without charge),
+  projectile kill loot/XP, tipped/spectral arrows, block-hit effects, client
+  sequence acknowledgement. CI green at f7bed49 (1,307 tests).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

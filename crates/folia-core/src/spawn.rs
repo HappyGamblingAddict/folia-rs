@@ -2,7 +2,8 @@
 //!
 //! This is the first vertical slice of `NaturalSpawner`: category caps,
 //! spawnable-block/light/height checks, weighted biome mob lists, a 3x3x3 pack
-//! placement helper, and a deterministic per-chunk spawn cycle.
+//! placement helper, a deterministic per-chunk spawn cycle, and the vanilla
+//! `Mob.checkDespawn` rules.
 //!
 //! It deliberately does not add entities to the shared server world. Callers
 //! provide a [`WorldView`], player positions, and a [`RandomSource`]; the
@@ -145,6 +146,91 @@ impl MobCategory {
             Self::WaterAmbient => 64.0,
             _ => SPAWN_DISTANCE_BLOCK,
         }
+    }
+}
+
+/// Vanilla `Mob.checkDespawn` nearest-player no-despawn radius (32 blocks).
+pub const NO_DESPAWN_DISTANCE: f64 = 32.0;
+
+/// Squared [`NO_DESPAWN_DISTANCE`]; Java compares against the literal `1024.0`.
+pub const NO_DESPAWN_DISTANCE_SQ: f64 = NO_DESPAWN_DISTANCE * NO_DESPAWN_DISTANCE;
+
+/// Vanilla `Mob.checkDespawn` no-action-time threshold.
+pub const NO_ACTION_TIME_THRESHOLD: i32 = 600;
+
+/// Vanilla `Mob.checkDespawn` random bound for the no-action-time despawn.
+pub const NO_ACTION_TIME_RANDOM_BOUND: i32 = 800;
+
+/// Vanilla `Mob.checkDespawn` outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DespawnDecision {
+    Keep,
+    Despawn,
+}
+
+/// Vanilla `Mob.checkDespawn` state for one mob.
+///
+/// `persistence_required` defaults to the category's `is_persistent()` value,
+/// `custom_persistence` to `false`, and `remove_when_far_away` to `true`,
+/// matching the vanilla `Mob` defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MobDespawnState {
+    pub category: MobCategory,
+    pub persistence_required: bool,
+    pub custom_persistence: bool,
+    pub remove_when_far_away: bool,
+    pub no_action_time: i32,
+}
+
+impl MobDespawnState {
+    pub fn new(category: MobCategory) -> Self {
+        Self {
+            category,
+            persistence_required: category.is_persistent(),
+            custom_persistence: false,
+            remove_when_far_away: true,
+            no_action_time: 0,
+        }
+    }
+
+    /// Vanilla `Mob.checkDespawn`.
+    ///
+    /// `nearest_player_distance_sq` is `None` when no player is loaded. Java's
+    /// `getNearestPlayer(this, -1.0)` returns null in that case, the whole
+    /// distance branch is skipped, and the mob is kept.
+    pub fn check_despawn(
+        &mut self,
+        peaceful: bool,
+        should_despawn_in_peaceful: bool,
+        nearest_player_distance_sq: Option<f64>,
+        random: &mut impl RandomSource,
+    ) -> DespawnDecision {
+        if peaceful && should_despawn_in_peaceful {
+            return DespawnDecision::Despawn;
+        }
+        if self.persistence_required || self.custom_persistence {
+            return DespawnDecision::Keep;
+        }
+        let Some(distance_sq) = nearest_player_distance_sq else {
+            return DespawnDecision::Keep;
+        };
+
+        let despawn_distance = self.category.despawn_distance();
+        let despawn_distance_sq = despawn_distance * despawn_distance;
+        if distance_sq > despawn_distance_sq && self.remove_when_far_away {
+            return DespawnDecision::Despawn;
+        }
+        if self.no_action_time > NO_ACTION_TIME_THRESHOLD
+            && random.next_int_bound(NO_ACTION_TIME_RANDOM_BOUND) == 0
+            && distance_sq > NO_DESPAWN_DISTANCE_SQ
+            && self.remove_when_far_away
+        {
+            return DespawnDecision::Despawn;
+        }
+        if distance_sq < NO_DESPAWN_DISTANCE_SQ {
+            self.no_action_time = 0;
+        }
+        DespawnDecision::Keep
     }
 }
 

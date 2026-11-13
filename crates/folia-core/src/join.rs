@@ -1454,6 +1454,18 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let player_entity = player_entity_id();
     register_player_entity(&session, player_entity);
     write_packet(&mut stream, &health_packet(&session))?;
+    write_packet(
+        &mut stream,
+        &crate::entity_metadata::set_equipment_packet(player_entity, &player_equipment(&session)),
+    )?;
+    write_packet(
+        &mut stream,
+        &crate::entity_metadata::set_experience_packet(
+            session.xp_progress,
+            session.xp_level,
+            session.xp_total,
+        ),
+    )?;
     // The position has to arrive before the chunk batch. The client stays on
     // the loading screen until it has both; the old order generated every
     // column first, so a 441-column join sat on the loading screen for the
@@ -3115,6 +3127,19 @@ pub fn reset_player_entity(session: &mut PlayerSession, entity_id: i32) {
     player.set_health(20.0);
     player.metadata.pack_dirty();
     session.health = player.health;
+}
+
+fn player_equipment(session: &PlayerSession) -> crate::entity_metadata::Equipment {
+    let mut equipment = crate::entity_metadata::Equipment::new();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Feet) = session.armor[0].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Legs) = session.armor[1].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Chest) = session.armor[2].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Head) = session.armor[3].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::MainHand) = session
+        .selected_item()
+        .cloned()
+        .unwrap_or_else(crate::inventory::ItemStack::empty);
+    equipment
 }
 
 /// Apply damage through the living-entity model so the client receives the
@@ -6117,5 +6142,68 @@ mod tests {
         writer.write_string("op Steve").unwrap();
         let error = parse_command_packet(&writer.into_inner()).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn player_equipment_maps_the_armor_array() {
+        let mut session = PlayerSession::new("Equip".to_string(), [0xE1; 16], 0.0, 64.0, 0.0);
+        session.armor[0] =
+            crate::inventory::ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+        session.armor[1] =
+            crate::inventory::ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+        session.armor[2] =
+            crate::inventory::ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+        session.armor[3] =
+            crate::inventory::ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+
+        let equipment = player_equipment(&session);
+        assert_eq!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::Feet)
+                .item,
+            "minecraft:diamond_boots"
+        );
+        assert_eq!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::Legs)
+                .item,
+            "minecraft:diamond_leggings"
+        );
+        assert_eq!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::Chest)
+                .item,
+            "minecraft:diamond_chestplate"
+        );
+        assert_eq!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::Head)
+                .item,
+            "minecraft:diamond_helmet"
+        );
+        assert!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::MainHand)
+                .is_empty(),
+            "empty selected slot maps to empty main hand"
+        );
+    }
+
+    #[test]
+    fn initial_experience_packet_uses_session_values() {
+        let mut session = PlayerSession::new("XpJoin".to_string(), [0xE2; 16], 0.0, 64.0, 0.0);
+        session.xp_progress = 0.5;
+        session.xp_level = 4;
+        session.xp_total = 37;
+        let packet = crate::entity_metadata::set_experience_packet(
+            session.xp_progress,
+            session.xp_level,
+            session.xp_total,
+        );
+        let (progress, level, total) =
+            crate::entity_metadata::read_set_experience(&packet).unwrap();
+        assert!((progress - 0.5).abs() < 1e-6);
+        assert_eq!(level, 4);
+        assert_eq!(total, 37);
     }
 }

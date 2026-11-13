@@ -4,7 +4,7 @@ use folia_core::block_breaking::BlockDrops;
 use folia_core::entity::FlatCollider;
 use folia_core::inventory::ItemStack;
 use folia_core::item_entity::{
-    DropEntityStore, DroppedEntity, ExperienceOrb, ITEM_LIFETIME, ItemEntity, PickupTarget,
+    DropEntityStore, DroppedEntity, ITEM_LIFETIME, ItemEntity, PickupTarget,
 };
 use folia_core::math::{BlockPos, Vec3};
 use folia_core::protocol::PacketReader;
@@ -98,7 +98,7 @@ fn spawn_emits_add_and_metadata_for_each_entity() {
     // experience 5 splits into 3 + 1 + 1 = 3 orbs
     assert_eq!(store.len(), 5);
     assert_eq!(packets.len(), 10);
-    for pair in packets.chunks_exact(2) {
+    for pair in packets.as_chunks::<2>().0 {
         assert_eq!(packet_id(&pair[0]), ADD_ENTITY);
         // second is metadata (set entity data); id differs by entity but packet exists
         assert!(!pair[1].is_empty());

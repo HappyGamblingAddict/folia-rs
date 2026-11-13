@@ -1608,9 +1608,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                 }
             }
-            if drop_tick.picked_experience {
-                // TODO: send experience/progress packet when wired.
-            }
+            // TODO: send experience/progress packet when `picked_experience` is true.
+            let _ = drop_tick.picked_experience;
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player(&mut session, player_entity, tick.player_damage);
                 for packet in &result.packets {

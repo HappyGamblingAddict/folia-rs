@@ -2211,12 +2211,22 @@ are still open.
 - **Why:** End-game content; can be deferred until dimensions and combat work.
 - **Done when:** Boss fights can be completed with parity behavior.
 
-### P5.11 Combat system `[ ]` `L`
+### P5.11 Combat system `[~]` `L`
 
 - **What:** Attack cooldown, critical hits, knockback, armor, enchantments,
   damage types, death loot, XP, shields, and projectile damage.
 - **Why:** Combat ties together items, entities, attributes, and effects.
 - **Done when:** Damage traces match Java for melee/ranged/enchanted cases.
+- **Progress (2026-11-13):** `Entity::knockback` ports
+  `LivingEntity.knockback` (halve delta, normalized direction, grounded lift
+  capped at 0.4, zero direction is a no-op). `SessionEntityTracker` adds
+  `damage_with_knockback`, which applies the victim's
+  `minecraft:knockback_resistance` before the push, and `handle_entity_attack`
+  passes the vanilla player direction `(sin(yaw), -cos(yaw))` with strength
+  `0.4 + 0.5 * knockback enchantment level`. `ItemStack::enchantment_level`
+  exposes held-enchantment lookups. Focused: 7 lib tests. Remaining: player
+  knockback via `Set Entity Motion`, critical/sprint attacks, attack cooldown,
+  armor/enchantment damage reduction, and Java damage traces.
 
 ### P5.12 Natural spawning and spawners `[~]` `L`
 

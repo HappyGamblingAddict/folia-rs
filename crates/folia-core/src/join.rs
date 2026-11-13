@@ -20,6 +20,7 @@ use crate::block_entity::{BlockEntity, BlockEntityPos};
 use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
+use crate::combat::AttackCooldown;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
 use crate::entity::{SessionEntityTracker, WorldCollider};
@@ -1537,6 +1538,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut remote_chat: Option<RemoteChatSession> = None;
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
     let mut next_chat_index = 0i32;
+    let mut attack_cooldown = AttackCooldown::new(4.0);
     let (_console_guard, console_commands) =
         SessionCommandGuard::register(&session.name, session.uuid);
 
@@ -1556,6 +1558,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             return Ok(());
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
+            attack_cooldown.tick();
             let tick = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
@@ -1945,6 +1948,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 &mut stream,
                                 &session,
                                 &mut tracked_entities,
+                                &mut attack_cooldown,
                                 target,
                             )
                         {
@@ -2476,6 +2480,7 @@ fn handle_entity_attack(
     stream: &mut LoginStream,
     session: &PlayerSession,
     tracked: &mut SessionEntityTracker,
+    cooldown: &mut AttackCooldown,
     target: i32,
 ) -> io::Result<()> {
     let Some(entity) = tracked.entity(target) else {
@@ -2488,15 +2493,13 @@ fn handle_entity_attack(
     if dx * dx + dy * dy + dz * dz > reach * reach {
         return Ok(());
     }
-    let damage = held_attack_damage(session);
-    let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
-    let Some(result) = tracked.damage_with_knockback(
-        target,
-        damage,
-        attack_knockback_strength(session),
-        knockback_x,
-        knockback_z,
-    ) else {
+    let (damage, knockback_strength, _critical) = resolve_player_attack(session, cooldown);
+    let Some(result) = (if knockback_strength > 0.0 {
+        let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
+        tracked.damage_with_knockback(target, damage, knockback_strength, knockback_x, knockback_z)
+    } else {
+        tracked.damage(target, damage)
+    }) else {
         return Ok(());
     };
     if !result.damaged {
@@ -2509,6 +2512,39 @@ fn handle_entity_attack(
         println!("[join] {} killed entity {target}", session.name);
     }
     Ok(())
+}
+
+fn resolve_player_attack(
+    session: &PlayerSession,
+    cooldown: &mut AttackCooldown,
+) -> (f32, f64, bool) {
+    let speed = session
+        .inventory
+        .get(session.selected_slot.max(0) as usize)
+        .and_then(|stack| crate::item_prototypes::prototype(&stack.item))
+        .and_then(|prototype| prototype.tool.as_ref())
+        .and_then(|tool| tool.attack_speed)
+        .unwrap_or(4.0);
+    cooldown.set_attack_speed(speed);
+    let scale = cooldown.strength_scale(0.5);
+    let conditions = crate::combat::CriticalConditions {
+        falling: session.physics.fall_distance > 0.0,
+        on_ground: session.physics.on_ground,
+        in_water: session.physics.swimming,
+        on_climbable: false,
+        blind: false,
+        passenger: false,
+        sprinting: session.physics.sprinting,
+    };
+    let critical = crate::combat::is_critical(scale, &conditions);
+    let damage = crate::combat::attack_damage(held_attack_damage(session), scale, critical);
+    let knockback_strength = if scale > 0.9 {
+        attack_knockback_strength(session)
+    } else {
+        0.0
+    };
+    cooldown.reset();
+    (damage, knockback_strength, critical)
 }
 
 fn held_attack_damage(session: &PlayerSession) -> f32 {
@@ -5478,6 +5514,97 @@ mod tests {
             .expect("diamond sword has attack damage");
         assert_eq!(held_attack_damage(&session), expected);
         assert!(expected > 1.0);
+    }
+
+    fn equip_diamond_sword(session: &mut PlayerSession) {
+        session.inventory[session.selected_slot.max(0) as usize] =
+            crate::item_components::ItemStack::new("minecraft:diamond_sword", 1);
+    }
+
+    #[test]
+    fn first_swing_after_reset_uses_partial_charge() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        equip_diamond_sword(&mut session);
+        let mut cooldown = AttackCooldown::new(4.0);
+        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        assert!((damage - 1.456).abs() < 1e-5, "damage {damage}");
+        assert!(knockback.abs() < 1e-5, "knockback {knockback}");
+        assert!(!critical);
+    }
+
+    #[test]
+    fn fully_charged_sword_deals_full_damage_and_knockback() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        equip_diamond_sword(&mut session);
+        let mut cooldown = AttackCooldown::new(4.0);
+        for _ in 0..5 {
+            cooldown.tick();
+        }
+        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        assert!((damage - 7.0).abs() < 1e-5, "damage {damage}");
+        assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
+        assert!(!critical);
+    }
+
+    #[test]
+    fn knockback_enchantment_adds_half_per_level() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        let mut sword = crate::item_components::ItemStack::new("minecraft:diamond_sword", 1);
+        sword.set_component(crate::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:knockback".to_string(), 2)]),
+        ));
+        session.inventory[session.selected_slot.max(0) as usize] = sword;
+        let mut cooldown = AttackCooldown::new(4.0);
+        for _ in 0..5 {
+            cooldown.tick();
+        }
+        let (_damage, knockback, _critical) = resolve_player_attack(&session, &mut cooldown);
+        assert!((knockback - 1.4).abs() < 1e-5, "knockback {knockback}");
+    }
+
+    #[test]
+    fn falling_sprintless_full_charge_is_critical() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        equip_diamond_sword(&mut session);
+        session.physics.fall_distance = 1.0;
+        session.physics.on_ground = false;
+        session.physics.sprinting = false;
+        let mut cooldown = AttackCooldown::new(4.0);
+        for _ in 0..5 {
+            cooldown.tick();
+        }
+        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        assert!(critical, "expected critical");
+        assert!((damage - 10.5).abs() < 1e-5, "damage {damage}");
+        assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
+    }
+
+    #[test]
+    fn sprinting_cancels_critical() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        equip_diamond_sword(&mut session);
+        session.physics.fall_distance = 1.0;
+        session.physics.on_ground = false;
+        session.physics.sprinting = true;
+        let mut cooldown = AttackCooldown::new(4.0);
+        for _ in 0..5 {
+            cooldown.tick();
+        }
+        let (damage, _knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        assert!(!critical, "sprinting should cancel critical");
+        assert!((damage - 7.0).abs() < 1e-5, "damage {damage}");
+    }
+
+    #[test]
+    fn resolve_resets_the_cooldown() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
+        equip_diamond_sword(&mut session);
+        let mut cooldown = AttackCooldown::new(4.0);
+        for _ in 0..5 {
+            cooldown.tick();
+        }
+        let _ = resolve_player_attack(&session, &mut cooldown);
+        assert!((cooldown.strength_scale(0.5) - 0.1).abs() < 1e-5);
     }
 
     /// Chat is broadcast to every registered session, so skip commands that

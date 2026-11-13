@@ -126,7 +126,8 @@ fn attack_damage_values() {
 fn attack_damage_nan_scale_and_base() {
     assert_eq!(attack_damage(f32::NAN, 1.0, false), 0.0);
     assert!((attack_damage(7.0, f32::NAN, false) - 1.4).abs() < 1e-6);
-    assert!((attack_damage(7.0, f32::INFINITY, false) - 7.0).abs() < 1e-6);
+    assert!((attack_damage(7.0, f32::INFINITY, false) - 1.4).abs() < 1e-6);
+    assert!((attack_damage(7.0, f32::NEG_INFINITY, false) - 1.4).abs() < 1e-6);
 }
 
 #[test]

@@ -2525,7 +2525,7 @@ fn resolve_player_attack(
         .and_then(|prototype| prototype.tool.as_ref())
         .and_then(|tool| tool.attack_speed)
         .unwrap_or(4.0);
-    cooldown.set_attack_speed(speed);
+    cooldown.set_attack_speed(f64::from(speed));
     let scale = cooldown.strength_scale(0.5);
     let conditions = crate::combat::CriticalConditions {
         falling: session.physics.fall_distance > 0.0,

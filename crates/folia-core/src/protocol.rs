@@ -1739,6 +1739,97 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+pub const CLIENTBOUND_SET_ENTITY_MOTION: i32 = 99;
+pub const ABS_MAX: f64 = 1.7179869183e10;
+pub const ABS_MIN: f64 = 3.051944088384301e-5;
+
+pub fn write_lp_vec3(velocity: [f64; 3]) -> Vec<u8> {
+    let max_abs = velocity[0]
+        .abs()
+        .max(velocity[1].abs())
+        .max(velocity[2].abs());
+    if max_abs < ABS_MIN {
+        return vec![0];
+    }
+    let scale = (max_abs.ceil() as i64).max(1);
+    let pack = |value: f64| -> u64 {
+        let scaled = (value / scale as f64) * 0.5 + 0.5;
+        let packed = (scaled * 32766.0).round();
+        packed.clamp(0.0, 32766.0) as u64
+    };
+    let px = pack(velocity[0]);
+    let py = pack(velocity[1]);
+    let pz = pack(velocity[2]);
+    let continuation = if (scale & 0x3) != scale { 1u64 } else { 0u64 };
+    let low_scale = (scale & 0x3) as u64;
+    let bits = low_scale | (continuation << 2) | (px << 3) | (py << 18) | (pz << 33);
+    let mut out = Vec::with_capacity(6);
+    out.push(bits as u8);
+    out.push((bits >> 8) as u8);
+    out.extend_from_slice(&((bits >> 16) as u32).to_be_bytes());
+    if continuation == 1 {
+        crate::varint::write_varint(&mut out, (scale >> 2) as i32).unwrap();
+    }
+    out
+}
+
+pub fn read_lp_vec3(data: &[u8]) -> io::Result<([f64; 3], usize)> {
+    if data.is_empty() {
+        return Err(invalid("lp vec3 is truncated"));
+    }
+    if data[0] == 0 {
+        return Ok(([0.0, 0.0, 0.0], 1));
+    }
+    if data.len() < 6 {
+        return Err(invalid("lp vec3 is truncated"));
+    }
+    let first = data[0] as u64;
+    let second = data[1] as u64;
+    let hi = u32::from_be_bytes([data[2], data[3], data[4], data[5]]) as u64;
+    let bits = (hi << 16) | (second << 8) | first;
+    let px = (bits >> 3) & 0x7fff;
+    let py = (bits >> 18) & 0x7fff;
+    let pz = (bits >> 33) & 0x7fff;
+    let continuation = ((bits >> 2) & 1) as u8;
+    let mut scale = (first & 0x3) as i64;
+    let mut consumed = 6usize;
+    if continuation == 1 {
+        let (value, used) = crate::varint::read_varint_slice(&data[consumed..])?;
+        consumed += used;
+        scale |= (value as i64) << 2;
+    }
+    if scale == 0 {
+        scale = 1;
+    }
+    let unpack = |value: u64| -> f64 {
+        let clamped = (value as f64).clamp(0.0, 32766.0);
+        (clamped * 2.0 / 32766.0 - 1.0) * scale as f64
+    };
+    Ok(([unpack(px), unpack(py), unpack(pz)], consumed))
+}
+
+pub fn set_entity_motion_packet(entity_id: i32, velocity: [f64; 3]) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(CLIENTBOUND_SET_ENTITY_MOTION).unwrap();
+    writer.write_varint(entity_id).unwrap();
+    writer.write_bytes(&write_lp_vec3(velocity));
+    writer.into_inner()
+}
+
+pub fn read_set_entity_motion(data: &[u8]) -> io::Result<(i32, [f64; 3])> {
+    let mut reader = PacketReader::new(data);
+    let id = reader.read_varint()?;
+    if id != CLIENTBOUND_SET_ENTITY_MOTION {
+        return Err(invalid("wrong packet id"));
+    }
+    let entity_id = reader.read_varint()?;
+    let (velocity, consumed) = read_lp_vec3(&data[reader.position()..])?;
+    if reader.position() + consumed != data.len() {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok((entity_id, velocity))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

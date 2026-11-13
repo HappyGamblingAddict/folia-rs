@@ -414,6 +414,8 @@ pub struct SessionEntityTick {
     pub removed: Vec<i32>,
     /// Sum of melee damage the session mobs dealt to the player this tick.
     pub player_damage: f32,
+    /// Knockback vector from the last mob attack this tick, if any.
+    pub player_knockback: Option<[f64; 3]>,
 }
 
 /// Last position packet payload sent to one viewer for one entity.
@@ -879,6 +881,17 @@ impl SessionEntityTracker {
                     } = event
                     {
                         out.player_damage += damage;
+                        let dx = tracked.entity.x - player.0;
+                        let dz = tracked.entity.z - player.2;
+                        let length = (dx * dx + dz * dz).sqrt();
+                        let (unit_x, unit_z) = if length > 0.0 {
+                            (dx / length, dz / length)
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        // Grounded lift is 0.4; airborne player velocity is not
+                        // modeled in this slice.
+                        out.player_knockback = Some([-unit_x * 0.4, 0.4, -unit_z * 0.4]);
                     }
                 }
                 // Navigation writes horizontal movement; physics below owns

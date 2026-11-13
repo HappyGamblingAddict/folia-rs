@@ -1626,6 +1626,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 for packet in &result.packets {
                     write_packet(&mut stream, packet)?;
                 }
+                if !result.died
+                    && let Some(knockback) = tick.player_knockback
+                {
+                    write_packet(
+                        &mut stream,
+                        &crate::protocol::set_entity_motion_packet(player_entity, knockback),
+                    )?;
+                }
                 if result.died {
                     write_packet(
                         &mut stream,

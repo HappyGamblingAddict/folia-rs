@@ -802,11 +802,10 @@ These are expected gaps, not reasons to stop:
   `tests/fluid_interactions.rs` adds 16 focused tests and `tests/fluids.rs` adds
   one neighbour-update test.
 - Not wired in production:
-  - `tick::behavior_for` still routes `minecraft:fire` to the no-op behaviour.
-    Fire aging, burnout, and fire spread need one registration line in
-    `tick.rs` (outside this slice) or a caller that uses
-    `fluid::interaction_table()`. Lava ignition itself is live because lava is
-    a fluid.
+  - `minecraft:fire` is now registered in `tick.rs` (no longer a no-op);
+    remaining fire gaps are weather/rain, per-world difficulty,
+    `fireSpreadRadiusAroundPlayer`, increased-burnout environment attribute,
+    and TNT priming.
   - `minecraft:soul_sand`/`minecraft:magma_block` do not schedule their Java
     20-tick column check. A water source above them performs the equivalent
     `updateColumn` on its normal 5-tick fluid tick, so columns can form up to
@@ -1121,6 +1120,10 @@ These are expected gaps, not reasons to stop:
 
 - Armor enchantments (Protection/Blast/Fire/Projectile), armor durability loss,
   and armor trims are not modeled.
+- Server-side armor mitigation now exists (`armor_values_from_equipment` +
+  `damage_after_armor` + resistance in `damage_player`); durability loss,
+  Protection-family enchantments, armor trims, and client equipment sync
+  remain open.
 - No absorption, health boost, hunger, levitation, slow falling, conduit,
   dolphin, bad omen, or darkness gameplay; only the listed effect flags and
   modifiers are exposed.

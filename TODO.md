@@ -2197,6 +2197,12 @@ are still open.
   `tests/projectile.rs`. Not wired to bows/use-item yet (use-item packet
   handling is still open). CI green at 8871081 (1,280 tests).
 
+- **Progress (2026-11-13):** death drops + death XP — player death drops
+  inventory, armor, and cursor as item entities at the death position and
+  clears them; death drops `min(xp_level * 7, 100)` experience orbs, then
+  resets level/progress/total to 0. 2 + 1 join lib tests. CI green at
+  693c55b (1,292 tests).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,
@@ -2297,6 +2303,14 @@ are still open.
   `tests/armor.rs`. Still open: armor equipment sync to clients, armor slot
   clicks in the player inventory menu, armor durability, Protection
   enchantments. CI green at 8871081 (1,280 tests).
+- **Progress (2026-11-13):** join equipment/XP + death drops/XP —
+  `handle_login` sends `ClientboundSetEquipment` for the player's four armor
+  slots + main hand and `ClientboundSetExperience` with session XP values (2
+  join lib tests); player death drops inventory, armor, and cursor as item
+  entities at the death position and clears them (2 join lib tests); death
+  drops `min(xp_level * 7, 100)` experience orbs, then resets level/progress/
+  total to 0 (1 join lib test). Packet ids: equipment 100, experience 101. CI
+  green at 693c55b (1,292 tests).
 - **Progress (2026-11-13):** ClientboundSetExperience (id 101) —
   `set_experience_packet`/`read_set_experience` in `entity_metadata.rs` with
   progress clamp; join sends it when `DropStoreTick.picked_experience`. 3

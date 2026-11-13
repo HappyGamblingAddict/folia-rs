@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `d07b722` (Ubuntu + Windows: fmt, clippy, 1,287 tests,
+  CI is green at `693c55b` (Ubuntu + Windows: fmt, clippy, 1,292 tests,
   release build).
-- Tests: **1,287 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,292 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -30,9 +30,15 @@ Last updated: 2026-11-13
   multi-region world parallelism, dragon entity fight, and terrain adaptation
   for structures.
 
+### Delegated model notes
+- LongCat 2.5 Free completed the despawn slice but later review runs
+  repeatedly failed/stalled; Beam Free was reliable for reviews/fixes/
+  implementations; Iceman Contributor Free failed to open provider sessions,
+  while Iceman Free worked after retries.
+
 ## Current focus
 
-1. P5 player knockback motion is wired; remaining is mob motion packets, armor equipment sync, Java traces, the XP/progress packet, chunk/dimension retention, entity loot conditions, and per-viewer ranges/shared mob state.
+1. P5 join equipment/XP and death drops/XP are wired; remaining is armor durability/protection, armor equipment/menu clicks, mob motion packets, Java traces, chunk/dimension retention, entity loot conditions, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +65,14 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: join equipment/XP + death drops/XP —
+  `handle_login` now sends `ClientboundSetEquipment` for the player's four
+  armor slots + main hand and `ClientboundSetExperience` with the session XP
+  values (2 join lib tests); player death drops inventory, armor, and cursor
+  as item entities at the death position and clears them (2 join lib tests);
+  death drops `min(xp_level * 7, 100)` experience orbs, then resets level/
+  progress/total to 0 (1 join lib test). Packet ids: equipment 100,
+  experience 101. (4f85480, d51a6c4, 693c55b)
 - 2026-11-13: Set Entity Motion + player knockback — id 99;
   LpVec3 codec in `protocol.rs` (`write_lp_vec3`/`read_lp_vec3`, zero-vector
   single byte, continuation scale), `SessionEntityTick.player_knockback`

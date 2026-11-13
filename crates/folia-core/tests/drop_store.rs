@@ -90,6 +90,7 @@ fn spawn_emits_add_and_metadata_for_each_entity() {
             ItemStack::new("minecraft:dirt", 2),
         ],
         experience: 5,
+        ..BlockDrops::empty()
     };
     let mut rng = LegacyRandomSource::new(42);
     let packets = store.spawn(BlockPos::new(0, 64, 0), &drops, &mut rng);
@@ -123,6 +124,8 @@ fn tick_applies_gravity_and_emits_position_sync() {
     let tick = store.tick(&mut collider, &mut target);
     assert!(tick.removed.is_empty());
     assert!(tick.packets.iter().any(|p| packet_id(p) == POSITION_SYNC));
+    assert!(!tick.picked_items);
+    assert!(!tick.picked_experience);
     assert_eq!(store.len(), 1);
 }
 
@@ -132,6 +135,7 @@ fn pickup_after_delay_adds_items_and_removes_entity() {
     let drops = BlockDrops {
         items: vec![ItemStack::new("minecraft:diamond", 3)],
         experience: 0,
+        ..BlockDrops::empty()
     };
     let mut rng = LegacyRandomSource::new(1);
     let spawn_packets = store.spawn(BlockPos::new(0, 64, 0), &drops, &mut rng);
@@ -162,6 +166,7 @@ fn xp_orb_pickup_adds_experience() {
     let drops = BlockDrops {
         items: Vec::new(),
         experience: 5,
+        ..BlockDrops::empty()
     };
     let mut rng = LegacyRandomSource::new(2);
     store.spawn(BlockPos::new(0, 64, 0), &drops, &mut rng);
@@ -170,13 +175,18 @@ fn xp_orb_pickup_adds_experience() {
     let mut collider = FlatCollider { ground_y: 0 };
     let mut target = FakeTarget::at(0.5, 64.5, 0.5);
     let mut total_removed = 0usize;
+    let mut picked_experience = false;
     for _ in 0..40 {
         let tick = store.tick(&mut collider, &mut target);
+        if tick.picked_experience {
+            picked_experience = true;
+        }
         total_removed += tick.removed.len();
         if store.is_empty() {
             break;
         }
     }
+    assert!(picked_experience);
     assert_eq!(target.xp, 5);
     assert_eq!(store.len(), 0);
     assert!(total_removed >= 3);

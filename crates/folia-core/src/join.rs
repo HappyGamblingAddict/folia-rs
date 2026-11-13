@@ -1647,6 +1647,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     )?;
                 }
                 if result.died {
+                    drop_player_death_items(
+                        &mut stream,
+                        &mut drop_entities,
+                        &mut drop_rng,
+                        &mut session,
+                    )?;
                     write_packet(
                         &mut stream,
                         &combat_kill_packet("Player was slain by a zombie"),
@@ -1887,7 +1893,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     &sent_chunks,
                 )?;
             }
-        } else if apply_void_damage(&mut stream, &mut session, &mut last_void_damage)? {
+        } else if apply_void_damage(
+            &mut stream,
+            &mut session,
+            &mut drop_entities,
+            &mut drop_rng,
+            &mut last_void_damage,
+        )? {
             awaiting_respawn = true;
             death_at = Some(Instant::now());
             if let Err(error) =
@@ -3142,6 +3154,52 @@ fn player_equipment(session: &PlayerSession) -> crate::entity_metadata::Equipmen
     equipment
 }
 
+fn take_player_death_drops(session: &mut PlayerSession) -> Vec<crate::item_components::ItemStack> {
+    let mut drops = Vec::new();
+    for slot in session.inventory.iter_mut() {
+        if !slot.is_empty() {
+            drops.push(std::mem::replace(
+                slot,
+                crate::inventory::ItemStack::empty(),
+            ));
+        }
+    }
+    for slot in session.armor.iter_mut() {
+        if !slot.is_empty() {
+            drops.push(std::mem::replace(
+                slot,
+                crate::inventory::ItemStack::empty(),
+            ));
+        }
+    }
+    if !session.cursor.is_empty() {
+        drops.push(std::mem::replace(
+            &mut session.cursor,
+            crate::inventory::ItemStack::empty(),
+        ));
+    }
+    drops
+}
+
+fn drop_player_death_items(
+    stream: &mut LoginStream,
+    drops: &mut DropEntityStore,
+    rng: &mut dyn crate::random::RandomSource,
+    session: &mut PlayerSession,
+) -> io::Result<()> {
+    let stacks = take_player_death_drops(session);
+    let pos = BlockPos::new(
+        session.x.floor() as i32,
+        session.y.floor() as i32,
+        session.z.floor() as i32,
+    );
+    for packet in drops.spawn_stacks(pos, &stacks, rng) {
+        write_packet(stream, &packet)?;
+    }
+    send_container_content(stream, session)?;
+    Ok(())
+}
+
 /// Apply damage through the living-entity model so the client receives the
 /// same metadata health update and `ClientboundSetHealth` body as vanilla.
 pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -> PlayerDamage {
@@ -3307,6 +3365,8 @@ fn apply_fall_damage(
 fn apply_void_damage(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
+    drops: &mut DropEntityStore,
+    rng: &mut dyn crate::random::RandomSource,
     last_damage: &mut Instant,
 ) -> io::Result<bool> {
     if session.y < VOID_DAMAGE_Y && session.health <= 0.0 {
@@ -3314,6 +3374,7 @@ fn apply_void_damage(
         // below the void line. `hurt` rejects zero-health entities, so drive
         // the death/respawn flow directly instead of falling forever.
         *last_damage = Instant::now();
+        drop_player_death_items(stream, drops, rng, session)?;
         write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
@@ -3335,6 +3396,7 @@ fn apply_void_damage(
         write_packet(stream, packet)?;
     }
     if result.died {
+        drop_player_death_items(stream, drops, rng, session)?;
         write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
@@ -6147,6 +6209,8 @@ mod tests {
     #[test]
     fn player_equipment_maps_the_armor_array() {
         let mut session = PlayerSession::new("Equip".to_string(), [0xE1; 16], 0.0, 64.0, 0.0);
+        session.inventory[session.selected_slot.max(0) as usize] =
+            crate::inventory::ItemStack::empty();
         session.armor[0] =
             crate::inventory::ItemStack::new("minecraft:diamond_boots".to_string(), 1);
         session.armor[1] =
@@ -6187,6 +6251,16 @@ mod tests {
                 .is_empty(),
             "empty selected slot maps to empty main hand"
         );
+
+        session.inventory[session.selected_slot.max(0) as usize] =
+            crate::inventory::ItemStack::new("minecraft:diamond_sword".to_string(), 1);
+        let equipment = player_equipment(&session);
+        assert_eq!(
+            equipment
+                .get(crate::entity_metadata::EquipmentSlot::MainHand)
+                .item,
+            "minecraft:diamond_sword"
+        );
     }
 
     #[test]
@@ -6205,5 +6279,45 @@ mod tests {
         assert!((progress - 0.5).abs() < 1e-6);
         assert_eq!(level, 4);
         assert_eq!(total, 37);
+    }
+
+    #[test]
+    fn death_drops_take_inventory_armor_and_cursor() {
+        let mut session = PlayerSession::new("DeathDrops".to_string(), [0xD1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:stone".to_string(), 5);
+        session.armor[2] =
+            crate::inventory::ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+        session.cursor = crate::inventory::ItemStack::new("minecraft:dirt".to_string(), 3);
+
+        let drops = take_player_death_drops(&mut session);
+        assert_eq!(drops.len(), 3);
+        assert_eq!(drops[0].item, "minecraft:stone");
+        assert_eq!(drops[0].count, 5);
+        assert_eq!(drops[1].item, "minecraft:diamond_chestplate");
+        assert_eq!(drops[1].count, 1);
+        assert_eq!(drops[2].item, "minecraft:dirt");
+        assert_eq!(drops[2].count, 3);
+
+        assert!(session.inventory[0].is_empty());
+        assert!(session.armor[2].is_empty());
+        assert!(session.cursor.is_empty());
+        assert!(session.inventory.iter().all(|stack| stack.is_empty()));
+        assert!(session.armor.iter().all(|stack| stack.is_empty()));
+    }
+
+    #[test]
+    fn death_drops_skip_empty_slots() {
+        let mut session = PlayerSession::new("NoDrops".to_string(), [0xD2; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        let drops = take_player_death_drops(&mut session);
+        assert!(drops.is_empty());
+        assert!(session.inventory.iter().all(|stack| stack.is_empty()));
+        assert!(session.armor.iter().all(|stack| stack.is_empty()));
+        assert!(session.cursor.is_empty());
     }
 }

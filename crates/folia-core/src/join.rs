@@ -1501,9 +1501,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     )?;
     let chunk_count = streamed.streamed;
     let counts = streamed.counts;
-    for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
-        write_packet(&mut stream, &packet)?;
-    }
+    retain_session_entities(
+        &mut stream,
+        &mut tracked_entities,
+        &mut drop_entities,
+        &sent_chunks,
+    )?;
 
     for packet in crate::entity::spawn_packets() {
         write_packet(&mut stream, &packet)?;
@@ -1720,9 +1723,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut sent_chunks,
                             STREAM_TOPUP_BATCH,
                         )?;
-                        for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
-                            write_packet(&mut stream, &packet)?;
-                        }
+                        retain_session_entities(
+                            &mut stream,
+                            &mut tracked_entities,
+                            &mut drop_entities,
+                            &sent_chunks,
+                        )?;
                     }
                     if let Err(error) =
                         dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -1811,6 +1817,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 &mut menus,
                 &mut dig,
                 &mut tracked_entities,
+                &mut drop_entities,
                 &trigger,
                 current_storage,
                 new_storage,
@@ -1845,9 +1852,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
                 awaiting_respawn = false;
                 death_at = None;
-                for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
-                    write_packet(&mut stream, &packet)?;
-                }
+                retain_session_entities(
+                    &mut stream,
+                    &mut tracked_entities,
+                    &mut drop_entities,
+                    &sent_chunks,
+                )?;
             }
         } else if apply_void_damage(&mut stream, &mut session, &mut last_void_damage)? {
             awaiting_respawn = true;
@@ -1951,9 +1961,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             )?;
                             awaiting_respawn = false;
                             death_at = None;
-                            for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
-                                write_packet(&mut stream, &packet)?;
-                            }
+                            retain_session_entities(
+                                &mut stream,
+                                &mut tracked_entities,
+                                &mut drop_entities,
+                                &sent_chunks,
+                            )?;
                         }
                     }
                     SERVERBOUND_CHAT => {
@@ -2221,9 +2234,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     batch.counts.describe()
                                 );
                             }
-                            for packet in tracked_entities.retain_in_chunks(&sent_chunks) {
-                                write_packet(&mut stream, &packet)?;
-                            }
+                            retain_session_entities(
+                                &mut stream,
+                                &mut tracked_entities,
+                                &mut drop_entities,
+                                &sent_chunks,
+                            )?;
                         }
                     }
                 }
@@ -3320,6 +3336,7 @@ fn switch_dimension(
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     tracked: &mut SessionEntityTracker,
+    drops: &mut DropEntityStore,
     trigger: &dimension::PortalTrigger,
     old_storage: &Mutex<WorldStorage>,
     new_storage: &'static Mutex<WorldStorage>,
@@ -3347,6 +3364,7 @@ fn switch_dimension(
         write_packet(stream, &menu.close_packet())?;
     }
     tracked.clear();
+    drops.clear();
     *dig = DigState::default();
 
     // 3. Load the destination column first so the arrival can be lifted out of
@@ -3406,13 +3424,26 @@ fn switch_dimension(
     for packet in tracked.join_packets() {
         write_packet(stream, &packet)?;
     }
-    for packet in tracked.retain_in_chunks(sent_chunks) {
-        write_packet(stream, &packet)?;
-    }
+    retain_session_entities(stream, tracked, drops, sent_chunks)?;
     println!(
         "[join] {} switched {:?} -> {:?} at ({:.1}, {:.1}, {:.1}); streamed {} chunks",
         session.name, trigger.from, trigger.to, session.x, session.y, session.z, batch.streamed
     );
+    Ok(())
+}
+
+fn retain_session_entities(
+    stream: &mut LoginStream,
+    tracked: &mut SessionEntityTracker,
+    drops: &mut DropEntityStore,
+    sent_chunks: &HashSet<(i32, i32)>,
+) -> io::Result<()> {
+    for packet in tracked.retain_in_chunks(sent_chunks) {
+        write_packet(stream, &packet)?;
+    }
+    for packet in drops.retain_in_chunks(sent_chunks) {
+        write_packet(stream, &packet)?;
+    }
     Ok(())
 }
 

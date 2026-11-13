@@ -3062,6 +3062,42 @@ fn handle_command(
             }
             apply_game_mode(stream, session, mode)
         }
+        Some("xp") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /xp",
+                    session.name
+                );
+                return Ok(());
+            }
+            if parts.next() != Some("add") {
+                println!("[join] {}: usage: /xp add <points>", session.name);
+                return Ok(());
+            }
+            let Some(amount) = parts.next().and_then(|value| value.parse::<i32>().ok()) else {
+                println!("[join] {}: usage: /xp add <points>", session.name);
+                return Ok(());
+            };
+            if amount <= 0 {
+                println!("[join] {}: usage: /xp add <points>", session.name);
+                return Ok(());
+            }
+            session.add_experience(amount);
+            write_packet(
+                stream,
+                &crate::entity_metadata::set_experience_packet(
+                    session.xp_progress,
+                    session.xp_level,
+                    session.xp_total,
+                ),
+            )?;
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+            {
+                eprintln!("[join] could not save xp: {error}");
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -6332,7 +6368,6 @@ mod tests {
         assert!(session.armor.iter().all(|stack| stack.is_empty()));
         assert!(session.cursor.is_empty());
     }
-
     #[test]
     fn death_experience_is_seven_per_level_capped_at_100() {
         let mut session = PlayerSession::new("DeathXp".to_string(), [0xD3; 16], 0.0, 64.0, 0.0);
@@ -6359,5 +6394,30 @@ mod tests {
         assert_eq!(session.xp_level, 0);
         assert!(session.xp_progress.abs() < 1e-6);
         assert_eq!(session.xp_total, 0);
+    }
+
+    #[test]
+    fn xp_add_updates_level_and_builds_experience_packet() {
+        let mut session = PlayerSession::new("XpAdd".to_string(), [0xD4; 16], 0.0, 64.0, 0.0);
+        session.xp_level = 0;
+        session.xp_progress = 0.0;
+        session.xp_total = 0;
+
+        session.add_experience(9);
+        assert_eq!(session.xp_level, 1);
+        assert_eq!(session.xp_total, 9);
+        let expected_progress = 2.0 / PlayerSession::xp_needed_for_next_level(1) as f32;
+        assert!((session.xp_progress - expected_progress).abs() < 1e-5);
+
+        let packet = crate::entity_metadata::set_experience_packet(
+            session.xp_progress,
+            session.xp_level,
+            session.xp_total,
+        );
+        let (progress, level, total) =
+            crate::entity_metadata::read_set_experience(&packet).unwrap();
+        assert!((progress - session.xp_progress).abs() < 1e-6);
+        assert_eq!(level, 1);
+        assert_eq!(total, 9);
     }
 }

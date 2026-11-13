@@ -811,6 +811,28 @@ impl SessionEntityTracker {
         self.entities.ids().collect()
     }
 
+    /// Per-tracked entity `(id, Aabb)` in ascending id order, for projectile
+    /// collision checks.
+    pub fn collision_targets(&self) -> Vec<(i32, crate::block_shapes::Aabb)> {
+        self.entities
+            .ids()
+            .filter_map(|id| {
+                self.entities.get(id).map(|tracked| {
+                    (
+                        id,
+                        crate::block_shapes::Aabb::player(
+                            tracked.entity.x,
+                            tracked.entity.y,
+                            tracked.entity.z,
+                            tracked.entity.width,
+                            tracked.entity.height,
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
     pub fn tracks(&self, id: i32) -> bool {
         self.entities.contains(id)
     }
@@ -1590,6 +1612,30 @@ mod tests {
         assert!(result.damaged);
         let entity = &tracker.entity(zombie).expect("zombie").entity;
         assert_eq!(entity.velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn session_tracker_collision_targets_match_tracked_entities() {
+        let tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let ids = tracker.tracked_ids();
+        let targets = tracker.collision_targets();
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids);
+        let zombie = ids
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.entity.height > 1.9)
+            })
+            .expect("zombie");
+        let (_, aabb) = targets
+            .iter()
+            .find(|(id, _)| *id == zombie)
+            .expect("zombie target");
+        assert!(aabb.max_x > aabb.min_x);
+        assert!(aabb.max_y > aabb.min_y);
+        assert!(aabb.max_z > aabb.min_z);
     }
 
     fn packet_id(packet: &[u8]) -> i32 {

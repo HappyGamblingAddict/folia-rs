@@ -1482,6 +1482,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     // report a large but legitimate distance.
     let mut last_move_at = Instant::now();
     let mut drop_entities = DropEntityStore::new();
+    let mut projectiles = crate::projectile::ProjectileStore::new();
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -1569,6 +1570,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         if shutdown_requested() {
             tracked_entities.clear();
             drop_entities.clear();
+            projectiles.clear();
             menus.on_disconnect();
             if let Err(error) =
                 dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -1583,19 +1585,22 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let (tick, drop_tick, inventory_before) = {
+            let targets = tracked_entities.collision_targets();
+            let (tick, drop_tick, projectile_tick, inventory_before) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
                 let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
-                (tick, drop_tick, inventory_before)
+                let projectile_tick = projectiles.tick(&mut collider, &targets);
+                (tick, drop_tick, projectile_tick, inventory_before)
             };
             for packet in &tick.packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {
                         tracked_entities.clear();
                         drop_entities.clear();
+                        projectiles.clear();
                         finish_disconnected(&session, current_storage, &start.name, &error);
                         return Ok(());
                     }
@@ -1607,6 +1612,19 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     if is_disconnect(&error) {
                         tracked_entities.clear();
                         drop_entities.clear();
+                        projectiles.clear();
+                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            for packet in &projectile_tick.packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        drop_entities.clear();
+                        projectiles.clear();
                         finish_disconnected(&session, current_storage, &start.name, &error);
                         return Ok(());
                     }
@@ -1632,6 +1650,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         session.xp_total,
                     ),
                 )?;
+            }
+            for hit in &projectile_tick.hits {
+                if let Some(result) = tracked_entities.damage(hit.target_id, hit.damage) {
+                    for packet in &result.packets {
+                        write_packet(&mut stream, packet)?;
+                    }
+                    // Projectile-kill death loot/XP can be a later slice.
+                }
             }
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player(&mut session, player_entity, tick.player_damage);
@@ -1714,6 +1740,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
                     tracked_entities.clear();
                     drop_entities.clear();
+                    projectiles.clear();
                     menus.on_disconnect();
                     if let Err(error) =
                         dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -2049,6 +2076,17 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             eprintln!("[join] entity attack failed: {error}");
                         }
                     }
+                    crate::protocol::SERVERBOUND_USE_ITEM => {
+                        if let Err(error) = handle_use_item(
+                            &mut stream,
+                            &mut session,
+                            &mut projectiles,
+                            player_entity,
+                            &packet,
+                        ) {
+                            eprintln!("[join] use item failed: {error}");
+                        }
+                    }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
                             let portal = {
@@ -2257,6 +2295,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     {
                                         eprintln!("[join] could not flush terrain: {flush_error}");
                                     }
+                                    tracked_entities.clear();
+                                    drop_entities.clear();
+                                    projectiles.clear();
                                     println!(
                                         "[join] {} disconnected while streaming chunks: \
                                          {error}",
@@ -2561,6 +2602,75 @@ fn epoch_millis() -> i64 {
 }
 
 /// `ServerboundInteractPacket` with action `ATTACK` (`ActionType` 1).
+fn use_item_projectile(
+    session: &PlayerSession,
+) -> Option<(crate::projectile::ProjectileKind, [f64; 3], bool)> {
+    let item = session.selected_item()?;
+    let yaw = session.yaw.to_radians() as f64;
+    let pitch = session.pitch.to_radians() as f64;
+    // Minecraft yaw 0 looks +Z. Arrows/ammo not modeled yet for bow.
+    let dir = [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ];
+    match item.item.as_str() {
+        "minecraft:bow" => Some((
+            crate::projectile::ProjectileKind::Arrow,
+            [dir[0] * 3.0, dir[1] * 3.0, dir[2] * 3.0],
+            false,
+        )),
+        "minecraft:snowball" => Some((
+            crate::projectile::ProjectileKind::Snowball,
+            [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
+            true,
+        )),
+        "minecraft:egg" => Some((
+            crate::projectile::ProjectileKind::Egg,
+            [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
+            true,
+        )),
+        _ => None,
+    }
+}
+
+fn handle_use_item(
+    stream: &mut LoginStream,
+    session: &mut PlayerSession,
+    projectiles: &mut crate::projectile::ProjectileStore,
+    player_entity: i32,
+    packet: &[u8],
+) -> io::Result<()> {
+    let use_item = crate::protocol::parse_serverbound_use_item(packet)?;
+    session.yaw = use_item.yaw;
+    session.pitch = use_item.pitch;
+    let Some((kind, velocity, consume_item)) = use_item_projectile(session) else {
+        return Ok(());
+    };
+    if consume_item {
+        let slot = session.selected_slot.max(0) as usize;
+        if let Some(stack) = session.inventory.get_mut(slot) {
+            stack.shrink(1);
+            write_packet(stream, &inventory::inventory_packet(slot as i32, stack))?;
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+            {
+                eprintln!("[join] could not save projectile use: {error}");
+            }
+        }
+    }
+    let packets = projectiles.spawn(
+        kind,
+        Some(player_entity),
+        [session.x, session.y + 1.62, session.z],
+        velocity,
+    );
+    for packet in packets {
+        write_packet(stream, &packet)?;
+    }
+    Ok(())
+}
+
 fn parse_attack(payload: &[u8]) -> Option<i32> {
     let mut reader = PacketReader::new(payload);
     if reader.read_varint().ok()? != SERVERBOUND_INTERACT {
@@ -6419,5 +6529,71 @@ mod tests {
         assert!((progress - session.xp_progress).abs() < 1e-6);
         assert_eq!(level, 1);
         assert_eq!(total, 9);
+    }
+
+    #[test]
+    fn bow_use_spawns_arrow_speed_three() {
+        let mut session = PlayerSession::new("Bow".to_string(), [0xB1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        session.selected_slot = 0;
+        session.yaw = 0.0;
+        session.pitch = 0.0;
+        let (kind, velocity, consume) = use_item_projectile(&session).expect("projectile");
+        assert_eq!(kind, crate::projectile::ProjectileKind::Arrow);
+        assert!((velocity[0]).abs() < 1e-6);
+        assert!((velocity[1]).abs() < 1e-6);
+        assert!((velocity[2] - 3.0).abs() < 1e-6);
+        assert!(!consume);
+    }
+
+    #[test]
+    fn snowball_use_consumes_one_item() {
+        let mut session = PlayerSession::new("Snow".to_string(), [0xB2; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] =
+            crate::inventory::ItemStack::new("minecraft:snowball".to_string(), 2);
+        session.selected_slot = 0;
+        session.yaw = 0.0;
+        session.pitch = 0.0;
+        let (kind, velocity, consume) = use_item_projectile(&session).expect("projectile");
+        assert_eq!(kind, crate::projectile::ProjectileKind::Snowball);
+        assert!((velocity[0]).abs() < 1e-6);
+        assert!((velocity[1]).abs() < 1e-6);
+        assert!((velocity[2] - 1.5).abs() < 1e-6);
+        assert!(consume);
+    }
+
+    #[test]
+    fn unusable_item_has_no_projectile() {
+        let mut session = PlayerSession::new("Stone".to_string(), [0xB3; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:stone".to_string(), 1);
+        session.selected_slot = 0;
+        assert!(use_item_projectile(&session).is_none());
+    }
+
+    #[test]
+    fn yaw_90_throws_west() {
+        let mut session = PlayerSession::new("West".to_string(), [0xB4; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        session.selected_slot = 0;
+        session.yaw = 90.0;
+        session.pitch = 0.0;
+        let (kind, velocity, consume) = use_item_projectile(&session).expect("projectile");
+        assert_eq!(kind, crate::projectile::ProjectileKind::Arrow);
+        assert!((velocity[0] + 3.0).abs() < 1e-6);
+        assert!(velocity[1].abs() < 1e-6);
+        assert!(velocity[2].abs() < 1e-6);
+        assert!(!consume);
     }
 }

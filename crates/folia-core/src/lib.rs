@@ -33,6 +33,7 @@ pub mod nbt;
 pub mod piston;
 pub mod player;
 pub mod player_physics;
+pub mod projectile;
 pub mod protocol;
 pub mod redstone;
 pub mod region;

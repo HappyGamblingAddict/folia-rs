@@ -943,6 +943,187 @@ impl PickupTarget for SlicePickupTarget<'_> {
     }
 }
 
+/// Result of one [`DropEntityStore::tick`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DropStoreTick {
+    pub packets: Vec<Vec<u8>>,
+    pub removed: Vec<i32>,
+}
+
+/// Session-free container for dropped item entities and XP orbs.
+///
+/// Entities tick against a [`BlockCollider`] and a [`PickupTarget`] without
+/// any live session dependency.
+#[derive(Debug, Default)]
+pub struct DropEntityStore {
+    entities: Vec<DroppedEntity>,
+}
+
+impl DropEntityStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.entities.clear();
+    }
+
+    /// Insert an existing entity (used by tests and deterministic setup).
+    pub fn insert(&mut self, entity: DroppedEntity) {
+        self.entities.push(entity);
+    }
+
+    /// Spawn drop entities at `pos` and emit add+metadata packets in entity
+    /// order.
+    pub fn spawn(
+        &mut self,
+        pos: BlockPos,
+        drops: &BlockDrops,
+        rng: &mut dyn RandomSource,
+    ) -> Vec<Vec<u8>> {
+        let spawned = spawn_drops_at(pos, drops, rng);
+        let mut packets = Vec::with_capacity(spawned.len() * 2);
+        for entity in spawned {
+            packets.push(entity.add_packet());
+            packets.push(entity.metadata_packet());
+            self.entities.push(entity);
+        }
+        packets
+    }
+
+    /// Tick all stored entities.
+    ///
+    /// Packet order is deterministic:
+    /// 1. In original store order, each entity is processed once: if it is
+    ///    picked up or despawns, a remove packet is emitted; otherwise a
+    ///    position-sync packet is emitted when it moved, and an item metadata
+    ///    packet is emitted when the stack changed without full pickup (partial
+    ///    pickup).
+    /// 2. After ticking, item entities are merged with [`merge_item_entities`]
+    ///    in their original store order and remove packets are emitted for
+    ///    absorbed ids in the merge's removal order. XP orbs are not merged.
+    pub fn tick(
+        &mut self,
+        collider: &mut impl BlockCollider,
+        target: &mut dyn PickupTarget,
+    ) -> DropStoreTick {
+        let mut out = DropStoreTick::default();
+        let mut kept = Vec::with_capacity(self.entities.len());
+
+        for mut entity in self.entities.drain(..) {
+            match &mut entity {
+                DroppedEntity::Item(item) => {
+                    let before_stack = item.stack.clone();
+                    let moved = item.tick_physics(collider, Some(target.position()));
+                    if item.try_pickup(target) {
+                        out.removed.push(item.id);
+                        out.packets.push(remove_entities_packet(&[item.id]));
+                        continue;
+                    }
+                    if item.should_despawn() {
+                        out.removed.push(item.id);
+                        out.packets.push(remove_entities_packet(&[item.id]));
+                        continue;
+                    }
+                    if moved {
+                        out.packets.push(item.position_sync_packet());
+                    }
+                    if item.stack != before_stack && !item.stack.is_empty() {
+                        out.packets.push(item.metadata_packet());
+                    }
+                    kept.push(entity);
+                }
+                DroppedEntity::ExperienceOrb(orb) => {
+                    let moved = orb.tick_physics(collider, Some(target.position()));
+                    if orb.try_pickup(target) {
+                        out.removed.push(orb.id);
+                        out.packets.push(remove_entities_packet(&[orb.id]));
+                        continue;
+                    }
+                    if orb.should_despawn() {
+                        out.removed.push(orb.id);
+                        out.packets.push(remove_entities_packet(&[orb.id]));
+                        continue;
+                    }
+                    if moved {
+                        out.packets.push(orb.position_sync_packet());
+                    }
+                    kept.push(entity);
+                }
+            }
+        }
+
+        let mut items = Vec::new();
+        for entity in &kept {
+            if let DroppedEntity::Item(item) = entity {
+                items.push(item.clone());
+            }
+        }
+        let merged_removed = merge_item_entities(&mut items);
+        for id in &merged_removed {
+            out.removed.push(*id);
+            out.packets.push(remove_entities_packet(&[*id]));
+        }
+
+        let absorbed: std::collections::HashSet<i32> = merged_removed.iter().copied().collect();
+        items.retain(|item| !absorbed.contains(&item.id) && !item.stack.is_empty());
+
+        let mut item_iter = items.into_iter();
+        let mut rebuilt = Vec::with_capacity(kept.len().saturating_sub(merged_removed.len()));
+        for entity in kept {
+            match entity {
+                DroppedEntity::Item(_) => {
+                    if let Some(item) = item_iter.next() {
+                        rebuilt.push(DroppedEntity::Item(item));
+                    }
+                }
+                other => rebuilt.push(other),
+            }
+        }
+
+        self.entities = rebuilt;
+        out
+    }
+
+    /// Remove entities whose chunk column is not in `chunks`, emitting remove
+    /// packets in ascending entity id order.
+    pub fn retain_in_chunks(
+        &mut self,
+        chunks: &std::collections::HashSet<(i32, i32)>,
+    ) -> Vec<Vec<u8>> {
+        let mut removed_ids = Vec::new();
+        self.entities.retain(|entity| {
+            let (x, z) = match entity {
+                DroppedEntity::Item(item) => (item.x, item.z),
+                DroppedEntity::ExperienceOrb(orb) => (orb.x, orb.z),
+            };
+            let chunk = (
+                (x.floor() as i32).div_euclid(16),
+                (z.floor() as i32).div_euclid(16),
+            );
+            if chunks.contains(&chunk) {
+                true
+            } else {
+                removed_ids.push(entity.id());
+                false
+            }
+        });
+        removed_ids.sort_unstable();
+        removed_ids
+            .into_iter()
+            .map(|id| remove_entities_packet(&[id]))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

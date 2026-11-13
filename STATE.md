@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `618a27a` (Ubuntu + Windows: fmt, clippy, 1,264 tests,
+  CI is green at `0ea7816` (Ubuntu + Windows: fmt, clippy, 1,268 tests,
   release build).
-- Tests: **1,264 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,268 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -33,7 +33,7 @@ Last updated: 2026-11-13
 ## Current focus
 
 1. P5 live block/entity drops and XP orbs are wired; remaining is the XP/progress packet, chunk/dimension retention, entity loot conditions, player knockback/armor, and per-viewer ranges/shared mob state.
-2. P8.2 join command dispatch after codecs, signed-command validation, Mojang trust roots, and plugin chat events.
+2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
 5. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
@@ -59,6 +59,19 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: live chat commands — `join.rs` parses
+  `SERVERBOUND_CHAT_COMMAND` (6) and `_SIGNED` (7) with the new codecs,
+  validates/applies the last-seen update, then runs the existing `/op`,
+  `/deop`, `/gamemode` dispatch; malformed/short command packets are
+  rejected. `tests/game_mode.rs` now sends a real 1.21.11 unsigned command
+  body. 4 join lib tests. Still open: signature/argument validation for
+  signed commands, broader command registry. (0ea7816)
+- 2026-11-13: drop-entity retention — new `retain_session_entities` helper
+  retains tracked mobs + dropped items/XP orbs on every chunk-set change
+  (initial join, movement/top-up, auto/manual respawn) and
+  `switch_dimension` clears per-session drops (old-dimension entities are not
+  persisted yet). No new tests; `DropEntityStore::retain_in_chunks` is
+  already covered. (7caae89, e327e52)
 - 2026-11-13: entity death loot + XP orbs — `LootCatalog::entity_table_id`/
   `roll_entity` resolve `minecraft:entities/<mob>` (108 shipped tables);
   `DropEntityStore::spawn_stacks` spawns pre-rolled item stacks with add+

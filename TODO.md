@@ -2168,6 +2168,12 @@ are still open.
   + 2 join lib tests. CI green at 522125f (1,255 tests). Remaining: send
   XP/progress packet, chunk-unload retention wiring, entity death loot/XP
   drops.
+- **Progress (2026-11-13):** drop-entity retention — `retain_session_entities`
+  retains tracked mobs + dropped items/XP orbs on every chunk-set change
+  (initial join, movement/top-up, auto/manual respawn); `switch_dimension`
+  clears per-session drops (old-dimension entities are not persisted yet).
+  `DropEntityStore::retain_in_chunks` already covered. CI green at 0ea7816
+  (1,268 tests).
 - **Progress (2026-11-13):** entity death loot + XP orbs —
   `LootCatalog::entity_table_id`/`roll_entity` resolve
   `minecraft:entities/<mob>` (108 shipped tables); `DropEntityStore::spawn_stacks`
@@ -2639,6 +2645,13 @@ chat signing.
   `SignedCommandArgument`, and `ServerboundChatCommandSigned` parse/build with
   bounds, duplicate-name and trailing-byte rejection; `tests/chat_signing.rs`
   adds 10 tests (34f7a43, fixed by 942ede0). CI green at c856b5e (1,237 tests).
+- **Progress (2026-11-13):** `join.rs` parses `SERVERBOUND_CHAT_COMMAND` (6)
+  and `_SIGNED` (7) with the new codecs, validates/applies the last-seen
+  update, then runs the existing `/op`, `/deop`, `/gamemode` dispatch;
+  malformed/short command packets are rejected. `tests/game_mode.rs` now sends
+  a real 1.21.11 unsigned command body. 4 join lib tests. CI green at 0ea7816
+  (1,268 tests). Remaining: signature/argument validation for signed
+  commands, broader command registry.
 - **Remaining:** wired into the live session on 2026-11-08: `join.rs` parses
   `ServerboundChatSessionUpdate` (remote session id + DER key + expiry) and
   `ServerboundChat`, maintains the 20-entry `LastSeenValidator` window, verifies

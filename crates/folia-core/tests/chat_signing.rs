@@ -589,8 +589,6 @@ fn signed_chat_command_rejects_too_many_arguments() {
     assert!(build_serverbound_chat_command_signed(&command).is_err());
 
     // Also ensure parse rejects 9 encoded arguments
-    let ok = signed_command();
-    let bytes = build_serverbound_chat_command_signed(&ok).unwrap();
     let mut tampered = Vec::new();
     tampered.push(SERVERBOUND_CHAT_COMMAND_SIGNED as u8);
     tampered.push(12);

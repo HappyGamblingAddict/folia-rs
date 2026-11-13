@@ -2,7 +2,7 @@
 
 use folia_core::entity_ai::MemoryWorld;
 use folia_core::math::{BlockPos, Vec3};
-use folia_core::random::LegacyRandomSource;
+use folia_core::random::{LegacyRandomSource, RandomSource};
 use folia_core::spawn::{
     ChunkPos, ChunkSpawnResult, DespawnDecision, MobCategory, MobDespawnState,
     NO_ACTION_TIME_RANDOM_BOUND, NaturalSpawner, SpawnFailure, SpawnSettings, SpawnState,

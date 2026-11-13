@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `8871081` (Ubuntu + Windows: fmt, clippy, 1,280 tests,
+  CI is green at `d07b722` (Ubuntu + Windows: fmt, clippy, 1,287 tests,
   release build).
-- Tests: **1,280 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,287 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -32,7 +32,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 armor is server-side only (equipment sync/menu slots open) and projectile join wiring remains; remaining is the XP/progress packet, chunk/dimension retention, entity loot conditions, player knockback, and per-viewer ranges/shared mob state.
+1. P5 player knockback motion is wired; remaining is mob motion packets, armor equipment sync, Java traces, the XP/progress packet, chunk/dimension retention, entity loot conditions, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +59,18 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: Set Entity Motion + player knockback — id 99;
+  LpVec3 codec in `protocol.rs` (`write_lp_vec3`/`read_lp_vec3`, zero-vector
+  single byte, continuation scale), `SessionEntityTick.player_knockback`
+  computed from retaliating mob attacks, join sends the motion packet to the
+  player when damaged and alive; 4 `tests/motion.rs`. Still open: player
+  attack knockback motion for mobs, non-grounded player initial velocity,
+  exact LpVec3 verification against a Java/client fixture. (d07b722)
+- 2026-11-13: ClientboundSetExperience — id 101;
+  `set_experience_packet`/`read_set_experience` in `entity_metadata.rs` with
+  progress clamp; join sends it when `DropStoreTick.picked_experience`; 3
+  `tests/experience.rs`. Still open: send initial XP on join/changes.
+  (792308b)
 - 2026-11-13: player armor — `PlayerSession.armor: [ItemStack;4]`
   (`[feet, legs, chest, head]`) loaded/saved at playerdata slots 100..=103;
   `damage_player` now applies `armor_values_from_equipment` +

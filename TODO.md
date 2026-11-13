@@ -2174,6 +2174,9 @@ are still open.
   clears per-session drops (old-dimension entities are not persisted yet).
   `DropEntityStore::retain_in_chunks` already covered. CI green at 0ea7816
   (1,268 tests).
+- **Progress (2026-11-13):** ClientboundSetExperience (id 101) — join sends it
+  when `DropStoreTick.picked_experience`; 3 `tests/experience.rs`. CI green at
+  d07b722 (1,287 tests). Still open: initial XP on join/changes.
 - **Progress (2026-11-13):** entity death loot + XP orbs —
   `LootCatalog::entity_table_id`/`roll_entity` resolve
   `minecraft:entities/<mob>` (108 shipped tables); `DropEntityStore::spawn_stacks`
@@ -2294,6 +2297,19 @@ are still open.
   `tests/armor.rs`. Still open: armor equipment sync to clients, armor slot
   clicks in the player inventory menu, armor durability, Protection
   enchantments. CI green at 8871081 (1,280 tests).
+- **Progress (2026-11-13):** ClientboundSetExperience (id 101) —
+  `set_experience_packet`/`read_set_experience` in `entity_metadata.rs` with
+  progress clamp; join sends it when `DropStoreTick.picked_experience`. 3
+  `tests/experience.rs`. Still open: send initial XP on join/changes. CI green
+  at d07b722 (1,287 tests).
+- **Progress (2026-11-13):** Set Entity Motion + player knockback (id 99) —
+  LpVec3 codec in `protocol.rs` (`write_lp_vec3`/`read_lp_vec3`, zero-vector
+  single byte, continuation scale), `SessionEntityTick.player_knockback`
+  computed from retaliating mob attacks, join sends the motion packet to the
+  player when damaged and alive. 4 `tests/motion.rs`. Still open: player
+  attack knockback motion for mobs, non-grounded player initial velocity,
+  exact LpVec3 verification against a Java/client fixture. CI green at
+  d07b722 (1,287 tests).
 
 ### P5.12 Natural spawning and spawners `[~]` `L`
 

@@ -10,8 +10,12 @@ use folia_core::player::{
 };
 use folia_core::protocol::{
     LAST_SEEN_MESSAGES_MAX, LastSeenMessages, LastSeenUpdate, MESSAGE_SIGNATURE_BYTES,
-    MessageSignature, MessageSignatureCache, SERVERBOUND_CHAT, ServerboundChat, SignedMessageBody,
-    build_login_success, build_serverbound_chat, parse_login_success, parse_serverbound_chat,
+    MessageSignature, MessageSignatureCache, SERVERBOUND_CHAT, SERVERBOUND_CHAT_COMMAND,
+    SERVERBOUND_CHAT_COMMAND_SIGNED, ServerboundChat, ServerboundChatCommand,
+    ServerboundChatCommandSigned, SignedCommandArgument, SignedMessageBody, build_login_success,
+    build_serverbound_chat, build_serverbound_chat_command, build_serverbound_chat_command_signed,
+    parse_login_success, parse_serverbound_chat, parse_serverbound_chat_command,
+    parse_serverbound_chat_command_signed,
 };
 
 const SENDER: [u8; 16] = [0x11; 16];
@@ -461,4 +465,175 @@ fn config_parses_enforces_secure_chat_with_false_default() {
     assert!(ServerProperties::parse("enforces-secure-chat=true\n").enforces_secure_chat);
     assert!(!ServerProperties::parse("enforces-secure-chat=false\n").enforces_secure_chat);
     assert!(ServerProperties::parse("enforce-secure-profile=true\n").enforces_secure_chat);
+}
+
+fn last_seen_update() -> LastSeenUpdate {
+    let acknowledged = LastSeenMessages::new(vec![signature(0x10), signature(0x11)]).unwrap();
+    LastSeenUpdate::new(2, 0b11, acknowledged.compute_checksum()).unwrap()
+}
+
+fn unsigned_command() -> ServerboundChatCommand {
+    ServerboundChatCommand {
+        command: "say hello".into(),
+        timestamp_ms: NOW,
+        salt: 42,
+        last_seen: last_seen_update(),
+    }
+}
+
+fn signed_command() -> ServerboundChatCommandSigned {
+    let sig_a = MessageSignature::from_slice(&[0xAA; MESSAGE_SIGNATURE_BYTES]).unwrap();
+    let sig_b = MessageSignature::from_slice(&[0xBB; MESSAGE_SIGNATURE_BYTES]).unwrap();
+    ServerboundChatCommandSigned {
+        command: "msg Steve hi".into(),
+        timestamp_ms: NOW,
+        salt: -7,
+        argument_signatures: vec![
+            SignedCommandArgument {
+                name: "target".into(),
+                signature: sig_a,
+            },
+            SignedCommandArgument {
+                name: "message".into(),
+                signature: sig_b,
+            },
+        ],
+        last_seen: last_seen_update(),
+    }
+}
+
+#[test]
+fn serverbound_chat_command_round_trips_with_last_seen() {
+    let command = unsigned_command();
+    let bytes = build_serverbound_chat_command(&command).unwrap();
+    assert_eq!(bytes[0], SERVERBOUND_CHAT_COMMAND as u8);
+    assert_eq!(parse_serverbound_chat_command(&bytes).unwrap(), command);
+}
+
+#[test]
+fn serverbound_chat_command_signed_round_trips_preserving_order_and_bytes() {
+    let command = signed_command();
+    let bytes = build_serverbound_chat_command_signed(&command).unwrap();
+    assert_eq!(bytes[0], SERVERBOUND_CHAT_COMMAND_SIGNED as u8);
+    let parsed = parse_serverbound_chat_command_signed(&bytes).unwrap();
+    assert_eq!(parsed, command);
+    assert_eq!(parsed.argument_signatures[0].name, "target");
+    assert_eq!(
+        parsed.argument_signatures[0].signature.as_bytes(),
+        &[0xAA; MESSAGE_SIGNATURE_BYTES]
+    );
+    assert_eq!(parsed.argument_signatures[1].name, "message");
+    assert_eq!(
+        parsed.argument_signatures[1].signature.as_bytes(),
+        &[0xBB; MESSAGE_SIGNATURE_BYTES]
+    );
+}
+
+#[test]
+fn chat_command_rejects_wrong_packet_id() {
+    let mut bytes = build_serverbound_chat_command(&unsigned_command()).unwrap();
+    bytes[0] = SERVERBOUND_CHAT_COMMAND_SIGNED as u8;
+    assert!(parse_serverbound_chat_command(&bytes).is_err());
+
+    let mut bytes = build_serverbound_chat_command_signed(&signed_command()).unwrap();
+    bytes[0] = SERVERBOUND_CHAT_COMMAND as u8;
+    assert!(parse_serverbound_chat_command_signed(&bytes).is_err());
+}
+
+#[test]
+fn chat_command_rejects_empty_command() {
+    let mut command = unsigned_command();
+    command.command.clear();
+    assert!(build_serverbound_chat_command(&command).is_err());
+
+    let mut signed = signed_command();
+    signed.command.clear();
+    assert!(build_serverbound_chat_command_signed(&signed).is_err());
+}
+
+#[test]
+fn chat_command_rejects_command_longer_than_max_length() {
+    let long = "a".repeat(257);
+    let mut command = unsigned_command();
+    command.command = long.clone();
+    assert!(build_serverbound_chat_command(&command).is_err());
+
+    let mut signed = signed_command();
+    signed.command = long;
+    assert!(build_serverbound_chat_command_signed(&signed).is_err());
+}
+
+#[test]
+fn signed_chat_command_rejects_negative_argument_count() {
+    let bytes = build_serverbound_chat_command_signed(&signed_command()).unwrap();
+    let mut tampered = vec![SERVERBOUND_CHAT_COMMAND_SIGNED as u8];
+    // command "msg Steve hi" (12 chars)
+    tampered.push(12);
+    tampered.extend_from_slice(b"msg Steve hi");
+    tampered.extend_from_slice(&NOW.to_be_bytes());
+    tampered.extend_from_slice(&(-7i64).to_be_bytes());
+    tampered.push(0xFF); // VarInt -1
+    tampered.extend_from_slice(&bytes[bytes.len() - 5..]); // last_seen
+    assert!(parse_serverbound_chat_command_signed(&tampered).is_err());
+}
+
+#[test]
+fn signed_chat_command_rejects_too_many_arguments() {
+    let mut command = signed_command();
+    command.argument_signatures = (0..9)
+        .map(|i| SignedCommandArgument {
+            name: format!("a{i}"),
+            signature: MessageSignature::from_slice(&[i as u8; MESSAGE_SIGNATURE_BYTES]).unwrap(),
+        })
+        .collect();
+    assert!(build_serverbound_chat_command_signed(&command).is_err());
+
+    // Also ensure parse rejects 9 encoded arguments
+    let ok = signed_command();
+    let bytes = build_serverbound_chat_command_signed(&ok).unwrap();
+    let mut tampered = Vec::new();
+    tampered.push(SERVERBOUND_CHAT_COMMAND_SIGNED as u8);
+    tampered.push(12);
+    tampered.extend_from_slice(b"msg Steve hi");
+    tampered.extend_from_slice(&NOW.to_be_bytes());
+    tampered.extend_from_slice(&(-7i64).to_be_bytes());
+    tampered.push(9); // count
+    for i in 0..9u8 {
+        let name = format!("a{i}");
+        tampered.push(name.len() as u8);
+        tampered.extend_from_slice(name.as_bytes());
+        tampered.extend_from_slice(&[i; MESSAGE_SIGNATURE_BYTES]);
+    }
+    // last_seen
+    let last_seen = last_seen_update();
+    tampered.push(last_seen.offset as u8);
+    let ack = last_seen.acknowledged.to_le_bytes();
+    tampered.extend_from_slice(&ack[..3]);
+    tampered.push(last_seen.checksum);
+    assert!(parse_serverbound_chat_command_signed(&tampered).is_err());
+}
+
+#[test]
+fn signed_chat_command_rejects_empty_argument_name() {
+    let mut command = signed_command();
+    command.argument_signatures[0].name.clear();
+    assert!(build_serverbound_chat_command_signed(&command).is_err());
+}
+
+#[test]
+fn signed_chat_command_rejects_duplicate_argument_names() {
+    let mut command = signed_command();
+    command.argument_signatures[1].name = "target".into();
+    assert!(build_serverbound_chat_command_signed(&command).is_err());
+}
+
+#[test]
+fn chat_command_rejects_trailing_bytes() {
+    let mut bytes = build_serverbound_chat_command(&unsigned_command()).unwrap();
+    bytes.push(0);
+    assert!(parse_serverbound_chat_command(&bytes).is_err());
+
+    let mut bytes = build_serverbound_chat_command_signed(&signed_command()).unwrap();
+    bytes.push(0);
+    assert!(parse_serverbound_chat_command_signed(&bytes).is_err());
 }

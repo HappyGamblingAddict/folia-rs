@@ -569,6 +569,10 @@ pub const MESSAGE_SIGNATURE_BYTES: usize = 256;
 pub const LAST_SEEN_MESSAGES_MAX: usize = 20;
 /// `ServerboundChatPacket` reads the message with `readUtf(256)`.
 pub const MAX_CHAT_MESSAGE_LENGTH: usize = 256;
+/// `ServerboundChatCommandPacket` reads the command with `readUtf(256)`.
+pub const MAX_COMMAND_LENGTH: usize = 256;
+pub const SERVERBOUND_CHAT_COMMAND: i32 = 6;
+pub const SERVERBOUND_CHAT_COMMAND_SIGNED: i32 = 7;
 /// `GameProtocolTypes.SERVERBOUND_CHAT` registration index.
 pub const SERVERBOUND_CHAT: i32 = 8;
 /// `ServerboundChatSessionUpdatePacket` in the 1.21.11 play protocol.
@@ -879,6 +883,10 @@ impl LastSeenUpdate {
         })
     }
 
+    pub fn validate(&self) -> io::Result<()> {
+        Self::new(self.offset, self.acknowledged, self.checksum).map(|_| ())
+    }
+
     pub fn acknowledges(&self, index: usize) -> bool {
         index < LAST_SEEN_MESSAGES_MAX && (self.acknowledged >> index) & 1 != 0
     }
@@ -1083,6 +1091,206 @@ pub fn build_serverbound_chat_session_update(
     writer.write_i64(update.expires_at_ms)?;
     writer.write_byte_array(&update.public_key)?;
     writer.write_byte_array(&update.key_signature)?;
+    Ok(writer.into_inner())
+}
+
+/// `ServerboundChatCommandPacket` body for 1.21.11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerboundChatCommand {
+    pub command: String,
+    pub timestamp_ms: i64,
+    pub salt: i64,
+    pub last_seen: LastSeenUpdate,
+}
+
+pub fn parse_serverbound_chat_command(payload: &[u8]) -> io::Result<ServerboundChatCommand> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_CHAT_COMMAND {
+        return Err(invalid(format!(
+            "expected serverbound chat command id {SERVERBOUND_CHAT_COMMAND}, got {id}"
+        )));
+    }
+    let command = reader.read_string()?;
+    if command.is_empty() {
+        return Err(invalid("chat command must not be empty"));
+    }
+    if command.chars().count() > MAX_COMMAND_LENGTH {
+        return Err(invalid(format!(
+            "chat command is longer than {MAX_COMMAND_LENGTH} characters"
+        )));
+    }
+    let timestamp_ms = reader.read_i64()?;
+    let salt = reader.read_i64()?;
+    let last_seen = LastSeenUpdate::read(&mut reader)?;
+    if !reader.is_empty() {
+        return Err(invalid("trailing bytes after serverbound chat command"));
+    }
+    Ok(ServerboundChatCommand {
+        command,
+        timestamp_ms,
+        salt,
+        last_seen,
+    })
+}
+
+pub fn build_serverbound_chat_command(command: &ServerboundChatCommand) -> io::Result<Vec<u8>> {
+    if command.command.is_empty() {
+        return Err(invalid("chat command must not be empty"));
+    }
+    if command.command.chars().count() > MAX_COMMAND_LENGTH {
+        return Err(invalid(format!(
+            "chat command is longer than {MAX_COMMAND_LENGTH} characters"
+        )));
+    }
+    command.last_seen.validate()?;
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_CHAT_COMMAND)?;
+    writer.write_string(&command.command)?;
+    writer.write_i64(command.timestamp_ms)?;
+    writer.write_i64(command.salt)?;
+    command.last_seen.write(&mut writer)?;
+    Ok(writer.into_inner())
+}
+
+const MAX_COMMAND_ARGUMENT_NAME_LENGTH: usize = 16;
+const MAX_SIGNED_COMMAND_ARGUMENTS: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedCommandArgument {
+    pub name: String,
+    pub signature: MessageSignature,
+}
+
+/// `ServerboundChatCommandSignedPacket` body for 1.21.11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerboundChatCommandSigned {
+    pub command: String,
+    pub timestamp_ms: i64,
+    pub salt: i64,
+    pub argument_signatures: Vec<SignedCommandArgument>,
+    pub last_seen: LastSeenUpdate,
+}
+
+pub fn parse_serverbound_chat_command_signed(
+    payload: &[u8],
+) -> io::Result<ServerboundChatCommandSigned> {
+    let mut reader = PacketReader::new(payload);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_CHAT_COMMAND_SIGNED {
+        return Err(invalid(format!(
+            "expected serverbound signed chat command id {SERVERBOUND_CHAT_COMMAND_SIGNED}, got {id}"
+        )));
+    }
+    let command = reader.read_string()?;
+    if command.is_empty() {
+        return Err(invalid("chat command must not be empty"));
+    }
+    if command.chars().count() > MAX_COMMAND_LENGTH {
+        return Err(invalid(format!(
+            "chat command is longer than {MAX_COMMAND_LENGTH} characters"
+        )));
+    }
+    let timestamp_ms = reader.read_i64()?;
+    let salt = reader.read_i64()?;
+    let count = reader.read_varint()?;
+    if count < 0 {
+        return Err(invalid(format!(
+            "signed chat command argument count must not be negative: {count}"
+        )));
+    }
+    if count as usize > MAX_SIGNED_COMMAND_ARGUMENTS {
+        return Err(invalid(format!(
+            "signed chat command has {count} argument signatures, maximum is {MAX_SIGNED_COMMAND_ARGUMENTS}"
+        )));
+    }
+    let mut argument_signatures = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let name = reader.read_string()?;
+        if name.is_empty() {
+            return Err(invalid(
+                "signed chat command argument name must not be empty",
+            ));
+        }
+        if name.chars().count() > MAX_COMMAND_ARGUMENT_NAME_LENGTH {
+            return Err(invalid(format!(
+                "signed chat command argument name is longer than {MAX_COMMAND_ARGUMENT_NAME_LENGTH} characters"
+            )));
+        }
+        if argument_signatures
+            .iter()
+            .any(|argument: &SignedCommandArgument| argument.name == name)
+        {
+            return Err(invalid(format!(
+                "duplicate signed chat command argument name '{name}'"
+            )));
+        }
+        let signature = MessageSignature::read(&mut reader)?;
+        argument_signatures.push(SignedCommandArgument { name, signature });
+    }
+    let last_seen = LastSeenUpdate::read(&mut reader)?;
+    if !reader.is_empty() {
+        return Err(invalid(
+            "trailing bytes after serverbound signed chat command",
+        ));
+    }
+    Ok(ServerboundChatCommandSigned {
+        command,
+        timestamp_ms,
+        salt,
+        argument_signatures,
+        last_seen,
+    })
+}
+
+pub fn build_serverbound_chat_command_signed(
+    command: &ServerboundChatCommandSigned,
+) -> io::Result<Vec<u8>> {
+    if command.command.is_empty() {
+        return Err(invalid("chat command must not be empty"));
+    }
+    if command.command.chars().count() > MAX_COMMAND_LENGTH {
+        return Err(invalid(format!(
+            "chat command is longer than {MAX_COMMAND_LENGTH} characters"
+        )));
+    }
+    if command.argument_signatures.len() > MAX_SIGNED_COMMAND_ARGUMENTS {
+        return Err(invalid(format!(
+            "signed chat command has {} argument signatures, maximum is {MAX_SIGNED_COMMAND_ARGUMENTS}",
+            command.argument_signatures.len()
+        )));
+    }
+    let mut seen_names = std::collections::HashSet::new();
+    for argument in &command.argument_signatures {
+        if argument.name.is_empty() {
+            return Err(invalid(
+                "signed chat command argument name must not be empty",
+            ));
+        }
+        if argument.name.chars().count() > MAX_COMMAND_ARGUMENT_NAME_LENGTH {
+            return Err(invalid(format!(
+                "signed chat command argument name is longer than {MAX_COMMAND_ARGUMENT_NAME_LENGTH} characters"
+            )));
+        }
+        if !seen_names.insert(argument.name.as_str()) {
+            return Err(invalid(format!(
+                "duplicate signed chat command argument name '{}'",
+                argument.name
+            )));
+        }
+    }
+    command.last_seen.validate()?;
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_CHAT_COMMAND_SIGNED)?;
+    writer.write_string(&command.command)?;
+    writer.write_i64(command.timestamp_ms)?;
+    writer.write_i64(command.salt)?;
+    writer.write_varint(command.argument_signatures.len() as i32)?;
+    for argument in &command.argument_signatures {
+        writer.write_string(&argument.name)?;
+        argument.signature.write(&mut writer)?;
+    }
+    command.last_seen.write(&mut writer)?;
     Ok(writer.into_inner())
 }
 

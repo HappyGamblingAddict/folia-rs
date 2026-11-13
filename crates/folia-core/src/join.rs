@@ -2489,7 +2489,14 @@ fn handle_entity_attack(
         return Ok(());
     }
     let damage = held_attack_damage(session);
-    let Some(result) = tracked.damage(target, damage) else {
+    let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
+    let Some(result) = tracked.damage_with_knockback(
+        target,
+        damage,
+        attack_knockback_strength(session),
+        knockback_x,
+        knockback_z,
+    ) else {
         return Ok(());
     };
     if !result.damaged {
@@ -2512,6 +2519,24 @@ fn held_attack_damage(session: &PlayerSession) -> f32 {
         .and_then(|prototype| prototype.tool.as_ref())
         .and_then(|tool| tool.attack_damage)
         .unwrap_or(1.0)
+}
+
+/// `Player.attack` knockback strength: the vanilla base 0.4 plus 0.5 per
+/// `minecraft:knockback` level.
+fn attack_knockback_strength(session: &PlayerSession) -> f64 {
+    let level = session
+        .inventory
+        .get(session.selected_slot.max(0) as usize)
+        .map_or(0, |stack| stack.enchantment_level("minecraft:knockback"));
+    0.4 + 0.5 * f64::from(level)
+}
+
+/// `Player.attack` direction arguments for `LivingEntity.knockback`: the
+/// horizontal look vector is `(sin(yaw), -cos(yaw))`; `knockback` subtracts it
+/// so the victim travels along the player's facing direction.
+fn attack_knockback_direction(yaw: f32) -> (f64, f64) {
+    let radians = f64::from(yaw) * std::f64::consts::PI / 180.0;
+    (radians.sin(), -radians.cos())
 }
 
 fn system_chat_packet(message: &str) -> io::Result<Vec<u8>> {
@@ -5417,6 +5442,28 @@ mod tests {
         writer.write_varint(0).unwrap(); // hand
         writer.write_u8(0).unwrap();
         assert_eq!(parse_attack(&writer.into_inner()), None);
+    }
+
+    #[test]
+    fn attack_knockback_strength_adds_half_per_enchantment_level() {
+        let mut session = PlayerSession::new("Attacker".into(), [0x94; 16], 0.0, 64.0, 0.0);
+        assert!((attack_knockback_strength(&session) - 0.4).abs() < f64::EPSILON);
+        let mut sword = crate::item_components::ItemStack::new("minecraft:diamond_sword", 1);
+        sword.set_component(crate::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:knockback".to_string(), 2)]),
+        ));
+        session.inventory[session.selected_slot.max(0) as usize] = sword;
+        assert!((attack_knockback_strength(&session) - 1.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn attack_knockback_direction_follows_the_player_facing() {
+        let (x, z) = attack_knockback_direction(0.0);
+        assert!(x.abs() < 1e-12, "yaw 0 has no x component: {x}");
+        assert!((z + 1.0).abs() < 1e-12, "yaw 0 looks south: {z}");
+        let (x, z) = attack_knockback_direction(90.0);
+        assert!((x - 1.0).abs() < 1e-12, "yaw 90 has sin = 1: {x}");
+        assert!(z.abs() < 1e-12, "yaw 90 has no z component: {z}");
     }
 
     #[test]

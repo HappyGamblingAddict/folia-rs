@@ -682,6 +682,16 @@ impl ItemStack {
             _ => false,
         }
     }
+
+    /// Level of one `minecraft:enchantments` entry, or 0 when absent.
+    pub fn enchantment_level(&self, name: &str) -> i32 {
+        match self.get_component("minecraft:enchantments") {
+            Some(ComponentValue::Enchantments(map)) => {
+                map.get(&normalize_key(name)).copied().unwrap_or(0).max(0)
+            }
+            _ => 0,
+        }
+    }
 }
 
 pub fn plain_text(text: impl Into<String>) -> Tag {

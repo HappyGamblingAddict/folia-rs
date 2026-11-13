@@ -94,6 +94,41 @@ impl Entity {
         self.velocity = [x, y, z];
     }
 
+    /// `LivingEntity.knockback(double, double, double)`:
+    ///
+    /// ```text
+    /// strength *= 1 - knockback_resistance;
+    /// dir = normalize(x, 0, z) * strength;
+    /// delta = (delta.x / 2 - dir.x,
+    ///          onGround ? min(0.4, delta.y / 2 + strength) : delta.y,
+    ///          delta.z / 2 - dir.z);
+    /// ```
+    ///
+    /// A zero direction normalizes to zero, matching `Vec3.normalize`.
+    pub fn knockback(&mut self, strength: f64, x: f64, z: f64) {
+        if strength <= 0.0 {
+            return;
+        }
+        let length = x.hypot(z);
+        let (unit_x, unit_z) = if length > 0.0 {
+            (x / length, z / length)
+        } else {
+            (0.0, 0.0)
+        };
+        let delta_x = unit_x * strength;
+        let delta_z = unit_z * strength;
+        let velocity_y = if self.on_ground {
+            (self.velocity[1] / 2.0 + strength).min(0.4)
+        } else {
+            self.velocity[1]
+        };
+        self.velocity = [
+            self.velocity[0] / 2.0 - delta_x,
+            velocity_y,
+            self.velocity[2] / 2.0 - delta_z,
+        ];
+    }
+
     /// Create the living-entity state (health, attributes, equipment,
     /// metadata) for this entity's id. The state is stored separately by id so
     /// physics and gameplay data stay independent.
@@ -873,9 +908,46 @@ impl SessionEntityTracker {
     /// Apply damage to one tracked mob. The returned packets are the vanilla
     /// death event, metadata health/pose update, and (for players) SetHealth.
     pub fn damage(&mut self, id: i32, amount: f32) -> Option<HurtResult> {
+        self.damage_inner(id, amount, None)
+    }
+
+    /// Apply damage plus `LivingEntity.knockback`.
+    ///
+    /// `x`/`z` are the direction Java passes at the call site: the victim is
+    /// pushed opposite it after the direction is normalized and scaled by
+    /// `strength`. Knockback resistance is applied from the victim's
+    /// attributes.
+    pub fn damage_with_knockback(
+        &mut self,
+        id: i32,
+        amount: f32,
+        strength: f64,
+        x: f64,
+        z: f64,
+    ) -> Option<HurtResult> {
+        self.damage_inner(id, amount, Some((strength, x, z)))
+    }
+
+    fn damage_inner(
+        &mut self,
+        id: i32,
+        amount: f32,
+        knockback: Option<(f64, f64, f64)>,
+    ) -> Option<HurtResult> {
         let tracked = self.entities.get_mut(id)?;
         let result = tracked.living.hurt(amount);
         let health = tracked.living.health;
+        if result.damaged
+            && let Some((strength, x, z)) = knockback
+        {
+            let resistance = tracked
+                .living
+                .attributes
+                .get(Attribute::KnockbackResistance);
+            tracked
+                .entity
+                .knockback(strength * (1.0 - resistance), x, z);
+        }
         if let Some(agent) = &mut tracked.ai {
             agent.mob.health = health;
             if tracked.living.dead {
@@ -1410,6 +1482,101 @@ mod tests {
             damage > 0.0,
             "a retaliating zombie should deal melee damage"
         );
+    }
+
+    #[test]
+    fn knockback_halves_delta_and_pushes_opposite_the_direction() {
+        let mut entity = armor_stand();
+        entity.on_ground = true;
+        entity.set_velocity(0.2, 0.1, -0.2);
+        entity.knockback(0.4, 1.0, 0.0);
+        assert!((entity.velocity[0] - (0.1 - 0.4)).abs() < 1e-12);
+        assert!((entity.velocity[1] - 0.4).abs() < 1e-12);
+        assert!((entity.velocity[2] - (-0.1)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn airborne_knockback_keeps_the_vertical_delta() {
+        let mut entity = armor_stand();
+        entity.on_ground = false;
+        entity.set_velocity(0.0, -0.5, 0.0);
+        entity.knockback(0.4, 0.0, 1.0);
+        assert!((entity.velocity[1] + 0.5).abs() < 1e-12);
+        assert!((entity.velocity[2] + 0.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn knockback_direction_is_normalized_and_zero_is_a_no_op() {
+        let mut entity = armor_stand();
+        entity.on_ground = false;
+        entity.knockback(0.4, 3.0, 4.0);
+        let length = entity.velocity[0].hypot(entity.velocity[2]);
+        assert!((length - 0.4).abs() < 1e-12, "length {length}");
+
+        let mut entity = armor_stand();
+        entity.on_ground = false;
+        entity.knockback(0.4, 0.0, 0.0);
+        assert_eq!(entity.velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn damage_with_knockback_pushes_the_zombie_away_from_the_attacker() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let zombie = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.ai.is_some())
+            })
+            .expect("session tracker spawns a zombie");
+        let (x, z) = {
+            let entity = &tracker.entity(zombie).expect("zombie").entity;
+            (entity.x, entity.z)
+        };
+        let attacker = (x - 1.0, 63.0, z);
+        let result = tracker
+            .damage_with_knockback(zombie, 1.0, 0.4, attacker.0 - x, attacker.2 - z)
+            .expect("zombie takes damage");
+        assert!(result.damaged);
+        let entity = &tracker.entity(zombie).expect("zombie").entity;
+        assert!(
+            entity.velocity[0] > 0.0,
+            "knockback should push east: {:?}",
+            entity.velocity
+        );
+        assert!(
+            entity.velocity[1].abs() > 0.0,
+            "a grounded hit should also add lift: {:?}",
+            entity.velocity
+        );
+    }
+
+    #[test]
+    fn knockback_resistance_cancels_the_push() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let zombie = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.ai.is_some())
+            })
+            .expect("session tracker spawns a zombie");
+        tracker
+            .shared_mut()
+            .get_mut(zombie)
+            .expect("zombie")
+            .living
+            .set_attribute(Attribute::KnockbackResistance, 1.0);
+        let result = tracker
+            .damage_with_knockback(zombie, 1.0, 0.4, 1.0, 0.0)
+            .expect("zombie takes damage");
+        assert!(result.damaged);
+        let entity = &tracker.entity(zombie).expect("zombie").entity;
+        assert_eq!(entity.velocity, [0.0; 3]);
     }
 
     fn packet_id(packet: &[u8]) -> i32 {

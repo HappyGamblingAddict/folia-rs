@@ -233,10 +233,21 @@ fn change_game_mode(mode: i32) -> Vec<u8> {
 }
 
 fn chat_command(command: &str) -> Vec<u8> {
-    let mut writer = PacketWriter::new();
-    writer.write_varint(6).unwrap();
-    writer.write_string(command).unwrap();
-    writer.into_inner()
+    let last_seen = folia_core::protocol::LastSeenUpdate::new(
+        0,
+        0,
+        folia_core::protocol::LastSeenMessages::empty().compute_checksum(),
+    )
+    .unwrap();
+    folia_core::protocol::build_serverbound_chat_command(
+        &folia_core::protocol::ServerboundChatCommand {
+            command: command.trim_start_matches('/').to_string(),
+            timestamp_ms: 0,
+            salt: 0,
+            last_seen,
+        },
+    )
+    .unwrap()
 }
 
 fn wait_for_saved_mode(

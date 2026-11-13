@@ -1988,7 +1988,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     SERVERBOUND_CHAT_COMMAND | SERVERBOUND_CHAT_COMMAND_SIGNED => {
-                        if let Err(error) = handle_command(&mut stream, &mut session, &packet) {
+                        if let Err(error) =
+                            handle_command(&mut stream, &mut session, &mut last_seen, &packet)
+                        {
                             eprintln!("[join] command failed: {error}");
                         }
                     }
@@ -2926,14 +2928,37 @@ fn apply_game_mode(
     Ok(())
 }
 
+fn parse_command_packet(packet: &[u8]) -> io::Result<(String, crate::protocol::LastSeenUpdate)> {
+    let mut reader = PacketReader::new(packet);
+    match reader.read_varint()? {
+        crate::protocol::SERVERBOUND_CHAT_COMMAND => {
+            let command = crate::protocol::parse_serverbound_chat_command(packet)?;
+            Ok((command.command, command.last_seen))
+        }
+        crate::protocol::SERVERBOUND_CHAT_COMMAND_SIGNED => {
+            let command = crate::protocol::parse_serverbound_chat_command_signed(packet)?;
+            Ok((command.command, command.last_seen))
+        }
+        id => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected a chat command packet, got id {id}"),
+        )),
+    }
+}
+
 fn handle_command(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
+    last_seen: &mut LastSeenValidator,
     packet: &[u8],
 ) -> io::Result<()> {
-    let mut reader = PacketReader::new(packet);
-    let _ = reader.read_varint()?;
-    let command = reader.read_string()?;
+    let (command, update) = parse_command_packet(packet)?;
+    last_seen.apply_update(update).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid command last-seen update: {error}"),
+        )
+    })?;
     let command = command.strip_prefix('/').unwrap_or(&command);
     let mut parts = command.split_whitespace();
     match parts.next() {
@@ -5985,5 +6010,88 @@ mod tests {
             .is_none(),
             "option-carrying particles fail loudly"
         );
+    }
+
+    #[test]
+    fn parse_command_packet_accepts_unsigned_commands() {
+        let last_seen = crate::protocol::LastSeenUpdate::new(
+            0,
+            0,
+            crate::protocol::LastSeenMessages::empty().compute_checksum(),
+        )
+        .unwrap();
+        let packet = crate::protocol::build_serverbound_chat_command(
+            &crate::protocol::ServerboundChatCommand {
+                command: "gamemode creative".to_string(),
+                timestamp_ms: 1,
+                salt: 2,
+                last_seen,
+            },
+        )
+        .unwrap();
+        let (command, parsed_last_seen) = parse_command_packet(&packet).unwrap();
+        assert_eq!(command, "gamemode creative");
+        assert_eq!(parsed_last_seen.offset, 0);
+        assert_eq!(parsed_last_seen.acknowledged, 0);
+        assert_eq!(
+            parsed_last_seen.checksum,
+            crate::protocol::LastSeenMessages::empty().compute_checksum()
+        );
+    }
+
+    #[test]
+    fn parse_command_packet_accepts_signed_commands() {
+        let last_seen = crate::protocol::LastSeenUpdate::new(
+            0,
+            0,
+            crate::protocol::LastSeenMessages::empty().compute_checksum(),
+        )
+        .unwrap();
+        let packet = crate::protocol::build_serverbound_chat_command_signed(
+            &crate::protocol::ServerboundChatCommandSigned {
+                command: "msg".to_string(),
+                timestamp_ms: 7,
+                salt: 9,
+                argument_signatures: vec![
+                    crate::protocol::SignedCommandArgument {
+                        name: "target".to_string(),
+                        signature: crate::protocol::MessageSignature::from_slice(
+                            &[1u8; crate::protocol::MESSAGE_SIGNATURE_BYTES],
+                        )
+                        .unwrap(),
+                    },
+                    crate::protocol::SignedCommandArgument {
+                        name: "text".to_string(),
+                        signature: crate::protocol::MessageSignature::from_slice(
+                            &[4u8; crate::protocol::MESSAGE_SIGNATURE_BYTES],
+                        )
+                        .unwrap(),
+                    },
+                ],
+                last_seen,
+            },
+        )
+        .unwrap();
+        let (command, _parsed_last_seen) = parse_command_packet(&packet).unwrap();
+        assert_eq!(command, "msg");
+    }
+
+    #[test]
+    fn parse_command_packet_rejects_other_packet_ids() {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(8).unwrap();
+        let error = parse_command_packet(&writer.into_inner()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn command_packet_codec_rejects_missing_last_seen() {
+        let mut writer = PacketWriter::new();
+        writer
+            .write_varint(crate::protocol::SERVERBOUND_CHAT_COMMAND)
+            .unwrap();
+        writer.write_string("op Steve").unwrap();
+        let error = parse_command_packet(&writer.into_inner()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 }

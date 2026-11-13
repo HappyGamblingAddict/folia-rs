@@ -1100,6 +1100,51 @@ pub fn read_set_health(packet: &[u8]) -> io::Result<(f32, i32, f32)> {
     Ok((health, food, saturation))
 }
 
+pub const CLIENTBOUND_SET_EXPERIENCE: i32 = 101;
+
+pub fn set_experience_packet(progress: f32, level: i32, total: i32) -> Vec<u8> {
+    // VarInt id, f32 experienceProgress, VarInt experienceLevel, VarInt totalExperience.
+    // Clamp defensively: vanilla sends valid values.
+    let progress = progress.clamp(0.0, 1.0);
+    let level = level.max(0);
+    let total = total.max(0);
+    let mut writer = PacketWriter::new();
+    writer
+        .write_varint(CLIENTBOUND_SET_EXPERIENCE)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_f32(progress)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(level)
+        .expect("writing to Vec cannot fail");
+    writer
+        .write_varint(total)
+        .expect("writing to Vec cannot fail");
+    writer.into_inner()
+}
+
+pub fn read_set_experience(packet: &[u8]) -> io::Result<(f32, i32, i32)> {
+    let mut reader = PacketReader::new(packet);
+    let packet_id = reader.read_varint()?;
+    if packet_id != CLIENTBOUND_SET_EXPERIENCE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected set_experience id {CLIENTBOUND_SET_EXPERIENCE}, got {packet_id}"),
+        ));
+    }
+    let progress = reader.read_f32()?;
+    let level = reader.read_varint()?;
+    let total = reader.read_varint()?;
+    if !reader.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing bytes after set_experience",
+        ));
+    }
+    Ok((progress, level, total))
+}
+
 /// Result of applying one damage source. Packets are ready to broadcast in
 /// vanilla order: entity event first for a lethal hit, then synched-data and
 /// `ClientboundSetHealth`.

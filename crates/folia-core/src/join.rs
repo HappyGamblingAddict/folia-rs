@@ -1611,8 +1611,16 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                 }
             }
-            // TODO: send experience/progress packet when `picked_experience` is true.
-            let _ = drop_tick.picked_experience;
+            if drop_tick.picked_experience {
+                write_packet(
+                    &mut stream,
+                    &crate::entity_metadata::set_experience_packet(
+                        session.xp_progress,
+                        session.xp_level,
+                        session.xp_total,
+                    ),
+                )?;
+            }
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player(&mut session, player_entity, tick.player_damage);
                 for packet in &result.packets {

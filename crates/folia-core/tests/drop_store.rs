@@ -295,3 +295,18 @@ fn spawn_stacks_emits_add_and_metadata_and_skips_empty() {
         assert!(!pair[1].is_empty());
     }
 }
+
+#[test]
+fn spawn_experience_emits_orbs_and_ignores_zero() {
+    let mut store = DropEntityStore::new();
+    let mut rng = LegacyRandomSource::new(1);
+    let packets = store.spawn_experience(BlockPos::new(0, 64, 0), 5, &mut rng);
+    assert_eq!(store.len(), 3);
+    assert_eq!(packets.len(), 6);
+
+    let mut empty = DropEntityStore::new();
+    let mut rng = LegacyRandomSource::new(1);
+    let packets = empty.spawn_experience(BlockPos::new(0, 64, 0), 0, &mut rng);
+    assert!(packets.is_empty());
+    assert_eq!(empty.len(), 0);
+}

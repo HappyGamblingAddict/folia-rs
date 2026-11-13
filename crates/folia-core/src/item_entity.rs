@@ -1004,6 +1004,25 @@ impl DropEntityStore {
         packets
     }
 
+    /// Spawn experience orbs for an amount and emit add+metadata packets in
+    /// orb order. Amounts `<= 0` produce no entities or packets.
+    pub fn spawn_experience(
+        &mut self,
+        pos: BlockPos,
+        amount: i32,
+        rng: &mut dyn RandomSource,
+    ) -> Vec<Vec<u8>> {
+        let orbs = spawn_experience_at(pos, amount.max(0), rng);
+        let mut packets = Vec::with_capacity(orbs.len() * 2);
+        for orb in orbs {
+            let entity = DroppedEntity::ExperienceOrb(orb);
+            packets.push(entity.add_packet());
+            packets.push(entity.metadata_packet());
+            self.entities.push(entity);
+        }
+        packets
+    }
+
     /// Spawn drop entities at `pos` and emit add+metadata packets in entity
     /// order.
     pub fn spawn(

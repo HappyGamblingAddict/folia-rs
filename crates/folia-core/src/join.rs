@@ -2565,12 +2565,22 @@ fn handle_entity_attack(
         write_packet(stream, packet)?;
     }
     if result.died {
-        if let Some(entity_type) = entity_type_name {
-            if let Some(roll) = entity_loot_roll(session, &entity_type, drop_rng) {
-                let packets = drop_entities.spawn_stacks(entity_pos, &roll.stacks, drop_rng);
-                for packet in &packets {
-                    write_packet(stream, packet)?;
-                }
+        if let Some(entity_type) = entity_type_name.as_deref()
+            && let Some(roll) = entity_loot_roll(session, entity_type, drop_rng)
+        {
+            let packets = drop_entities.spawn_stacks(entity_pos, &roll.stacks, drop_rng);
+            for packet in &packets {
+                write_packet(stream, packet)?;
+            }
+        }
+        if let Some(entity_type) = entity_type_name.as_deref() {
+            let xp_packets = drop_entities.spawn_experience(
+                entity_pos,
+                entity_experience_reward(entity_type, drop_rng),
+                drop_rng,
+            );
+            for packet in &xp_packets {
+                write_packet(stream, packet)?;
             }
         }
         println!("[join] {} killed entity {target}", session.name);
@@ -2591,6 +2601,14 @@ fn entity_loot_roll(
         .with_killed_by_player()
         .with_looting_level(looting_level);
     crate::loot::LootCatalog::global().roll_entity(entity_type, rng, &context)
+}
+
+fn entity_experience_reward(entity_type: &str, rng: &mut dyn folia_random::RandomSource) -> i32 {
+    match entity_type {
+        "minecraft:zombie" => 5,
+        "minecraft:cow" | "minecraft:pig" => 1 + rng.next_int_bound(3),
+        _ => 0,
+    }
 }
 
 fn resolve_player_attack(
@@ -5822,6 +5840,26 @@ mod tests {
         let mut rng = folia_random::LegacyRandomSource::new(7);
         let roll = entity_loot_roll(&session, "minecraft:cow", &mut rng);
         assert!(roll.is_some(), "looting roll should still resolve a table");
+    }
+
+    #[test]
+    fn experience_reward_matches_the_three_session_mobs() {
+        let mut rng = folia_random::LegacyRandomSource::new(1);
+        assert_eq!(entity_experience_reward("minecraft:zombie", &mut rng), 5);
+
+        let mut cow_rng = folia_random::LegacyRandomSource::new(2);
+        let cow = entity_experience_reward("minecraft:cow", &mut cow_rng);
+        assert!((1..=3).contains(&cow), "cow xp {cow}");
+
+        let mut pig_rng = folia_random::LegacyRandomSource::new(3);
+        let pig = entity_experience_reward("minecraft:pig", &mut pig_rng);
+        assert!((1..=3).contains(&pig), "pig xp {pig}");
+
+        let mut unknown_rng = folia_random::LegacyRandomSource::new(4);
+        assert_eq!(
+            entity_experience_reward("minecraft:not_a_real_mob", &mut unknown_rng),
+            0
+        );
     }
 
     #[test]

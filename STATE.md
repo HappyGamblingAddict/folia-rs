@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `ba8ea95` (Ubuntu + Windows: fmt, clippy, 1,246 tests,
+  CI is green at `522125f` (Ubuntu + Windows: fmt, clippy, 1,255 tests,
   release build).
-- Tests: **1,246 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,255 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -32,7 +32,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 combat is wired (cooldown/critical/knockback gating); remaining is player knockback via Set Entity Motion, armor/enchantment damage reduction, sprint-attack rules, and Java damage traces, plus per-viewer ranges/shared mob state.
+1. P5 live block drops are wired (pickup, merge, despawn); remaining is the XP/progress packet, chunk-unload retention wiring, entity death loot/XP drops, and player knockback via Set Entity Motion, plus per-viewer ranges/shared mob state.
 2. P8.2 join command dispatch after codecs, signed-command validation, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +59,20 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: dropped-entity store + live block drops — `item_entity.rs` adds
+  `DropEntityStore`/`DropStoreTick` with `spawn` (add+metadata packets, item
+  stacks + split XP orbs), deterministic `tick` (physics with magnet, pickup
+  via `PickupTarget`, partial-pickup metadata, despawn at 6000), item merging
+  with absorbed-survivor rebuild, `retain_in_chunks` remove packets, and
+  `picked_items`/`picked_experience` flags (7 tests). `join.rs` now spawns
+  drops into a per-session `DropEntityStore` instead of the inventory:
+  `finish_break` returns add/metadata packets; `handle_block_action` and
+  `tick_delayed_destroy` thread the store + deterministic `LegacyRandomSource`
+  (generator seed xor UUID half); the session tick advances drops and sends
+  changed `Set Player Inventory` slots on pickup; XP orbs credit
+  `PlayerSession::add_experience` (client XP packet still TODO); cleanup on
+  disconnect/shutdown; creative breaks produce no drops. `PickupTarget for
+  PlayerSession` added. 2 join lib tests. (941a89c, 811ee54, 522125f)
 - 2026-11-13: combat wiring — `handle_entity_attack` now uses
   `resolve_player_attack`, deriving effective attack speed from `4.0 + held item
   attack_speed` modifier (diamond sword -2.4 => 1.6 => 13-tick cooldown),

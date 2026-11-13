@@ -1831,6 +1831,17 @@ instantly on start-destroy and places on use-item-on.
   inventory. 13 unit + 9 integration tests cover stone/wood, dirt/shovel,
   obsidian tier gating, creative, durability, drop counts, and the
   delayed-destroy path.
+- **Progress (2026-11-13):** live drops — block breaks now spawn into a
+  per-session `DropEntityStore` instead of the inventory; `finish_break`
+  returns add/metadata packets; `handle_block_action` and
+  `tick_delayed_destroy` thread the store + deterministic
+  `LegacyRandomSource`; the session tick advances drops and sends changed
+  `Set Player Inventory` slots on pickup; XP orbs credit
+  `PlayerSession::add_experience` (client XP packet still TODO); cleanup on
+  disconnect/shutdown; creative breaks produce no drops. `PickupTarget for
+  PlayerSession` added. 2 join lib tests. CI green at 522125f (1,255 tests).
+  Remaining: send XP/progress packet, chunk-unload retention wiring, entity
+  death loot/XP drops.
 - **Progress (2026-11-06, shipped drop tables):** every break now resolves
   `minecraft:blocks/<block>` through `LootCatalog::roll_block` with a
   `folia_random::RandomSource`. `BlockLootContext` carries the tool, explicit
@@ -2148,6 +2159,15 @@ are still open.
   sync/remove packets. `spawn_drops_at` + `DigState::stop_with_entities`
   connect block drops to ground entities. Projectiles, falling blocks, TNT,
   live-session ticking, and Java pickup fixtures remain open.
+- **Progress (2026-11-13):** `DropEntityStore`/`DropStoreTick` adds `spawn`
+  (add+metadata packets, item stacks + split XP orbs), deterministic `tick`
+  (physics with magnet, pickup via `PickupTarget`, partial-pickup metadata,
+  despawn at 6000), item merging with absorbed-survivor rebuild,
+  `retain_in_chunks` remove packets, and `picked_items`/`picked_experience`
+  flags. `join.rs` uses it for live block-drop pickup; 7 `tests/drop_store.rs`
+  + 2 join lib tests. CI green at 522125f (1,255 tests). Remaining: send
+  XP/progress packet, chunk-unload retention wiring, entity death loot/XP
+  drops.
 
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 

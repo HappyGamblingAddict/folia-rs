@@ -1469,6 +1469,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     // for a long time on a slow build, and the first queued movement packet may
     // report a large but legitimate distance.
     let mut last_move_at = Instant::now();
+    let mut drop_entities = DropEntityStore::new();
+    let seed = crate::worldgen::generator::configured()
+        .map(|g| g.seed())
+        .unwrap_or(0)
+        ^ i64::from_le_bytes(session.uuid[..8].try_into().expect("uuid half"));
+    let mut drop_rng = LegacyRandomSource::new(seed);
     // Session-owned mobs are announced between the position and the chunk
     // batch. The client keeps them until their columns arrive, and the join
     // test's captured chunk loop ignores non-chunk packets.
@@ -1544,12 +1550,6 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
     let mut next_chat_index = 0i32;
     let mut attack_cooldown = AttackCooldown::new(4.0);
-    let mut drop_entities = DropEntityStore::new();
-    let seed = crate::worldgen::generator::configured()
-        .map(|g| g.seed())
-        .unwrap_or(0)
-        ^ i64::from_le_bytes(session.uuid[..8].try_into().expect("uuid half"));
-    let mut drop_rng = LegacyRandomSource::new(seed);
     let (_console_guard, console_commands) =
         SessionCommandGuard::register(&session.name, session.uuid);
 

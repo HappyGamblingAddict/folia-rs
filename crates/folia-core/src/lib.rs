@@ -8,6 +8,7 @@ pub mod block_shapes;
 pub mod block_update;
 pub mod chunk;
 pub mod chunk_packet;
+pub mod combat;
 pub mod compression;
 pub mod config;
 pub mod crafting;

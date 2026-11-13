@@ -3,7 +3,7 @@
 > Last updated: 2026-11-13
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,237 passing** on the full merged gate (0 failed, 1 ignored benchmark); CI green at c856b5e
+> Test status: **1,246 passing** on the full merged gate (0 failed, 1 ignored benchmark); CI green at ba8ea95
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2224,14 +2224,23 @@ are still open.
   `minecraft:knockback_resistance` before the push, and `handle_entity_attack`
   passes the vanilla player direction `(sin(yaw), -cos(yaw))` with strength
   `0.4 + 0.5 * knockback enchantment level`. `ItemStack::enchantment_level`
-  exposes held-enchantment lookups. `combat.rs` models `AttackCooldown`
+  exposes held-enchantment lookups.   `combat.rs` models `AttackCooldown`
   (attack-speed-derived cooldown, saturating ticks, `strength_scale`),
   `damage_scale`, `CriticalConditions`/`is_critical` (`scale > 0.9` plus
-  vetoes), `CRITICAL_MULTIPLIER`, and `attack_damage`. Focused: 7 knockback
-  lib tests + 7 `tests/combat.rs`. CI green at c856b5e (1,237 tests).
-  Remaining: wire cooldown/critical into `handle_entity_attack` and player
-  knockback via `Set Entity Motion`, critical/sprint attacks, armor/enchantment
-  damage reduction, and Java damage traces.
+  vetoes), `CRITICAL_MULTIPLIER`, and `attack_damage`. Join wiring
+  (c7a7878, 193ccae, ba8ea95): `handle_entity_attack` now calls
+  `resolve_player_attack`, deriving effective attack speed from `4.0 + held item
+  attack_speed` modifier (diamond sword -2.4 => 1.6 => 13-tick cooldown),
+  calling `strength_scale(0.5)`, using `combat::is_critical` from session
+  physics (fall distance, on_ground, swimming, sprinting; climbable/blind/
+  passenger conservatively false), applying `combat::attack_damage`, gating
+  base + enchantment knockback on scale > 0.9, and resetting the cooldown each
+  attack. The session play loop ticks an `AttackCooldown`; dead players
+  (health <= 0) cannot attack. `combat.rs` sanitizes non-finite strength
+  scales to 0 and clamps extreme attack speeds to i32::MAX cooldown. Focused:
+  7 knockback lib tests + 9 `tests/combat.rs`. CI green at ba8ea95 (1,246
+  tests). Remaining: player knockback via `Set Entity Motion`, armor/enchantment
+  damage reduction, sprint-attack rules, and Java damage traces.
 
 ### P5.12 Natural spawning and spawners `[~]` `L`
 

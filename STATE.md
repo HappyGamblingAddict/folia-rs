@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `c856b5e` (Ubuntu + Windows: fmt, clippy, 1,237 tests,
+  CI is green at `ba8ea95` (Ubuntu + Windows: fmt, clippy, 1,246 tests,
   release build).
-- Tests: **1,237 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,246 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -32,7 +32,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 wire the new combat model into `handle_entity_attack` and player knockback via Set Entity Motion, plus per-viewer ranges/shared mob state.
+1. P5 combat is wired (cooldown/critical/knockback gating); remaining is player knockback via Set Entity Motion, armor/enchantment damage reduction, sprint-attack rules, and Java damage traces, plus per-viewer ranges/shared mob state.
 2. P8.2 join command dispatch after codecs, signed-command validation, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +59,18 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: combat wiring — `handle_entity_attack` now uses
+  `resolve_player_attack`, deriving effective attack speed from `4.0 + held item
+  attack_speed` modifier (diamond sword -2.4 => 1.6 => 13-tick cooldown),
+  calling `strength_scale(0.5)`, using `combat::is_critical` from session
+  physics (fall distance, on_ground, swimming, sprinting; climbable/blind/
+  passenger conservatively false), applying `combat::attack_damage`, gating
+  base + enchantment knockback on scale > 0.9, and resetting the cooldown each
+  attack. The session play loop ticks an `AttackCooldown`; dead players
+  (health <= 0) cannot attack. `combat.rs` sanitizes non-finite strength
+  scales to 0 and clamps extreme attack speeds to i32::MAX cooldown. Tests:
+  6 join lib tests + 3 new combat tests (reset, NaN/inf scale, extreme
+  speed), 9 combat tests total. (c7a7878, 193ccae, ba8ea95)
 - 2026-11-13: attack cooldown/critical model — `combat.rs` adds
   `AttackCooldown` (attack-speed-derived cooldown, saturating ticks,
   `strength_scale`), `damage_scale`, `CriticalConditions`/`is_critical`

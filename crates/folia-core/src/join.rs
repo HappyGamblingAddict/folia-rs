@@ -3112,7 +3112,15 @@ pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -
         player.set_health(session.health);
         player.metadata.pack_dirty();
     }
-    let result = player.hurt(amount);
+    let mut equipment = crate::entity_metadata::Equipment::new();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Feet) = session.armor[0].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Legs) = session.armor[1].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Chest) = session.armor[2].clone();
+    *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Head) = session.armor[3].clone();
+    let (armor, toughness) = crate::effects::armor_values_from_equipment(&equipment);
+    let after_armor = crate::effects::damage_after_armor(amount, armor, toughness);
+    let after_resistance = after_armor * player.effects.resistance_multiplier();
+    let result = player.hurt(after_resistance);
     session.health = player.health;
     PlayerDamage {
         damaged: result.damaged,

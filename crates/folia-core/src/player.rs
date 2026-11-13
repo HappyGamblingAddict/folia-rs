@@ -891,6 +891,9 @@ pub struct PlayerSession {
     pub selected_slot: i32,
     pub inventory: Vec<ItemStack>,
     pub cursor: ItemStack,
+    /// Equipped armor `[feet, legs, chest, head]`, matching playerdata slots
+    /// 100..=103.
+    pub armor: [ItemStack; 4],
     /// Current health points; vanilla's survival default is 20.
     pub health: f32,
     /// `foodLevel`, 0-20.
@@ -962,6 +965,7 @@ impl PlayerSession {
             selected_slot: 0,
             inventory: default_inventory(),
             cursor: ItemStack::empty(),
+            armor: std::array::from_fn(|_| ItemStack::empty()),
             health: 20.0,
             food_level: 20,
             food_saturation: 5.0,
@@ -1136,7 +1140,7 @@ impl PlayerSession {
         let directory = directory.as_ref();
         fs::create_dir_all(directory)?;
         let path = Self::path(directory, &self.uuid);
-        let inventory_entries = self
+        let mut inventory_entries: Vec<Tag> = self
             .inventory
             .iter()
             .enumerate()
@@ -1149,6 +1153,16 @@ impl PlayerSession {
                 Tag::Compound(fields)
             })
             .collect();
+        for (index, stack) in self.armor.iter().enumerate() {
+            if stack.is_empty() {
+                continue;
+            }
+            let mut fields = vec![("Slot".into(), Tag::Int(100 + index as i32))];
+            if let Tag::Compound(inner) = item_stack_to_nbt(stack) {
+                fields.extend(inner);
+            }
+            inventory_entries.push(Tag::Compound(fields));
+        }
         let cursor = item_stack_to_nbt(&self.cursor);
 
         let mut entries = vec![
@@ -1247,18 +1261,23 @@ impl PlayerSession {
             .unwrap_or(0)
             .clamp(0, (HOTBAR_SLOTS - 1) as i32);
         let mut inventory = default_inventory();
+        let mut armor = std::array::from_fn(|_| ItemStack::empty());
         if let Some(entries) = root.get("Inventory").and_then(Tag::as_list) {
             inventory = vec![ItemStack::empty(); INVENTORY_SLOTS];
             for entry in entries {
                 let Some(slot) = entry.get("Slot").and_then(Tag::as_int) else {
                     continue;
                 };
-                if !(0..INVENTORY_SLOTS as i32).contains(&slot) {
-                    continue;
-                }
-                let stack = item_stack_from_nbt(entry)?;
-                if !stack.is_empty() {
-                    inventory[slot as usize] = stack;
+                if (0..INVENTORY_SLOTS as i32).contains(&slot) {
+                    let stack = item_stack_from_nbt(entry)?;
+                    if !stack.is_empty() {
+                        inventory[slot as usize] = stack;
+                    }
+                } else if (100..=103).contains(&slot) {
+                    let stack = item_stack_from_nbt(entry)?;
+                    if !stack.is_empty() {
+                        armor[(slot - 100) as usize] = stack;
+                    }
                 }
             }
         }
@@ -1333,6 +1352,7 @@ impl PlayerSession {
             selected_slot,
             inventory,
             cursor,
+            armor,
             health,
             food_level,
             food_saturation,

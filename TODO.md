@@ -2220,6 +2220,17 @@ are still open.
   projectile kill loot/XP, tipped/spectral arrows, block-hit effects, client
   sequence acknowledgement. CI green at f7bed49 (1,307 tests).
 
+- **Progress (2026-11-13):** bow ammo + projectile death rewards —
+  survival bow shots consume one `minecraft:arrow`/`tipped_arrow`/
+  `spectral_arrow` from the first matching inventory slot (`take_arrow`), send
+  the changed slot and persist; creative does not consume; no projectile spawns
+  without ammo. 4 join lib tests. Shared `entity_death_rewards`/
+  `spawn_mob_death_rewards` now serve both melee and projectile kills, spawning
+  entity loot stacks + XP orbs at the death position. 2 join lib tests. Still
+  open: bow charge/draw time, tipped-arrow potion effects, projectile block-hit
+  effects, client sequence acknowledgement, projectile pickup. CI green at
+  4f24e17 (1,313 tests).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

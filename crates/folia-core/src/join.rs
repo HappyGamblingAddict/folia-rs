@@ -2608,7 +2608,7 @@ fn use_item_projectile(
     let item = session.selected_item()?;
     let yaw = session.yaw.to_radians() as f64;
     let pitch = session.pitch.to_radians() as f64;
-    // Minecraft yaw 0 looks +Z. Arrows/ammo not modeled yet for bow.
+    // Minecraft yaw 0 looks +Z.
     let dir = [
         -yaw.sin() * pitch.cos(),
         -pitch.sin(),
@@ -2634,6 +2634,22 @@ fn use_item_projectile(
     }
 }
 
+fn take_arrow(session: &mut PlayerSession) -> Option<(usize, crate::inventory::ItemStack)> {
+    for (slot, stack) in session.inventory.iter_mut().enumerate() {
+        if stack.is_empty() {
+            continue;
+        }
+        if matches!(
+            stack.item.as_str(),
+            "minecraft:arrow" | "minecraft:tipped_arrow" | "minecraft:spectral_arrow"
+        ) {
+            stack.shrink(1);
+            return Some((slot, stack.clone()));
+        }
+    }
+    None
+}
+
 fn handle_use_item(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
@@ -2647,7 +2663,17 @@ fn handle_use_item(
     let Some((kind, velocity, consume_item)) = use_item_projectile(session) else {
         return Ok(());
     };
-    if consume_item {
+    if matches!(kind, crate::projectile::ProjectileKind::Arrow) && session.game_mode != 1 {
+        let Some((slot, stack)) = take_arrow(session) else {
+            return Ok(());
+        };
+        write_packet(stream, &inventory::inventory_packet(slot as i32, &stack))?;
+        if let Err(error) =
+            dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+        {
+            eprintln!("[join] could not save projectile use: {error}");
+        }
+    } else if consume_item {
         let slot = session.selected_slot.max(0) as usize;
         if let Some(stack) = session.inventory.get_mut(slot) {
             stack.shrink(1);
@@ -6595,5 +6621,73 @@ mod tests {
         assert!(velocity[1].abs() < 1e-6);
         assert!(velocity[2].abs() < 1e-6);
         assert!(!consume);
+    }
+
+    #[test]
+    fn take_arrow_consumes_one_from_the_first_stack() {
+        let mut session = PlayerSession::new("Arrow".to_string(), [0xA1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[4] = crate::inventory::ItemStack::new("minecraft:arrow".to_string(), 3);
+        session.inventory[5] = crate::inventory::ItemStack::new("minecraft:arrow".to_string(), 1);
+
+        let (slot, stack) = take_arrow(&mut session).expect("arrow");
+        assert_eq!(slot, 4);
+        assert_eq!(stack.count, 2);
+
+        let (slot, stack) = take_arrow(&mut session).expect("arrow");
+        assert_eq!(slot, 4);
+        assert_eq!(stack.count, 1);
+
+        let (slot, stack) = take_arrow(&mut session).expect("arrow");
+        assert_eq!(slot, 4);
+        assert!(stack.is_empty());
+        assert_eq!(session.inventory[5].count, 1);
+    }
+
+    #[test]
+    fn take_arrow_accepts_tipped_and_spectral() {
+        let mut session = PlayerSession::new("Tipped".to_string(), [0xA2; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[2] =
+            crate::inventory::ItemStack::new("minecraft:tipped_arrow".to_string(), 1);
+        assert!(take_arrow(&mut session).is_some());
+
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[7] =
+            crate::inventory::ItemStack::new("minecraft:spectral_arrow".to_string(), 2);
+        let (slot, stack) = take_arrow(&mut session).expect("spectral arrow");
+        assert_eq!(slot, 7);
+        assert_eq!(stack.count, 1);
+    }
+
+    #[test]
+    fn take_arrow_returns_none_without_arrows() {
+        let mut session = PlayerSession::new("NoArrow".to_string(), [0xA3; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        assert!(take_arrow(&mut session).is_none());
+    }
+
+    #[test]
+    fn bow_without_arrows_does_not_spawn() {
+        let mut session = PlayerSession::new("NoAmmo".to_string(), [0xA4; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        session.selected_slot = 0;
+        session.game_mode = 0;
+        assert_eq!(
+            use_item_projectile(&session).map(|(kind, _, _)| kind),
+            Some(crate::projectile::ProjectileKind::Arrow)
+        );
+        assert!(take_arrow(&mut session).is_none());
     }
 }

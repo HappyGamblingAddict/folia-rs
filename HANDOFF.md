@@ -1,14 +1,24 @@
 # Folia-RS Handoff
 
-Last updated: 2026-11-07
+Last updated: 2026-11-13
 Repository: https://github.com/HappyGamblingAddict/folia-rs
 Branch: `main`
-Last local commit: see `git log` (pushed)
+Last local commit: `8810005` (docs); latest code commit with full CI green: `4f24e17`
 
 This document is a status snapshot for continuing the Rust rewrite of Folia
 1.21.11. It is not a claim of parity. The project is still a partial server.
 
 ---
+
+## Next priorities
+
+- Armor durability/Protection and armor menu clicks.
+- Bow charge plus arrow effects.
+- Projectile kill/block effects and sequence acknowledgement.
+- Mob motion packets for player attacks.
+- Java damage/light fixtures.
+- Structure terrain adaptation.
+- Per-region world state.
 
 ## Goal and architecture
 
@@ -38,7 +48,7 @@ The working tree is clean and work is committed and pushed on `main`.
 Verified state (2026-11-07, merged workspace):
 
 ```text
-1199 tests passing on the merged tree (full gate, 1 ignored benchmark)
+1313 tests passing on the full gate (0 failed, 1 ignored benchmark)
 0 failed
 cargo fmt --check: clean
 cargo clippy --workspace --all-targets -- -D warnings: clean
@@ -47,36 +57,19 @@ native-only startup (no jars): verified to completion
 .jar plugin startup (HelloPlugin): verified through enable, scheduled task, shutdown
 ```
 
-Latest merged wave (2026-11-12): damaged session zombies retaliate — they
-target the player, their melee events flow through the living-entity damage
-path, and a melee death enters the 2-second respawn flow. Joins are progressive:
-the nearest 64 columns are sent first and the play loop tops up 24 columns
-every 50 ms until the full view radius is filled, reading movement between
-batches. Rust 1.100 Clippy/rustfmt lints are fixed. The previous wave made
-movement catch-up time-scaled, so a client that walked during a long initial
-batch is resynced instead of being teleported back forever; the normal 10-block
-guard still rejects instant teleports, and the position tolerance is vanilla's
-0.0625. Fallback chunk lighting attenuates sky light through tree canopies
-(heightmap plus an 8-block opacity walk) without a full light BFS per generated
-chunk. Runtime `world/`, `logs/`, `server.properties`, and `plugins/` are
-untracked; `server.properties.example` is the checked-in template. Written
-chunks are versioned (`GENERATION_VERSION = 2`), so terrain saved by older
-builds regenerates with current decorations/ores on the next start. Sessions
-saved below the world or at zero health recover on join. The session zombie
-runs the real goal set
-(float, melee, stroll, look, hurt-by-target) with navigation-driven movement,
-and player interact attacks apply held-item damage through the session tracker.
-Session AI also reads the real collider's water/lava/ground state. Live
-signed/unsigned player chat works with `ServerboundChatSessionUpdate`, a
-20-entry last-seen window, signature and sequence verification, and
-`ClientboundPlayerChat`/`ClientboundDisguisedChat` broadcast to every session.
-Join streaming polls shutdown during the column scan and chunk generation, and
-generation workers are detached so a slow chunk cannot delay the save path. The
-2026-11-07 wave added fossils, trial-chamber templates, portal-driven live
-dimension switching, target blocks + dispenser/dropper automation, anvil
-combine/repair/rename, Nether fortress and End city pieces, deeper pathfinding,
-and the 3x3 feature biome region. All 224 configured feature types execute and
-the shipped structure catalogs total 1,202 templates.
+Latest merged wave (2026-11-13): melee knockback; `Mob.checkDespawn` with
+the RNG-order fix; signed chat-command codecs plus live command parsing;
+attack cooldown/critical model wired into player attacks; `DropEntityStore` plus
+live block drops; entity loot tables plus entity/player death XP orbs; player
+armor slots and mitigation; projectile model plus live bow/snowball/egg use
+with arrow ammo; Set Entity Motion player knockback; `ClientboundSetExperience`
+on pickups and join; join equipment/XP packets; death item/XP drops. The
+earlier 2026-11-12 wave added retaliating session zombies, progressive join
+streaming, time-scaled movement catch-up, fallback canopy lighting, versioned
+chunk generation, void-save recovery, live AI environment, live player chat,
+and the 2026-11-07 fossils/trial-chamber/portal/anvil/Nether-End wave. All
+224 configured feature types execute and the shipped structure catalogs total
+1,202 templates.
 
 Worldgen parity on the 16-column fixture:
 

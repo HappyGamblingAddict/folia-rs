@@ -379,11 +379,11 @@ fn roll_entity_is_deterministic_for_cow() {
     let mut any_non_empty = false;
     for seed in 0..64 {
         let mut random = LegacyRandomSource::new(seed);
-        if let Some(roll) = catalog.roll_entity("minecraft:cow", &mut random, &context) {
-            if !roll.stacks.is_empty() {
-                any_non_empty = true;
-                break;
-            }
+        if let Some(roll) = catalog.roll_entity("minecraft:cow", &mut random, &context)
+            && !roll.stacks.is_empty()
+        {
+            any_non_empty = true;
+            break;
         }
     }
     assert!(any_non_empty, "expected some cow roll to produce items");

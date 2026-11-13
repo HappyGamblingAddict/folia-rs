@@ -1986,6 +1986,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 &session,
                                 &mut tracked_entities,
                                 &mut attack_cooldown,
+                                &mut drop_entities,
+                                &mut drop_rng,
                                 target,
                             )
                         {
@@ -2522,6 +2524,8 @@ fn handle_entity_attack(
     session: &PlayerSession,
     tracked: &mut SessionEntityTracker,
     cooldown: &mut AttackCooldown,
+    drop_entities: &mut DropEntityStore,
+    drop_rng: &mut LegacyRandomSource,
     target: i32,
 ) -> io::Result<()> {
     if session.health <= 0.0 {
@@ -2537,6 +2541,13 @@ fn handle_entity_attack(
     if dx * dx + dy * dy + dz * dz > reach * reach {
         return Ok(());
     }
+    let entity_type_name =
+        crate::registry::entity_type_name(entity.entity.entity_type).map(str::to_owned);
+    let entity_pos = BlockPos::new(
+        entity.entity.x.floor() as i32,
+        entity.entity.y.floor() as i32,
+        entity.entity.z.floor() as i32,
+    );
     let (damage, knockback_strength, _critical) = resolve_player_attack(session, cooldown);
     let attack_result = if knockback_strength > 0.0 {
         let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
@@ -2554,9 +2565,32 @@ fn handle_entity_attack(
         write_packet(stream, packet)?;
     }
     if result.died {
+        if let Some(entity_type) = entity_type_name {
+            if let Some(roll) = entity_loot_roll(session, &entity_type, drop_rng) {
+                let packets = drop_entities.spawn_stacks(entity_pos, &roll.stacks, drop_rng);
+                for packet in &packets {
+                    write_packet(stream, packet)?;
+                }
+            }
+        }
         println!("[join] {} killed entity {target}", session.name);
     }
     Ok(())
+}
+
+fn entity_loot_roll(
+    session: &PlayerSession,
+    entity_type: &str,
+    rng: &mut dyn folia_random::RandomSource,
+) -> Option<crate::loot::LootRoll> {
+    let looting_level = session
+        .inventory
+        .get(session.selected_slot.max(0) as usize)
+        .map_or(0, |stack| stack.enchantment_level("minecraft:looting"));
+    let context = crate::loot::LootContext::new()
+        .with_killed_by_player()
+        .with_looting_level(looting_level);
+    crate::loot::LootCatalog::global().roll_entity(entity_type, rng, &context)
 }
 
 fn resolve_player_attack(
@@ -5760,6 +5794,34 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn entity_loot_roll_for_cow_uses_the_shipped_table() {
+        let session = PlayerSession::new("Killer".into(), [0xA1; 16], 0.0, 64.0, 0.0);
+        let mut rng = folia_random::LegacyRandomSource::new(1);
+        let roll = entity_loot_roll(&session, "minecraft:cow", &mut rng);
+        assert!(roll.is_some(), "cow entity loot table should exist");
+    }
+
+    #[test]
+    fn entity_loot_roll_for_unknown_entity_is_none() {
+        let session = PlayerSession::new("Killer".into(), [0xA1; 16], 0.0, 64.0, 0.0);
+        let mut rng = folia_random::LegacyRandomSource::new(1);
+        assert!(entity_loot_roll(&session, "minecraft:not_a_real_mob", &mut rng).is_none());
+    }
+
+    #[test]
+    fn looting_enchantment_reaches_the_context() {
+        let mut session = PlayerSession::new("Killer".into(), [0xA1; 16], 0.0, 64.0, 0.0);
+        let mut sword = crate::item_components::ItemStack::new("minecraft:diamond_sword", 1);
+        sword.set_component(crate::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:looting".to_string(), 3)]),
+        ));
+        session.inventory[session.selected_slot.max(0) as usize] = sword;
+        let mut rng = folia_random::LegacyRandomSource::new(7);
+        let roll = entity_loot_roll(&session, "minecraft:cow", &mut rng);
+        assert!(roll.is_some(), "looting roll should still resolve a table");
     }
 
     #[test]

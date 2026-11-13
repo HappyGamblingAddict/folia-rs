@@ -277,3 +277,21 @@ fn tick_despawns_at_lifetime() {
             .any(|p| { packet_id(p) == REMOVE_ENTITIES && remove_ids(p).contains(&20) })
     );
 }
+
+#[test]
+fn spawn_stacks_emits_add_and_metadata_and_skips_empty() {
+    let mut store = DropEntityStore::new();
+    let stacks = vec![
+        ItemStack::new("minecraft:stone", 1),
+        ItemStack::empty(),
+        ItemStack::new("minecraft:dirt", 2),
+    ];
+    let mut rng = LegacyRandomSource::new(7);
+    let packets = store.spawn_stacks(BlockPos::new(0, 64, 0), &stacks, &mut rng);
+    assert_eq!(store.len(), 2);
+    assert_eq!(packets.len(), 4);
+    for pair in packets.as_chunks::<2>().0 {
+        assert_eq!(packet_id(&pair[0]), ADD_ENTITY);
+        assert!(!pair[1].is_empty());
+    }
+}

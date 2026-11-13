@@ -339,3 +339,64 @@ fn set_name_and_set_damage_functions_execute_with_item_components() {
     ));
     let _ = NameTarget::ItemName;
 }
+
+#[test]
+fn entity_tables_resolve_from_the_entity_id() {
+    let catalog = LootCatalog::global();
+    assert_eq!(
+        catalog.entity_table_id("minecraft:cow"),
+        Some("minecraft:entities/cow")
+    );
+    assert_eq!(
+        catalog.entity_table_id("minecraft:zombie"),
+        Some("minecraft:entities/zombie")
+    );
+    assert_eq!(
+        catalog.entity_table_id("minecraft:pig"),
+        Some("minecraft:entities/pig")
+    );
+    assert_eq!(
+        catalog.entity_table_id("minecraft:entities/cow"),
+        Some("minecraft:entities/cow")
+    );
+    assert_eq!(catalog.entity_table_id("minecraft:not_a_real_mob"), None);
+}
+
+#[test]
+fn roll_entity_is_deterministic_for_cow() {
+    let catalog = LootCatalog::global();
+    let context = LootContext::new().with_killed_by_player();
+    let mut random_a = LegacyRandomSource::new(1234);
+    let mut random_b = LegacyRandomSource::new(1234);
+    let first = catalog
+        .roll_entity("minecraft:cow", &mut random_a, &context)
+        .expect("cow entity table exists");
+    let second = catalog
+        .roll_entity("minecraft:cow", &mut random_b, &context)
+        .expect("cow entity table exists");
+    assert_eq!(first.stacks, second.stacks);
+
+    let mut any_non_empty = false;
+    for seed in 0..64 {
+        let mut random = LegacyRandomSource::new(seed);
+        if let Some(roll) = catalog.roll_entity("minecraft:cow", &mut random, &context) {
+            if !roll.stacks.is_empty() {
+                any_non_empty = true;
+                break;
+            }
+        }
+    }
+    assert!(any_non_empty, "expected some cow roll to produce items");
+}
+
+#[test]
+fn roll_entity_rejects_unknown_entity() {
+    let catalog = LootCatalog::global();
+    let context = LootContext::new().with_killed_by_player();
+    let mut random = LegacyRandomSource::new(1);
+    assert!(
+        catalog
+            .roll_entity("minecraft:not_a_real_mob", &mut random, &context)
+            .is_none()
+    );
+}

@@ -983,6 +983,27 @@ impl DropEntityStore {
         self.entities.push(entity);
     }
 
+    /// Spawn item entities for pre-rolled stacks and emit add+metadata packets
+    /// in stack order. Empty stacks are skipped.
+    pub fn spawn_stacks(
+        &mut self,
+        pos: BlockPos,
+        stacks: &[ItemStack],
+        rng: &mut dyn RandomSource,
+    ) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        for stack in stacks {
+            if stack.is_empty() {
+                continue;
+            }
+            let entity = ItemEntity::spawn_one(pos, stack.clone(), rng);
+            packets.push(entity.add_packet());
+            packets.push(entity.metadata_packet());
+            self.entities.push(DroppedEntity::Item(entity));
+        }
+        packets
+    }
+
     /// Spawn drop entities at `pos` and emit add+metadata packets in entity
     /// order.
     pub fn spawn(

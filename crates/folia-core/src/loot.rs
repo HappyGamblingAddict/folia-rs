@@ -2181,6 +2181,38 @@ impl LootCatalog {
         let id = self.block_table_id(block)?;
         self.roll(id, random, context)
     }
+
+    /// Resolves an entity id to its shipped entity loot table.
+    ///
+    /// Vanilla stores entity tables under `minecraft:entities/<entity path>`,
+    /// so `minecraft:cow` resolves to `minecraft:entities/cow`. The exact table
+    /// id is also accepted (`minecraft:entities/cow`). Returns `None` when the
+    /// table is absent.
+    pub fn entity_table_id(&self, entity: &str) -> Option<&str> {
+        let entity_id = normalized(entity);
+        if let Some(path) = entity_id.strip_prefix("minecraft:") {
+            let candidate = format!("minecraft:entities/{path}");
+            if let Some((id, _)) = self.tables.get_key_value(&candidate) {
+                return Some(id);
+            }
+        }
+        if let Some((id, _)) = self.tables.get_key_value(&entity_id) {
+            return Some(id);
+        }
+        None
+    }
+
+    /// Rolls the shipped entity table for an entity id. Returns `None` when the
+    /// entity has no shipped table.
+    pub fn roll_entity(
+        &self,
+        entity: &str,
+        random: &mut dyn RandomSource,
+        context: &LootContext<'_>,
+    ) -> Option<LootRoll> {
+        let id = self.entity_table_id(entity)?;
+        self.roll(id, random, context)
+    }
 }
 
 // ---------------------------------------------------------------------------

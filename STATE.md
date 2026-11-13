@@ -9,9 +9,9 @@ Last updated: 2026-11-13
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `522125f` (Ubuntu + Windows: fmt, clippy, 1,255 tests,
+  CI is green at `618a27a` (Ubuntu + Windows: fmt, clippy, 1,264 tests,
   release build).
-- Tests: **1,255 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+- Tests: **1,264 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -32,7 +32,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 live block drops are wired (pickup, merge, despawn); remaining is the XP/progress packet, chunk-unload retention wiring, entity death loot/XP drops, and player knockback via Set Entity Motion, plus per-viewer ranges/shared mob state.
+1. P5 live block/entity drops and XP orbs are wired; remaining is the XP/progress packet, chunk/dimension retention, entity loot conditions, player knockback/armor, and per-viewer ranges/shared mob state.
 2. P8.2 join command dispatch after codecs, signed-command validation, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.
@@ -59,6 +59,18 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-13: entity death loot + XP orbs — `LootCatalog::entity_table_id`/
+  `roll_entity` resolve `minecraft:entities/<mob>` (108 shipped tables);
+  `DropEntityStore::spawn_stacks` spawns pre-rolled item stacks with add+
+  metadata packets; `join.rs` rolls the killed mob's table with
+  `killed_by_player` + held `minecraft:looting` and spawns the drops at the
+  death position. Entity XP orbs via `DropEntityStore::spawn_experience`;
+  zombie drops 5 XP, cow/pig 1..=3 via `nextInt(3)+1`; XP pickup credits
+  `PlayerSession::add_experience`. 3 `tests/loot.rs` + 1 `tests/drop_store.rs`
+  + 2 join lib tests for loot, 1 + 2 for XP; clippy collapse fixes in
+  618a27a. Still open: client XP/progress packet, chunk/dimension retention,
+  entity loot conditions (`entity_properties` etc. unsupported), player
+  knockback/armor. (2d643fc, 23b3469, 618a27a)
 - 2026-11-13: dropped-entity store + live block drops — `item_entity.rs` adds
   `DropEntityStore`/`DropStoreTick` with `spawn` (add+metadata packets, item
   stacks + split XP orbs), deterministic `tick` (physics with magnet, pickup

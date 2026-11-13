@@ -2168,6 +2168,18 @@ are still open.
   + 2 join lib tests. CI green at 522125f (1,255 tests). Remaining: send
   XP/progress packet, chunk-unload retention wiring, entity death loot/XP
   drops.
+- **Progress (2026-11-13):** entity death loot + XP orbs —
+  `LootCatalog::entity_table_id`/`roll_entity` resolve
+  `minecraft:entities/<mob>` (108 shipped tables); `DropEntityStore::spawn_stacks`
+  spawns pre-rolled item stacks; `join.rs` rolls the killed mob's table with
+  `killed_by_player` + held `minecraft:looting` and spawns drops at the death
+  position. `DropEntityStore::spawn_experience`; zombie drops 5 XP, cow/pig
+  1..=3 via `nextInt(3)+1`; XP pickup credits `PlayerSession::add_experience`.
+  3 `tests/loot.rs` + 1 `tests/drop_store.rs` + 2 join lib tests for loot,
+  1 + 2 for XP; clippy collapse fixes in 618a27a. CI green at 618a27a
+  (1,264 tests). Remaining: client XP/progress packet, chunk/dimension
+  retention, entity loot conditions (`entity_properties` etc. unsupported),
+  player knockback/armor.
 
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 

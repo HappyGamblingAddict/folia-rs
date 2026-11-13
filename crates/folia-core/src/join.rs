@@ -3154,6 +3154,14 @@ fn player_equipment(session: &PlayerSession) -> crate::entity_metadata::Equipmen
     equipment
 }
 
+fn take_player_death_experience(session: &mut PlayerSession) -> i32 {
+    let amount = (session.xp_level.max(0) * 7).min(100);
+    session.xp_level = 0;
+    session.xp_progress = 0.0;
+    session.xp_total = 0;
+    amount
+}
+
 fn take_player_death_drops(session: &mut PlayerSession) -> Vec<crate::item_components::ItemStack> {
     let mut drops = Vec::new();
     for slot in session.inventory.iter_mut() {
@@ -3194,6 +3202,10 @@ fn drop_player_death_items(
         session.z.floor() as i32,
     );
     for packet in drops.spawn_stacks(pos, &stacks, rng) {
+        write_packet(stream, &packet)?;
+    }
+    let experience = take_player_death_experience(session);
+    for packet in drops.spawn_experience(pos, experience, rng) {
         write_packet(stream, &packet)?;
     }
     send_container_content(stream, session)?;
@@ -6319,5 +6331,33 @@ mod tests {
         assert!(session.inventory.iter().all(|stack| stack.is_empty()));
         assert!(session.armor.iter().all(|stack| stack.is_empty()));
         assert!(session.cursor.is_empty());
+    }
+
+    #[test]
+    fn death_experience_is_seven_per_level_capped_at_100() {
+        let mut session = PlayerSession::new("DeathXp".to_string(), [0xD3; 16], 0.0, 64.0, 0.0);
+        session.xp_level = 3;
+        session.xp_progress = 0.5;
+        session.xp_total = 21;
+        assert_eq!(take_player_death_experience(&mut session), 21);
+        assert_eq!(session.xp_level, 0);
+        assert!(session.xp_progress.abs() < 1e-6);
+        assert_eq!(session.xp_total, 0);
+
+        session.xp_level = 20;
+        session.xp_progress = 0.25;
+        session.xp_total = 400;
+        assert_eq!(take_player_death_experience(&mut session), 100);
+        assert_eq!(session.xp_level, 0);
+        assert!(session.xp_progress.abs() < 1e-6);
+        assert_eq!(session.xp_total, 0);
+
+        session.xp_level = 0;
+        session.xp_progress = 0.0;
+        session.xp_total = 0;
+        assert_eq!(take_player_death_experience(&mut session), 0);
+        assert_eq!(session.xp_level, 0);
+        assert!(session.xp_progress.abs() < 1e-6);
+        assert_eq!(session.xp_total, 0);
     }
 }

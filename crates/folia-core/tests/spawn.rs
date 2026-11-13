@@ -4,9 +4,10 @@ use folia_core::entity_ai::MemoryWorld;
 use folia_core::math::{BlockPos, Vec3};
 use folia_core::random::LegacyRandomSource;
 use folia_core::spawn::{
-    ChunkPos, ChunkSpawnResult, DespawnDecision, MobCategory, MobDespawnState, NaturalSpawner,
-    SpawnFailure, SpawnSettings, SpawnState, biome_spawn_count, biome_spawns, entity_type,
-    entity_type_by_id, is_spawnable_position, spawn_category_for_position, spawn_for_chunk,
+    ChunkPos, ChunkSpawnResult, DespawnDecision, MobCategory, MobDespawnState,
+    NO_ACTION_TIME_RANDOM_BOUND, NaturalSpawner, SpawnFailure, SpawnSettings, SpawnState,
+    biome_spawn_count, biome_spawns, entity_type, entity_type_by_id, is_spawnable_position,
+    spawn_category_for_position, spawn_for_chunk,
 };
 
 fn flat_world() -> MemoryWorld {
@@ -349,6 +350,71 @@ fn remove_when_far_away_false_keeps_beyond_the_category_distance() {
         state.check_despawn(false, true, Some(200.0 * 200.0), &mut random),
         DespawnDecision::Keep
     );
+}
+
+#[test]
+fn despawn_distance_branch_still_consumes_the_no_action_random() {
+    let mut state = MobDespawnState::new(MobCategory::Monster);
+    state.no_action_time = 601;
+    let mut random = LegacyRandomSource::new(923);
+    assert_eq!(
+        state.check_despawn(false, true, Some(200.0 * 200.0), &mut random),
+        DespawnDecision::Despawn
+    );
+
+    let mut control = LegacyRandomSource::new(923);
+    control.next_int_bound(NO_ACTION_TIME_RANDOM_BOUND);
+    assert_eq!(random.next_int(), control.next_int());
+}
+
+#[test]
+fn no_action_threshold_is_strictly_greater_than_600() {
+    let mut keeps = MobDespawnState::new(MobCategory::Monster);
+    keeps.no_action_time = 600;
+    let mut keeps_random = LegacyRandomSource::new(923);
+    assert_eq!(
+        keeps.check_despawn(false, true, Some(40.0 * 40.0), &mut keeps_random),
+        DespawnDecision::Keep
+    );
+    let mut control = LegacyRandomSource::new(923);
+    assert_eq!(keeps_random.next_int(), control.next_int());
+
+    let mut despawns = MobDespawnState::new(MobCategory::Monster);
+    despawns.no_action_time = 601;
+    let mut despawns_random = LegacyRandomSource::new(923);
+    assert_eq!(
+        despawns.check_despawn(false, true, Some(40.0 * 40.0), &mut despawns_random),
+        DespawnDecision::Despawn
+    );
+}
+
+#[test]
+fn exactly_32_blocks_does_not_reset_no_action_time() {
+    let mut state = MobDespawnState::new(MobCategory::Monster);
+    state.no_action_time = 1234;
+    let mut random = LegacyRandomSource::new(1);
+    assert_eq!(
+        state.check_despawn(false, true, Some(32.0 * 32.0), &mut random),
+        DespawnDecision::Keep
+    );
+    assert_eq!(state.no_action_time, 1234);
+}
+
+#[test]
+fn remove_when_far_away_false_still_consumes_the_no_action_random() {
+    let mut state = MobDespawnState::new(MobCategory::Monster);
+    state.no_action_time = 601;
+    state.remove_when_far_away = false;
+    let mut random = LegacyRandomSource::new(923);
+    assert_eq!(
+        state.check_despawn(false, true, Some(40.0 * 40.0), &mut random),
+        DespawnDecision::Keep
+    );
+    assert_eq!(state.no_action_time, 601);
+
+    let mut control = LegacyRandomSource::new(923);
+    control.next_int_bound(NO_ACTION_TIME_RANDOM_BOUND);
+    assert_eq!(random.next_int(), control.next_int());
 }
 
 #[test]

@@ -217,20 +217,21 @@ impl MobDespawnState {
 
         let despawn_distance = self.category.despawn_distance();
         let despawn_distance_sq = despawn_distance * despawn_distance;
-        if distance_sq > despawn_distance_sq && self.remove_when_far_away {
-            return DespawnDecision::Despawn;
-        }
+        let mut despawned = distance_sq > despawn_distance_sq && self.remove_when_far_away;
         if self.no_action_time > NO_ACTION_TIME_THRESHOLD
             && random.next_int_bound(NO_ACTION_TIME_RANDOM_BOUND) == 0
             && distance_sq > NO_DESPAWN_DISTANCE_SQ
             && self.remove_when_far_away
         {
-            return DespawnDecision::Despawn;
-        }
-        if distance_sq < NO_DESPAWN_DISTANCE_SQ {
+            despawned = true;
+        } else if distance_sq < NO_DESPAWN_DISTANCE_SQ {
             self.no_action_time = 0;
         }
-        DespawnDecision::Keep
+        if despawned {
+            DespawnDecision::Despawn
+        } else {
+            DespawnDecision::Keep
+        }
     }
 }
 

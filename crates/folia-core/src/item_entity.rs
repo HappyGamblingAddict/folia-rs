@@ -948,6 +948,8 @@ impl PickupTarget for SlicePickupTarget<'_> {
 pub struct DropStoreTick {
     pub packets: Vec<Vec<u8>>,
     pub removed: Vec<i32>,
+    pub picked_items: bool,
+    pub picked_experience: bool,
 }
 
 /// Session-free container for dropped item entities and XP orbs.
@@ -1024,6 +1026,7 @@ impl DropEntityStore {
                     let before_stack = item.stack.clone();
                     let moved = item.tick_physics(collider, Some(target.position()));
                     if item.try_pickup(target) {
+                        out.picked_items = true;
                         out.removed.push(item.id);
                         out.packets.push(remove_entities_packet(&[item.id]));
                         continue;
@@ -1037,6 +1040,7 @@ impl DropEntityStore {
                         out.packets.push(item.position_sync_packet());
                     }
                     if item.stack != before_stack && !item.stack.is_empty() {
+                        out.picked_items = true;
                         out.packets.push(item.metadata_packet());
                     }
                     kept.push(entity);
@@ -1044,6 +1048,7 @@ impl DropEntityStore {
                 DroppedEntity::ExperienceOrb(orb) => {
                     let moved = orb.tick_physics(collider, Some(target.position()));
                     if orb.try_pickup(target) {
+                        out.picked_experience = true;
                         out.removed.push(orb.id);
                         out.packets.push(remove_entities_packet(&[orb.id]));
                         continue;

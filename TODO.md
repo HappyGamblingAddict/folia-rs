@@ -2331,6 +2331,22 @@ are still open.
   `tests/armor.rs`. Still open: armor equipment sync to clients, armor slot
   clicks in the player inventory menu, armor durability, Protection
   enchantments. CI green at 8871081 (1,280 tests).
+- **Progress (2026-11-13):** armor menu clicks (e570e84) — player
+  inventory menu slots 5..8 (head/chest/legs/feet) now map to
+  `PlayerSession.armor`, with equip-slot validation, pickup/place/swap,
+  quick-move to inventory, and hotbar-swap; content packets include armor;
+  armor changes emit container slot + Set Equipment packets and persist. 6
+  tests. Infinity bow (949b9db): survival bow shots with
+  `minecraft:infinity` still require an arrow but do not consume it; no-ammo
+  Infinity bows cannot fire. 3 join tests. Player input (7ef54a2):
+  `ServerboundPlayerInput` id 42 codec with forward/back/left/right/jump/
+  sneak/sprint flags; live session updates `physics.sprinting`/`sneaking`. 4
+  codec + 1 join test. Live vitals (81428d1): session tick advances food/air,
+  sprint adds 0.1 exhaustion/tick while alive, food heal/starve sync health,
+  underwater air drains/refills and syncs `DATA_AIR_SUPPLY`. 4 join tests.
+  Still open: bow charge/draw, arrow potion effects, drowning/starvation
+  death flow, shield blocking, sweeping, projectile sequence ack. CI green at
+  81428d1 (1,347 tests).
 - **Progress (2026-11-13):** armor durability + protection + mob motion —
   `ItemStack::set_damage`; `damage_player_with_rng` wears each armor piece by
   `max(1, floor(raw/4))` with Unbreaking rolls, clears broken pieces, and

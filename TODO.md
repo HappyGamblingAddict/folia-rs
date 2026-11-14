@@ -2352,11 +2352,15 @@ are still open.
   selected item by 1 on successful non-creative hits, sends the inventory
   slot, saves, logs breakage. 3 tests/block_breaking.rs. CI green at 423e852
   (1,359 tests).
-- **Progress (2026-11-13):** `/give` (3f1b923, pending CI) — operator-only
+- **Progress (2026-11-13):** `/give` (3f1b923, CI green) — operator-only
   `/give <item> [count]`, bare names namespaced, prototype validation, count
   1..=64, applies prototype defaults, inserts via `add_stack`, resyncs
-  inventory and saves. 3 join tests (expected total 1,362 once CI confirms).
-  CI status pending at brief time.
+  inventory and saves. 3 join tests. CI green at 6776e65 (1,362 tests).
+- **Progress (2026-11-13):** `/enchant` (eee0bf0, pending CI) — operator
+  `/enchant <enchantment> <level>` applies/merges `minecraft:enchantments`
+  on the selected item through `item_components::enchanting::definition`,
+  validates names/levels, sends inventory packet and saves. 3 join tests
+  (expected total 1,365 once CI confirms). CI status pending at brief time.
 - **Progress (2026-11-13):** `/tp`/`/teleport` — operator-only
   `/tp <x> <y> <z>`, finite-coordinate parser, applies session teleport +
   position packet, updates chunk center for top-up streaming, saves playerdata.

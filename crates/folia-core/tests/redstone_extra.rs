@@ -302,3 +302,120 @@ fn tripwire_hook_chain_is_bounded_to_42_blocks() {
     let chain = scan_map(&map);
     assert!(!chain.attached);
 }
+
+fn hook_state(facing: &str) -> BlockState {
+    BlockState {
+        name: "minecraft:tripwire_hook".to_owned(),
+        properties: vec![
+            ("attached".to_owned(), "false".to_owned()),
+            ("facing".to_owned(), facing.to_owned()),
+            ("powered".to_owned(), "false".to_owned()),
+        ],
+    }
+}
+
+fn tripwire_state(powered: bool) -> BlockState {
+    BlockState {
+        name: "minecraft:tripwire".to_owned(),
+        properties: vec![
+            ("attached".to_owned(), "true".to_owned()),
+            ("disarmed".to_owned(), "false".to_owned()),
+            ("east".to_owned(), "false".to_owned()),
+            ("north".to_owned(), "false".to_owned()),
+            (
+                "powered".to_owned(),
+                if powered { "true" } else { "false" }.to_owned(),
+            ),
+            ("south".to_owned(), "false".to_owned()),
+            ("west".to_owned(), "false".to_owned()),
+        ],
+    }
+}
+
+#[test]
+fn tripwire_hook_attaches_and_detaches_with_chain() {
+    let mut storage = flat_storage("tripwire-hook-attach");
+    let hook = BlockPos::new(0, -60, 0);
+    let wire1 = BlockPos::new(1, -60, 0);
+    let wire2 = BlockPos::new(2, -60, 0);
+    let wire3 = BlockPos::new(3, -60, 0);
+    let other = BlockPos::new(4, -60, 0);
+    place(&mut storage, hook, hook_state("east"));
+    place(&mut storage, wire1, tripwire_state(false));
+    place(&mut storage, wire2, tripwire_state(false));
+    place(&mut storage, wire3, tripwire_state(false));
+    place(&mut storage, other, hook_state("west"));
+
+    tick_until_settled(&mut storage);
+    assert_eq!(
+        redstone::property(&block(&storage, hook), "attached"),
+        Some("true")
+    );
+
+    place(&mut storage, wire2, state("minecraft:air"));
+    tick_until_settled(&mut storage);
+    assert_eq!(
+        redstone::property(&block(&storage, hook), "attached"),
+        Some("false")
+    );
+}
+
+#[test]
+fn tripwire_hook_power_follows_attached_tripwire() {
+    let mut storage = flat_storage("tripwire-hook-power");
+    let hook = BlockPos::new(0, -60, 0);
+    let wire1 = BlockPos::new(1, -60, 0);
+    let wire2 = BlockPos::new(2, -60, 0);
+    let wire3 = BlockPos::new(3, -60, 0);
+    let other = BlockPos::new(4, -60, 0);
+    place(&mut storage, hook, hook_state("east"));
+    place(&mut storage, wire1, tripwire_state(false));
+    place(&mut storage, wire2, tripwire_state(false));
+    place(&mut storage, wire3, tripwire_state(false));
+    place(&mut storage, other, hook_state("west"));
+    tick_until_settled(&mut storage);
+
+    place(&mut storage, wire2, tripwire_state(true));
+    tick_until_settled(&mut storage);
+    assert_eq!(
+        redstone::property(&block(&storage, hook), "powered"),
+        Some("true")
+    );
+
+    place(&mut storage, wire2, tripwire_state(false));
+    tick_until_settled(&mut storage);
+    assert_eq!(
+        redstone::property(&block(&storage, hook), "powered"),
+        Some("false")
+    );
+}
+
+#[test]
+fn powered_tripwire_hook_emits_signal_behind_it() {
+    let mut storage = flat_storage("tripwire-hook-signal");
+    let hook = BlockPos::new(0, -60, 0);
+    let wire1 = BlockPos::new(1, -60, 0);
+    let wire2 = BlockPos::new(2, -60, 0);
+    let wire3 = BlockPos::new(3, -60, 0);
+    let other = BlockPos::new(4, -60, 0);
+    place(&mut storage, hook, hook_state("east"));
+    place(&mut storage, wire1, tripwire_state(false));
+    place(&mut storage, wire2, tripwire_state(true));
+    place(&mut storage, wire3, tripwire_state(false));
+    place(&mut storage, other, hook_state("west"));
+    tick_until_settled(&mut storage);
+    assert_eq!(
+        redstone::property(&block(&storage, hook), "powered"),
+        Some("true")
+    );
+
+    let reader = redstone::SignalReader::world(&storage);
+    assert_eq!(
+        reader.direct_signal(hook, folia_core::math::Direction::East),
+        15
+    );
+    assert_eq!(
+        reader.direct_signal(hook, folia_core::math::Direction::West),
+        0
+    );
+}

@@ -284,7 +284,7 @@ impl<'a> SignalReader<'a> {
             } else {
                 0
             }
-        } else if is_observer(state) {
+        } else if is_observer(state) || is_tripwire_hook(state) {
             if is_powered(state) && facing(state) == side {
                 15
             } else {
@@ -334,7 +334,7 @@ impl<'a> SignalReader<'a> {
                 0
             };
         }
-        if is_observer(state) {
+        if is_observer(state) || is_tripwire_hook(state) {
             return if is_powered(state) && facing(state) == side {
                 15
             } else {
@@ -671,6 +671,7 @@ pub fn is_signal_source(state: &BlockState) -> bool {
         || is_observer(state)
         || is_pressure_plate(state)
         || is_target_block(state)
+        || is_tripwire_hook(state)
         || state.name == REDSTONE_BLOCK
 }
 
@@ -1886,6 +1887,24 @@ pub fn tripwire_should_connect_to(neighbor: &BlockState, direction: Direction) -
     }
 }
 
+fn tripwire_hooks_for_wire(world: &mut TickWorld<'_>, pos: BlockPos) -> Vec<BlockPos> {
+    let mut hooks = Vec::new();
+    for direction in HORIZONTAL {
+        let mut cursor = pos.relative(direction);
+        while let Some(state) = world.block_state(cursor).ok().flatten() {
+            if is_tripwire(&state) {
+                cursor = cursor.relative(direction);
+                continue;
+            }
+            if is_tripwire_hook(&state) && !hooks.contains(&cursor) {
+                hooks.push(cursor);
+            }
+            break;
+        }
+    }
+    hooks
+}
+
 impl BlockBehavior for TripwireBehavior {
     fn on_place(
         &self,
@@ -1910,6 +1929,33 @@ impl BlockBehavior for TripwireBehavior {
         }
         if shaped != *state {
             world.set_block(pos, shaped)?;
+        }
+        for hook in tripwire_hooks_for_wire(world, pos) {
+            if let Some(hook_state) = world.block_state(hook).ok().flatten()
+                && is_tripwire_hook(&hook_state)
+            {
+                recalculate_tripwire_hook(world, hook, &hook_state)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn neighbor_changed(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _source: BlockPos,
+    ) -> io::Result<()> {
+        if !is_tripwire(state) {
+            return Ok(());
+        }
+        for hook in tripwire_hooks_for_wire(world, pos) {
+            if let Some(hook_state) = world.block_state(hook).ok().flatten()
+                && is_tripwire_hook(&hook_state)
+            {
+                recalculate_tripwire_hook(world, hook, &hook_state)?;
+            }
         }
         Ok(())
     }
@@ -2698,6 +2744,70 @@ pub fn is_triggered(state: &BlockState) -> bool {
 
 fn with_triggered(state: &BlockState, triggered: bool) -> BlockState {
     with_property(state, "triggered", if triggered { "true" } else { "false" })
+}
+
+fn recalculate_tripwire_hook(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: crate::math::BlockPos,
+    state: &BlockState,
+) -> io::Result<()> {
+    if !is_tripwire_hook(state) {
+        return Ok(());
+    }
+    let facing = facing(state);
+    let chain = scan_tripwire_hook_chain(pos, facing, |p| world.block_state(p).ok().flatten());
+    let mut new_state = state.clone();
+    set_property(
+        &mut new_state,
+        "attached",
+        if chain.attached { "true" } else { "false" },
+    );
+    set_property(
+        &mut new_state,
+        "powered",
+        if chain.powered { "true" } else { "false" },
+    );
+    if &new_state != state {
+        world.set_block(pos, new_state)?;
+    }
+    Ok(())
+}
+
+/// `TripwireHookBlock`: attaches when a connected tripwire run reaches a
+/// second hook and powers when any attached tripwire is powered.
+pub struct TripwireHookBehavior;
+
+pub static TRIPWIRE_HOOK_BEHAVIOR: TripwireHookBehavior = TripwireHookBehavior;
+
+impl crate::tick::BlockBehavior for TripwireHookBehavior {
+    fn on_place(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: crate::math::BlockPos,
+        state: &BlockState,
+        _old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        recalculate_tripwire_hook(world, pos, state)
+    }
+
+    fn neighbor_changed(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: crate::math::BlockPos,
+        state: &BlockState,
+        _source: crate::math::BlockPos,
+    ) -> io::Result<()> {
+        recalculate_tripwire_hook(world, pos, state)
+    }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut crate::tick::TickWorld<'_>,
+        pos: crate::math::BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        recalculate_tripwire_hook(world, pos, state)
+    }
 }
 
 /// `DispenserBlock`: schedule one dispense on each rising edge of a neighbour

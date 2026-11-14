@@ -2745,6 +2745,11 @@ fn parse_attack(payload: &[u8]) -> Option<i32> {
     Some(entity_id)
 }
 
+fn mob_motion_packet(tracked: &SessionEntityTracker, target: i32) -> Option<Vec<u8>> {
+    let velocity = tracked.entity(target)?.entity.velocity;
+    (velocity != [0.0; 3]).then(|| crate::protocol::set_entity_motion_packet(target, velocity))
+}
+
 /// Apply the held item's attack damage to one session-owned entity. The
 /// vanilla attack-range check is approximated by the player's 3-block reach
 /// plus the target width.
@@ -2792,6 +2797,11 @@ fn handle_entity_attack(
     }
     for packet in &result.packets {
         write_packet(stream, packet)?;
+    }
+    // Send motion after damage metadata/death packets so knockback updates the
+    // client's velocity, but before the death log/reward side effects.
+    if let Some(packet) = mob_motion_packet(tracked, target) {
+        write_packet(stream, &packet)?;
     }
     if result.died {
         if let Some(entity_type) = entity_type_name.as_deref() {
@@ -6854,5 +6864,46 @@ mod tests {
             Some(crate::projectile::ProjectileKind::Arrow)
         );
         assert!(take_arrow(&mut session).is_none());
+    }
+
+    #[test]
+    fn mob_motion_packet_after_knockback() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let zombie = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.ai.is_some())
+            })
+            .expect("session tracker spawns a zombie");
+        let result = tracker
+            .damage_with_knockback(zombie, 1.0, 0.4, 1.0, 0.0)
+            .expect("zombie takes damage");
+        assert!(result.damaged);
+        let packet = mob_motion_packet(&tracker, zombie).expect("knockback sets velocity");
+        let (entity_id, velocity) =
+            crate::protocol::read_set_entity_motion(&packet).expect("parse motion");
+        assert_eq!(entity_id, zombie);
+        assert!(
+            velocity != [0.0; 3],
+            "knockback should yield non-zero velocity"
+        );
+    }
+
+    #[test]
+    fn mob_motion_packet_is_none_without_velocity() {
+        let tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let zombie = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.ai.is_some())
+            })
+            .expect("session tracker spawns a zombie");
+        assert!(mob_motion_packet(&tracker, zombie).is_none());
     }
 }

@@ -38,7 +38,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 held-weapon durability on attacks is in progress; remaining is shield/sweeping, armor equipment visual sync beyond Set Equipment, Java loot fixtures, and per-viewer ranges/shared mob state.
+1. P5 held-weapon durability is wired; remaining is shield/sweeping, armor equipment visual sync beyond Set Equipment, Java loot fixtures, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.

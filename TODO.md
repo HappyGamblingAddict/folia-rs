@@ -2344,9 +2344,19 @@ are still open.
   codec + 1 join test. Live vitals (81428d1): session tick advances food/air,
   sprint adds 0.1 exhaustion/tick while alive, food heal/starve sync health,
   underwater air drains/refills and syncs `DATA_AIR_SUPPLY`. 4 join tests.
-  Still open: held-weapon durability on attacks, shield/sweeping, armor
-  equipment visual sync beyond Set Equipment, Java loot fixtures. CI green at
-  4d08be0 (1,356 tests).
+  Still open: shield/sweeping, armor equipment visual sync beyond Set
+  Equipment, Java loot fixtures. CI green at 423e852 (1,359 tests).
+- **Progress (2026-11-13):** weapon durability (423e852) —
+  `block_breaking::apply_item_durability_with_rng` (hurt-and-break with
+  Unbreaking rolls, clears broken stacks), `handle_entity_attack` wears the
+  selected item by 1 on successful non-creative hits, sends the inventory
+  slot, saves, logs breakage. 3 tests/block_breaking.rs. CI green at 423e852
+  (1,359 tests).
+- **Progress (2026-11-13):** `/give` (3f1b923, pending CI) — operator-only
+  `/give <item> [count]`, bare names namespaced, prototype validation, count
+  1..=64, applies prototype defaults, inserts via `add_stack`, resyncs
+  inventory and saves. 3 join tests (expected total 1,362 once CI confirms).
+  CI status pending at brief time.
 - **Progress (2026-11-13):** `/tp`/`/teleport` — operator-only
   `/tp <x> <y> <z>`, finite-coordinate parser, applies session teleport +
   position packet, updates chunk center for top-up streaming, saves playerdata.

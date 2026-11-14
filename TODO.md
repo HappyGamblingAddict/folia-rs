@@ -2361,6 +2361,13 @@ are still open.
   on the selected item through `item_components::enchanting::definition`,
   validates names/levels, sends inventory packet and saves. 3 join tests
   (expected total 1,365 once CI confirms). CI status pending at brief time.
+- **Progress (2026-11-13):** `/clear`+`/seed` (50c312b, pending CI) —
+  operator `/clear` clears inventory, armor, and cursor, resyncs
+  content/equipment when armor changed, and saves (2 join tests); operator
+  `/seed` sends the configured generator seed as system chat (1 join test).
+  Command surface now includes `/op`, `/deop`, `/gamemode`, `/xp add`, `/tp`,
+  `/give`, `/enchant`, `/clear`, `/seed`. Expected total 1,368 once CI
+  confirms. CI status pending at brief time.
 - **Progress (2026-11-13):** `/tp`/`/teleport` — operator-only
   `/tp <x> <y> <z>`, finite-coordinate parser, applies session teleport +
   position packet, updates chunk center for top-up streaming, saves playerdata.

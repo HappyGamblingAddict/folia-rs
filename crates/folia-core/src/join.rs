@@ -2185,7 +2185,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         if let Some(target) = parse_attack(&packet)
                             && let Err(error) = handle_entity_attack(
                                 &mut stream,
-                                &session,
+                                &mut session,
                                 &mut tracked_entities,
                                 &mut attack_cooldown,
                                 &mut drop_entities,
@@ -2957,7 +2957,7 @@ fn mob_motion_packet(tracked: &SessionEntityTracker, target: i32) -> Option<Vec<
 /// plus the target width.
 fn handle_entity_attack(
     stream: &mut LoginStream,
-    session: &PlayerSession,
+    session: &mut PlayerSession,
     tracked: &mut SessionEntityTracker,
     cooldown: &mut AttackCooldown,
     drop_entities: &mut DropEntityStore,
@@ -3004,6 +3004,24 @@ fn handle_entity_attack(
     // client's velocity, but before the death log/reward side effects.
     if let Some(packet) = mob_motion_packet(tracked, target) {
         write_packet(stream, &packet)?;
+    }
+    if session.game_mode != 1 {
+        let slot = session.selected_slot.max(0) as usize;
+        if let Some(stack) = session.inventory.get_mut(slot) {
+            let wear =
+                crate::block_breaking::apply_item_durability_with_rng(stack, 1, false, drop_rng);
+            if wear.changed() {
+                write_packet(stream, &inventory::inventory_packet(slot as i32, stack))?;
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                {
+                    eprintln!("[join] could not save weapon durability: {error}");
+                }
+                if wear.broke {
+                    println!("[join] {} broke their held weapon", session.name);
+                }
+            }
+        }
     }
     if result.died {
         if let Some(entity_type) = entity_type_name.as_deref() {

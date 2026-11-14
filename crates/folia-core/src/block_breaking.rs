@@ -776,6 +776,71 @@ pub fn apply_block_durability_with_rng(
     }
 }
 
+/// Apply generic item durability damage (e.g. weapon hits or tool use),
+/// rolling Unbreaking per point with the provided random source.
+pub fn apply_item_durability_with_rng(
+    stack: &mut ItemStack,
+    amount: i32,
+    creative: bool,
+    random: &mut dyn RandomSource,
+) -> ToolWear {
+    let none = ToolWear {
+        damage: 0,
+        max_damage: 0,
+        broke: false,
+    };
+    if creative || stack.is_empty() || amount <= 0 {
+        return none;
+    }
+    if stack.get_component("minecraft:unbreakable").is_some() {
+        return none;
+    }
+    let max_damage = {
+        let explicit = stack.max_damage();
+        if explicit > 0 {
+            explicit
+        } else if let Some(profile) = builtin_tool_profile(&stack.item) {
+            profile.max_damage
+        } else {
+            0
+        }
+    };
+    if max_damage <= 0 {
+        return none;
+    }
+
+    let unbreaking = enchantment_level(stack, "minecraft:unbreaking");
+    let mut wear = 0i32;
+    for _ in 0..amount {
+        if unbreaking > 0 && random.next_int_bound(unbreaking + 1) != 0 {
+            continue;
+        }
+        wear += 1;
+    }
+    if wear <= 0 {
+        return none;
+    }
+
+    let next = stack.damage().saturating_add(wear);
+    if next >= max_damage {
+        stack.shrink(1);
+        return ToolWear {
+            damage: max_damage,
+            max_damage,
+            broke: true,
+        };
+    }
+    stack.set_component(ComponentValue::Damage(next));
+    if stack.get_component("minecraft:max_damage").is_none() {
+        stack.set_component(ComponentValue::MaxDamage(max_damage));
+    }
+    ToolWear {
+        damage: wear,
+        max_damage,
+        broke: false,
+    }
+}
+
 /// Inputs for one block-loot roll.
 ///
 /// `tool_context` is explicit so callers that do not put enchantments on the

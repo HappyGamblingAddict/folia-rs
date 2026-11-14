@@ -248,3 +248,73 @@ fn unbreakable_blocks_are_rejected_in_survival() {
         f32::INFINITY
     );
 }
+
+#[test]
+fn weapon_durability_wears_one_per_hit_and_breaks() {
+    let mut sword = stack("minecraft:diamond_sword");
+    folia_core::item_prototypes::apply_defaults(&mut sword);
+    let max = sword.max_damage();
+    assert!(max > 1);
+    for expected in 1..max {
+        let wear = block_breaking::apply_item_durability_with_rng(
+            &mut sword,
+            1,
+            false,
+            &mut folia_core::random::LegacyRandomSource::new(1),
+        );
+        assert!(wear.changed());
+        assert_eq!(wear.damage, 1);
+        assert!(!wear.broke);
+        assert_eq!(sword.damage(), expected);
+    }
+    let wear = block_breaking::apply_item_durability_with_rng(
+        &mut sword,
+        1,
+        false,
+        &mut folia_core::random::LegacyRandomSource::new(1),
+    );
+    assert!(wear.broke);
+    assert!(sword.is_empty());
+}
+
+#[test]
+fn weapon_unbreaking_can_skip_wear() {
+    let mut base = stack("minecraft:diamond_sword");
+    folia_core::item_prototypes::apply_defaults(&mut base);
+    base.set_component(folia_core::item_components::ComponentValue::Enchantments(
+        std::collections::BTreeMap::from([("minecraft:unbreaking".to_string(), 3)]),
+    ));
+    let mut saw_zero = false;
+    let mut saw_one = false;
+    for seed in 0i64..256 {
+        let mut sword = base.clone();
+        let mut rng = folia_core::random::LegacyRandomSource::new(seed);
+        let _ = folia_core::random::RandomSource::next_int_bound(&mut rng, 4);
+        let wear = block_breaking::apply_item_durability_with_rng(&mut sword, 1, false, &mut rng);
+        if wear.damage == 0 && !wear.broke {
+            saw_zero = true;
+        }
+        if wear.damage == 1 {
+            saw_one = true;
+        }
+        if saw_zero && saw_one {
+            break;
+        }
+    }
+    assert!(saw_zero, "expected some seed to skip unbreaking wear");
+    assert!(saw_one, "expected some seed to apply wear");
+}
+
+#[test]
+fn creative_weapon_does_not_wear() {
+    let mut sword = stack("minecraft:diamond_sword");
+    folia_core::item_prototypes::apply_defaults(&mut sword);
+    let wear = block_breaking::apply_item_durability_with_rng(
+        &mut sword,
+        1,
+        true,
+        &mut folia_core::random::LegacyRandomSource::new(1),
+    );
+    assert!(!wear.changed());
+    assert_eq!(sword.damage(), 0);
+}

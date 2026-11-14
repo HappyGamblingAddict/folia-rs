@@ -2269,6 +2269,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             menus.close();
                         }
                     }
+                    crate::protocol::SERVERBOUND_PLAYER_INPUT => {
+                        match crate::protocol::parse_serverbound_player_input(&packet) {
+                            Ok(input) => apply_player_input(&mut session, input.flags),
+                            Err(error) => eprintln!("[join] player input failed: {error}"),
+                        }
+                    }
                     _ => {
                         let elapsed = last_move_at
                             .elapsed()
@@ -2675,6 +2681,11 @@ fn epoch_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn apply_player_input(session: &mut PlayerSession, flags: u8) {
+    session.physics.sprinting = flags & crate::protocol::PLAYER_INPUT_SPRINT != 0;
+    session.physics.sneaking = flags & crate::protocol::PLAYER_INPUT_SNEAK != 0;
 }
 
 /// `ServerboundInteractPacket` with action `ATTACK` (`ActionType` 1).
@@ -7050,5 +7061,28 @@ mod tests {
             .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
         assert_eq!(infinity, 1);
         assert!(!has_arrow(&session));
+    }
+
+    #[test]
+    fn apply_player_input_tracks_sprint_and_sneak() {
+        let mut session = PlayerSession::new("Input".to_string(), [0xB3; 16], 0.0, 64.0, 0.0);
+        apply_player_input(&mut session, 0);
+        assert!(!session.physics.sprinting);
+        assert!(!session.physics.sneaking);
+
+        apply_player_input(&mut session, crate::protocol::PLAYER_INPUT_SPRINT);
+        assert!(session.physics.sprinting);
+        assert!(!session.physics.sneaking);
+
+        apply_player_input(&mut session, crate::protocol::PLAYER_INPUT_SNEAK);
+        assert!(!session.physics.sprinting);
+        assert!(session.physics.sneaking);
+
+        apply_player_input(
+            &mut session,
+            crate::protocol::PLAYER_INPUT_SPRINT | crate::protocol::PLAYER_INPUT_SNEAK,
+        );
+        assert!(session.physics.sprinting);
+        assert!(session.physics.sneaking);
     }
 }

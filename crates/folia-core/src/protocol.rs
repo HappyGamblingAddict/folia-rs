@@ -1828,14 +1828,55 @@ pub fn read_set_entity_motion(data: &[u8]) -> io::Result<(i32, [f64; 3])> {
     Ok((entity_id, velocity))
 }
 
+pub const SERVERBOUND_PLAYER_INPUT: i32 = 42;
 pub const SERVERBOUND_USE_ITEM: i32 = 64;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+pub const PLAYER_INPUT_FORWARD: u8 = 0x01;
+pub const PLAYER_INPUT_BACKWARD: u8 = 0x02;
+pub const PLAYER_INPUT_LEFT: u8 = 0x04;
+pub const PLAYER_INPUT_RIGHT: u8 = 0x08;
+pub const PLAYER_INPUT_JUMP: u8 = 0x10;
+pub const PLAYER_INPUT_SNEAK: u8 = 0x20;
+pub const PLAYER_INPUT_SPRINT: u8 = 0x40;
+pub const PLAYER_INPUT_MASK: u8 = 0x7F;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerboundPlayerInput {
+    pub flags: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ServerboundUseItem {
     pub hand: i32,
     pub sequence: i32,
     pub yaw: f32,
     pub pitch: f32,
+}
+
+pub fn parse_serverbound_player_input(data: &[u8]) -> io::Result<ServerboundPlayerInput> {
+    let mut reader = PacketReader::new(data);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_PLAYER_INPUT {
+        return Err(invalid("wrong packet id"));
+    }
+    let flags = reader.read_u8()?;
+    if flags & !PLAYER_INPUT_MASK != 0 {
+        return Err(invalid("unknown player input flags"));
+    }
+    if reader.remaining() != 0 {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok(ServerboundPlayerInput { flags })
+}
+
+pub fn build_serverbound_player_input(input: &ServerboundPlayerInput) -> io::Result<Vec<u8>> {
+    if input.flags & !PLAYER_INPUT_MASK != 0 {
+        return Err(invalid("unknown player input flags"));
+    }
+    let mut writer = PacketWriter::new();
+    writer.write_varint(SERVERBOUND_PLAYER_INPUT)?;
+    writer.write_u8(input.flags)?;
+    Ok(writer.into_inner())
 }
 
 pub fn parse_serverbound_use_item(data: &[u8]) -> io::Result<ServerboundUseItem> {

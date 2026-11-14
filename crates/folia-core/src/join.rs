@@ -3423,6 +3423,25 @@ fn parse_teleport_coords(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(f
     Some((x, y, z))
 }
 
+fn parse_give(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(String, i32)> {
+    let item = parts.next()?;
+    let name = if item.contains(':') {
+        item.to_string()
+    } else {
+        format!("minecraft:{item}")
+    };
+    crate::item_prototypes::prototype(&name)?;
+    let count = if let Some(count) = parts.next() {
+        count.parse::<i32>().ok()?
+    } else {
+        1
+    };
+    if !(1..=64).contains(&count) {
+        return None;
+    }
+    Some((name, count))
+}
+
 fn handle_command(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
@@ -3560,6 +3579,35 @@ fn handle_command(
                 "[join] {} requested teleport to ({:.1}, {:.1}, {:.1})",
                 session.name, x, y, z
             );
+            Ok(())
+        }
+        Some("give") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /give",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some((name, count)) = parse_give(&mut parts) else {
+                println!("[join] {}: usage: /give <item> [count]", session.name);
+                return Ok(());
+            };
+            let mut stack = crate::inventory::ItemStack::new(name, count);
+            crate::item_prototypes::apply_defaults(&mut stack);
+            let leftover = crate::inventory::add_stack(&mut session.inventory, stack);
+            send_container_content(stream, session)?;
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+            {
+                eprintln!("[join] could not save give: {error}");
+            }
+            if !leftover.is_empty() {
+                println!(
+                    "[join] {}: inventory full, could not fit {}x {}",
+                    session.name, leftover.count, leftover.item
+                );
+            }
             Ok(())
         }
         Some(other) => {
@@ -7501,5 +7549,43 @@ mod tests {
 
         let mut parts = "NaN 64 0".split_whitespace();
         assert_eq!(parse_teleport_coords(&mut parts), None);
+    }
+
+    #[test]
+    fn parse_give_accepts_bare_and_namespaced_names() {
+        let mut parts = "diamond".split_whitespace();
+        assert_eq!(
+            parse_give(&mut parts),
+            Some(("minecraft:diamond".to_string(), 1))
+        );
+
+        let mut parts = "minecraft:apple 16".split_whitespace();
+        assert_eq!(
+            parse_give(&mut parts),
+            Some(("minecraft:apple".to_string(), 16))
+        );
+    }
+
+    #[test]
+    fn parse_give_rejects_unknown_item_and_bad_count() {
+        let mut parts = "not_an_item".split_whitespace();
+        assert_eq!(parse_give(&mut parts), None);
+
+        let mut parts = "diamond 0".split_whitespace();
+        assert_eq!(parse_give(&mut parts), None);
+
+        let mut parts = "diamond 65".split_whitespace();
+        assert_eq!(parse_give(&mut parts), None);
+
+        let mut parts = "diamond x".split_whitespace();
+        assert_eq!(parse_give(&mut parts), None);
+    }
+
+    #[test]
+    fn give_stack_applies_prototype_defaults() {
+        let mut stack = crate::inventory::ItemStack::new("minecraft:diamond_sword".to_string(), 1);
+        crate::item_prototypes::apply_defaults(&mut stack);
+        assert!(stack.max_damage() > 0);
+        assert_eq!(stack.max_stack_size(), 1);
     }
 }

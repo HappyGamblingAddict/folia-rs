@@ -2344,9 +2344,14 @@ are still open.
   codec + 1 join test. Live vitals (81428d1): session tick advances food/air,
   sprint adds 0.1 exhaustion/tick while alive, food heal/starve sync health,
   underwater air drains/refills and syncs `DATA_AIR_SUPPLY`. 4 join tests.
-  Still open: bow charge/draw, arrow potion effects, drowning/starvation
-  death flow, shield blocking, sweeping, projectile sequence ack. CI green at
-  81428d1 (1,347 tests).
+  Still open: bow charge/draw, arrow potion effects, shield blocking,
+  sweeping, projectile sequence ack. CI green at ba110f0 (1,348 tests).
+- **Progress (2026-11-13):** drowning/starvation death flow (ba110f0) —
+  `vitals_death_message` chooses "Player drowned" over "Player starved to
+  death"; when live vitals tick health to <=0 and the player is not already
+  awaiting respawn, the session drops inventory/armor/cursor/XP, sends the
+  kill message, enters the 2-second respawn flow, and saves playerdata. 1 join
+  test. CI green at ba110f0 (1,348 tests).
 - **Progress (2026-11-13):** armor durability + protection + mob motion —
   `ItemStack::set_damage`; `damage_player_with_rng` wears each armor piece by
   `max(1, floor(raw/4))` with Unbreaking rolls, clears broken pieces, and

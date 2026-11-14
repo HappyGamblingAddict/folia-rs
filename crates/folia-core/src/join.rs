@@ -3424,6 +3424,30 @@ fn parse_teleport_coords(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(f
     Some((x, y, z))
 }
 
+fn parse_effect_give(
+    parts: &mut std::str::SplitWhitespace<'_>,
+) -> Option<(crate::effects::StatusEffectKind, i32, u8)> {
+    let effect = parts.next()?;
+    let kind = crate::effects::StatusEffectKind::from_id(effect)?;
+    let seconds = if let Some(seconds) = parts.next() {
+        seconds.parse::<i32>().ok()?
+    } else {
+        30
+    };
+    if !(1..=1_000_000).contains(&seconds) {
+        return None;
+    }
+    let amplifier = if let Some(amplifier) = parts.next() {
+        amplifier.parse::<i32>().ok()?
+    } else {
+        0
+    };
+    if !(0..=255).contains(&amplifier) {
+        return None;
+    }
+    Some((kind, seconds.saturating_mul(20), amplifier as u8))
+}
+
 fn parse_give(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(String, i32)> {
     let item = parts.next()?;
     let name = if item.contains(':') {
@@ -3716,6 +3740,45 @@ fn handle_command(
                     println!("[join] {}: {message}", session.name);
                 }
             }
+            Ok(())
+        }
+        Some("effect") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /effect",
+                    session.name
+                );
+                return Ok(());
+            }
+            if parts.next() != Some("give") {
+                println!(
+                    "[join] {}: usage: /effect give <effect> [seconds] [amplifier]",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some((kind, duration, amplifier)) = parse_effect_give(&mut parts) else {
+                println!(
+                    "[join] {}: usage: /effect give <effect> [seconds] [amplifier]",
+                    session.name
+                );
+                return Ok(());
+            };
+            let result = {
+                let mut store = crate::entity_metadata::living_entities();
+                let player = store.entry_player(player_entity);
+                player.apply_effect(crate::effects::StatusEffect::new(kind, duration, amplifier))
+            };
+            for packet in result.packets {
+                write_packet(stream, &packet)?;
+            }
+            println!(
+                "[join] {} applied effect {} for {} ticks (amplifier {})",
+                session.name,
+                kind.registry_id(),
+                duration,
+                amplifier
+            );
             Ok(())
         }
         Some("clear") => {
@@ -7840,5 +7903,59 @@ mod tests {
     #[test]
     fn seed_command_formats_the_generator_seed() {
         assert_eq!(seed_message(123), "Seed: [123]");
+    }
+
+    #[test]
+    fn effect_give_parses_defaults_and_explicit_values() {
+        let mut parts = "speed".split_whitespace();
+        assert_eq!(
+            parse_effect_give(&mut parts),
+            Some((crate::effects::StatusEffectKind::Speed, 600, 0))
+        );
+
+        let mut parts = "minecraft:regeneration 5 2".split_whitespace();
+        assert_eq!(
+            parse_effect_give(&mut parts),
+            Some((crate::effects::StatusEffectKind::Regeneration, 100, 2))
+        );
+    }
+
+    #[test]
+    fn effect_give_rejects_unknown_and_bad_values() {
+        let mut parts = "not_an_effect".split_whitespace();
+        assert_eq!(parse_effect_give(&mut parts), None);
+
+        let mut parts = "speed 0".split_whitespace();
+        assert_eq!(parse_effect_give(&mut parts), None);
+
+        let mut parts = "speed 1000001".split_whitespace();
+        assert_eq!(parse_effect_give(&mut parts), None);
+
+        let mut parts = "speed 30 256".split_whitespace();
+        assert_eq!(parse_effect_give(&mut parts), None);
+    }
+
+    #[test]
+    fn effect_give_applies_to_the_player_store() {
+        let entity_id = 9_001_001;
+        let result = {
+            let mut store = crate::entity_metadata::living_entities();
+            let player = store.entry_player(entity_id);
+            player.apply_effect(crate::effects::StatusEffect::new(
+                crate::effects::StatusEffectKind::Speed,
+                100,
+                1,
+            ))
+        };
+        assert!(!result.packets.is_empty());
+        let mut reader = crate::protocol::PacketReader::new(&result.packets[0]);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            crate::effects::CLIENTBOUND_UPDATE_MOB_EFFECT
+        );
+        let mut store = crate::entity_metadata::living_entities();
+        let player = store.entry_player(entity_id);
+        assert!(player.effects.has(crate::effects::StatusEffectKind::Speed));
+        let _ = store.remove(entity_id);
     }
 }

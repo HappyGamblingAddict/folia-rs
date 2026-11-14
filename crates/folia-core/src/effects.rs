@@ -1084,6 +1084,58 @@ pub fn damage_after_armor(amount: f32, armor: i32, toughness: i32) -> f32 {
     amount * (1.0 - g / 25.0)
 }
 
+/// Damage categories used by the live player-damage path for enchantment
+/// protection. `Void` bypasses enchantment protection; armor bypass is handled
+/// separately by the caller in this slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DamageKind {
+    Physical,
+    Projectile,
+    Fire,
+    Explosion,
+    Fall,
+    Void,
+}
+
+/// Raw enchantment protection points from the four armor slots for `kind`.
+/// Includes generic `minecraft:protection` for all non-void kinds plus the
+/// type-specific enchantment; values are summed across pieces.
+pub fn enchantment_damage_protection(equipment: &Equipment, kind: DamageKind) -> i32 {
+    if kind == DamageKind::Void {
+        return 0;
+    }
+    let mut total = 0;
+    for slot in [
+        EquipmentSlot::Feet,
+        EquipmentSlot::Legs,
+        EquipmentSlot::Chest,
+        EquipmentSlot::Head,
+    ] {
+        let stack: &ItemStack = equipment.get(slot);
+        if stack.is_empty() {
+            continue;
+        }
+        total += stack.enchantment_level("minecraft:protection");
+        total += match kind {
+            DamageKind::Projectile => stack.enchantment_level("minecraft:projectile_protection"),
+            DamageKind::Fire => stack.enchantment_level("minecraft:fire_protection"),
+            DamageKind::Explosion => stack.enchantment_level("minecraft:blast_protection"),
+            DamageKind::Fall => stack.enchantment_level("minecraft:feather_falling"),
+            DamageKind::Physical | DamageKind::Void => 0,
+        };
+    }
+    total
+}
+
+/// Vanilla `CombatRules.getDamageAfterMagicAbsorb` for enchantment protection.
+pub fn damage_after_enchantments(amount: f32, protection: i32) -> f32 {
+    if protection <= 0 {
+        amount
+    } else {
+        amount * (1.0 - protection.clamp(0, 20) as f32 / 25.0)
+    }
+}
+
 /// Damage categories with the vanilla bypass flags this slice models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageType {
@@ -1187,5 +1239,56 @@ mod tests {
             }]
         );
         assert_eq!(set.tick(26), vec![]);
+    }
+
+    #[test]
+    fn enchantment_protection_math_and_clamping() {
+        assert_eq!(damage_after_enchantments(10.0, 0), 10.0);
+        assert!((damage_after_enchantments(10.0, 10) - 6.0).abs() < 1e-5);
+        assert!((damage_after_enchantments(10.0, 20) - 2.0).abs() < 1e-5);
+        assert!((damage_after_enchantments(10.0, 25) - 2.0).abs() < 1e-5);
+        assert_eq!(damage_after_enchantments(10.0, -1), 10.0);
+    }
+
+    #[test]
+    fn enchantment_protection_selects_kind_specific_levels() {
+        use crate::item_components::ComponentValue;
+        use std::collections::BTreeMap;
+
+        let mut equipment = Equipment::new();
+        let mut chest = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+        chest.set_component(ComponentValue::Enchantments(BTreeMap::from([(
+            "minecraft:protection".to_string(),
+            2,
+        )])));
+        *equipment.get_mut(EquipmentSlot::Chest) = chest;
+        assert_eq!(
+            enchantment_damage_protection(&equipment, DamageKind::Physical),
+            2
+        );
+        assert_eq!(
+            enchantment_damage_protection(&equipment, DamageKind::Void),
+            0
+        );
+
+        for (kind, name) in [
+            (DamageKind::Projectile, "minecraft:projectile_protection"),
+            (DamageKind::Fire, "minecraft:fire_protection"),
+            (DamageKind::Explosion, "minecraft:blast_protection"),
+            (DamageKind::Fall, "minecraft:feather_falling"),
+        ] {
+            let mut equipment = Equipment::new();
+            let mut chest = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+            chest.set_component(ComponentValue::Enchantments(BTreeMap::from([(
+                name.to_string(),
+                4,
+            )])));
+            *equipment.get_mut(EquipmentSlot::Chest) = chest;
+            assert_eq!(enchantment_damage_protection(&equipment, kind), 4);
+            assert_eq!(
+                enchantment_damage_protection(&equipment, DamageKind::Physical),
+                0
+            );
+        }
     }
 }

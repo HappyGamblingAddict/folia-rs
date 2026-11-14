@@ -107,7 +107,13 @@ fn armor_takes_a_quarter_of_the_raw_damage() {
     register_player_entity(&session, 4301);
 
     let mut rng = folia_random::LegacyRandomSource::new(1);
-    let result = folia_core::join::damage_player_with_rng(&mut session, 4301, 10.0, &mut rng);
+    let result = folia_core::join::damage_player_with_rng(
+        &mut session,
+        4301,
+        10.0,
+        &mut rng,
+        folia_core::effects::DamageKind::Physical,
+    );
     assert!(result.damaged);
     assert_eq!(session.armor[0].damage(), 2);
     assert_eq!(session.armor[1].damage(), 2);
@@ -129,7 +135,13 @@ fn armor_minimum_wear_is_one() {
     register_player_entity(&session, 4302);
 
     let mut rng = folia_random::LegacyRandomSource::new(2);
-    let result = folia_core::join::damage_player_with_rng(&mut session, 4302, 3.0, &mut rng);
+    let result = folia_core::join::damage_player_with_rng(
+        &mut session,
+        4302,
+        3.0,
+        &mut rng,
+        folia_core::effects::DamageKind::Physical,
+    );
     assert!(result.damaged);
     assert_eq!(session.armor[0].damage(), 1);
     assert_eq!(session.armor[1].damage(), 1);
@@ -154,7 +166,13 @@ fn broken_armor_is_cleared_and_stops_mitigating() {
 
     let mut rng = folia_random::LegacyRandomSource::new(3);
     let health_before = session.health;
-    let result = folia_core::join::damage_player_with_rng(&mut session, 4303, 10.0, &mut rng);
+    let result = folia_core::join::damage_player_with_rng(
+        &mut session,
+        4303,
+        10.0,
+        &mut rng,
+        folia_core::effects::DamageKind::Physical,
+    );
     assert!(result.damaged);
     assert!(
         session.armor[0].is_empty(),
@@ -184,7 +202,13 @@ fn broken_armor_is_cleared_and_stops_mitigating() {
     register_player_entity(&session2, 4304);
     let mut rng2 = folia_random::LegacyRandomSource::new(4);
     let before2 = session2.health;
-    let _ = folia_core::join::damage_player_with_rng(&mut session2, 4304, 10.0, &mut rng2);
+    let _ = folia_core::join::damage_player_with_rng(
+        &mut session2,
+        4304,
+        10.0,
+        &mut rng2,
+        folia_core::effects::DamageKind::Physical,
+    );
     let loss_without_boots = before2 - session2.health;
     assert!(
         loss_without_boots >= loss_with_break - 1e-4,
@@ -205,7 +229,13 @@ fn unbreaking_can_skip_wear() {
         ));
         register_player_entity(&session, 4305);
         let mut rng = folia_random::LegacyRandomSource::new(seed as i64);
-        let _ = folia_core::join::damage_player_with_rng(&mut session, 4305, 10.0, &mut rng);
+        let _ = folia_core::join::damage_player_with_rng(
+            &mut session,
+            4305,
+            10.0,
+            &mut rng,
+            folia_core::effects::DamageKind::Physical,
+        );
         let wear = session.armor[2].damage();
         assert!(wear <= 2, "wear {wear} should be <= points (2)");
         if wear < 2 {
@@ -214,4 +244,143 @@ fn unbreaking_can_skip_wear() {
         }
     }
     assert!(found, "expected some seed to skip unbreaking wear");
+}
+#[test]
+fn protection_reduces_damage_after_armor() {
+    let uuid = [0xF1; 16];
+    let mut session = session_with_uuid(uuid);
+    session.armor[0] = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    session.armor[1] = ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+    session.armor[2] = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+    session.armor[3] = ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+    for piece in &mut session.armor {
+        folia_core::item_prototypes::apply_defaults(piece);
+    }
+    session.armor[2].set_component(folia_core::item_components::ComponentValue::Enchantments(
+        std::collections::BTreeMap::from([("minecraft:protection".to_string(), 4)]),
+    ));
+    register_player_entity(&session, 4310);
+
+    let mut rng = folia_random::LegacyRandomSource::new(7);
+    let result = folia_core::join::damage_player_with_rng(
+        &mut session,
+        4310,
+        10.0,
+        &mut rng,
+        folia_core::effects::DamageKind::Physical,
+    );
+    assert!(result.damaged);
+    let after_armor = folia_core::effects::damage_after_armor(10.0, 20, 8);
+    let expected_after = folia_core::effects::damage_after_enchantments(after_armor, 4);
+    let expected_health = 20.0 - expected_after;
+    assert!(
+        (session.health - expected_health).abs() < 1e-4,
+        "health {} expected {}",
+        session.health,
+        expected_health
+    );
+}
+
+#[test]
+fn feather_falling_uses_the_fall_kind() {
+    let mut physical_session = session_with_uuid([0xF2; 16]);
+    physical_session.armor[0] = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    physical_session.armor[1] = ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+    physical_session.armor[2] = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+    physical_session.armor[3] = ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+    for piece in &mut physical_session.armor {
+        folia_core::item_prototypes::apply_defaults(piece);
+    }
+    physical_session.armor[0].set_component(
+        folia_core::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:feather_falling".to_string(), 4)]),
+        ),
+    );
+    register_player_entity(&physical_session, 4311);
+    let mut physical_rng = folia_random::LegacyRandomSource::new(8);
+    let physical = folia_core::join::damage_player_with_rng(
+        &mut physical_session,
+        4311,
+        10.0,
+        &mut physical_rng,
+        folia_core::effects::DamageKind::Physical,
+    );
+    assert!(physical.damaged);
+
+    let mut fall_session = session_with_uuid([0xF3; 16]);
+    fall_session.armor[0] = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    fall_session.armor[1] = ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+    fall_session.armor[2] = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+    fall_session.armor[3] = ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+    for piece in &mut fall_session.armor {
+        folia_core::item_prototypes::apply_defaults(piece);
+    }
+    fall_session.armor[0].set_component(folia_core::item_components::ComponentValue::Enchantments(
+        std::collections::BTreeMap::from([("minecraft:feather_falling".to_string(), 4)]),
+    ));
+    register_player_entity(&fall_session, 4312);
+    let mut fall_rng = folia_random::LegacyRandomSource::new(8);
+    let fall = folia_core::join::damage_player_with_rng(
+        &mut fall_session,
+        4312,
+        10.0,
+        &mut fall_rng,
+        folia_core::effects::DamageKind::Fall,
+    );
+    assert!(fall.damaged);
+    assert!(
+        fall_session.health > physical_session.health,
+        "fall {} vs physical {}",
+        fall_session.health,
+        physical_session.health
+    );
+}
+
+#[test]
+fn void_damage_ignores_protection() {
+    let mut with_prot = session_with_uuid([0xF4; 16]);
+    with_prot.armor[0] = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    with_prot.armor[1] = ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+    with_prot.armor[2] = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+    with_prot.armor[3] = ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+    for piece in &mut with_prot.armor {
+        folia_core::item_prototypes::apply_defaults(piece);
+    }
+    with_prot.armor[2].set_component(folia_core::item_components::ComponentValue::Enchantments(
+        std::collections::BTreeMap::from([("minecraft:protection".to_string(), 4)]),
+    ));
+    register_player_entity(&with_prot, 4313);
+    let mut rng1 = folia_random::LegacyRandomSource::new(9);
+    let _ = folia_core::join::damage_player_with_rng(
+        &mut with_prot,
+        4313,
+        10.0,
+        &mut rng1,
+        folia_core::effects::DamageKind::Void,
+    );
+
+    let mut without_prot = session_with_uuid([0xF5; 16]);
+    without_prot.armor[0] = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    without_prot.armor[1] = ItemStack::new("minecraft:diamond_leggings".to_string(), 1);
+    without_prot.armor[2] = ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+    without_prot.armor[3] = ItemStack::new("minecraft:diamond_helmet".to_string(), 1);
+    for piece in &mut without_prot.armor {
+        folia_core::item_prototypes::apply_defaults(piece);
+    }
+    register_player_entity(&without_prot, 4314);
+    let mut rng2 = folia_random::LegacyRandomSource::new(9);
+    let _ = folia_core::join::damage_player_with_rng(
+        &mut without_prot,
+        4314,
+        10.0,
+        &mut rng2,
+        folia_core::effects::DamageKind::Void,
+    );
+
+    assert!(
+        (with_prot.health - without_prot.health).abs() < 1e-4,
+        "void {} vs no-prot {}",
+        with_prot.health,
+        without_prot.health
+    );
 }

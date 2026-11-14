@@ -1690,6 +1690,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     player_entity,
                     tick.player_damage,
                     &mut drop_rng,
+                    crate::effects::DamageKind::Physical,
                 );
                 for packet in &result.packets {
                     write_packet(&mut stream, packet)?;
@@ -3449,6 +3450,7 @@ pub fn damage_player_with_rng(
     entity_id: i32,
     amount: f32,
     rng: &mut dyn folia_random::RandomSource,
+    kind: crate::effects::DamageKind,
 ) -> PlayerDamage {
     let mut store = crate::entity_metadata::living_entities();
     let player = store.entry_player(entity_id);
@@ -3465,7 +3467,9 @@ pub fn damage_player_with_rng(
     *equipment.get_mut(crate::entity_metadata::EquipmentSlot::Head) = session.armor[3].clone();
     let (armor, toughness) = crate::effects::armor_values_from_equipment(&equipment);
     let after_armor = crate::effects::damage_after_armor(amount, armor, toughness);
-    let after_resistance = after_armor * player.effects.resistance_multiplier();
+    let protection = crate::effects::enchantment_damage_protection(&equipment, kind);
+    let after_magic = crate::effects::damage_after_enchantments(after_armor, protection);
+    let after_resistance = after_magic * player.effects.resistance_multiplier();
     let mut result = player.hurt(after_resistance);
     session.health = player.health;
 
@@ -3517,7 +3521,13 @@ pub fn damage_player_with_rng(
 
 pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -> PlayerDamage {
     let mut rng = folia_random::LegacyRandomSource::new(0);
-    damage_player_with_rng(session, entity_id, amount, &mut rng)
+    damage_player_with_rng(
+        session,
+        entity_id,
+        amount,
+        &mut rng,
+        crate::effects::DamageKind::Physical,
+    )
 }
 
 /// Void damage repeats every half second; the living model keeps a player's
@@ -3634,7 +3644,13 @@ fn apply_fall_damage(
     if fall_damage_health(session.health, damage, session.game_mode).is_none() {
         return Ok(false);
     }
-    let result = damage_player_with_rng(session, player_entity_id(), damage, rng);
+    let result = damage_player_with_rng(
+        session,
+        player_entity_id(),
+        damage,
+        rng,
+        crate::effects::DamageKind::Fall,
+    );
     if !result.damaged {
         return Ok(false);
     }
@@ -3681,7 +3697,13 @@ fn apply_void_damage(
     *last_damage = now;
     let entity_id = player_entity_id();
     clear_player_invulnerability(entity_id);
-    let result = damage_player_with_rng(session, entity_id, VOID_DAMAGE, rng);
+    let result = damage_player_with_rng(
+        session,
+        entity_id,
+        VOID_DAMAGE,
+        rng,
+        crate::effects::DamageKind::Void,
+    );
     if !result.damaged {
         return Ok(false);
     }

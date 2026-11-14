@@ -40,6 +40,8 @@ pub const ACTION_START_DESTROY_BLOCK: i32 = 0;
 pub const ACTION_ABORT_DESTROY_BLOCK: i32 = 1;
 /// `ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK`.
 pub const ACTION_STOP_DESTROY_BLOCK: i32 = 2;
+/// `ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM` (finish using hand).
+pub const ACTION_RELEASE_USE_ITEM: i32 = 5;
 
 /// Vanilla treats `air`, `cave_air`, and `void_air` as air.
 pub fn is_air(state: &BlockState) -> bool {

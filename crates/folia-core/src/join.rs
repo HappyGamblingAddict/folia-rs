@@ -1484,6 +1484,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut drop_entities = DropEntityStore::new();
     let mut projectiles = crate::projectile::ProjectileStore::new();
     let mut game_tick: u64 = 0;
+    let mut bow_draw: Option<u64> = None;
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -2182,6 +2183,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut session,
                             &mut projectiles,
                             player_entity,
+                            game_tick,
+                            &mut bow_draw,
                             &packet,
                         ) {
                             eprintln!("[join] use item failed: {error}");
@@ -2223,8 +2226,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut menus,
                             &mut dig,
                             play_started,
+                            &mut projectiles,
                             &mut drop_entities,
                             &mut drop_rng,
+                            game_tick,
+                            &mut bow_draw,
+                            player_entity,
                             &packet,
                             id,
                         ) {
@@ -2232,7 +2239,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     inventory::SERVERBOUND_SET_CARRIED_ITEM => {
-                        if let Err(error) = handle_set_carried(&mut stream, &mut session, &packet) {
+                        if let Err(error) =
+                            handle_set_carried(&mut stream, &mut session, &mut bow_draw, &packet)
+                        {
                             eprintln!("[join] carried slot update failed: {error}");
                         }
                     }
@@ -2752,6 +2761,11 @@ fn epoch_millis() -> i64 {
         .unwrap_or(0)
 }
 
+fn bow_power_for_ticks(ticks: u64) -> f64 {
+    let f = (ticks.min(20) as f64) / 20.0;
+    ((f * f + f * 2.0) / 3.0).min(1.0)
+}
+
 fn tick_player_vitals(
     session: &mut PlayerSession,
     game_tick: u64,
@@ -2789,19 +2803,23 @@ fn apply_player_input(session: &mut PlayerSession, flags: u8) {
     session.physics.sneaking = flags & crate::protocol::PLAYER_INPUT_SNEAK != 0;
 }
 
+fn look_vector(session: &PlayerSession) -> [f64; 3] {
+    let yaw = session.yaw.to_radians() as f64;
+    let pitch = session.pitch.to_radians() as f64;
+    // Minecraft yaw 0 looks +Z.
+    [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ]
+}
+
 /// `ServerboundInteractPacket` with action `ATTACK` (`ActionType` 1).
 fn use_item_projectile(
     session: &PlayerSession,
 ) -> Option<(crate::projectile::ProjectileKind, [f64; 3], bool)> {
     let item = session.selected_item()?;
-    let yaw = session.yaw.to_radians() as f64;
-    let pitch = session.pitch.to_radians() as f64;
-    // Minecraft yaw 0 looks +Z.
-    let dir = [
-        -yaw.sin() * pitch.cos(),
-        -pitch.sin(),
-        yaw.cos() * pitch.cos(),
-    ];
+    let dir = look_vector(session);
     match item.item.as_str() {
         "minecraft:bow" => Some((
             crate::projectile::ProjectileKind::Arrow,
@@ -2853,6 +2871,8 @@ fn handle_use_item(
     session: &mut PlayerSession,
     projectiles: &mut crate::projectile::ProjectileStore,
     player_entity: i32,
+    game_tick: u64,
+    bow_draw: &mut Option<u64>,
     packet: &[u8],
 ) -> io::Result<()> {
     let use_item = crate::protocol::parse_serverbound_use_item(packet)?;
@@ -2861,26 +2881,16 @@ fn handle_use_item(
     let Some((kind, velocity, consume_item)) = use_item_projectile(session) else {
         return Ok(());
     };
-    if matches!(kind, crate::projectile::ProjectileKind::Arrow) && session.game_mode != 1 {
-        let infinity = session
-            .selected_item()
-            .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
-        if infinity > 0 {
+    if matches!(kind, crate::projectile::ProjectileKind::Arrow) {
+        if session.game_mode != 1 {
+            // Require ammo at draw start (Infinity still needs an arrow in
+            // inventory). Do not consume yet; release handles consumption/spawn.
             if !has_arrow(session) {
                 return Ok(());
             }
-            // Infinity: require an arrow but do not consume it or send inventory updates.
-        } else {
-            let Some((slot, stack)) = take_arrow(session) else {
-                return Ok(());
-            };
-            write_packet(stream, &inventory::inventory_packet(slot as i32, &stack))?;
-            if let Err(error) =
-                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
-            {
-                eprintln!("[join] could not save projectile use: {error}");
-            }
         }
+        *bow_draw = Some(game_tick);
+        return Ok(());
     } else if consume_item {
         let slot = session.selected_slot.max(0) as usize;
         if let Some(stack) = session.inventory.get_mut(slot) {
@@ -5101,8 +5111,12 @@ fn handle_block_action(
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
     play_started: Instant,
+    projectiles: &mut crate::projectile::ProjectileStore,
     drop_entities: &mut DropEntityStore,
     drop_rng: &mut LegacyRandomSource,
+    game_tick: u64,
+    bow_draw: &mut Option<u64>,
+    player_entity: i32,
     packet: &[u8],
     id: i32,
 ) -> io::Result<()> {
@@ -5115,6 +5129,58 @@ fn handle_block_action(
     match id {
         SERVERBOUND_PLAYER_ACTION => {
             let action = crate::block_update::parse_player_action(packet)?;
+            if action.action == block_breaking::ACTION_RELEASE_USE_ITEM {
+                if let Some(start) = bow_draw.take() {
+                    let ticks = game_tick.saturating_sub(start);
+                    let power = bow_power_for_ticks(ticks);
+                    if power > 0.0
+                        && let Some((crate::projectile::ProjectileKind::Arrow, _, _)) =
+                            use_item_projectile(session)
+                    {
+                        if session.game_mode != 1 {
+                            let infinity = session
+                                .selected_item()
+                                .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
+                            if infinity > 0 {
+                                if !has_arrow(session) {
+                                    return Ok(());
+                                }
+                            } else {
+                                let Some((slot, stack)) = take_arrow(session) else {
+                                    return Ok(());
+                                };
+                                write_packet(
+                                    stream,
+                                    &inventory::inventory_packet(slot as i32, &stack),
+                                )?;
+                                if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                    session,
+                                    playerdata_dir(),
+                                ) {
+                                    eprintln!("[join] could not save bow release: {error}");
+                                }
+                            }
+                        }
+                        let direction = look_vector(session);
+                        let eye = [session.x, session.y + 1.62, session.z];
+                        let velocity = [
+                            direction[0] * 3.0 * power,
+                            direction[1] * 3.0 * power,
+                            direction[2] * 3.0 * power,
+                        ];
+                        let packets = projectiles.spawn(
+                            crate::projectile::ProjectileKind::Arrow,
+                            Some(player_entity),
+                            eye,
+                            velocity,
+                        );
+                        for projectile_packet in packets {
+                            write_packet(stream, &projectile_packet)?;
+                        }
+                    }
+                }
+                return Ok(());
+            }
             let pos = BlockPos::new(action.x, action.y, action.z);
             let now = mining_tick(play_started);
             match action.action {
@@ -5471,6 +5537,7 @@ fn send_container_content(stream: &mut LoginStream, session: &PlayerSession) -> 
 fn handle_set_carried(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
+    bow_draw: &mut Option<u64>,
     packet: &[u8],
 ) -> io::Result<()> {
     let mut reader = PacketReader::new(packet);
@@ -5483,12 +5550,16 @@ fn handle_set_carried(
     }
     let slot = i32::from(reader.read_i16()?);
     if (0..inventory::HOTBAR_SLOTS as i32).contains(&slot) {
+        let changed = session.selected_slot != slot;
         session.selected_slot = slot;
         write_packet(stream, &inventory::held_slot_packet(slot))?;
         if let Err(error) =
             dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
         {
             eprintln!("[join] could not save inventory: {error}");
+        }
+        if changed {
+            *bow_draw = None;
         }
         println!("[join] selected hotbar slot {slot}");
     }
@@ -7272,5 +7343,63 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn bow_power_curve_matches_vanilla() {
+        assert!((bow_power_for_ticks(0) - 0.0).abs() < 1e-12);
+        assert!((bow_power_for_ticks(10) - (5.0 / 12.0)).abs() < 1e-12);
+        assert!((bow_power_for_ticks(20) - 1.0).abs() < 1e-12);
+        assert!((bow_power_for_ticks(40) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bow_full_draw_reaches_full_speed() {
+        let mut session = PlayerSession::new("Bow".to_string(), [0xB4; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        session.selected_slot = 0;
+        session.yaw = 90.0;
+        session.pitch = 0.0;
+        let (kind, _, consume) = use_item_projectile(&session).expect("projectile");
+        assert_eq!(kind, crate::projectile::ProjectileKind::Arrow);
+        assert!(!consume);
+        let direction = look_vector(&session);
+        let power = bow_power_for_ticks(20);
+        let velocity = [
+            direction[0] * 3.0 * power,
+            direction[1] * 3.0 * power,
+            direction[2] * 3.0 * power,
+        ];
+        let magnitude =
+            (velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2])
+                .sqrt();
+        assert!((magnitude - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bow_partial_draw_scales_velocity() {
+        let mut session = PlayerSession::new("Bow".to_string(), [0xB5; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        session.selected_slot = 0;
+        session.yaw = 90.0;
+        session.pitch = 0.0;
+        let (kind, _, _) = use_item_projectile(&session).expect("projectile");
+        assert_eq!(kind, crate::projectile::ProjectileKind::Arrow);
+        let direction = look_vector(&session);
+        let power = bow_power_for_ticks(10);
+        let velocity = [
+            direction[0] * 3.0 * power,
+            direction[1] * 3.0 * power,
+            direction[2] * 3.0 * power,
+        ];
+        assert!((velocity[0] + 3.0 * (5.0 / 12.0)).abs() < 1e-6);
+        assert!(velocity[1].abs() < 1e-6);
+        assert!(velocity[2].abs() < 1e-6);
     }
 }

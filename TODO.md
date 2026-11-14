@@ -2344,9 +2344,19 @@ are still open.
   codec + 1 join test. Live vitals (81428d1): session tick advances food/air,
   sprint adds 0.1 exhaustion/tick while alive, food heal/starve sync health,
   underwater air drains/refills and syncs `DATA_AIR_SUPPLY`. 4 join tests.
-  Still open: bow draw animation/particles, arrow potion effects, projectile
-  sequence acknowledgement, sweeping/shield, Java damage traces. CI green at
-  ff5dfc0 (1,351 tests).
+  Still open: held-weapon durability on attacks, shield/sweeping, armor
+  equipment visual sync beyond Set Equipment, Java loot fixtures. CI green at
+  4d08be0 (1,356 tests).
+- **Progress (2026-11-13):** `/tp`/`/teleport` — operator-only
+  `/tp <x> <y> <z>`, finite-coordinate parser, applies session teleport +
+  position packet, updates chunk center for top-up streaming, saves playerdata.
+  2 join tests. CI green at 4d08be0 (1,356 tests).
+- **Progress (2026-11-13):** entity loot predicates — `LootContext.entity_on_fire`;
+  `minecraft:entity_properties` now evaluates `this.flags.is_on_fire`, rejects
+  `vehicle`, and evaluates `direct_attacker.equipment.mainhand` enchantment
+  predicates including `#minecraft:smelts_loot` tags; unsupported keys report
+  explicitly. `entity_loot_roll` passes the held weapon and fire state. 3
+  tests/loot.rs. CI green at 4d08be0 (1,356 tests).
 - **Progress (2026-11-13):** bow charge/release (ff5dfc0) —
   `bow_power_for_ticks` ports `getPowerForTime`; using a bow in
   survival/creative starts a draw instead of firing immediately;

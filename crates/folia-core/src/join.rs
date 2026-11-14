@@ -3442,6 +3442,43 @@ fn parse_give(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(String, i32)
     Some((name, count))
 }
 
+fn apply_enchantment_to_selected(
+    session: &mut PlayerSession,
+    name: &str,
+    level: i32,
+) -> Result<(), String> {
+    let name = if name.contains(':') {
+        name.to_string()
+    } else {
+        format!("minecraft:{name}")
+    };
+    let Some(definition) = crate::item_components::enchanting::definition(&name) else {
+        return Err(format!("unknown enchantment {name}"));
+    };
+    if level < 1 || level > definition.max_level {
+        return Err(format!(
+            "level out of range for {name}: {level} (max {})",
+            definition.max_level
+        ));
+    }
+    let slot = session.selected_slot.max(0) as usize;
+    let Some(stack) = session.inventory.get_mut(slot) else {
+        return Err("selected item slot is unavailable".to_string());
+    };
+    if stack.is_empty() {
+        return Err("selected item is empty".to_string());
+    }
+    let mut enchantments = match stack.get_component("minecraft:enchantments") {
+        Some(crate::item_components::ComponentValue::Enchantments(map)) => map.clone(),
+        _ => std::collections::BTreeMap::new(),
+    };
+    enchantments.insert(definition.name.to_string(), level);
+    stack.set_component(crate::item_components::ComponentValue::Enchantments(
+        enchantments,
+    ));
+    Ok(())
+}
+
 fn handle_command(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
@@ -3607,6 +3644,50 @@ fn handle_command(
                     "[join] {}: inventory full, could not fit {}x {}",
                     session.name, leftover.count, leftover.item
                 );
+            }
+            Ok(())
+        }
+        Some("enchant") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /enchant",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some(enchantment) = parts.next() else {
+                println!(
+                    "[join] {}: usage: /enchant <enchantment> <level>",
+                    session.name
+                );
+                return Ok(());
+            };
+            let Some(level) = parts.next().and_then(|value| value.parse::<i32>().ok()) else {
+                println!(
+                    "[join] {}: usage: /enchant <enchantment> <level>",
+                    session.name
+                );
+                return Ok(());
+            };
+            match apply_enchantment_to_selected(session, enchantment, level) {
+                Ok(()) => {
+                    let slot = session.selected_slot.max(0) as usize;
+                    if let Some(stack) = session.inventory.get(slot) {
+                        write_packet(stream, &inventory::inventory_packet(slot as i32, stack))?;
+                    }
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                    {
+                        eprintln!("[join] could not save enchant: {error}");
+                    }
+                    println!(
+                        "[join] {} enchanted selected item with {} {}",
+                        session.name, enchantment, level
+                    );
+                }
+                Err(message) => {
+                    println!("[join] {}: {message}", session.name);
+                }
             }
             Ok(())
         }
@@ -7587,5 +7668,49 @@ mod tests {
         crate::item_prototypes::apply_defaults(&mut stack);
         assert!(stack.max_damage() > 0);
         assert_eq!(stack.max_stack_size(), 1);
+    }
+
+    #[test]
+    fn enchant_selected_item_adds_component() {
+        let mut session = PlayerSession::new("Enchant".to_string(), [0xD0; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] =
+            crate::inventory::ItemStack::new("minecraft:diamond_sword".to_string(), 1);
+        crate::item_prototypes::apply_defaults(&mut session.inventory[0]);
+        session.selected_slot = 0;
+
+        assert!(apply_enchantment_to_selected(&mut session, "sharpness", 3).is_ok());
+        let enchantments = match session.inventory[0].get_component("minecraft:enchantments") {
+            Some(crate::item_components::ComponentValue::Enchantments(map)) => map,
+            other => panic!("expected enchantments component, got {other:?}"),
+        };
+        assert_eq!(enchantments.get("minecraft:sharpness"), Some(&3));
+    }
+
+    #[test]
+    fn enchant_rejects_unknown_and_out_of_range() {
+        let mut session = PlayerSession::new("Enchant".to_string(), [0xD1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[0] =
+            crate::inventory::ItemStack::new("minecraft:diamond_sword".to_string(), 1);
+        session.selected_slot = 0;
+
+        assert!(apply_enchantment_to_selected(&mut session, "not_an_enchant", 1).is_err());
+        assert!(apply_enchantment_to_selected(&mut session, "sharpness", 0).is_err());
+        assert!(apply_enchantment_to_selected(&mut session, "sharpness", 6).is_err());
+    }
+
+    #[test]
+    fn enchant_rejects_empty_selected_item() {
+        let mut session = PlayerSession::new("Enchant".to_string(), [0xD2; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.selected_slot = 0;
+        assert!(apply_enchantment_to_selected(&mut session, "sharpness", 1).is_err());
     }
 }

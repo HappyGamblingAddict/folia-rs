@@ -2162,6 +2162,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut session,
                             &mut last_seen,
                             &mut pending_teleport,
+                            player_entity,
                             &packet,
                         ) {
                             eprintln!("[join] command failed: {error}");
@@ -3442,6 +3443,31 @@ fn parse_give(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(String, i32)
     Some((name, count))
 }
 
+fn clear_player_items(session: &mut PlayerSession) -> bool {
+    let mut had_items = false;
+    for slot in session.inventory.iter_mut() {
+        if !slot.is_empty() {
+            had_items = true;
+            *slot = crate::inventory::ItemStack::empty();
+        }
+    }
+    for slot in session.armor.iter_mut() {
+        if !slot.is_empty() {
+            had_items = true;
+            *slot = crate::inventory::ItemStack::empty();
+        }
+    }
+    if !session.cursor.is_empty() {
+        had_items = true;
+        session.cursor = crate::inventory::ItemStack::empty();
+    }
+    had_items
+}
+
+fn seed_message(seed: i64) -> String {
+    format!("Seed: [{seed}]")
+}
+
 fn apply_enchantment_to_selected(
     session: &mut PlayerSession,
     name: &str,
@@ -3484,6 +3510,7 @@ fn handle_command(
     session: &mut PlayerSession,
     last_seen: &mut LastSeenValidator,
     pending_teleport: &mut Option<(f64, f64, f64)>,
+    player_entity: i32,
     packet: &[u8],
 ) -> io::Result<()> {
     let (command, update) = parse_command_packet(packet)?;
@@ -3689,6 +3716,68 @@ fn handle_command(
                     println!("[join] {}: {message}", session.name);
                 }
             }
+            Ok(())
+        }
+        Some("clear") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /clear",
+                    session.name
+                );
+                return Ok(());
+            }
+            let armor_before = session.armor.clone();
+            let cleared = clear_player_items(session);
+            if cleared {
+                send_container_content(stream, session)?;
+                if armor_before != session.armor {
+                    write_packet(
+                        stream,
+                        &inventory::container_set_slot_packet(5, &session.armor[3]),
+                    )?;
+                    write_packet(
+                        stream,
+                        &inventory::container_set_slot_packet(6, &session.armor[2]),
+                    )?;
+                    write_packet(
+                        stream,
+                        &inventory::container_set_slot_packet(7, &session.armor[1]),
+                    )?;
+                    write_packet(
+                        stream,
+                        &inventory::container_set_slot_packet(8, &session.armor[0]),
+                    )?;
+                    write_packet(
+                        stream,
+                        &crate::entity_metadata::set_equipment_packet(
+                            player_entity,
+                            &player_equipment(session),
+                        ),
+                    )?;
+                }
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                {
+                    eprintln!("[join] could not save clear: {error}");
+                }
+                println!("[join] {} cleared their items", session.name);
+            } else {
+                println!("[join] {} has no items to clear", session.name);
+            }
+            Ok(())
+        }
+        Some("seed") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /seed",
+                    session.name
+                );
+                return Ok(());
+            }
+            let seed = crate::worldgen::generator::configured()
+                .map(|generator| generator.seed())
+                .unwrap_or(0);
+            write_packet(stream, &system_chat_packet(&seed_message(seed))?)?;
             Ok(())
         }
         Some(other) => {
@@ -7712,5 +7801,44 @@ mod tests {
         }
         session.selected_slot = 0;
         assert!(apply_enchantment_to_selected(&mut session, "sharpness", 1).is_err());
+    }
+
+    #[test]
+    fn clear_player_items_clears_inventory_armor_and_cursor() {
+        let mut session = PlayerSession::new("Clear".to_string(), [0xD3; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        for slot in &mut session.armor {
+            *slot = crate::inventory::ItemStack::empty();
+        }
+        session.cursor = crate::inventory::ItemStack::empty();
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:diamond".to_string(), 3);
+        session.armor[2] =
+            crate::inventory::ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+        session.cursor = crate::inventory::ItemStack::new("minecraft:apple".to_string(), 5);
+
+        assert!(clear_player_items(&mut session));
+        assert!(session.inventory.iter().all(|stack| stack.is_empty()));
+        assert!(session.armor.iter().all(|stack| stack.is_empty()));
+        assert!(session.cursor.is_empty());
+    }
+
+    #[test]
+    fn clear_player_items_returns_false_when_empty() {
+        let mut session = PlayerSession::new("Empty".to_string(), [0xD4; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        for slot in &mut session.armor {
+            *slot = crate::inventory::ItemStack::empty();
+        }
+        session.cursor = crate::inventory::ItemStack::empty();
+        assert!(!clear_player_items(&mut session));
+    }
+
+    #[test]
+    fn seed_command_formats_the_generator_seed() {
+        assert_eq!(seed_message(123), "Seed: [123]");
     }
 }

@@ -23,7 +23,7 @@ use crate::chunk_packet::ChunkPacketTemplate;
 use crate::combat::AttackCooldown;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
-use crate::entity::{SessionEntityTracker, WorldCollider};
+use crate::entity::{BlockCollider, SessionEntityTracker, WorldCollider};
 use crate::inventory;
 use crate::item_entity::{DropEntityStore, PickupTarget};
 use crate::math::{BlockPos, Vec3};
@@ -1483,6 +1483,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_move_at = Instant::now();
     let mut drop_entities = DropEntityStore::new();
     let mut projectiles = crate::projectile::ProjectileStore::new();
+    let mut game_tick: u64 = 0;
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -1585,15 +1586,34 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let (tick, drop_tick, projectile_tick, inventory_before) = {
+            let (tick, drop_tick, projectile_tick, inventory_before, submerged) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
+                let eye_pos = BlockPos::new(
+                    session.x.floor() as i32,
+                    (session.y + 1.62).floor() as i32,
+                    session.z.floor() as i32,
+                );
+                let submerged = collider
+                    .block_at(eye_pos.x(), eye_pos.y(), eye_pos.z())
+                    .is_some_and(|state| {
+                        matches!(
+                            crate::block_behaviour::fluid(&state),
+                            Some("minecraft:water" | "minecraft:flowing_water")
+                        ) || state.name == "minecraft:bubble_column"
+                    });
                 let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
                 let targets = tracked_entities.collision_targets();
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
-                (tick, drop_tick, projectile_tick, inventory_before)
+                (
+                    tick,
+                    drop_tick,
+                    projectile_tick,
+                    inventory_before,
+                    submerged,
+                )
             };
             for packet in &tick.packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
@@ -1650,6 +1670,37 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         session.xp_total,
                     ),
                 )?;
+            }
+            game_tick = game_tick.wrapping_add(1);
+            let (food, air) = tick_player_vitals(&mut session, game_tick, submerged);
+            let air_changed = matches!(
+                air,
+                crate::player::AirTick::Consumed
+                    | crate::player::AirTick::Refilled
+                    | crate::player::AirTick::Drowning
+            );
+            let health_changed = matches!(
+                food,
+                crate::player::FoodTick::Heal | crate::player::FoodTick::Starve
+            ) || air == crate::player::AirTick::Drowning;
+            if air_changed || health_changed {
+                let mut store = crate::entity_metadata::living_entities();
+                let player = store.entry_player(player_entity);
+                if air_changed {
+                    let _ = player.metadata.set(
+                        crate::entity_metadata::DATA_AIR_SUPPLY,
+                        crate::entity_metadata::MetadataValue::Int(i32::from(session.air)),
+                    );
+                }
+                if health_changed {
+                    player.set_health(session.health);
+                }
+                if let Some(packet) = player.metadata.dirty_packet() {
+                    write_packet(&mut stream, &packet)?;
+                }
+            }
+            if health_changed {
+                write_packet(&mut stream, &health_packet(&session))?;
             }
             for hit in &projectile_tick.hits {
                 if !tracked_entities.tracks(hit.target_id) {
@@ -2681,6 +2732,25 @@ fn epoch_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn tick_player_vitals(
+    session: &mut PlayerSession,
+    game_tick: u64,
+    submerged: bool,
+) -> (crate::player::FoodTick, crate::player::AirTick) {
+    // Simplified: vanilla applies sprint exhaustion per movement distance/tick
+    // conditions; we approximate with a flat 0.1 per live session tick while
+    // sprinting and alive.
+    if session.physics.sprinting && session.health > 0.0 {
+        session.add_exhaustion(0.1);
+    }
+    let food = session.tick_food(game_tick);
+    let air = session.tick_air(submerged);
+    // Drowning/starvation can reduce health to 0 here; we do not trigger the
+    // full death/respawn flow in this slice and leave it to existing void/death
+    // paths to observe on later ticks/conditions.
+    (food, air)
 }
 
 fn apply_player_input(session: &mut PlayerSession, flags: u8) {
@@ -7084,5 +7154,60 @@ mod tests {
         );
         assert!(session.physics.sprinting);
         assert!(session.physics.sneaking);
+    }
+
+    #[test]
+    fn vitals_sprint_burns_food() {
+        let mut session = PlayerSession::new("Sprint".to_string(), [0xC0; 16], 0.0, 64.0, 0.0);
+        session.health = 20.0;
+        session.food_level = 20;
+        session.food_saturation = 0.0;
+        session.physics.sprinting = true;
+        for tick in 1u64..=50 {
+            let _ = tick_player_vitals(&mut session, tick, false);
+        }
+        assert!(
+            session.food_level < 20,
+            "food should decrease from sprint exhaustion"
+        );
+    }
+
+    #[test]
+    fn vitals_food_heal_at_full_saturation() {
+        let mut session = PlayerSession::new("Heal".to_string(), [0xC1; 16], 0.0, 64.0, 0.0);
+        session.health = 10.0;
+        session.food_level = 20;
+        session.food_saturation = 5.0;
+        let (food, _) = tick_player_vitals(&mut session, 10, false);
+        assert_eq!(food, crate::player::FoodTick::Heal);
+        assert!((session.health - 11.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn vitals_starvation_at_zero_food() {
+        let mut session = PlayerSession::new("Starve".to_string(), [0xC2; 16], 0.0, 64.0, 0.0);
+        session.health = 10.0;
+        session.food_level = 0;
+        session.food_saturation = 0.0;
+        let (food, _) = tick_player_vitals(&mut session, 80, false);
+        assert_eq!(food, crate::player::FoodTick::Starve);
+        assert!((session.health - 9.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn vitals_air_drains_underwater_and_refills() {
+        let mut session = PlayerSession::new("Air".to_string(), [0xC3; 16], 0.0, 64.0, 0.0);
+        session.air = 300;
+        let mut last_air = crate::player::AirTick::Nothing;
+        for tick in 1u64..=320 {
+            let (_, air) = tick_player_vitals(&mut session, tick, true);
+            last_air = air;
+        }
+        assert_eq!(last_air, crate::player::AirTick::Drowning);
+        assert_eq!(session.air, 0);
+
+        let (_, air) = tick_player_vitals(&mut session, 321, false);
+        assert_eq!(air, crate::player::AirTick::Refilled);
+        assert!(session.air > 0, "air should refill out of water");
     }
 }

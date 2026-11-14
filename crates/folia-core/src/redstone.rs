@@ -2781,6 +2781,45 @@ fn set_property(state: &mut BlockState, key: &str, value: &str) {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TripwireHookChain {
+    pub attached: bool,
+    pub powered: bool,
+    pub wires: Vec<crate::math::BlockPos>,
+}
+
+/// Scans a straight tripwire run starting one block in `facing` from
+/// `hook_pos`. A second hook with at least one wire between the hooks makes
+/// the chain attached; a directly adjacent second hook is not attached.
+pub fn scan_tripwire_hook_chain(
+    hook_pos: crate::math::BlockPos,
+    facing: crate::math::Direction,
+    mut state_at: impl FnMut(crate::math::BlockPos) -> Option<BlockState>,
+) -> TripwireHookChain {
+    let mut chain = TripwireHookChain::default();
+    let mut pos = hook_pos.offset(facing.step_x(), facing.step_y(), facing.step_z());
+    for _ in 0..43 {
+        match state_at(pos) {
+            None => break,
+            Some(state) if is_tripwire(&state) => {
+                chain.wires.push(pos);
+                if property(&state, "powered") == Some("true") {
+                    chain.powered = true;
+                }
+                pos = pos.offset(facing.step_x(), facing.step_y(), facing.step_z());
+            }
+            Some(state) if is_tripwire_hook(&state) => {
+                if !chain.wires.is_empty() {
+                    chain.attached = true;
+                }
+                break;
+            }
+            Some(_) => break,
+        }
+    }
+    chain
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

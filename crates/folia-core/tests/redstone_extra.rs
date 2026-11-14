@@ -193,3 +193,112 @@ fn neighbours_can_supply_power_directly() {
     );
     assert_eq!(neighbor_power(&storage, pos), 15);
 }
+
+use folia_core::math::Direction;
+use folia_core::redstone::{TripwireHookChain, scan_tripwire_hook_chain};
+use std::collections::HashMap;
+
+fn tripwire_block(powered: bool) -> BlockState {
+    BlockState {
+        name: "minecraft:tripwire".to_owned(),
+        properties: vec![(
+            "powered".to_owned(),
+            if powered { "true" } else { "false" }.to_owned(),
+        )],
+    }
+}
+
+fn hook_block() -> BlockState {
+    BlockState {
+        name: "minecraft:tripwire_hook".to_owned(),
+        properties: vec![],
+    }
+}
+
+fn stone_block() -> BlockState {
+    BlockState {
+        name: "minecraft:stone".to_owned(),
+        properties: vec![],
+    }
+}
+
+fn scan_map(map: &HashMap<BlockPos, BlockState>) -> TripwireHookChain {
+    let map = map.clone();
+    scan_tripwire_hook_chain(BlockPos::new(0, 0, 0), Direction::East, |pos| {
+        map.get(&pos).cloned()
+    })
+}
+
+#[test]
+fn tripwire_hook_chain_attaches_across_three_wires() {
+    let mut map = HashMap::new();
+    for i in 1..=3 {
+        map.insert(BlockPos::new(i, 0, 0), tripwire_block(false));
+    }
+    map.insert(BlockPos::new(4, 0, 0), hook_block());
+    let chain = scan_map(&map);
+    assert!(chain.attached);
+    assert_eq!(chain.wires.len(), 3);
+    assert!(!chain.powered);
+}
+
+#[test]
+fn tripwire_hook_chain_reports_powered_wire() {
+    let mut map = HashMap::new();
+    map.insert(BlockPos::new(1, 0, 0), tripwire_block(false));
+    map.insert(BlockPos::new(2, 0, 0), tripwire_block(true));
+    map.insert(BlockPos::new(3, 0, 0), tripwire_block(false));
+    map.insert(BlockPos::new(4, 0, 0), hook_block());
+    let chain = scan_map(&map);
+    assert!(chain.attached);
+    assert!(chain.powered);
+}
+
+#[test]
+fn tripwire_hook_chain_stops_at_obstruction() {
+    let mut map = HashMap::new();
+    map.insert(BlockPos::new(1, 0, 0), tripwire_block(false));
+    map.insert(BlockPos::new(2, 0, 0), stone_block());
+    let chain = scan_map(&map);
+    assert!(!chain.attached);
+    assert_eq!(chain.wires.len(), 1);
+}
+
+#[test]
+fn tripwire_hook_chain_requires_a_second_hook() {
+    let mut map = HashMap::new();
+    for i in 1..=3 {
+        map.insert(BlockPos::new(i, 0, 0), tripwire_block(false));
+    }
+    let chain = scan_map(&map);
+    assert!(!chain.attached);
+}
+
+#[test]
+fn tripwire_hook_chain_rejects_direct_hook_without_wire() {
+    let mut map = HashMap::new();
+    map.insert(BlockPos::new(1, 0, 0), hook_block());
+    let chain = scan_map(&map);
+    assert!(!chain.attached);
+    assert!(chain.wires.is_empty());
+}
+
+#[test]
+fn tripwire_hook_chain_is_bounded_to_42_blocks() {
+    let mut map = HashMap::new();
+    for i in 1..=42 {
+        map.insert(BlockPos::new(i, 0, 0), tripwire_block(false));
+    }
+    map.insert(BlockPos::new(43, 0, 0), hook_block());
+    let chain = scan_map(&map);
+    assert!(chain.attached);
+    assert_eq!(chain.wires.len(), 42);
+
+    let mut map = HashMap::new();
+    for i in 1..=43 {
+        map.insert(BlockPos::new(i, 0, 0), tripwire_block(false));
+    }
+    map.insert(BlockPos::new(44, 0, 0), hook_block());
+    let chain = scan_map(&map);
+    assert!(!chain.attached);
+}

@@ -2344,8 +2344,17 @@ are still open.
   codec + 1 join test. Live vitals (81428d1): session tick advances food/air,
   sprint adds 0.1 exhaustion/tick while alive, food heal/starve sync health,
   underwater air drains/refills and syncs `DATA_AIR_SUPPLY`. 4 join tests.
-  Still open: bow charge/draw, arrow potion effects, shield blocking,
-  sweeping, projectile sequence ack. CI green at ba110f0 (1,348 tests).
+  Still open: bow draw animation/particles, arrow potion effects, projectile
+  sequence acknowledgement, sweeping/shield, Java damage traces. CI green at
+  ff5dfc0 (1,351 tests).
+- **Progress (2026-11-13):** bow charge/release (ff5dfc0) —
+  `bow_power_for_ticks` ports `getPowerForTime`; using a bow in
+  survival/creative starts a draw instead of firing immediately;
+  `ServerboundPlayerAction` FinishUsingHand (status 5, new
+  `ACTION_RELEASE_USE_ITEM`) fires an arrow with power-scaled velocity after
+  checking/consuming ammo (Infinity requires but does not consume an arrow);
+  changing the hotbar slot cancels the draw. 3 join tests. CI green at
+  ff5dfc0 (1,351 tests).
 - **Progress (2026-11-13):** drowning/starvation death flow (ba110f0) —
   `vitals_death_message` chooses "Player drowned" over "Player starved to
   death"; when live vitals tick health to <=0 and the player is not already

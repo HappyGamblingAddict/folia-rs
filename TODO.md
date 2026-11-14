@@ -2539,8 +2539,14 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   target strength/connection shape and 0..15 decay through the neighbour queue,
   lever toggling, buttons, repeaters (delay/facing/locking/strong output),
   comparators (compare/subtract plus container inputs), observers, redstone
-  torches with burn-out, pressure plates, and tripwire. Redstone lamps, target
-  blocks, tripwire hooks, doors, and a Java timing fixture are still open.
+  torches with burn-out, pressure plates, and tripwire. Tripwire hook chain
+  scanning (`TripwireHookChain`/`scan_tripwire_hook_chain`, 43-block walk,
+  at-least-one-wire attachment, powered propagation) and production tripwire
+  hooks (`TRIPWIRE_HOOK_BEHAVIOR` on place/neighbor/scheduled recalc,
+  wire-to-hook propagation, hook `attached`/`powered` states, weak/direct
+  signal 15 behind a powered hook, `behavior_for` registration) are now
+  implemented. Redstone lamps, target blocks, doors, rails, and a Java timing
+  fixture are still open. (ff3fcd3, 02bd8d6 pending CI)
 
 ### P6.4 Redstone components `[~]` `XL`
 
@@ -2552,9 +2558,10 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 - **Done when:** Each component has a timing fixture against Java.
 - **Progress (2026-11-06):** Wire, lever, button, repeater, comparator,
   observer, redstone torch, wooden/stone/weighted pressure plates, tripwire,
-  and piston/sticky-piston are implemented. Rails, doors/trapdoors,
+  and piston/sticky-piston are implemented. Tripwire hooks are now implemented
+  (production behavior + chain scan). Rails, doors/trapdoors,
   dispensers/droppers/hoppers, daylight detectors, target blocks, note blocks,
-  bells, copper bulbs, crafters, and tripwire hooks remain explicit gaps.
+  bells, copper bulbs, and crafters remain explicit gaps.
 
 ### P6.5 Pistons and moving blocks `[~]` `L`
 

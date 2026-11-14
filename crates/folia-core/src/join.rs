@@ -2710,6 +2710,16 @@ fn use_item_projectile(
     }
 }
 
+fn has_arrow(session: &PlayerSession) -> bool {
+    session.inventory.iter().any(|stack| {
+        !stack.is_empty()
+            && matches!(
+                stack.item.as_str(),
+                "minecraft:arrow" | "minecraft:tipped_arrow" | "minecraft:spectral_arrow"
+            )
+    })
+}
+
 fn take_arrow(session: &mut PlayerSession) -> Option<(usize, crate::inventory::ItemStack)> {
     for (slot, stack) in session.inventory.iter_mut().enumerate() {
         if stack.is_empty() {
@@ -2740,14 +2750,24 @@ fn handle_use_item(
         return Ok(());
     };
     if matches!(kind, crate::projectile::ProjectileKind::Arrow) && session.game_mode != 1 {
-        let Some((slot, stack)) = take_arrow(session) else {
-            return Ok(());
-        };
-        write_packet(stream, &inventory::inventory_packet(slot as i32, &stack))?;
-        if let Err(error) =
-            dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
-        {
-            eprintln!("[join] could not save projectile use: {error}");
+        let infinity = session
+            .selected_item()
+            .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
+        if infinity > 0 {
+            if !has_arrow(session) {
+                return Ok(());
+            }
+            // Infinity: require an arrow but do not consume it or send inventory updates.
+        } else {
+            let Some((slot, stack)) = take_arrow(session) else {
+                return Ok(());
+            };
+            write_packet(stream, &inventory::inventory_packet(slot as i32, &stack))?;
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+            {
+                eprintln!("[join] could not save projectile use: {error}");
+            }
         }
     } else if consume_item {
         let slot = session.selected_slot.max(0) as usize;
@@ -6950,5 +6970,85 @@ mod tests {
             })
             .expect("session tracker spawns a zombie");
         assert!(mob_motion_packet(&tracker, zombie).is_none());
+    }
+
+    #[test]
+    fn has_arrow_detects_regular_tipped_and_spectral() {
+        let mut session = PlayerSession::new("Arrows".to_string(), [0xB0; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        assert!(!has_arrow(&session));
+
+        session.inventory[0] = crate::inventory::ItemStack::new("minecraft:arrow".to_string(), 1);
+        assert!(has_arrow(&session));
+
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[1] =
+            crate::inventory::ItemStack::new("minecraft:tipped_arrow".to_string(), 1);
+        assert!(has_arrow(&session));
+
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        session.inventory[2] =
+            crate::inventory::ItemStack::new("minecraft:spectral_arrow".to_string(), 1);
+        assert!(has_arrow(&session));
+
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        assert!(!has_arrow(&session));
+    }
+
+    #[test]
+    fn infinity_bow_does_not_consume_arrows() {
+        let mut session = PlayerSession::new("InfBow".to_string(), [0xB1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        let mut bow = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        bow.set_component(crate::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:infinity".to_string(), 1)]),
+        ));
+        session.inventory[0] = bow;
+        session.inventory[9] = crate::inventory::ItemStack::new("minecraft:arrow".to_string(), 2);
+        session.selected_slot = 0;
+        session.game_mode = 0;
+
+        let infinity = session
+            .selected_item()
+            .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
+        assert_eq!(infinity, 1);
+        assert!(has_arrow(&session));
+        assert_eq!(
+            use_item_projectile(&session).map(|(kind, _, _)| kind),
+            Some(crate::projectile::ProjectileKind::Arrow)
+        );
+        // Infinity path: no consumption/inventory update, so arrow count remains.
+        assert_eq!(session.inventory[9].count, 2);
+    }
+
+    #[test]
+    fn infinity_bow_without_arrows_cannot_fire() {
+        let mut session = PlayerSession::new("NoInfAmmo".to_string(), [0xB2; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        let mut bow = crate::inventory::ItemStack::new("minecraft:bow".to_string(), 1);
+        bow.set_component(crate::item_components::ComponentValue::Enchantments(
+            std::collections::BTreeMap::from([("minecraft:infinity".to_string(), 1)]),
+        ));
+        session.inventory[0] = bow;
+        session.selected_slot = 0;
+        session.game_mode = 0;
+
+        let infinity = session
+            .selected_item()
+            .map_or(0, |stack| stack.enchantment_level("minecraft:infinity"));
+        assert_eq!(infinity, 1);
+        assert!(!has_arrow(&session));
     }
 }

@@ -1702,6 +1702,24 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             if health_changed {
                 write_packet(&mut stream, &health_packet(&session))?;
             }
+            if session.health <= 0.0 && !awaiting_respawn {
+                drop_player_death_items(
+                    &mut stream,
+                    &mut drop_entities,
+                    &mut drop_rng,
+                    &mut session,
+                )?;
+                if let Some(message) = vitals_death_message(food, air) {
+                    write_packet(&mut stream, &combat_kill_packet(message))?;
+                }
+                awaiting_respawn = true;
+                death_at = Some(Instant::now());
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                {
+                    eprintln!("[join] could not save vitals death: {error}");
+                }
+            }
             for hit in &projectile_tick.hits {
                 if !tracked_entities.tracks(hit.target_id) {
                     continue;
@@ -2751,6 +2769,19 @@ fn tick_player_vitals(
     // full death/respawn flow in this slice and leave it to existing void/death
     // paths to observe on later ticks/conditions.
     (food, air)
+}
+
+fn vitals_death_message(
+    food: crate::player::FoodTick,
+    air: crate::player::AirTick,
+) -> Option<&'static str> {
+    if air == crate::player::AirTick::Drowning {
+        Some("Player drowned")
+    } else if food == crate::player::FoodTick::Starve {
+        Some("Player starved to death")
+    } else {
+        None
+    }
 }
 
 fn apply_player_input(session: &mut PlayerSession, flags: u8) {
@@ -7209,5 +7240,37 @@ mod tests {
         let (_, air) = tick_player_vitals(&mut session, 321, false);
         assert_eq!(air, crate::player::AirTick::Refilled);
         assert!(session.air > 0, "air should refill out of water");
+    }
+
+    #[test]
+    fn vitals_death_message_prefers_drowning_then_starvation() {
+        assert_eq!(
+            vitals_death_message(
+                crate::player::FoodTick::Nothing,
+                crate::player::AirTick::Drowning
+            ),
+            Some("Player drowned")
+        );
+        assert_eq!(
+            vitals_death_message(
+                crate::player::FoodTick::Starve,
+                crate::player::AirTick::Nothing
+            ),
+            Some("Player starved to death")
+        );
+        assert_eq!(
+            vitals_death_message(
+                crate::player::FoodTick::Starve,
+                crate::player::AirTick::Drowning
+            ),
+            Some("Player drowned")
+        );
+        assert_eq!(
+            vitals_death_message(
+                crate::player::FoodTick::Nothing,
+                crate::player::AirTick::Nothing
+            ),
+            None
+        );
     }
 }

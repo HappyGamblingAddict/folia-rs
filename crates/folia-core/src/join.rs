@@ -1585,11 +1585,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let targets = tracked_entities.collision_targets();
             let (tick, drop_tick, projectile_tick, inventory_before) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
                 let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
+                let targets = tracked_entities.collision_targets();
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
@@ -1652,37 +1652,45 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
             }
             for hit in &projectile_tick.hits {
-                let target_info = tracked_entities.entity(hit.target_id).map(|tracked| {
-                    (
-                        crate::registry::entity_type_name(tracked.entity.entity_type)
-                            .map(str::to_owned),
-                        BlockPos::new(
-                            tracked.entity.x.floor() as i32,
-                            tracked.entity.y.floor() as i32,
-                            tracked.entity.z.floor() as i32,
-                        ),
-                    )
-                });
+                if !tracked_entities.tracks(hit.target_id) {
+                    continue;
+                }
                 if let Some(result) = tracked_entities.damage(hit.target_id, hit.damage) {
                     for packet in &result.packets {
                         write_packet(&mut stream, packet)?;
                     }
-                    if result.died
-                        && let Some((Some(entity_type), pos)) = target_info
-                    {
-                        spawn_mob_death_rewards(
-                            &mut stream,
-                            &mut drop_entities,
-                            &mut drop_rng,
-                            &session,
-                            pos,
-                            &entity_type,
-                        )?;
+                    if result.died {
+                        let target_info = tracked_entities.entity(hit.target_id).map(|tracked| {
+                            (
+                                crate::registry::entity_type_name(tracked.entity.entity_type)
+                                    .map(str::to_owned),
+                                BlockPos::new(
+                                    tracked.entity.x.floor() as i32,
+                                    tracked.entity.y.floor() as i32,
+                                    tracked.entity.z.floor() as i32,
+                                ),
+                            )
+                        });
+                        if let Some((Some(entity_type), pos)) = target_info {
+                            spawn_mob_death_rewards(
+                                &mut stream,
+                                &mut drop_entities,
+                                &mut drop_rng,
+                                &session,
+                                pos,
+                                &entity_type,
+                            )?;
+                        }
                     }
                 }
             }
             if tick.player_damage > 0.0 && !awaiting_respawn {
-                let result = damage_player(&mut session, player_entity, tick.player_damage);
+                let result = damage_player_with_rng(
+                    &mut session,
+                    player_entity,
+                    tick.player_damage,
+                    &mut drop_rng,
+                );
                 for packet in &result.packets {
                     write_packet(&mut stream, packet)?;
                 }
@@ -2264,8 +2272,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             }
                         }
                         if outcome.fall_damage > 0.0 && !awaiting_respawn {
-                            let died =
-                                apply_fall_damage(&mut stream, &mut session, outcome.fall_damage)?;
+                            let died = apply_fall_damage(
+                                &mut stream,
+                                &mut session,
+                                outcome.fall_damage,
+                                &mut drop_rng,
+                            )?;
                             if died {
                                 awaiting_respawn = true;
                                 death_at = Some(Instant::now());
@@ -3430,7 +3442,14 @@ fn drop_player_death_items(
 
 /// Apply damage through the living-entity model so the client receives the
 /// same metadata health update and `ClientboundSetHealth` body as vanilla.
-pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -> PlayerDamage {
+/// Armor mitigation uses the raw amount; worn armor loses durability only when
+/// the hit is not rejected.
+pub fn damage_player_with_rng(
+    session: &mut PlayerSession,
+    entity_id: i32,
+    amount: f32,
+    rng: &mut dyn folia_random::RandomSource,
+) -> PlayerDamage {
     let mut store = crate::entity_metadata::living_entities();
     let player = store.entry_player(entity_id);
     player.food = session.food_level.clamp(0, 20);
@@ -3447,13 +3466,58 @@ pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -
     let (armor, toughness) = crate::effects::armor_values_from_equipment(&equipment);
     let after_armor = crate::effects::damage_after_armor(amount, armor, toughness);
     let after_resistance = after_armor * player.effects.resistance_multiplier();
-    let result = player.hurt(after_resistance);
+    let mut result = player.hurt(after_resistance);
     session.health = player.health;
+
+    if result.damaged && amount > 0.0 {
+        let points = ((amount / 4.0).floor() as i32).max(1);
+        let mut armor_changed = false;
+        for slot in session.armor.iter_mut() {
+            if slot.is_empty()
+                || slot.get_component("minecraft:unbreakable").is_some()
+                || slot.max_damage() <= 0
+            {
+                continue;
+            }
+            let mut wear = 0;
+            let unbreaking = slot.enchantment_level("minecraft:unbreaking");
+            for _ in 0..points {
+                if unbreaking > 0 && rng.next_int_bound(unbreaking + 1) != 0 {
+                    continue;
+                }
+                wear += 1;
+            }
+            if wear <= 0 {
+                continue;
+            }
+            let next = slot.damage() + wear;
+            armor_changed = true;
+            if next >= slot.max_damage() {
+                *slot = crate::inventory::ItemStack::empty();
+            } else {
+                slot.set_damage(next);
+            }
+        }
+        if armor_changed {
+            result
+                .packets
+                .push(crate::entity_metadata::set_equipment_packet(
+                    entity_id,
+                    &player_equipment(session),
+                ));
+        }
+    }
+
     PlayerDamage {
         damaged: result.damaged,
         died: result.died,
         packets: result.packets,
     }
+}
+
+pub fn damage_player(session: &mut PlayerSession, entity_id: i32, amount: f32) -> PlayerDamage {
+    let mut rng = folia_random::LegacyRandomSource::new(0);
+    damage_player_with_rng(session, entity_id, amount, &mut rng)
 }
 
 /// Void damage repeats every half second; the living model keeps a player's
@@ -3565,11 +3629,12 @@ fn apply_fall_damage(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
     damage: f32,
+    rng: &mut dyn crate::random::RandomSource,
 ) -> io::Result<bool> {
     if fall_damage_health(session.health, damage, session.game_mode).is_none() {
         return Ok(false);
     }
-    let result = damage_player(session, player_entity_id(), damage);
+    let result = damage_player_with_rng(session, player_entity_id(), damage, rng);
     if !result.damaged {
         return Ok(false);
     }
@@ -3616,7 +3681,7 @@ fn apply_void_damage(
     *last_damage = now;
     let entity_id = player_entity_id();
     clear_player_invulnerability(entity_id);
-    let result = damage_player(session, entity_id, VOID_DAMAGE);
+    let result = damage_player_with_rng(session, entity_id, VOID_DAMAGE, rng);
     if !result.damaged {
         return Ok(false);
     }

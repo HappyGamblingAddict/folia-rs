@@ -88,6 +88,36 @@ fn try_hit_inflates_the_target_box() {
 }
 
 #[test]
+fn swept_arrow_hits_a_target_it_passes_through() {
+    let mut projectile = Projectile::spawn(
+        ProjectileKind::Arrow,
+        20,
+        None,
+        0.0,
+        64.5,
+        0.5,
+        [10.0, 0.0, 0.0],
+    );
+    let aabb = Aabb::new(2.0, 64.0, 0.0, 3.0, 65.0, 1.0);
+    let mut collider = FlatCollider { ground_y: -1000 };
+    let tick = projectile.tick(&mut collider);
+    assert!(tick.moved);
+    let hit = projectile.try_hit(&[(21, aabb)]);
+    assert!(hit.is_some());
+    let hit = hit.unwrap();
+    assert_eq!(hit.target_id, 21);
+    assert!(projectile.stuck);
+}
+
+#[test]
+fn zero_velocity_projectile_inside_inflated_box_hits() {
+    let mut projectile =
+        Projectile::spawn(ProjectileKind::Arrow, 22, None, 1.2, 64.5, 0.5, [0.0; 3]);
+    let aabb = Aabb::new(0.0, 64.0, 0.0, 1.0, 65.0, 1.0);
+    assert!(projectile.try_hit(&[(23, aabb)]).is_some());
+}
+
+#[test]
 fn stuck_projectile_does_not_move() {
     let mut projectile = Projectile::spawn(
         ProjectileKind::Arrow,

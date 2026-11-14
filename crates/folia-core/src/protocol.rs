@@ -1864,6 +1864,9 @@ pub fn parse_serverbound_use_item(data: &[u8]) -> io::Result<ServerboundUseItem>
         reader.read_u8()?,
         reader.read_u8()?,
     ]);
+    if !yaw.is_finite() || !pitch.is_finite() {
+        return Err(invalid("non-finite rotation"));
+    }
     if reader.remaining() != 0 {
         return Err(invalid("trailing bytes"));
     }
@@ -1878,6 +1881,9 @@ pub fn parse_serverbound_use_item(data: &[u8]) -> io::Result<ServerboundUseItem>
 pub fn build_serverbound_use_item(use_item: &ServerboundUseItem) -> io::Result<Vec<u8>> {
     if use_item.hand != 0 && use_item.hand != 1 {
         return Err(invalid("invalid hand"));
+    }
+    if !use_item.yaw.is_finite() || !use_item.pitch.is_finite() {
+        return Err(invalid("non-finite rotation"));
     }
     let mut writer = PacketWriter::new();
     writer.write_varint(SERVERBOUND_USE_ITEM)?;

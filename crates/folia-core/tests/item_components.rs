@@ -550,3 +550,16 @@ fn component_helpers_keep_custom_data_and_potion_types() {
 fn item_id(name: &str) -> i32 {
     inventory::item_id(name).expect("known item")
 }
+
+#[test]
+fn set_damage_round_trips_and_clamps_negative() {
+    let mut stack = ItemStack::new("minecraft:diamond_boots", 1);
+    assert_eq!(stack.damage(), 0);
+    assert!(!stack.set_damage(0), "unchanged when already undamaged");
+    assert!(stack.set_damage(3));
+    assert_eq!(stack.damage(), 3);
+    assert!(!stack.set_damage(3), "unchanged");
+    assert!(stack.set_damage(-5), "clamps to 0 and removes component");
+    assert_eq!(stack.damage(), 0);
+    assert!(stack.get_component("minecraft:damage").is_none());
+}

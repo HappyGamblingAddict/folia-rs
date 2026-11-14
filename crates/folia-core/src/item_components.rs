@@ -662,6 +662,21 @@ impl ItemStack {
         }
     }
 
+    /// Write or remove the `minecraft:damage` component. Negative values are
+    /// clamped to 0; a value of 0 removes the component (keeping an undamaged
+    /// item free of an explicit damage entry). Returns whether the effective
+    /// damage changed.
+    pub fn set_damage(&mut self, damage: i32) -> bool {
+        let damage = damage.max(0);
+        let previous = self.damage();
+        if damage == 0 {
+            let _ = self.remove_component("minecraft:damage");
+        } else {
+            self.set_component(ComponentValue::Damage(damage));
+        }
+        previous != damage
+    }
+
     pub fn max_damage(&self) -> i32 {
         match self.get_component("minecraft:max_damage") {
             Some(ComponentValue::MaxDamage(value)) => *value,

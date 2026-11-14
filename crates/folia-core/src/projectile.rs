@@ -69,6 +69,9 @@ pub struct Projectile {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    pub prev_x: f64,
+    pub prev_y: f64,
+    pub prev_z: f64,
     pub velocity: [f64; 3],
     pub age: i32,
     pub stuck: bool,
@@ -95,6 +98,9 @@ impl Projectile {
             x,
             y,
             z,
+            prev_x: x,
+            prev_y: y,
+            prev_z: z,
             velocity,
             age: 0,
             stuck: false,
@@ -111,6 +117,10 @@ impl Projectile {
                 hit_block: false,
             };
         }
+
+        self.prev_x = self.x;
+        self.prev_y = self.y;
+        self.prev_z = self.z;
 
         // Gravity is applied before drag so a projectile starting from rest
         // falls 0.05 and then is scaled by 0.99, matching the model tests.
@@ -166,14 +176,34 @@ impl Projectile {
             + self.velocity[1] * self.velocity[1]
             + self.velocity[2] * self.velocity[2])
             .sqrt();
+        let dx = self.x - self.prev_x;
+        let dy = self.y - self.prev_y;
+        let dz = self.z - self.prev_z;
+        let segment_length = (dx * dx + dy * dy + dz * dz).sqrt();
+        let steps = if segment_length <= 0.0 {
+            1usize
+        } else {
+            ((segment_length / 0.1).ceil() as usize).max(1)
+        };
         for (target_id, aabb) in targets {
-            if self.x >= aabb.min_x - 0.3
-                && self.x <= aabb.max_x + 0.3
-                && self.y >= aabb.min_y - 0.3
-                && self.y <= aabb.max_y + 0.3
-                && self.z >= aabb.min_z - 0.3
-                && self.z <= aabb.max_z + 0.3
-            {
+            let mut hit = false;
+            for step in 0..=steps {
+                let t = step as f64 / steps as f64;
+                let px = self.prev_x + dx * t;
+                let py = self.prev_y + dy * t;
+                let pz = self.prev_z + dz * t;
+                if px >= aabb.min_x - 0.3
+                    && px <= aabb.max_x + 0.3
+                    && py >= aabb.min_y - 0.3
+                    && py <= aabb.max_y + 0.3
+                    && pz >= aabb.min_z - 0.3
+                    && pz <= aabb.max_z + 0.3
+                {
+                    hit = true;
+                    break;
+                }
+            }
+            if hit {
                 let damage = self.hit_damage(speed);
                 self.stuck = true;
                 self.velocity = [0.0; 3];

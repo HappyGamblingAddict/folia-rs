@@ -45,6 +45,47 @@ fn use_item_rejects_invalid_hand() {
 }
 
 #[test]
+fn use_item_rejects_non_finite_parse() {
+    let mut packet = build_serverbound_use_item(&ServerboundUseItem {
+        hand: 0,
+        sequence: 1,
+        yaw: 0.0,
+        pitch: 0.0,
+    })
+    .unwrap();
+    // NaN as big-endian f32 bytes.
+    let nan_bytes = f32::NAN.to_be_bytes();
+    // yaw occupies the four bytes after id/hand/sequence; sequence is one byte
+    // here, so yaw starts at offset 3.
+    packet[3..7].copy_from_slice(&nan_bytes);
+    assert!(parse_serverbound_use_item(&packet).is_err());
+}
+
+#[test]
+fn use_item_rejects_non_finite_build() {
+    for rotation in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            build_serverbound_use_item(&ServerboundUseItem {
+                hand: 0,
+                sequence: 1,
+                yaw: rotation,
+                pitch: 0.0,
+            })
+            .is_err()
+        );
+        assert!(
+            build_serverbound_use_item(&ServerboundUseItem {
+                hand: 0,
+                sequence: 1,
+                yaw: 0.0,
+                pitch: rotation,
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn use_item_rejects_trailing_byte() {
     let mut packet = build_serverbound_use_item(&ServerboundUseItem {
         hand: 0,

@@ -159,6 +159,33 @@ pub fn container_content_packet(inventory: &[ItemStack], cursor: &ItemStack) -> 
     writer.into_inner()
 }
 
+pub fn container_content_packet_with_armor(
+    inventory: &[ItemStack],
+    armor: &[ItemStack; 4],
+    cursor: &ItemStack,
+) -> Vec<u8> {
+    let mut menu = container_items(inventory);
+    // Menu slots: 5=head (armor[3]), 6=chest (armor[2]), 7=legs (armor[1]), 8=feet (armor[0]).
+    if menu.len() > 8 {
+        menu[5] = armor[3].clone();
+        menu[6] = armor[2].clone();
+        menu[7] = armor[1].clone();
+        menu[8] = armor[0].clone();
+    }
+    let mut writer = PacketWriter::new();
+    writer
+        .write_varint(CLIENTBOUND_CONTAINER_SET_CONTENT)
+        .unwrap();
+    writer.write_varint(0).unwrap(); // player inventory container
+    writer.write_varint(0).unwrap(); // state id
+    writer.write_varint(menu.len() as i32).unwrap();
+    for stack in menu {
+        write_item_stack(&mut writer, &stack);
+    }
+    write_item_stack(&mut writer, cursor);
+    writer.into_inner()
+}
+
 // ---------------------------------------------------------------------------
 // Container menus
 // ---------------------------------------------------------------------------
@@ -1259,6 +1286,134 @@ pub fn apply_click(
             true
         }
         _ => false,
+    }
+}
+
+fn armor_slot_info(menu_slot: i32) -> Option<(usize, &'static str)> {
+    match menu_slot {
+        5 => Some((3, "head")),
+        6 => Some((2, "chest")),
+        7 => Some((1, "legs")),
+        8 => Some((0, "feet")),
+        _ => None,
+    }
+}
+
+fn can_equip_in_armor_slot(stack: &ItemStack, required: &str) -> bool {
+    if stack.is_empty() {
+        return true;
+    }
+    crate::item_prototypes::prototype(&stack.item)
+        .and_then(|prototype| prototype.equippable_slot.as_deref())
+        == Some(required)
+}
+
+/// Apply a click in the player inventory menu (container 0), including armor
+/// slots 5..=8 (head/chest/legs/feet mapped to `armor[3]/[2]/[1]/[0]`).
+/// Hotbar/main slots 9..=44 keep the free `apply_click` behavior.
+pub fn apply_player_click(
+    inventory: &mut [ItemStack],
+    armor: &mut [ItemStack; 4],
+    cursor: &mut ItemStack,
+    click: ContainerClick,
+) -> bool {
+    if !(5..=44).contains(&click.slot) {
+        return false;
+    }
+
+    if let Some((armor_index, required)) = armor_slot_info(click.slot) {
+        match click.click_type {
+            0 => {
+                if click.button == 0 {
+                    if cursor.is_empty() {
+                        if armor[armor_index].is_empty() {
+                            return false;
+                        }
+                        *cursor = armor[armor_index].clone();
+                        armor[armor_index] = ItemStack::empty();
+                        true
+                    } else if armor[armor_index].is_empty() {
+                        if !can_equip_in_armor_slot(cursor, required) {
+                            return false;
+                        }
+                        armor[armor_index] = cursor.clone();
+                        *cursor = ItemStack::empty();
+                        true
+                    } else if can_equip_in_armor_slot(cursor, required) {
+                        std::mem::swap(&mut armor[armor_index], cursor);
+                        true
+                    } else {
+                        false
+                    }
+                } else if click.button == 1 {
+                    if cursor.is_empty() {
+                        if armor[armor_index].is_empty() {
+                            return false;
+                        }
+                        *cursor = armor[armor_index].clone();
+                        armor[armor_index] = ItemStack::empty();
+                        true
+                    } else if armor[armor_index].is_empty() {
+                        if !can_equip_in_armor_slot(cursor, required) {
+                            return false;
+                        }
+                        armor[armor_index] = cursor.copy_with_count(1);
+                        cursor.shrink(1);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            1 => {
+                if armor[armor_index].is_empty() {
+                    return false;
+                }
+                let mut stack = armor[armor_index].clone();
+                for slot in inventory.iter_mut().take(INVENTORY_SLOTS) {
+                    if slot.is_empty() {
+                        *slot = stack;
+                        armor[armor_index] = ItemStack::empty();
+                        return true;
+                    }
+                    if same_stack(slot, &stack) && slot.count < slot.max_stack_size() {
+                        let space = slot.max_stack_size() - slot.count;
+                        let moved = space.min(stack.count);
+                        slot.count += moved;
+                        stack.shrink(moved);
+                        if stack.is_empty() {
+                            armor[armor_index] = ItemStack::empty();
+                            return true;
+                        }
+                    }
+                }
+                if stack != armor[armor_index] {
+                    armor[armor_index] = stack;
+                    true
+                } else {
+                    false
+                }
+            }
+            2 => {
+                if !(0..HOTBAR_SLOTS as i32).contains(&click.button) {
+                    return false;
+                }
+                let hotbar = click.button as usize;
+                if hotbar >= inventory.len() {
+                    return false;
+                }
+                if !can_equip_in_armor_slot(&inventory[hotbar], required) {
+                    return false;
+                }
+                std::mem::swap(&mut inventory[hotbar], &mut armor[armor_index]);
+                true
+            }
+            _ => false,
+        }
+    } else {
+        apply_click(inventory, cursor, click)
     }
 }
 

@@ -2202,19 +2202,60 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     eprintln!("[join] container click failed: {error}");
                                 }
                             } else if click.container_id == 0 {
-                                // Player inventory menu (container id 0) keeps
-                                // the pre-menu behaviour byte-for-byte.
-                                inventory::apply_click(
+                                // Player inventory menu (container id 0).
+                                let armor_before = session.armor.clone();
+                                if inventory::apply_player_click(
                                     &mut session.inventory,
+                                    &mut session.armor,
                                     &mut session.cursor,
                                     click,
-                                );
-                                send_container_content(&mut stream, &session)?;
-                                if let Err(error) = dimension::save_playerdata_preserving_dimension(
-                                    &session,
-                                    playerdata_dir(),
                                 ) {
-                                    eprintln!("[join] could not save inventory: {error}");
+                                    send_container_content(&mut stream, &session)?;
+                                    if session.armor != armor_before {
+                                        write_packet(
+                                            &mut stream,
+                                            &inventory::container_set_slot_packet(
+                                                5,
+                                                &session.armor[3],
+                                            ),
+                                        )?;
+                                        write_packet(
+                                            &mut stream,
+                                            &inventory::container_set_slot_packet(
+                                                6,
+                                                &session.armor[2],
+                                            ),
+                                        )?;
+                                        write_packet(
+                                            &mut stream,
+                                            &inventory::container_set_slot_packet(
+                                                7,
+                                                &session.armor[1],
+                                            ),
+                                        )?;
+                                        write_packet(
+                                            &mut stream,
+                                            &inventory::container_set_slot_packet(
+                                                8,
+                                                &session.armor[0],
+                                            ),
+                                        )?;
+                                        write_packet(
+                                            &mut stream,
+                                            &crate::entity_metadata::set_equipment_packet(
+                                                player_entity,
+                                                &player_equipment(&session),
+                                            ),
+                                        )?;
+                                    }
+                                    if let Err(error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
+                                        eprintln!("[join] could not save inventory: {error}");
+                                    }
                                 }
                             }
                         }
@@ -5287,7 +5328,11 @@ fn resync_block(
 fn send_container_content(stream: &mut LoginStream, session: &PlayerSession) -> io::Result<()> {
     write_packet(
         stream,
-        &inventory::container_content_packet(&session.inventory, &session.cursor),
+        &inventory::container_content_packet_with_armor(
+            &session.inventory,
+            &session.armor,
+            &session.cursor,
+        ),
     )
 }
 

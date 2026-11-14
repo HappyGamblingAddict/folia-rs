@@ -2368,6 +2368,11 @@ are still open.
   Command surface now includes `/op`, `/deop`, `/gamemode`, `/xp add`, `/tp`,
   `/give`, `/enchant`, `/clear`, `/seed`. Expected total 1,368 once CI
   confirms. CI status pending at brief time.
+- **Progress (2026-11-13):** `/effect give` (b53fb89, pending CI) —
+  operator `/effect give <effect> [seconds] [amplifier]` applies self effects
+  through `LivingEntity::apply_effect`, sends Update Mob Effect packets,
+  validates names/seconds/amplifier. 3 join tests (expected total 1,380 once
+  CI confirms). CI status pending at brief time.
 - **Progress (2026-11-13):** `/tp`/`/teleport` — operator-only
   `/tp <x> <y> <z>`, finite-coordinate parser, applies session teleport +
   position packet, updates chunk center for top-up streaming, saves playerdata.

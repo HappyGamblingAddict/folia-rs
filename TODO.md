@@ -2331,6 +2331,20 @@ are still open.
   `tests/armor.rs`. Still open: armor equipment sync to clients, armor slot
   clicks in the player inventory menu, armor durability, Protection
   enchantments. CI green at 8871081 (1,280 tests).
+- **Progress (2026-11-13):** armor durability + protection + mob motion —
+  `ItemStack::set_damage`; `damage_player_with_rng` wears each armor piece by
+  `max(1, floor(raw/4))` with Unbreaking rolls, clears broken pieces, and
+  appends a Set Equipment packet; live projectiles use swept segment hit
+  tests with `prev_*` positions and reject non-finite use-item rotations. 9
+  tests across armor/item_components/projectile/use_item.
+  `DamageKind { Physical, Projectile, Fire, Explosion, Fall, Void }`,
+  `enchantment_damage_protection`, and `damage_after_enchantments` implement
+  magic absorb (cap 20, /25); wired after armor before resistance;
+  melee=Physical, fall=Fall, void=Void. 5 tests. Player melee knockback now
+  sends `Set Entity Motion` for the affected mob after damage metadata; 2 join
+  tests. Still open: armor menu clicks/equipping, Infinity bow, bow charge,
+  tipped-arrow effects, sequence acknowledgement. CI green at 90d5c14
+  (1,329 tests).
 - **Progress (2026-11-13):** join equipment/XP + death drops/XP —
   `handle_login` sends `ClientboundSetEquipment` for the player's four armor
   slots + main hand and `ClientboundSetExperience` with session XP values (2

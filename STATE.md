@@ -38,7 +38,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 projectiles are live with ammo consumption and shared death rewards; remaining is bow charge/draw time, tipped-arrow potion effects, projectile block-hit effects, client sequence acknowledgement, projectile pickup, armor durability/protection, armor equipment/menu clicks, and per-viewer ranges/shared mob state.
+1. P5 armor durability/protection and mob motion packets are wired; remaining is armor menu clicks/equipping, Infinity bow, bow charge, tipped-arrow effects, sequence acknowledgement, projectile pickup, and per-viewer ranges/shared mob state.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.

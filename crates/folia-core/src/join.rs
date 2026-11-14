@@ -1485,6 +1485,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut projectiles = crate::projectile::ProjectileStore::new();
     let mut game_tick: u64 = 0;
     let mut bow_draw: Option<u64> = None;
+    let mut pending_teleport: Option<(f64, f64, f64)> = None;
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -2156,10 +2157,28 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     SERVERBOUND_CHAT_COMMAND | SERVERBOUND_CHAT_COMMAND_SIGNED => {
-                        if let Err(error) =
-                            handle_command(&mut stream, &mut session, &mut last_seen, &packet)
-                        {
+                        if let Err(error) = handle_command(
+                            &mut stream,
+                            &mut session,
+                            &mut last_seen,
+                            &mut pending_teleport,
+                            &packet,
+                        ) {
                             eprintln!("[join] command failed: {error}");
+                        }
+                        if let Some((x, y, z)) = pending_teleport.take() {
+                            session.teleport(x, y, z, false);
+                            session.reset_physics();
+                            teleport_id += 1;
+                            write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                            center_x = (session.x.floor() as i32).div_euclid(16);
+                            center_z = (session.z.floor() as i32).div_euclid(16);
+                            if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                &session,
+                                playerdata_dir(),
+                            ) {
+                                eprintln!("[join] could not save teleport: {error}");
+                            }
                         }
                     }
                     SERVERBOUND_INTERACT => {
@@ -3372,10 +3391,21 @@ fn parse_command_packet(packet: &[u8]) -> io::Result<(String, crate::protocol::L
     }
 }
 
+fn parse_teleport_coords(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(f64, f64, f64)> {
+    let x = parts.next()?.parse::<f64>().ok()?;
+    let y = parts.next()?.parse::<f64>().ok()?;
+    let z = parts.next()?.parse::<f64>().ok()?;
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return None;
+    }
+    Some((x, y, z))
+}
+
 fn handle_command(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
     last_seen: &mut LastSeenValidator,
+    pending_teleport: &mut Option<(f64, f64, f64)>,
     packet: &[u8],
 ) -> io::Result<()> {
     let (command, update) = parse_command_packet(packet)?;
@@ -3465,7 +3495,10 @@ fn handle_command(
                 return Ok(());
             };
             if amount <= 0 {
-                println!("[join] {}: usage: /xp add <points>", session.name);
+                println!(
+                    "[join] {}: /xp add requires a positive point amount",
+                    session.name
+                );
                 return Ok(());
             }
             session.add_experience(amount);
@@ -3480,11 +3513,38 @@ fn handle_command(
             if let Err(error) =
                 dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
             {
-                eprintln!("[join] could not save xp: {error}");
+                eprintln!("[join] could not save xp change: {error}");
             }
+            println!(
+                "[join] {} added {amount} xp (level {}, total {})",
+                session.name, session.xp_level, session.xp_total
+            );
             Ok(())
         }
-        _ => Ok(()),
+        Some("tp" | "teleport") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /tp",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some((x, y, z)) = parse_teleport_coords(&mut parts) else {
+                println!("[join] {}: usage: /tp <x> <y> <z>", session.name);
+                return Ok(());
+            };
+            *pending_teleport = Some((x, y, z));
+            println!(
+                "[join] {} requested teleport to ({:.1}, {:.1}, {:.1})",
+                session.name, x, y, z
+            );
+            Ok(())
+        }
+        Some(other) => {
+            println!("[join] {}: unknown command /{other}", session.name);
+            Ok(())
+        }
+        None => Ok(()),
     }
 }
 
@@ -7401,5 +7461,23 @@ mod tests {
         assert!((velocity[0] + 3.0 * (5.0 / 12.0)).abs() < 1e-6);
         assert!(velocity[1].abs() < 1e-6);
         assert!(velocity[2].abs() < 1e-6);
+    }
+
+    #[test]
+    fn teleport_coords_parse_three_numbers() {
+        let mut parts = "1 64 -3.5".split_whitespace();
+        assert_eq!(parse_teleport_coords(&mut parts), Some((1.0, 64.0, -3.5)));
+    }
+
+    #[test]
+    fn teleport_coords_reject_missing_or_invalid() {
+        let mut parts = "1 64".split_whitespace();
+        assert_eq!(parse_teleport_coords(&mut parts), None);
+
+        let mut parts = "1 x 3".split_whitespace();
+        assert_eq!(parse_teleport_coords(&mut parts), None);
+
+        let mut parts = "NaN 64 0".split_whitespace();
+        assert_eq!(parse_teleport_coords(&mut parts), None);
     }
 }

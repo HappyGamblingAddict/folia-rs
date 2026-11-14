@@ -6,6 +6,7 @@ use folia_core::loot::{
     LootFunctionKind, LootTableKind, NameTarget, RecipeCatalog, RecipeKind, roll_table,
 };
 use folia_core::random::LegacyRandomSource;
+use serde_json::json;
 use std::collections::BTreeMap;
 
 fn silk_touch_pickaxe() -> ItemStack {
@@ -398,5 +399,96 @@ fn roll_entity_rejects_unknown_entity() {
         catalog
             .roll_entity("minecraft:not_a_real_mob", &mut random, &context)
             .is_none()
+    );
+}
+
+#[test]
+fn cow_loot_smelts_with_fire_aspect() {
+    let catalog = LootCatalog::global();
+    let mut tool = ItemStack::new("minecraft:diamond_sword", 1);
+    tool.set_component(ComponentValue::Enchantments(BTreeMap::from([(
+        "minecraft:fire_aspect".to_owned(),
+        1,
+    )])));
+    let mut found = false;
+    for seed in 0..64 {
+        let mut rng = LegacyRandomSource::new(seed);
+        let context = LootContext::new()
+            .with_killed_by_player()
+            .with_tool(&tool)
+            .with_entity_on_fire(false);
+        let roll = catalog
+            .roll_entity("minecraft:cow", &mut rng, &context)
+            .unwrap();
+        if roll
+            .stacks
+            .iter()
+            .any(|stack| stack.item == "minecraft:cooked_beef")
+        {
+            found = true;
+            assert!(
+                !roll
+                    .stacks
+                    .iter()
+                    .any(|stack| stack.item == "minecraft:beef")
+            );
+
+            let mut rng = LegacyRandomSource::new(seed);
+            let context = LootContext::new().with_killed_by_player();
+            let roll = catalog
+                .roll_entity("minecraft:cow", &mut rng, &context)
+                .unwrap();
+            assert!(
+                roll.stacks
+                    .iter()
+                    .any(|stack| stack.item == "minecraft:beef")
+            );
+            break;
+        }
+    }
+    assert!(found, "expected a cooked-beef roll with fire aspect");
+}
+
+#[test]
+fn cow_loot_smelts_when_entity_on_fire() {
+    let catalog = LootCatalog::global();
+    let mut found = false;
+    for seed in 0..64 {
+        let mut rng = LegacyRandomSource::new(seed);
+        let context = LootContext::new()
+            .with_killed_by_player()
+            .with_entity_on_fire(true);
+        let roll = catalog
+            .roll_entity("minecraft:cow", &mut rng, &context)
+            .unwrap();
+        if roll
+            .stacks
+            .iter()
+            .any(|stack| stack.item == "minecraft:cooked_beef")
+        {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected a cooked-beef roll when the entity is on fire"
+    );
+}
+
+#[test]
+fn entity_properties_unknown_predicate_reports_unsupported() {
+    let mut report = folia_core::loot::LootReport::default();
+    let condition = LootCondition::EntityProperties {
+        entity: "this".to_owned(),
+        predicate: json!({"foo": true}),
+    };
+    let context = LootContext::new();
+    let mut rng = LegacyRandomSource::new(1);
+    assert!(!condition.test(&context, &mut rng, &mut report));
+    assert!(
+        report
+            .unsupported_conditions
+            .contains("minecraft:entity_properties")
     );
 }

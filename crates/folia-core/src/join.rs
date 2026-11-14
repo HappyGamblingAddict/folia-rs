@@ -3030,9 +3030,13 @@ fn entity_loot_roll(
         .inventory
         .get(session.selected_slot.max(0) as usize)
         .map_or(0, |stack| stack.enchantment_level("minecraft:looting"));
-    let context = crate::loot::LootContext::new()
+    let mut context = crate::loot::LootContext::new()
         .with_killed_by_player()
         .with_looting_level(looting_level);
+    if let Some(held) = session.selected_item() {
+        context = context.with_tool(held);
+    }
+    context = context.with_entity_on_fire(false);
     crate::loot::LootCatalog::global().roll_entity(entity_type, rng, &context)
 }
 

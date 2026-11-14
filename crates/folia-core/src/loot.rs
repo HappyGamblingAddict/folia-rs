@@ -880,9 +880,200 @@ impl LootCondition {
                         .iter()
                         .all(|(name, value)| state.properties.get(name) == Some(value))
             }
-            LootCondition::EntityProperties { .. }
-            | LootCondition::LocationCheck { .. }
-            | LootCondition::DamageSourceProperties { .. } => {
+            LootCondition::EntityProperties { entity, predicate } => {
+                if entity == "this" {
+                    if predicate.is_null() {
+                        return true;
+                    }
+                    let Some(object) = predicate.as_object() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    if let Some(flags) = object.get("flags") {
+                        if flags.is_null() {
+                        } else if let Some(flags_object) = flags.as_object() {
+                            if let Some(is_on_fire) = flags_object.get("is_on_fire")
+                                && is_on_fire.as_bool() != Some(context.entity_on_fire)
+                            {
+                                return false;
+                            }
+                            for key in flags_object.keys() {
+                                if key != "is_on_fire" {
+                                    report
+                                        .unsupported_conditions
+                                        .insert("minecraft:entity_properties".to_owned());
+                                    return false;
+                                }
+                            }
+                        } else {
+                            report
+                                .unsupported_conditions
+                                .insert("minecraft:entity_properties".to_owned());
+                            return false;
+                        }
+                    }
+                    if object.contains_key("vehicle") {
+                        return false;
+                    }
+                    for key in object.keys() {
+                        if key != "flags" && key != "vehicle" {
+                            report
+                                .unsupported_conditions
+                                .insert("minecraft:entity_properties".to_owned());
+                            return false;
+                        }
+                    }
+                    true
+                } else if entity == "direct_attacker" {
+                    if predicate.is_null() || predicate.as_object().is_some_and(|o| o.is_empty()) {
+                        return true;
+                    }
+                    let Some(object) = predicate.as_object() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    if object.len() != 1 {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    }
+                    let Some(equipment) = object.get("equipment") else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    let Some(equipment_object) = equipment.as_object() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    if equipment_object.len() != 1 {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    }
+                    let Some(mainhand) = equipment_object.get("mainhand") else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    let Some(mainhand_object) = mainhand.as_object() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    if mainhand_object.len() != 1 {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    }
+                    let Some(predicates) = mainhand_object.get("predicates") else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    let Some(predicates_object) = predicates.as_object() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    if predicates_object.len() != 1 {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    }
+                    let Some(enchantments_value) = predicates_object.get("minecraft:enchantments")
+                    else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    let Some(entries) = enchantments_value.as_array() else {
+                        report
+                            .unsupported_conditions
+                            .insert("minecraft:entity_properties".to_owned());
+                        return false;
+                    };
+                    let Some(tool) = context.tool else {
+                        return false;
+                    };
+                    let enchantment_map = enchantment_map(tool).cloned().unwrap_or_default();
+                    for entry in entries {
+                        let Some(entry_object) = entry.as_object() else {
+                            report
+                                .unsupported_conditions
+                                .insert("minecraft:entity_properties".to_owned());
+                            return false;
+                        };
+                        let Some(enchantments) = entry_object.get("enchantments") else {
+                            report
+                                .unsupported_conditions
+                                .insert("minecraft:entity_properties".to_owned());
+                            return false;
+                        };
+                        let names: Vec<String> = match enchantments {
+                            Value::String(name) => vec![name.clone()],
+                            Value::Array(values) => values
+                                .iter()
+                                .filter_map(|value| value.as_str().map(str::to_owned))
+                                .collect(),
+                            _ => {
+                                report
+                                    .unsupported_conditions
+                                    .insert("minecraft:entity_properties".to_owned());
+                                return false;
+                            }
+                        };
+                        let min = entry_object
+                            .get("levels")
+                            .and_then(|levels| levels.get("min"))
+                            .and_then(|value| value.as_i64())
+                            .unwrap_or(1) as i32;
+                        for name in names {
+                            let matched = if let Some(tag) = name.strip_prefix('#') {
+                                enchantment_map.iter().any(|(enchantment, level)| {
+                                    crate::tags::has(
+                                        crate::tags::TagRegistryKind::Enchantment,
+                                        tag,
+                                        enchantment,
+                                    ) && *level >= min
+                                })
+                            } else {
+                                let level = enchantment_map
+                                    .get(&normalized(&name))
+                                    .copied()
+                                    .unwrap_or(0);
+                                level >= min
+                            };
+                            if !matched {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    report
+                        .unsupported_conditions
+                        .insert("minecraft:entity_properties".to_owned());
+                    false
+                }
+            }
+            LootCondition::LocationCheck { .. } | LootCondition::DamageSourceProperties { .. } => {
                 report.unsupported_conditions.insert(self.kind().to_owned());
                 false
             }
@@ -1691,6 +1882,7 @@ pub struct LootContext<'a> {
     pub tool_context: Option<ToolContext>,
     pub block_state: Option<LootBlockState<'a>>,
     pub killed_by_player: bool,
+    pub entity_on_fire: bool,
     /// Enchantment level of the attacking entity (`looting`).
     pub looting_level: i32,
     /// Enchantment level parameter (`enchantment_level` provider).
@@ -1747,6 +1939,11 @@ impl<'a> LootContext<'a> {
 
     pub fn with_killed_by_player(mut self) -> Self {
         self.killed_by_player = true;
+        self
+    }
+
+    pub fn with_entity_on_fire(mut self, value: bool) -> Self {
+        self.entity_on_fire = value;
         self
     }
 

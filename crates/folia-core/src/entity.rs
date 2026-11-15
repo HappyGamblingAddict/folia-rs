@@ -775,8 +775,24 @@ impl SessionEntityTracker {
             // re-send them on the first tick.
             living.metadata.pack_dirty();
 
-            let ai = (spawn.name == "minecraft:zombie")
-                .then(|| AiAgent::zombie(id, Vec3::new(x, y, z), seed ^ i64::from(id)));
+            let mut ai = if spawn.name == "minecraft:zombie" {
+                Some(AiAgent::zombie(
+                    id,
+                    Vec3::new(x, y, z),
+                    seed ^ i64::from(id),
+                ))
+            } else {
+                Some(AiAgent::passive(
+                    id,
+                    Vec3::new(x, y, z),
+                    seed ^ i64::from(id),
+                ))
+            };
+            if let Some(agent) = ai.as_mut() {
+                agent.mob.width = entity.width as f32;
+                agent.mob.height = entity.height as f32;
+                agent.mob.health = spawn.max_health;
+            }
 
             entities.insert(TrackedEntity { entity, living, ai });
         }
@@ -1476,6 +1492,38 @@ mod tests {
             (end.0 - start.0).abs() + (end.1 - start.1).abs() > 0.1,
             "zombie did not wander: {start:?} -> {end:?}"
         );
+        assert!(synced, "wandering must emit position syncs");
+    }
+
+    #[test]
+    fn session_passive_mobs_wander() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let ids: Vec<i32> = tracker.tracked_ids();
+        let starts: Vec<(i32, (f64, f64))> = ids
+            .iter()
+            .filter_map(|id| {
+                tracker
+                    .entity(*id)
+                    .filter(|tracked| tracked.ai.is_some())
+                    .map(|tracked| (*id, (tracked.entity.x, tracked.entity.z)))
+            })
+            .collect();
+        assert!(!starts.is_empty());
+        let mut collider = FlatCollider { ground_y: 63 };
+        let mut synced = false;
+        for _ in 0..400 {
+            let tick = tracker.tick((0.5, 63.0, 0.5), &mut collider);
+            synced |= !tick.packets.is_empty();
+        }
+        let mut moved = false;
+        for (id, start) in &starts {
+            if let Some(tracked) = tracker.entity(*id)
+                && (tracked.entity.x - start.0).abs() + (tracked.entity.z - start.1).abs() > 0.1
+            {
+                moved = true;
+            }
+        }
+        assert!(moved, "passive mobs did not wander");
         assert!(synced, "wandering must emit position syncs");
     }
 

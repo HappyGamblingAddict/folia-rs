@@ -399,3 +399,18 @@ fn equipment_encoder_is_still_the_registered_packet() {
         .expect("equipment packet");
     assert_eq!(packet_id(equipment), 100);
 }
+
+#[test]
+fn passive_session_mobs_have_ai_and_do_not_attack() {
+    let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+    for id in tracker.tracked_ids() {
+        assert!(tracker.entity(id).unwrap().ai.is_some());
+    }
+
+    let mut collider = FlatCollider { ground_y: 63 };
+    let mut damage = 0.0;
+    for _ in 0..80 {
+        damage += tracker.tick((0.5, 63.0, 0.5), &mut collider).player_damage;
+    }
+    assert_eq!(damage, 0.0);
+}

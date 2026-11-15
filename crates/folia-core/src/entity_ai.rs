@@ -1888,6 +1888,19 @@ impl AiAgent {
         agent
     }
 
+    /// Passive mob goals: float, random stroll, and look at players.
+    pub fn passive(id: EntityId, pos: Vec3, seed: i64) -> Self {
+        let mut agent = Self::new(AiMob::new(id, ActorKind::Other, pos, seed));
+        agent.goal_selector.add_goal(0, Box::new(FloatGoal::new()));
+        agent
+            .goal_selector
+            .add_goal(4, Box::new(RandomStrollGoal::new(1.0)));
+        agent
+            .goal_selector
+            .add_goal(5, Box::new(LookAtPlayerGoal::new(8.0)));
+        agent
+    }
+
     pub fn tick(
         &mut self,
         world: &dyn WorldView,

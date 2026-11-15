@@ -1432,10 +1432,12 @@ mod tests {
         let mut tracker = SessionEntityTracker::deterministic((0.0, 63.0, 0.0), 62, 7);
         let mut zombie = None;
         for id in tracker.entities.ids() {
-            if tracker
-                .entity(id)
-                .is_some_and(|tracked| tracked.ai.is_some())
-            {
+            if tracker.entity(id).is_some_and(|tracked| {
+                tracked
+                    .ai
+                    .as_ref()
+                    .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+            }) {
                 zombie = Some(id);
                 break;
             }
@@ -1465,10 +1467,12 @@ mod tests {
         let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
         let mut zombie = None;
         for id in tracker.entities.ids() {
-            if tracker
-                .entity(id)
-                .is_some_and(|tracked| tracked.ai.is_some())
-            {
+            if tracker.entity(id).is_some_and(|tracked| {
+                tracked
+                    .ai
+                    .as_ref()
+                    .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+            }) {
                 zombie = Some(id);
                 break;
             }
@@ -1504,7 +1508,11 @@ mod tests {
             .filter_map(|id| {
                 tracker
                     .entity(*id)
-                    .filter(|tracked| tracked.ai.is_some())
+                    .filter(|tracked| {
+                        tracked.ai.as_ref().is_some_and(|agent| {
+                            agent.mob.kind == crate::entity_ai::ActorKind::Other
+                        })
+                    })
                     .map(|tracked| (*id, (tracked.entity.x, tracked.entity.z)))
             })
             .collect();
@@ -1532,10 +1540,12 @@ mod tests {
         let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
         let mut zombie = None;
         for id in tracker.entities.ids() {
-            if tracker
-                .entity(id)
-                .is_some_and(|tracked| tracked.ai.is_some())
-            {
+            if tracker.entity(id).is_some_and(|tracked| {
+                tracked
+                    .ai
+                    .as_ref()
+                    .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+            }) {
                 zombie = Some(id);
                 break;
             }
@@ -1609,9 +1619,12 @@ mod tests {
             .tracked_ids()
             .into_iter()
             .find(|id| {
-                tracker
-                    .entity(*id)
-                    .is_some_and(|tracked| tracked.ai.is_some())
+                tracker.entity(*id).is_some_and(|tracked| {
+                    tracked
+                        .ai
+                        .as_ref()
+                        .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+                })
             })
             .expect("session tracker spawns a zombie");
         let (x, z) = {
@@ -1643,9 +1656,12 @@ mod tests {
             .tracked_ids()
             .into_iter()
             .find(|id| {
-                tracker
-                    .entity(*id)
-                    .is_some_and(|tracked| tracked.ai.is_some())
+                tracker.entity(*id).is_some_and(|tracked| {
+                    tracked
+                        .ai
+                        .as_ref()
+                        .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+                })
             })
             .expect("session tracker spawns a zombie");
         tracker

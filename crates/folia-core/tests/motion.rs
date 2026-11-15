@@ -55,10 +55,12 @@ fn session_tick_reports_player_knockback_from_mob_attacks() {
     let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
     let mut zombie = None;
     for id in tracker.tracked_ids() {
-        if tracker
-            .entity(id)
-            .is_some_and(|tracked| tracked.ai.is_some())
-        {
+        if tracker.entity(id).is_some_and(|tracked| {
+            tracked
+                .ai
+                .as_ref()
+                .is_some_and(|agent| agent.mob.kind == folia_core::entity_ai::ActorKind::Zombie)
+        }) {
             zombie = Some(id);
             break;
         }

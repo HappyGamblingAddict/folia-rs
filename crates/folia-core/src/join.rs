@@ -7484,9 +7484,12 @@ mod tests {
             .tracked_ids()
             .into_iter()
             .find(|id| {
-                tracker
-                    .entity(*id)
-                    .is_some_and(|tracked| tracked.ai.is_some())
+                tracker.entity(*id).is_some_and(|tracked| {
+                    tracked
+                        .ai
+                        .as_ref()
+                        .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+                })
             })
             .expect("session tracker spawns a zombie");
         let result = tracker
@@ -7510,9 +7513,12 @@ mod tests {
             .tracked_ids()
             .into_iter()
             .find(|id| {
-                tracker
-                    .entity(*id)
-                    .is_some_and(|tracked| tracked.ai.is_some())
+                tracker.entity(*id).is_some_and(|tracked| {
+                    tracked
+                        .ai
+                        .as_ref()
+                        .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Zombie)
+                })
             })
             .expect("session tracker spawns a zombie");
         assert!(mob_motion_packet(&tracker, zombie).is_none());

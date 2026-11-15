@@ -2592,6 +2592,12 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   (production behavior + chain scan). Rails, doors/trapdoors,
   dispensers/droppers/hoppers, daylight detectors, target blocks, note blocks,
   bells, copper bulbs, and crafters remain explicit gaps.
+- **Progress (2026-11-13):** rail shapes (9eb20fe, pending CI) — new
+  `rail.rs` with all four rail block ids, `RailShape` names/parsing,
+  `connected_shape` straight/curve preservation, and `RailBehavior` on
+  place/neighbor/update-shape; wired into `tick::behavior_for`. 6
+  `tests/rails.rs`. Stage A excludes minecarts/powered-rail signal
+  propagation. Expected 1,398 once CI confirms.
 
 ### P6.5 Pistons and moving blocks `[~]` `L`
 

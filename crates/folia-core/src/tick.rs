@@ -1130,6 +1130,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::TRIPWIRE_BEHAVIOR
     } else if crate::redstone::is_tripwire_hook(state) {
         &crate::redstone::TRIPWIRE_HOOK_BEHAVIOR
+    } else if crate::rail::is_rail(state) {
+        &crate::rail::RAIL_BEHAVIOR
     } else if crate::redstone::is_target_block(state) {
         &crate::redstone::TARGET_BLOCK_BEHAVIOR
     } else if crate::redstone::is_dispenser_like(state) {

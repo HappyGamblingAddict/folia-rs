@@ -1490,6 +1490,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
     let mut pending_summon: Option<PendingSummon> = None;
     let mut pending_kill = false;
+    let mut hazards = PlayerHazards::default();
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -1592,7 +1593,17 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let (tick, drop_tick, projectile_tick, inventory_before, submerged, spawn_packets) = {
+            let (
+                tick,
+                drop_tick,
+                projectile_tick,
+                inventory_before,
+                submerged,
+                spawn_packets,
+                in_lava,
+                in_fire,
+                on_cactus,
+            ) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
                 let eye_pos = BlockPos::new(
@@ -1608,6 +1619,38 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             Some("minecraft:water" | "minecraft:flowing_water")
                         ) || state.name == "minecraft:bubble_column"
                     });
+                let feet_pos = BlockPos::new(
+                    session.x.floor() as i32,
+                    (session.y + 0.1).floor() as i32,
+                    session.z.floor() as i32,
+                );
+                let head_pos = eye_pos;
+                let below_pos = BlockPos::new(
+                    session.x.floor() as i32,
+                    (session.y - 0.1).floor() as i32,
+                    session.z.floor() as i32,
+                );
+                let feet_state = collider.block_at(feet_pos.x(), feet_pos.y(), feet_pos.z());
+                let head_state = collider.block_at(head_pos.x(), head_pos.y(), head_pos.z());
+                let below_state = collider.block_at(below_pos.x(), below_pos.y(), below_pos.z());
+                let is_lava = |state: &Option<crate::chunk::BlockState>| {
+                    state.as_ref().is_some_and(|s| {
+                        matches!(s.name.as_str(), "minecraft:lava" | "minecraft:flowing_lava")
+                    })
+                };
+                let is_fire = |state: &Option<crate::chunk::BlockState>| {
+                    state.as_ref().is_some_and(|s| {
+                        matches!(s.name.as_str(), "minecraft:fire" | "minecraft:soul_fire")
+                    })
+                };
+                let in_lava = is_lava(&feet_state) || is_lava(&head_state);
+                let in_fire = is_fire(&feet_state) || is_fire(&head_state);
+                let on_cactus = below_state
+                    .as_ref()
+                    .is_some_and(|s| s.name == "minecraft:cactus")
+                    || feet_state
+                        .as_ref()
+                        .is_some_and(|s| s.name == "minecraft:cactus");
                 let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
                 let targets = tracked_entities.collision_targets();
                 let inventory_before = session.inventory.clone();
@@ -1637,6 +1680,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     inventory_before,
                     submerged,
                     spawn_packets,
+                    in_lava,
+                    in_fire,
+                    on_cactus,
                 )
             };
             for packet in &tick.packets {
@@ -1754,6 +1800,41 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
                 {
                     eprintln!("[join] could not save vitals death: {error}");
+                }
+            }
+            if !awaiting_respawn
+                && let Some((damage, kind, message)) = hazards.tick(in_lava, in_fire, on_cactus)
+            {
+                let result = damage_player_with_rng(
+                    &mut session,
+                    player_entity,
+                    damage,
+                    &mut drop_rng,
+                    kind,
+                );
+                for packet in &result.packets {
+                    write_packet(&mut stream, packet)?;
+                }
+                if result.died && !awaiting_respawn {
+                    drop_player_death_items(
+                        &mut stream,
+                        &mut drop_entities,
+                        &mut drop_rng,
+                        &mut session,
+                    )?;
+                    write_packet(&mut stream, &combat_kill_packet(message))?;
+                    awaiting_respawn = true;
+                    death_at = Some(Instant::now());
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
+                    {
+                        eprintln!("[join] could not save hazard death: {error}");
+                    }
+                } else if result.damaged {
+                    println!(
+                        "[join] {} took {:.1} hazard damage; health {:.0}",
+                        session.name, damage, session.health
+                    );
                 }
             }
             for hit in &projectile_tick.hits {
@@ -2975,6 +3056,62 @@ fn run_session_spawn_cycle(
         }
     }
     packets
+}
+
+/// Simplified environmental hazard timer state. Fire immunity ticks, armor,
+/// and enchantment details beyond `DamageKind::Fire` are not modeled here.
+#[derive(Default)]
+struct PlayerHazards {
+    lava_hurt: u32,
+    fire_hurt: u32,
+    cactus_hurt: u32,
+}
+
+impl PlayerHazards {
+    fn tick(
+        &mut self,
+        in_lava: bool,
+        in_fire: bool,
+        on_cactus: bool,
+    ) -> Option<(f32, crate::effects::DamageKind, &'static str)> {
+        let mut result = None;
+        if in_lava {
+            if self.lava_hurt == 0 {
+                self.lava_hurt = 10;
+                result = Some((
+                    4.0,
+                    crate::effects::DamageKind::Fire,
+                    "Player tried to swim in lava",
+                ));
+            }
+        } else if in_fire {
+            if self.fire_hurt == 0 {
+                self.fire_hurt = 20;
+                result = Some((
+                    1.0,
+                    crate::effects::DamageKind::Fire,
+                    "Player burned to death",
+                ));
+            }
+        } else if on_cactus && self.cactus_hurt == 0 {
+            self.cactus_hurt = 10;
+            result = Some((
+                1.0,
+                crate::effects::DamageKind::Physical,
+                "Player was pricked to death",
+            ));
+        }
+        if self.lava_hurt > 0 {
+            self.lava_hurt -= 1;
+        }
+        if self.fire_hurt > 0 {
+            self.fire_hurt -= 1;
+        }
+        if self.cactus_hurt > 0 {
+            self.cactus_hurt -= 1;
+        }
+        result
+    }
 }
 
 fn bow_power_for_ticks(ticks: u64) -> f64 {
@@ -8207,6 +8344,99 @@ mod tests {
     #[test]
     fn seed_command_formats_the_generator_seed() {
         assert_eq!(seed_message(123), "Seed: [123]");
+    }
+
+    #[test]
+    fn hazards_lava_ticks_every_ten() {
+        let mut hazards = PlayerHazards::default();
+        assert_eq!(
+            hazards.tick(true, false, false),
+            Some((
+                4.0,
+                crate::effects::DamageKind::Fire,
+                "Player tried to swim in lava"
+            ))
+        );
+        for _ in 0..9 {
+            assert_eq!(hazards.tick(true, false, false), None);
+        }
+        assert_eq!(
+            hazards.tick(true, false, false),
+            Some((
+                4.0,
+                crate::effects::DamageKind::Fire,
+                "Player tried to swim in lava"
+            ))
+        );
+    }
+
+    #[test]
+    fn hazards_fire_ticks_every_twenty() {
+        let mut hazards = PlayerHazards::default();
+        assert_eq!(
+            hazards.tick(false, true, false),
+            Some((
+                1.0,
+                crate::effects::DamageKind::Fire,
+                "Player burned to death"
+            ))
+        );
+        for _ in 0..19 {
+            assert_eq!(hazards.tick(false, true, false), None);
+        }
+        assert_eq!(
+            hazards.tick(false, true, false),
+            Some((
+                1.0,
+                crate::effects::DamageKind::Fire,
+                "Player burned to death"
+            ))
+        );
+    }
+
+    #[test]
+    fn hazards_cactus_ticks_every_ten() {
+        let mut hazards = PlayerHazards::default();
+        assert_eq!(
+            hazards.tick(false, false, true),
+            Some((
+                1.0,
+                crate::effects::DamageKind::Physical,
+                "Player was pricked to death"
+            ))
+        );
+        for _ in 0..9 {
+            assert_eq!(hazards.tick(false, false, true), None);
+        }
+        assert_eq!(
+            hazards.tick(false, false, true),
+            Some((
+                1.0,
+                crate::effects::DamageKind::Physical,
+                "Player was pricked to death"
+            ))
+        );
+    }
+
+    #[test]
+    fn hazards_no_flags_return_none() {
+        let mut hazards = PlayerHazards::default();
+        for _ in 0..25 {
+            assert_eq!(hazards.tick(false, false, false), None);
+        }
+    }
+
+    #[test]
+    fn hazards_precedence_lava_over_fire_and_cactus() {
+        let mut hazards = PlayerHazards::default();
+        assert_eq!(
+            hazards.tick(true, true, true),
+            Some((
+                4.0,
+                crate::effects::DamageKind::Fire,
+                "Player tried to swim in lava"
+            ))
+        );
     }
 
     #[test]

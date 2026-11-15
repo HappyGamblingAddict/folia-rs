@@ -1603,6 +1603,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 in_lava,
                 in_fire,
                 on_cactus,
+                hazard_death_rewards,
+                hazard_reward_packets,
             ) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
@@ -1656,6 +1658,37 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
+                let hazard_death_rewards: Vec<(String, crate::math::BlockPos)> = tick
+                    .hazard_deaths
+                    .iter()
+                    .filter_map(|id| {
+                        tracked_entities.entity(*id).and_then(|tracked| {
+                            let name =
+                                crate::registry::entity_type_name(tracked.entity.entity_type)?
+                                    .to_owned();
+                            let pos = crate::math::BlockPos::new(
+                                tracked.entity.x.floor() as i32,
+                                tracked.entity.y.floor() as i32,
+                                tracked.entity.z.floor() as i32,
+                            );
+                            Some((name, pos))
+                        })
+                    })
+                    .collect();
+                let mut hazard_reward_packets = Vec::new();
+                for (entity_type, pos) in &hazard_death_rewards {
+                    let (stacks, xp) = entity_death_rewards(&session, entity_type, &mut drop_rng);
+                    hazard_reward_packets.extend(drop_entities.spawn_stacks(
+                        *pos,
+                        &stacks,
+                        &mut drop_rng,
+                    ));
+                    hazard_reward_packets.extend(drop_entities.spawn_experience(
+                        *pos,
+                        xp,
+                        &mut drop_rng,
+                    ));
+                }
                 let spawn_packets = if !awaiting_respawn && game_tick % 100 == 99 {
                     let chunk = crate::spawn::ChunkPos::new(
                         (session.x.floor() as i32).div_euclid(16),
@@ -1683,6 +1716,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     in_lava,
                     in_fire,
                     on_cactus,
+                    hazard_death_rewards,
+                    hazard_reward_packets,
                 )
             };
             for packet in &tick.packets {
@@ -1696,6 +1731,24 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     return Err(error);
                 }
+            }
+            for packet in &hazard_reward_packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        drop_entities.clear();
+                        projectiles.clear();
+                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            for (entity_type, _) in &hazard_death_rewards {
+                println!(
+                    "[join] session mob {} died to environmental hazard",
+                    entity_type
+                );
             }
             for packet in &drop_tick.packets {
                 if let Err(error) = write_packet(&mut stream, packet) {

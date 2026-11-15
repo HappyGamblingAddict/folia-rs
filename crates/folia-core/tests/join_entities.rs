@@ -457,3 +457,52 @@ fn sweep_targets_hits_adjacent_mobs() {
     let cow_entity = tracker.entity(cow).expect("cow still tracked");
     assert!(cow_entity.living.health < 10.0);
 }
+
+struct LavaFeetCollider;
+
+impl folia_core::entity::BlockCollider for LavaFeetCollider {
+    fn is_solid(&mut self, _x: i32, y: i32, _z: i32) -> bool {
+        y < 63
+    }
+
+    fn block_at(&mut self, _x: i32, y: i32, _z: i32) -> Option<folia_core::chunk::BlockState> {
+        if y == 63 {
+            Some(folia_core::chunk::BlockState {
+                name: "minecraft:lava".to_owned(),
+                properties: Vec::new(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+fn hazard_death_spawns_rewards() {
+    let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+    let cow = tracker
+        .tracked_ids()
+        .into_iter()
+        .find(|id| {
+            tracker.entity(*id).is_some_and(|tracked| {
+                folia_core::spawn::entity_type_by_id(tracked.entity.entity_type)
+                    .is_some_and(|t| t.name == "minecraft:cow")
+            })
+        })
+        .expect("cow");
+    let mut collider = LavaFeetCollider;
+    let mut reported = 0usize;
+    for _ in 0..40 {
+        let tick = tracker.tick((0.5, 63.0, 0.5), &mut collider);
+        for id in &tick.hazard_deaths {
+            if *id == cow {
+                reported += 1;
+            }
+        }
+        if !tracker.tracks(cow) {
+            break;
+        }
+    }
+    assert_eq!(reported, 1, "lava hazard death reported once for rewards");
+    assert!(!tracker.tracks(cow));
+}

@@ -394,6 +394,7 @@ pub struct TrackedEntity {
     /// model. Cows/pigs keep `None`; the session zombie wanders and looks at
     /// the player.
     pub ai: Option<AiAgent>,
+    pub hazards: MobHazards,
 }
 
 impl std::fmt::Debug for TrackedEntity {
@@ -407,6 +408,46 @@ impl std::fmt::Debug for TrackedEntity {
     }
 }
 
+/// Per-mob environmental hazard timers. Matches player hazard timings:
+/// lava 4.0 every 10 ticks, fire 1.0 every 20, cactus 1.0 every 10
+/// (lava > fire > cactus). Timers decrement each call.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MobHazards {
+    pub lava_hurt: u32,
+    pub fire_hurt: u32,
+    pub cactus_hurt: u32,
+}
+
+impl MobHazards {
+    pub fn tick(&mut self, in_lava: bool, in_fire: bool, on_cactus: bool) -> Option<f32> {
+        let mut damage = None;
+        if in_lava {
+            if self.lava_hurt == 0 {
+                self.lava_hurt = 10;
+                damage = Some(4.0);
+            }
+        } else if in_fire {
+            if self.fire_hurt == 0 {
+                self.fire_hurt = 20;
+                damage = Some(1.0);
+            }
+        } else if on_cactus && self.cactus_hurt == 0 {
+            self.cactus_hurt = 10;
+            damage = Some(1.0);
+        }
+        if self.lava_hurt > 0 {
+            self.lava_hurt -= 1;
+        }
+        if self.fire_hurt > 0 {
+            self.fire_hurt -= 1;
+        }
+        if self.cactus_hurt > 0 {
+            self.cactus_hurt -= 1;
+        }
+        damage
+    }
+}
+
 /// Packets produced by one session entity tick.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SessionEntityTick {
@@ -416,6 +457,8 @@ pub struct SessionEntityTick {
     pub player_damage: f32,
     /// Knockback vector from the last mob attack this tick, if any.
     pub player_knockback: Option<[f64; 3]>,
+    /// Mobs killed by environmental hazards this tick.
+    pub hazard_deaths: Vec<i32>,
 }
 
 /// Last position packet payload sent to one viewer for one entity.
@@ -794,7 +837,12 @@ impl SessionEntityTracker {
                 agent.mob.health = spawn.max_health;
             }
 
-            entities.insert(TrackedEntity { entity, living, ai });
+            entities.insert(TrackedEntity {
+                entity,
+                living,
+                ai,
+                hazards: MobHazards::default(),
+            });
         }
 
         Self {
@@ -931,7 +979,12 @@ impl SessionEntityTracker {
             agent.mob.health = max_health;
         }
 
-        self.entities.insert(TrackedEntity { entity, living, ai });
+        self.entities.insert(TrackedEntity {
+            entity,
+            living,
+            ai,
+            hazards: MobHazards::default(),
+        });
         Some(id)
     }
 
@@ -990,13 +1043,18 @@ impl SessionEntityTracker {
             }
 
             let before = (tracked.entity.x, tracked.entity.y, tracked.entity.z);
+            // Read feet/below once for AI environment and hazard checks.
+            let feet_pos = crate::math::BlockPos::new(
+                tracked.entity.x.floor() as i32,
+                tracked.entity.y.floor() as i32,
+                tracked.entity.z.floor() as i32,
+            );
+            let below_pos = feet_pos.below();
+            let feet_block = collider.block_at(feet_pos.x(), feet_pos.y(), feet_pos.z());
+            let below_block = collider.block_at(below_pos.x(), below_pos.y(), below_pos.z());
             if let Some(agent) = &mut tracked.ai {
                 agent.mob.health = tracked.living.health;
                 agent.mob.pos = Vec3::new(tracked.entity.x, tracked.entity.y, tracked.entity.z);
-                let feet = agent.mob.block_pos();
-                let feet_block = collider.block_at(feet.x(), feet.y(), feet.z());
-                let below = feet.below();
-                let below_block = collider.block_at(below.x(), below.y(), below.z());
                 let environment = (feet_block.is_some() || below_block.is_some())
                     .then_some((feet_block.as_ref(), below_block.as_ref()));
                 let mut events = Vec::new();
@@ -1032,6 +1090,27 @@ impl SessionEntityTracker {
                 tracked.entity.z = agent.mob.pos.z();
             }
             tracked.entity.tick_physics(collider);
+            let in_lava = feet_block.as_ref().is_some_and(|s| {
+                matches!(s.name.as_str(), "minecraft:lava" | "minecraft:flowing_lava")
+            }) || below_block.as_ref().is_some_and(|s| {
+                matches!(s.name.as_str(), "minecraft:lava" | "minecraft:flowing_lava")
+            });
+            let in_fire = feet_block.as_ref().is_some_and(|s| {
+                matches!(s.name.as_str(), "minecraft:fire" | "minecraft:soul_fire")
+            });
+            let on_cactus = feet_block
+                .as_ref()
+                .is_some_and(|s| s.name == "minecraft:cactus")
+                || below_block
+                    .as_ref()
+                    .is_some_and(|s| s.name == "minecraft:cactus");
+            if let Some(damage) = tracked.hazards.tick(in_lava, in_fire, on_cactus) {
+                let hurt = tracked.living.hurt(damage);
+                out.packets.extend(hurt.packets);
+                if hurt.died {
+                    out.hazard_deaths.push(id);
+                }
+            }
             let moved = (tracked.entity.x, tracked.entity.y, tracked.entity.z) != before;
             if moved {
                 out.packets
@@ -1860,6 +1939,63 @@ mod tests {
         assert_eq!(
             tracker.count_category(crate::spawn::MobCategory::Monster),
             1
+        );
+    }
+
+    struct LavaFeetCollider;
+
+    impl BlockCollider for LavaFeetCollider {
+        fn is_solid(&mut self, _x: i32, y: i32, _z: i32) -> bool {
+            y < 63
+        }
+
+        fn block_at(&mut self, _x: i32, y: i32, _z: i32) -> Option<BlockState> {
+            if y == 63 {
+                Some(BlockState {
+                    name: "minecraft:lava".to_owned(),
+                    properties: Vec::new(),
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn session_mob_lava_damage_kills_and_reports() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let cow = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker.entity(*id).is_some_and(|tracked| {
+                    crate::spawn::entity_type_by_id(tracked.entity.entity_type)
+                        .is_some_and(|t| t.name == "minecraft:cow")
+                })
+            })
+            .expect("cow");
+        // Cow max health 10, lava deals 4 every 10 ticks -> dies on tick 30 (1-based).
+        let mut collider = LavaFeetCollider;
+        let mut cow_hazard_kills = 0usize;
+        for _ in 0..40 {
+            let tick = tracker.tick((0.5, 63.0, 0.5), &mut collider);
+            for id in &tick.hazard_deaths {
+                if *id == cow {
+                    cow_hazard_kills += 1;
+                }
+            }
+            // Drive death animation/removal if it started.
+            if !tracker.tracks(cow) {
+                break;
+            }
+        }
+        assert_eq!(
+            cow_hazard_kills, 1,
+            "cow hazard death should be reported once"
+        );
+        assert!(
+            !tracker.tracks(cow),
+            "dead cow should be removed after animation"
         );
     }
 

@@ -2272,8 +2272,11 @@ are still open.
   and drops.
 - **Why:** Passive mobs are the baseline world population and food/wool source.
 - **Done when:** Spawn/breed/drop behavior matches Java.
-
-### P5.8 Hostile mobs `[ ]` `XL`
+- **Progress (2026-11-13):** session cows/pigs now own `AiAgent::passive`
+  (Float + RandomStroll + LookAtPlayer), wander and look at the player, and
+  never emit attacks. Zombie AI unchanged. 2 tests (entity lib +
+  join_entities). CI status pending for ccce884 (expected 1,382). CI green at
+  920cc9f (1,380 tests).
 
 - **What:** Implement zombies, skeletons, creepers, spiders, endermen, witches,
   pillagers, drowned, husks, etc., including targeting, attacks, and drops.

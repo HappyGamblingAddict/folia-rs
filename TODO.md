@@ -2231,6 +2231,14 @@ are still open.
   effects, client sequence acknowledgement, projectile pickup. CI green at
   4f24e17 (1,313 tests).
 
+- **Progress (2026-11-13):** `/summon` (1b888f9, pending CI) —
+  operator-only `/summon <entity> [x y z]`; `SessionEntityTracker::spawn_mob`
+  creates a tracked entity with dimensions/health/AI (zombie/passive),
+  `enter_packets_for` sends Add Entity + metadata; default position is 2 blocks
+  east of the player. 2 entity lib tests + 2 join parser tests + 1
+  join_entities test. First building block for natural spawning. CI status
+  pending at brief time (expected 1,387).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

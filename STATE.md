@@ -38,7 +38,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 passive AI is wired; remaining is natural mob spawning into sessions, mob despawn/tracking ranges, rails/minecarts, structure terrain adaptation, region isolation, and plugin chat events.
+1. P5 `/summon` and passive AI are wired; remaining is natural mob spawning into sessions, mob despawn/tracking ranges, rails/minecarts, structure terrain adaptation, region isolation, and plugin chat events.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.

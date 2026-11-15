@@ -922,6 +922,10 @@ impl SessionEntityTracker {
 
     /// One session tick: physics/gravity, AI environment, dirty metadata,
     /// death animation, and out-of-range removal.
+    ///
+    /// Removal uses the vanilla despawn-distance tracking window as the session
+    /// cleanup bound: per-entity range is the type's spawn-category
+    /// `despawn_distance()` clamped to at least `SESSION_TRACKING_RANGE`.
     pub fn tick(
         &mut self,
         player: (f64, f64, f64),
@@ -929,7 +933,6 @@ impl SessionEntityTracker {
     ) -> SessionEntityTick {
         self.game_time += 1;
         let mut out = SessionEntityTick::default();
-        let range_sq = SESSION_TRACKING_RANGE * SESSION_TRACKING_RANGE;
         let ai_world = &self.ai_world;
         let player_actor = ActorView::player(0, Vec3::new(player.0, player.1, player.2));
         let actors = [player_actor];
@@ -938,10 +941,18 @@ impl SessionEntityTracker {
             let Some(tracked) = self.entities.get_mut(id) else {
                 continue;
             };
+            let tracking_range = crate::spawn::entity_type_by_id(tracked.entity.entity_type)
+                .map(|entity_type| {
+                    entity_type
+                        .category
+                        .despawn_distance()
+                        .max(SESSION_TRACKING_RANGE)
+                })
+                .unwrap_or(SESSION_TRACKING_RANGE);
             let dx = tracked.entity.x - player.0;
             let dy = tracked.entity.y - player.1;
             let dz = tracked.entity.z - player.2;
-            if dx * dx + dy * dy + dz * dz > range_sq {
+            if dx * dx + dy * dy + dz * dz > tracking_range * tracking_range {
                 out.packets.push(remove_entities_packet(&[id]));
                 out.removed.push(id);
                 self.entities.remove_entity(id);
@@ -1785,5 +1796,27 @@ mod tests {
                 .is_none()
         );
         assert_eq!(tracker.len(), before);
+    }
+
+    #[test]
+    fn session_mobs_track_beyond_eighty_blocks_until_category_range() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        assert_eq!(tracker.len(), 3);
+        let mut collider = FlatCollider { ground_y: 63 };
+
+        let tick = tracker.tick((100.0, 63.0, 0.5), &mut collider);
+        assert!(
+            tick.removed.is_empty(),
+            "mobs within 128 blocks must remain tracked"
+        );
+        assert_eq!(tracker.len(), 3);
+
+        let tick = tracker.tick((140.0, 63.0, 0.5), &mut collider);
+        assert_eq!(
+            tick.removed.len(),
+            3,
+            "mobs beyond 128 blocks must be removed"
+        );
+        assert!(tracker.is_empty());
     }
 }

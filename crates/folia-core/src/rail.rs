@@ -1,9 +1,10 @@
-//! Stage-A rail block shapes and neighbour-driven reconnection.
+//! Stage-A rail block shapes and neighbour-driven reconnection/powering.
 
 use crate::chunk::BlockState;
 use crate::math::{BlockPos, Direction};
 use crate::redstone;
 use crate::tick::{BlockBehavior, TickWorld};
+use std::collections::HashSet;
 use std::io;
 
 pub const RAIL_BLOCKS: [&str; 4] = [
@@ -133,6 +134,92 @@ pub fn connected_shape(
     RailShape::NorthSouth
 }
 
+fn set_property(state: &mut BlockState, key: &str, value: &str) {
+    if let Some((_, existing)) = state.properties.iter_mut().find(|(name, _)| name == key) {
+        *existing = value.to_owned();
+    } else {
+        state.properties.push((key.to_owned(), value.to_owned()));
+    }
+}
+
+fn property_bool(state: &BlockState, key: &str) -> bool {
+    matches!(redstone::property(state, key), Some("true"))
+}
+
+fn rail_power_source(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<bool> {
+    let offsets = [
+        (0, 1, 0),
+        (0, -1, 0),
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+    ];
+    for (dx, dy, dz) in offsets {
+        let Some(state) = world.block_state(pos.offset(dx, dy, dz))? else {
+            continue;
+        };
+        let powered = match state.name.as_str() {
+            "minecraft:redstone_block" => true,
+            "minecraft:redstone_wire" => {
+                redstone::property(&state, "power")
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(0)
+                    > 0
+            }
+            name if name.ends_with("_button")
+                || name.ends_with("_pressure_plate")
+                || name == "minecraft:lever"
+                || name == "minecraft:tripwire_hook"
+                || name == "minecraft:tripwire" =>
+            {
+                property_bool(&state, "powered")
+            }
+            "minecraft:redstone_torch" | "minecraft:redstone_wall_torch" => {
+                property_bool(&state, "lit")
+            }
+            "minecraft:target" => {
+                redstone::property(&state, "power")
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(0)
+                    > 0
+            }
+            "minecraft:detector_rail" => property_bool(&state, "powered"),
+            _ => false,
+        };
+        if powered {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Simplification: powered-rail chain propagation searches horizontal rail
+/// neighbours up to 8 blocks without separate ascending/turn-specific rules.
+fn powered_rail_active(
+    world: &mut TickWorld<'_>,
+    pos: BlockPos,
+    depth: i32,
+    visited: &mut HashSet<BlockPos>,
+) -> io::Result<bool> {
+    if depth > 8 || !visited.insert(pos) {
+        return Ok(false);
+    }
+    if rail_power_source(world, pos)? {
+        return Ok(true);
+    }
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let neighbor = pos.offset(dx, 0, dz);
+        let Some(state) = world.block_state(neighbor)? else {
+            continue;
+        };
+        if is_rail(&state) && powered_rail_active(world, neighbor, depth + 1, visited)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub struct RailBehavior;
 
 pub static RAIL_BEHAVIOR: RailBehavior = RailBehavior;
@@ -145,7 +232,7 @@ impl BlockBehavior for RailBehavior {
         state: &BlockState,
         _old: Option<&BlockState>,
     ) -> io::Result<()> {
-        let new_state = compute_rail_shape(world, pos, state)?;
+        let new_state = compute_rail_state(world, pos, state)?;
         if new_state != *state {
             let _ = world.set_block(pos, new_state)?;
         }
@@ -159,7 +246,7 @@ impl BlockBehavior for RailBehavior {
         state: &BlockState,
         _source: BlockPos,
     ) -> io::Result<()> {
-        let new_state = compute_rail_shape(world, pos, state)?;
+        let new_state = compute_rail_state(world, pos, state)?;
         if new_state != *state {
             let _ = world.set_block(pos, new_state)?;
         }
@@ -174,13 +261,44 @@ impl BlockBehavior for RailBehavior {
         _neighbor: &BlockState,
         state: &BlockState,
     ) -> io::Result<Option<BlockState>> {
-        let new_state = compute_rail_shape(world, pos, state)?;
+        let new_state = compute_rail_state(world, pos, state)?;
         if new_state != *state {
             Ok(Some(new_state))
         } else {
             Ok(None)
         }
     }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        let new_state = compute_rail_state(world, pos, state)?;
+        if new_state != *state {
+            let _ = world.set_block(pos, new_state)?;
+        }
+        Ok(())
+    }
+}
+
+fn compute_rail_state(
+    world: &mut TickWorld<'_>,
+    pos: BlockPos,
+    state: &BlockState,
+) -> io::Result<BlockState> {
+    let mut new_state = compute_rail_shape(world, pos, state)?;
+    if new_state.name == "minecraft:powered_rail" {
+        let mut visited = HashSet::new();
+        let active = powered_rail_active(world, pos, 0, &mut visited)?;
+        set_property(
+            &mut new_state,
+            "powered",
+            if active { "true" } else { "false" },
+        );
+    }
+    Ok(new_state)
 }
 
 fn compute_rail_shape(
@@ -212,16 +330,6 @@ fn compute_rail_shape(
     }
 
     let mut new_state = state.clone();
-    if let Some((_, value)) = new_state
-        .properties
-        .iter_mut()
-        .find(|(name, _)| name == "shape")
-    {
-        *value = new_shape.name().to_owned();
-    } else {
-        new_state
-            .properties
-            .push(("shape".to_owned(), new_shape.name().to_owned()));
-    }
+    set_property(&mut new_state, "shape", new_shape.name());
     Ok(new_state)
 }

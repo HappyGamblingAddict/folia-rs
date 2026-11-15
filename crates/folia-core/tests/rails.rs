@@ -1,4 +1,4 @@
-//! Focused tests for stage-A rail block shapes.
+//! Focused tests for stage-A rail block shapes and powered-rail state.
 
 use folia_core::anvil::Compression;
 use folia_core::block_update;
@@ -44,6 +44,17 @@ fn rail_state() -> BlockState {
     state
         .properties
         .push(("shape".to_owned(), "north_south".to_owned()));
+    state
+}
+
+fn powered_rail_state() -> BlockState {
+    let mut state = default_block_state("minecraft:powered_rail").expect("powered rail state");
+    state
+        .properties
+        .push(("shape".to_owned(), "east_west".to_owned()));
+    state
+        .properties
+        .push(("powered".to_owned(), "false".to_owned()));
     state
 }
 
@@ -163,4 +174,98 @@ fn rail_corner_feeds_a_curve() {
     }
     let updated = storage.block_state_at(2, -60, 1).expect("cached");
     assert_eq!(rail::shape_of(&updated), Some(RailShape::SouthEast));
+}
+
+fn settle(storage: &mut WorldStorage, ticks: u64) {
+    for tick in 1..=ticks {
+        tick::tick_world(storage, tick).unwrap();
+    }
+}
+
+#[test]
+fn powered_rail_next_to_redstone_block_is_powered() {
+    let mut storage = flat_storage("powered-next-to-source");
+    let rail_pos = BlockPos::new(1, -60, 1);
+    let source_pos = BlockPos::new(0, -60, 1);
+    place(&mut storage, rail_pos, powered_rail_state());
+    place(
+        &mut storage,
+        source_pos,
+        default_block_state("minecraft:redstone_block").expect("redstone block"),
+    );
+    settle(&mut storage, 4);
+    let updated = storage.block_state_at(1, -60, 1).expect("cached");
+    assert_eq!(
+        folia_core::redstone::property(&updated, "powered"),
+        Some("true")
+    );
+}
+
+#[test]
+fn powered_rail_chain_powers_up_to_eight_blocks() {
+    let mut storage = flat_storage("powered-chain");
+    let source_pos = BlockPos::new(0, -60, 1);
+    place(
+        &mut storage,
+        source_pos,
+        default_block_state("minecraft:redstone_block").expect("redstone block"),
+    );
+    for x in 1..=4 {
+        place(&mut storage, BlockPos::new(x, -60, 1), powered_rail_state());
+    }
+    settle(&mut storage, 8);
+    for x in 1..=4 {
+        let updated = storage.block_state_at(x, -60, 1).expect("cached");
+        assert_eq!(
+            folia_core::redstone::property(&updated, "powered"),
+            Some("true"),
+            "rail at x={x} should be powered"
+        );
+    }
+}
+
+#[test]
+fn powered_rail_without_source_is_unpowered() {
+    let mut storage = flat_storage("powered-no-source");
+    let rail_pos = BlockPos::new(1, -60, 1);
+    place(&mut storage, rail_pos, powered_rail_state());
+    settle(&mut storage, 4);
+    let updated = storage.block_state_at(1, -60, 1).expect("cached");
+    assert_eq!(
+        folia_core::redstone::property(&updated, "powered"),
+        Some("false")
+    );
+}
+
+#[test]
+fn powered_rail_turns_off_when_source_removed() {
+    let mut storage = flat_storage("powered-remove-source");
+    let rail_pos = BlockPos::new(1, -60, 1);
+    let source_pos = BlockPos::new(0, -60, 1);
+    place(&mut storage, rail_pos, powered_rail_state());
+    place(
+        &mut storage,
+        source_pos,
+        default_block_state("minecraft:redstone_block").expect("redstone block"),
+    );
+    settle(&mut storage, 4);
+    assert_eq!(
+        folia_core::redstone::property(
+            &storage.block_state_at(1, -60, 1).expect("cached"),
+            "powered"
+        ),
+        Some("true")
+    );
+
+    place(
+        &mut storage,
+        source_pos,
+        default_block_state("minecraft:air").expect("air"),
+    );
+    settle(&mut storage, 8);
+    let updated = storage.block_state_at(1, -60, 1).expect("cached");
+    assert_eq!(
+        folia_core::redstone::property(&updated, "powered"),
+        Some("false")
+    );
 }

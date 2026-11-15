@@ -38,7 +38,7 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 natural spawning and category-aware tracking are wired; remaining is true per-category spawn caps/spawn state persistence, cave spawning, minecarts/powered-rail signal, structure terrain adaptation, region isolation, and plugin chat events.
+1. P5 sword sweeping and powered rails are wired; remaining is sweep particles/knockback/enchantment, minecarts, structure terrain adaptation, region isolation, and plugin chat events.
 2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
 3. P2.8 cross-chunk feature writes and structure terrain adaptation.
 4. P9.3 plugin API/event breadth and remaining bridge depth.

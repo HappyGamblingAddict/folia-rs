@@ -2253,6 +2253,22 @@ are still open.
   SESSION_TRACKING_RANGE)` per entity type (≈128 blocks) instead of a flat 80;
   1 entity test. Expected 1,391 once CI confirms.
 
+- **Progress (2026-11-13):** `/kill` (e495af3) — operator-only `/kill
+  [self]`; lethal Void damage through `damage_player_with_rng`, full death
+  flow (item/XP drops, kill message, respawn state, save); 2 join tests. CI
+  green at e495af3 (1,400 tests).
+- **Progress (2026-11-13):** sword sweeping (4043670, pending CI) —
+  `SessionEntityTracker::sweep_targets`, `is_sweeping_attack` (full charge
+  >0.9, not critical, not sprinting, `_sword`), secondary 1.0 damage to mobs
+  within 1 block of the primary target; no sweep particles/knockback yet. 2
+  lib + 1 join_entities test. Expected 1,403 once CI confirms.
+
+- **Progress (2026-11-13):** powered rails (6d38fcc, pending CI) —
+  `rail_power_source` (redstone block/wire/lever/button/plate/tripwire/torch/
+  target/detector rail), `powered_rail_active` BFS along connected rails up
+  to 8 blocks, `RailBehavior` updates the `powered` property on
+  place/neighbor/scheduled; 4 rails tests. Expected 1,407 once CI confirms.
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

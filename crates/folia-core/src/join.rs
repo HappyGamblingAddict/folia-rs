@@ -1589,7 +1589,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
-            let (tick, drop_tick, projectile_tick, inventory_before, submerged) = {
+            let (tick, drop_tick, projectile_tick, inventory_before, submerged, spawn_packets) = {
                 let mut storage = crate::world::lock(current_storage);
                 let mut collider = WorldCollider::new(&mut storage);
                 let eye_pos = BlockPos::new(
@@ -1610,12 +1610,29 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
+                let spawn_packets = if !awaiting_respawn && game_tick % 100 == 99 {
+                    let chunk = crate::spawn::ChunkPos::new(
+                        (session.x.floor() as i32).div_euclid(16),
+                        (session.z.floor() as i32).div_euclid(16),
+                    );
+                    run_session_spawn_cycle(
+                        &mut storage,
+                        &mut tracked_entities,
+                        chunk,
+                        (session.x, session.y, session.z),
+                        &mut drop_rng,
+                        12,
+                    )
+                } else {
+                    Vec::new()
+                };
                 (
                     tick,
                     drop_tick,
                     projectile_tick,
                     inventory_before,
                     submerged,
+                    spawn_packets,
                 )
             };
             for packet in &tick.packets {
@@ -1643,6 +1660,18 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
             for packet in &projectile_tick.packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        drop_entities.clear();
+                        projectiles.clear();
+                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            for packet in &spawn_packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {
                         tracked_entities.clear();
@@ -2795,6 +2824,111 @@ fn epoch_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Build a bounded surface-band spawn snapshot for one chunk.
+///
+/// This is a deliberate simplification: only `[min_surface-16, max_surface+4]`
+/// (clamped to world bounds) is copied, so deep-cave spawning below that band
+/// is not modeled here. Sky light defaults to 15 (daylight approximation) and
+/// is overwritten by stored sky light when available.
+fn spawn_snapshot(
+    storage: &mut crate::world::WorldStorage,
+    chunk_pos: crate::spawn::ChunkPos,
+) -> Option<crate::entity_ai::MemoryWorld> {
+    let chunk = storage
+        .load_chunk(chunk_pos.x, chunk_pos.z)
+        .ok()
+        .flatten()?;
+    let mut min_surface = i32::MAX;
+    let mut max_surface = i32::MIN;
+    for lz in 0..16 {
+        for lx in 0..16 {
+            let surface = crate::chunk::surface_y(&chunk, lx, lz);
+            min_surface = min_surface.min(surface);
+            max_surface = max_surface.max(surface);
+        }
+    }
+    if min_surface == i32::MAX {
+        return None;
+    }
+    let world_min = crate::chunk_packet::OVERWORLD_MIN_Y;
+    let world_max = world_min + crate::chunk_packet::OVERWORLD_HEIGHT as i32 - 1;
+    let min_y = (min_surface - 16).max(world_min);
+    let max_y = (max_surface + 4).min(world_max);
+    let mut world = crate::entity_ai::MemoryWorld::new(min_y, max_y + 1);
+    world.set_default_sky_light(15);
+    let mut default_biome_set = false;
+    for lz in 0..16usize {
+        for lx in 0..16usize {
+            let gx = chunk_pos.min_block_x() + lx as i32;
+            let gz = chunk_pos.min_block_z() + lz as i32;
+            let surface = crate::chunk::surface_y(&chunk, lx, lz);
+            world.set_surface(gx, gz, surface);
+            let biome_y = surface.clamp(world_min, world_max);
+            let biome = chunk
+                .biome(lx, biome_y, lz)
+                .or_else(|| chunk.biome(lx, 64.clamp(world_min, world_max), lz))
+                .cloned();
+            if let Some(biome) = biome {
+                if !default_biome_set {
+                    world.set_default_biome(&biome);
+                    default_biome_set = true;
+                }
+                world.set_biome(gx, surface, gz, &biome);
+            }
+            for y in min_y..=max_y {
+                if let Some(state) = chunk.block_state(lx, y, lz) {
+                    world.set_block(gx, y, gz, state.clone());
+                }
+                if let Some(sky) = storage.sky_light_at(gx, y, gz) {
+                    world.set_sky_light(gx, y, gz, sky);
+                }
+            }
+        }
+    }
+    Some(world)
+}
+
+fn run_session_spawn_cycle(
+    storage: &mut crate::world::WorldStorage,
+    tracker: &mut crate::entity::SessionEntityTracker,
+    chunk: crate::spawn::ChunkPos,
+    player: (f64, f64, f64),
+    rng: &mut dyn folia_random::RandomSource,
+    max_mobs: usize,
+) -> Vec<Vec<u8>> {
+    if tracker.len() >= max_mobs {
+        return Vec::new();
+    }
+    let Some(snapshot) = spawn_snapshot(storage, chunk) else {
+        return Vec::new();
+    };
+    let mut spawner =
+        crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
+    let results = spawner.run_cycle(
+        &snapshot,
+        chunk,
+        &[Vec3::new(player.0, player.1, player.2)],
+        rng,
+    );
+    let mut packets = Vec::new();
+    for result in results {
+        for mob in result.spawned {
+            if tracker.len() >= max_mobs {
+                return packets;
+            }
+            let pos = (
+                mob.pos.x() as f64 + 0.5,
+                mob.pos.y() as f64,
+                mob.pos.z() as f64,
+            );
+            if let Some(id) = tracker.spawn_mob(mob.entity_type.name, pos, rng.next_long()) {
+                packets.extend(tracker.enter_packets_for(id));
+            }
+        }
+    }
+    packets
 }
 
 fn bow_power_for_ticks(ticks: u64) -> f64 {
@@ -8056,5 +8190,125 @@ mod tests {
 
         let mut parts = "cow 1".split_whitespace();
         assert_eq!(parse_summon(&mut parts), None);
+    }
+
+    #[test]
+    fn spawn_snapshot_has_surface_and_blocks() {
+        use crate::entity_ai::WorldView;
+        let root = std::env::temp_dir().join(format!(
+            "folia-rs-spawn-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let chunk = crate::chunk_packet::flat_chunk(0, 0);
+        let mut storage = crate::world::WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&chunk, crate::anvil::Compression::Zlib)
+            .unwrap();
+        storage.flush().unwrap();
+
+        let snapshot = spawn_snapshot(&mut storage, crate::spawn::ChunkPos::new(0, 0))
+            .expect("snapshot for flat chunk");
+        let surface = snapshot.surface_y(0, 0).expect("surface for chunk column");
+        assert!((snapshot.min_y()..snapshot.max_y()).contains(&surface));
+        let has_block = (snapshot.min_y()..snapshot.max_y()).any(|y| {
+            snapshot
+                .block(crate::math::BlockPos::new(0, y, 0))
+                .is_some()
+        });
+        assert!(has_block, "expected copied blocks in snapshot band");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spawn_cycle_respects_the_mob_cap() {
+        let root = std::env::temp_dir().join(format!(
+            "folia-rs-spawn-cap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let chunk = crate::chunk_packet::flat_chunk(0, 0);
+        let mut storage = crate::world::WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&chunk, crate::anvil::Compression::Zlib)
+            .unwrap();
+        storage.flush().unwrap();
+
+        let mut tracker =
+            crate::entity::SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        // Pad tracker to cap with summoned mobs.
+        for i in 0..9 {
+            tracker.spawn_mob("minecraft:cow", (10.0 + i as f64, 63.0, 0.5), i as i64);
+        }
+        assert_eq!(tracker.len(), 12);
+        let mut rng = folia_random::LegacyRandomSource::new(1);
+        let packets = run_session_spawn_cycle(
+            &mut storage,
+            &mut tracker,
+            crate::spawn::ChunkPos::new(0, 0),
+            (0.5, 63.0, 0.5),
+            &mut rng,
+            12,
+        );
+        assert!(packets.is_empty());
+        assert_eq!(tracker.len(), 12);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spawn_cycle_can_add_a_mob() {
+        let root = std::env::temp_dir().join(format!(
+            "folia-rs-spawn-add-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let chunk = crate::chunk_packet::flat_chunk(0, 0);
+        let mut storage = crate::world::WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&chunk, crate::anvil::Compression::Zlib)
+            .unwrap();
+        storage.flush().unwrap();
+
+        let mut added = false;
+        let mut saw_packets = false;
+        for seed in 0i64..64 {
+            let mut tracker =
+                crate::entity::SessionEntityTracker::deterministic((8.5, 63.0, 8.5), 63, seed);
+            let before = tracker.len();
+            let mut rng = folia_random::LegacyRandomSource::new(seed);
+            let packets = run_session_spawn_cycle(
+                &mut storage,
+                &mut tracker,
+                crate::spawn::ChunkPos::new(0, 0),
+                (8.5, 63.0, 8.5),
+                &mut rng,
+                12,
+            );
+            if tracker.len() > before {
+                added = true;
+                if !packets.is_empty() && packet_id(&packets[0]).ok() == Some(1) {
+                    saw_packets = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            added,
+            "expected at least one seed to add a naturally spawned mob on a flat chunk"
+        );
+        assert!(saw_packets, "expected add-entity packets for a spawned mob");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

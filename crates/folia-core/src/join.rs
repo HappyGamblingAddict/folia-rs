@@ -1489,6 +1489,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut bow_draw: Option<u64> = None;
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
     let mut pending_summon: Option<PendingSummon> = None;
+    let mut pending_kill = false;
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -2196,6 +2197,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut last_seen,
                             &mut pending_teleport,
                             &mut pending_summon,
+                            &mut pending_kill,
                             player_entity,
                             &packet,
                         ) {
@@ -2227,6 +2229,43 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 );
                             } else {
                                 println!("[join] {} failed to summon {name}", session.name);
+                            }
+                        }
+                        if pending_kill {
+                            pending_kill = false;
+                            if !awaiting_respawn && session.health > 0.0 {
+                                let result = damage_player_with_rng(
+                                    &mut session,
+                                    player_entity,
+                                    f32::MAX,
+                                    &mut drop_rng,
+                                    crate::effects::DamageKind::Void,
+                                );
+                                for packet in &result.packets {
+                                    write_packet(&mut stream, packet)?;
+                                }
+                                if result.died {
+                                    drop_player_death_items(
+                                        &mut stream,
+                                        &mut drop_entities,
+                                        &mut drop_rng,
+                                        &mut session,
+                                    )?;
+                                    write_packet(
+                                        &mut stream,
+                                        &combat_kill_packet("Player was killed"),
+                                    )?;
+                                    awaiting_respawn = true;
+                                    death_at = Some(Instant::now());
+                                    if let Err(error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
+                                        eprintln!("[join] could not save /kill death: {error}");
+                                    }
+                                }
                             }
                         }
                     }
@@ -3682,6 +3721,13 @@ fn seed_message(seed: i64) -> String {
     format!("Seed: [{seed}]")
 }
 
+fn kill_targets_self(parts: &mut std::str::SplitWhitespace<'_>, player_name: &str) -> bool {
+    match parts.next() {
+        None => true,
+        Some(name) => name.eq_ignore_ascii_case(player_name) && parts.next().is_none(),
+    }
+}
+
 fn apply_enchantment_to_selected(
     session: &mut PlayerSession,
     name: &str,
@@ -3719,12 +3765,14 @@ fn apply_enchantment_to_selected(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_command(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
     last_seen: &mut LastSeenValidator,
     pending_teleport: &mut Option<(f64, f64, f64)>,
     pending_summon: &mut Option<PendingSummon>,
+    pending_kill: &mut bool,
     player_entity: i32,
     packet: &[u8],
 ) -> io::Result<()> {
@@ -3986,6 +4034,22 @@ fn handle_command(
             };
             let pos = coords.unwrap_or((session.x + 2.0, session.y, session.z));
             *pending_summon = Some((name, pos));
+            Ok(())
+        }
+        Some("kill") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /kill",
+                    session.name
+                );
+                return Ok(());
+            }
+            if kill_targets_self(&mut parts, &session.name) {
+                *pending_kill = true;
+                println!("[join] {} requested /kill", session.name);
+            } else {
+                println!("[join] {}: usage: /kill [self]", session.name);
+            }
             Ok(())
         }
         Some("clear") => {
@@ -8116,6 +8180,36 @@ mod tests {
     #[test]
     fn seed_command_formats_the_generator_seed() {
         assert_eq!(seed_message(123), "Seed: [123]");
+    }
+
+    #[test]
+    fn kill_command_parser_accepts_self_only() {
+        let mut parts = "".split_whitespace();
+        assert!(kill_targets_self(&mut parts, "Steve"));
+
+        let mut parts = "Steve".split_whitespace();
+        assert!(kill_targets_self(&mut parts, "steve"));
+
+        let mut parts = "Alex".split_whitespace();
+        assert!(!kill_targets_self(&mut parts, "Steve"));
+    }
+
+    #[test]
+    fn lethal_void_damage_marks_player_dead() {
+        let entity_id = 9_001_042;
+        let mut session = PlayerSession::new("KillCmd".into(), [0x4b; 16], 0.5, 63.0, 0.5);
+        crate::entity_metadata::living_entities().entry_player(entity_id);
+        let mut rng = folia_random::LegacyRandomSource::new(7);
+        let result = damage_player_with_rng(
+            &mut session,
+            entity_id,
+            f32::MAX,
+            &mut rng,
+            crate::effects::DamageKind::Void,
+        );
+        assert!(result.died);
+        assert_eq!(session.health, 0.0);
+        crate::entity_metadata::living_entities().remove(entity_id);
     }
 
     #[test]

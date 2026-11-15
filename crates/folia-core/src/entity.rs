@@ -857,6 +857,59 @@ impl SessionEntityTracker {
         self.entities.get(id)
     }
 
+    /// Spawn one mob into this session tracker and return its network id.
+    pub fn spawn_mob(&mut self, name: &str, pos: (f64, f64, f64), seed: i64) -> Option<i32> {
+        let entity_type = crate::spawn::entity_type(name)?;
+        let id = NEXT_SESSION_ENTITY_ID.fetch_add(1, Ordering::Relaxed);
+        let mut entity = Entity::new(
+            id,
+            session_entity_uuid(id, 0),
+            entity_type.id(),
+            pos.0,
+            pos.1,
+            pos.2,
+        );
+        entity.width = f64::from(entity_type.width);
+        entity.height = f64::from(entity_type.height);
+
+        let mut living = LivingEntity::new(id);
+        let max_health = if matches!(entity_type.category, crate::spawn::MobCategory::Monster) {
+            20.0
+        } else {
+            10.0
+        };
+        living.set_attribute(Attribute::MaxHealth, f64::from(max_health));
+        living.set_health(max_health);
+        living.metadata.pack_dirty();
+
+        let mut ai = match name {
+            "minecraft:zombie" => Some(crate::entity_ai::AiAgent::zombie(
+                id,
+                Vec3::new(pos.0, pos.1, pos.2),
+                seed ^ i64::from(id),
+            )),
+            "minecraft:cow" | "minecraft:pig" => Some(crate::entity_ai::AiAgent::passive(
+                id,
+                Vec3::new(pos.0, pos.1, pos.2),
+                seed ^ i64::from(id),
+            )),
+            _ => None,
+        };
+        if let Some(agent) = ai.as_mut() {
+            agent.mob.width = entity.width as f32;
+            agent.mob.height = entity.height as f32;
+            agent.mob.health = max_health;
+        }
+
+        self.entities.insert(TrackedEntity { entity, living, ai });
+        Some(id)
+    }
+
+    /// Add Entity, metadata, equipment, and active effects for one tracked entity.
+    pub fn enter_packets_for(&self, id: i32) -> Vec<Vec<u8>> {
+        self.entities.enter_packets(id)
+    }
+
     /// Add Entity, initial metadata (including health), equipment, and active
     /// effects for every tracked mob, in ascending network-id order.
     pub fn join_packets(&self) -> Vec<Vec<u8>> {
@@ -1705,5 +1758,32 @@ mod tests {
     fn packet_id(packet: &[u8]) -> i32 {
         let mut reader = PacketReader::new(packet);
         reader.read_varint().unwrap()
+    }
+
+    #[test]
+    fn spawn_mob_adds_a_wandering_cow() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let before = tracker.len();
+        let id = tracker
+            .spawn_mob("minecraft:cow", (2.5, 63.0, 0.5), 123)
+            .expect("cow should spawn");
+        assert_eq!(tracker.len(), before + 1);
+        let packets = tracker.enter_packets_for(id);
+        assert!(!packets.is_empty());
+        let tracked = tracker.entity(id).expect("spawned cow");
+        let ai = tracked.ai.as_ref().expect("cow should have AI");
+        assert_eq!(ai.mob.kind, crate::entity_ai::ActorKind::Other);
+    }
+
+    #[test]
+    fn spawn_mob_rejects_unknown_types() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let before = tracker.len();
+        assert!(
+            tracker
+                .spawn_mob("minecraft:not_a_mob", (2.5, 63.0, 0.5), 123)
+                .is_none()
+        );
+        assert_eq!(tracker.len(), before);
     }
 }

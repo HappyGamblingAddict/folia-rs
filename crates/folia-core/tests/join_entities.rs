@@ -414,3 +414,17 @@ fn passive_session_mobs_have_ai_and_do_not_attack() {
     }
     assert_eq!(damage, 0.0);
 }
+
+#[test]
+fn summoned_mob_gets_add_entity_packets() {
+    let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+    let id = tracker
+        .spawn_mob("minecraft:cow", (3.5, 63.0, 0.5), 99)
+        .expect("cow should spawn");
+    let packets = tracker.enter_packets_for(id);
+    assert!(!packets.is_empty());
+    assert_eq!(packet_id(&packets[0]), 1);
+    assert!(packets.iter().any(
+        |packet| packet_id(packet) == folia_core::entity_metadata::CLIENTBOUND_SET_ENTITY_DATA
+    ));
+}

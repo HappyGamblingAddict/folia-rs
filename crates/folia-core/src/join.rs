@@ -1486,6 +1486,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut game_tick: u64 = 0;
     let mut bow_draw: Option<u64> = None;
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
+    let mut pending_summon: Option<PendingSummon> = None;
     let seed = crate::worldgen::generator::configured()
         .map(|g| g.seed())
         .unwrap_or(0)
@@ -2162,6 +2163,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut session,
                             &mut last_seen,
                             &mut pending_teleport,
+                            &mut pending_summon,
                             player_entity,
                             &packet,
                         ) {
@@ -2179,6 +2181,20 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 playerdata_dir(),
                             ) {
                                 eprintln!("[join] could not save teleport: {error}");
+                            }
+                        }
+                        if let Some((name, pos)) = pending_summon.take() {
+                            let summon_seed = game_tick as i64 ^ 0x5EED;
+                            if let Some(id) = tracked_entities.spawn_mob(&name, pos, summon_seed) {
+                                for packet in tracked_entities.enter_packets_for(id) {
+                                    write_packet(&mut stream, &packet)?;
+                                }
+                                println!(
+                                    "[join] {} summoned {name} at ({:.1}, {:.1}, {:.1})",
+                                    session.name, pos.0, pos.1, pos.2
+                                );
+                            } else {
+                                println!("[join] {} failed to summon {name}", session.name);
                             }
                         }
                     }
@@ -3448,6 +3464,39 @@ fn parse_effect_give(
     Some((kind, seconds.saturating_mul(20), amplifier as u8))
 }
 
+type SummonPosition = (f64, f64, f64);
+type ParsedSummon = (String, Option<SummonPosition>);
+type PendingSummon = (String, SummonPosition);
+
+fn parse_summon(parts: &mut std::str::SplitWhitespace<'_>) -> Option<ParsedSummon> {
+    let name = parts.next()?;
+    let name = if name.contains(':') {
+        name.to_string()
+    } else {
+        format!("minecraft:{name}")
+    };
+    crate::spawn::entity_type(&name)?;
+    let first = parts.next();
+    let coords = match first {
+        None => None,
+        Some(x) => {
+            let y = parts.next()?;
+            let z = parts.next()?;
+            let x = x.parse::<f64>().ok()?;
+            let y = y.parse::<f64>().ok()?;
+            let z = z.parse::<f64>().ok()?;
+            if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+                return None;
+            }
+            Some((x, y, z))
+        }
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((name, coords))
+}
+
 fn parse_give(parts: &mut std::str::SplitWhitespace<'_>) -> Option<(String, i32)> {
     let item = parts.next()?;
     let name = if item.contains(':') {
@@ -3534,6 +3583,7 @@ fn handle_command(
     session: &mut PlayerSession,
     last_seen: &mut LastSeenValidator,
     pending_teleport: &mut Option<(f64, f64, f64)>,
+    pending_summon: &mut Option<PendingSummon>,
     player_entity: i32,
     packet: &[u8],
 ) -> io::Result<()> {
@@ -3779,6 +3829,22 @@ fn handle_command(
                 duration,
                 amplifier
             );
+            Ok(())
+        }
+        Some("summon") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /summon",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some((name, coords)) = parse_summon(&mut parts) else {
+                println!("[join] {}: usage: /summon <entity> [x y z]", session.name);
+                return Ok(());
+            };
+            let pos = coords.unwrap_or((session.x + 2.0, session.y, session.z));
+            *pending_summon = Some((name, pos));
             Ok(())
         }
         Some("clear") => {
@@ -7963,5 +8029,32 @@ mod tests {
         let player = store.entry_player(entity_id);
         assert!(player.effects.has(crate::effects::StatusEffectKind::Speed));
         let _ = store.remove(entity_id);
+    }
+
+    #[test]
+    fn parse_summon_accepts_bare_and_coords() {
+        let mut parts = "cow".split_whitespace();
+        assert_eq!(
+            parse_summon(&mut parts),
+            Some(("minecraft:cow".to_string(), None))
+        );
+
+        let mut parts = "minecraft:zombie 1 64 -3".split_whitespace();
+        assert_eq!(
+            parse_summon(&mut parts),
+            Some(("minecraft:zombie".to_string(), Some((1.0, 64.0, -3.0))))
+        );
+    }
+
+    #[test]
+    fn parse_summon_rejects_unknown_and_partial_coords() {
+        let mut parts = "not_a_mob".split_whitespace();
+        assert_eq!(parse_summon(&mut parts), None);
+
+        let mut parts = "cow 1 2".split_whitespace();
+        assert_eq!(parse_summon(&mut parts), None);
+
+        let mut parts = "cow 1".split_whitespace();
+        assert_eq!(parse_summon(&mut parts), None);
     }
 }

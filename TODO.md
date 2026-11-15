@@ -2239,6 +2239,20 @@ are still open.
   join_entities test. First building block for natural spawning. CI status
   pending at brief time (expected 1,387).
 
+- **Progress (2026-11-13):** live natural spawning (f0d60c3) —
+  `spawn_snapshot` copies a bounded surface band (min surface-16 .. max
+  surface+4, sky light default 15 with stored overrides, per-column biomes)
+  into a `MemoryWorld`; `run_session_spawn_cycle` runs
+  `NaturalSpawner::run_cycle` for the player's chunk every 100 session ticks
+  with a 12-mob session cap and inserts `SpawnedMob`s via
+  `SessionEntityTracker::spawn_mob`, sending enter packets. Explicit
+  simplification: no deep-cave spawning below the surface band. CI green at
+  f0d60c3 (1,390 tests).
+- **Progress (2026-11-13):** category-aware tracking (408b162, pending CI) —
+  session mob cleanup now uses `MobCategory::despawn_distance().max(
+  SESSION_TRACKING_RANGE)` per entity type (≈128 blocks) instead of a flat 80;
+  1 entity test. Expected 1,391 once CI confirms.
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

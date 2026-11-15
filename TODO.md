@@ -2269,6 +2269,14 @@ are still open.
   to 8 blocks, `RailBehavior` updates the `powered` property on
   place/neighbor/scheduled; 4 rails tests. Expected 1,407 once CI confirms.
 
+- **Progress (2026-11-13):** player hazards (b0b694b, pending CI) —
+  `PlayerHazards` timers for lava (4.0 every 10 ticks, Fire), fire (1.0 every
+  20 ticks, Fire), cactus (1.0 every 10 ticks, Physical), with precedence
+  lava > fire > cactus; session tick reads feet/head/below blocks and routes
+  lethal hazard damage through the shared death/drop/respawn path with vanilla
+  messages. 5 join tests. Simplifications: no lava fire-immunity countdown/
+  armor enchant specifics. Expected 1,412 once CI confirms.
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

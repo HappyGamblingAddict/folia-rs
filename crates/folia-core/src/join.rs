@@ -1483,6 +1483,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_move_at = Instant::now();
     let mut drop_entities = DropEntityStore::new();
     let mut projectiles = crate::projectile::ProjectileStore::new();
+    let mut mob_spawner =
+        crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
     let mut game_tick: u64 = 0;
     let mut bow_draw: Option<u64> = None;
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
@@ -1616,6 +1618,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         (session.z.floor() as i32).div_euclid(16),
                     );
                     run_session_spawn_cycle(
+                        &mut mob_spawner,
                         &mut storage,
                         &mut tracked_entities,
                         chunk,
@@ -2891,6 +2894,7 @@ fn spawn_snapshot(
 }
 
 fn run_session_spawn_cycle(
+    spawner: &mut crate::spawn::NaturalSpawner,
     storage: &mut crate::world::WorldStorage,
     tracker: &mut crate::entity::SessionEntityTracker,
     chunk: crate::spawn::ChunkPos,
@@ -2904,8 +2908,11 @@ fn run_session_spawn_cycle(
     let Some(snapshot) = spawn_snapshot(storage, chunk) else {
         return Vec::new();
     };
-    let mut spawner =
-        crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
+    for category in crate::spawn::MobCategory::ALL {
+        spawner
+            .state
+            .set_count(category, tracker.count_category(category));
+    }
     let results = spawner.run_cycle(
         &snapshot,
         chunk,
@@ -2921,7 +2928,7 @@ fn run_session_spawn_cycle(
             let pos = (
                 mob.pos.x() as f64 + 0.5,
                 mob.pos.y() as f64,
-                mob.pos.z() as f64,
+                mob.pos.z() as f64 + 0.5,
             );
             if let Some(id) = tracker.spawn_mob(mob.entity_type.name, pos, rng.next_long()) {
                 packets.extend(tracker.enter_packets_for(id));
@@ -8249,8 +8256,11 @@ mod tests {
             tracker.spawn_mob("minecraft:cow", (10.0 + i as f64, 63.0, 0.5), i as i64);
         }
         assert_eq!(tracker.len(), 12);
+        let mut spawner =
+            crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
         let mut rng = folia_random::LegacyRandomSource::new(1);
         let packets = run_session_spawn_cycle(
+            &mut spawner,
             &mut storage,
             &mut tracker,
             crate::spawn::ChunkPos::new(0, 0),
@@ -8284,11 +8294,14 @@ mod tests {
         let mut added = false;
         let mut saw_packets = false;
         for seed in 0i64..64 {
+            let mut spawner =
+                crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
             let mut tracker =
                 crate::entity::SessionEntityTracker::deterministic((8.5, 63.0, 8.5), 63, seed);
             let before = tracker.len();
             let mut rng = folia_random::LegacyRandomSource::new(seed);
             let packets = run_session_spawn_cycle(
+                &mut spawner,
                 &mut storage,
                 &mut tracker,
                 crate::spawn::ChunkPos::new(0, 0),

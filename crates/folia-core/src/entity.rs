@@ -812,6 +812,15 @@ impl SessionEntityTracker {
         self.entities.is_empty()
     }
 
+    pub fn count_category(&self, category: crate::spawn::MobCategory) -> i32 {
+        self.entities
+            .ids()
+            .filter_map(|id| self.entities.get(id))
+            .filter_map(|tracked| crate::spawn::entity_type_by_id(tracked.entity.entity_type))
+            .filter(|entity_type| entity_type.category == category)
+            .count() as i32
+    }
+
     /// Shared entity records without cloning. Callers that need per-viewer
     /// tracking can drive [`EntityTracker`] directly instead of maintaining a
     /// second entity list.
@@ -1818,5 +1827,18 @@ mod tests {
             "mobs beyond 128 blocks must be removed"
         );
         assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn deterministic_tracker_counts_categories() {
+        let tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        assert_eq!(
+            tracker.count_category(crate::spawn::MobCategory::Creature),
+            2
+        );
+        assert_eq!(
+            tracker.count_category(crate::spawn::MobCategory::Monster),
+            1
+        );
     }
 }

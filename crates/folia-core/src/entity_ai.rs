@@ -1894,6 +1894,9 @@ impl AiAgent {
         agent.goal_selector.add_goal(0, Box::new(FloatGoal::new()));
         agent
             .goal_selector
+            .add_goal(1, Box::new(PanicGoal::new(1.25)));
+        agent
+            .goal_selector
             .add_goal(4, Box::new(RandomStrollGoal::new(1.0)));
         agent
             .goal_selector
@@ -2220,6 +2223,107 @@ impl Goal for RandomStrollGoal {
 
     fn stop(&mut self, ctx: &mut GoalContext<'_>) {
         ctx.mob.navigation.stop();
+    }
+}
+
+pub struct PanicGoal {
+    speed: f64,
+    panic_ticks: i32,
+    target: Option<BlockPos>,
+}
+
+impl PanicGoal {
+    pub fn new(speed: f64) -> Self {
+        Self {
+            speed,
+            panic_ticks: 0,
+            target: None,
+        }
+    }
+}
+
+impl Goal for PanicGoal {
+    fn name(&self) -> &'static str {
+        "PanicGoal"
+    }
+
+    fn flags(&self) -> GoalFlags {
+        GoalFlags::MOVE
+    }
+
+    fn can_use(&mut self, ctx: &mut GoalContext<'_>) -> bool {
+        if ctx.mob.last_hurt_by.is_none() {
+            return false;
+        }
+        if ctx.game_time - ctx.mob.last_hurt_by_timestamp > 100 {
+            return false;
+        }
+        let Some(attacker) = ctx.mob.last_hurt_by else {
+            return false;
+        };
+        let Some(actor) = ctx.actor(attacker) else {
+            return false;
+        };
+        let dx = ctx.mob.pos.x() - actor.pos.x();
+        let dz = ctx.mob.pos.z() - actor.pos.z();
+        let length = (dx * dx + dz * dz).sqrt();
+        let (unit_x, unit_z) = if length > 1.0e-6 {
+            (dx / length, dz / length)
+        } else {
+            (1.0, 0.0)
+        };
+        let target = BlockPos::new(
+            (ctx.mob.pos.x() + unit_x * 5.0).floor() as i32,
+            ctx.mob.pos.y().floor() as i32,
+            (ctx.mob.pos.z() + unit_z * 5.0).floor() as i32,
+        );
+        let options = *ctx.mob.navigation.options();
+        let target = if is_standable(ctx.world, target, &options) {
+            target
+        } else {
+            let origin = ctx.mob.block_pos();
+            let mut fallback = None;
+            for _ in 0..10 {
+                let dx = ctx.mob.random.next_int_bound(21) - 10;
+                let dz = ctx.mob.random.next_int_bound(21) - 10;
+                let candidate = origin.offset(dx, 0, dz);
+                if is_standable(ctx.world, candidate, &options) {
+                    fallback = Some(candidate);
+                    break;
+                }
+            }
+            let Some(fallback) = fallback else {
+                return false;
+            };
+            fallback
+        };
+        self.target = Some(target);
+        true
+    }
+
+    fn can_continue_to_use(&mut self, ctx: &mut GoalContext<'_>) -> bool {
+        self.panic_ticks > 0 && !ctx.mob.navigation.is_done()
+    }
+
+    fn start(&mut self, ctx: &mut GoalContext<'_>) {
+        self.panic_ticks = 60 + ctx.mob.random.next_int_bound(40);
+        if let Some(target) = self.target {
+            ctx.mob.navigation.move_to_with_speed(
+                ctx.world,
+                ctx.mob.block_pos(),
+                target,
+                self.speed,
+            );
+        }
+    }
+
+    fn tick(&mut self, _ctx: &mut GoalContext<'_>) {
+        self.panic_ticks -= 1;
+    }
+
+    fn stop(&mut self, ctx: &mut GoalContext<'_>) {
+        ctx.mob.navigation.stop();
+        self.target = None;
     }
 }
 

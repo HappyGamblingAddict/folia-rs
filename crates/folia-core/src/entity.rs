@@ -884,6 +884,10 @@ impl SessionEntityTracker {
         self.entities.ids().collect()
     }
 
+    pub fn game_time(&self) -> i64 {
+        self.game_time
+    }
+
     /// Per-tracked entity `(id, Aabb)` in ascending id order, for projectile
     /// collision checks.
     pub fn collision_targets(&self) -> Vec<(i32, crate::block_shapes::Aabb)> {
@@ -1180,7 +1184,7 @@ impl SessionEntityTracker {
                 // The only attacker modeled in a session is the player
                 // (network actor id 0); make the mob retaliate.
                 agent.mob.last_hurt_by = Some(0);
-                agent.mob.last_hurt_by_timestamp = 0;
+                agent.mob.last_hurt_by_timestamp = self.game_time;
                 agent.mob.target = Some(0);
             }
         }
@@ -1706,6 +1710,30 @@ mod tests {
         }
         assert!(moved, "passive mobs did not wander");
         assert!(synced, "wandering must emit position syncs");
+    }
+
+    #[test]
+    fn damaged_session_cow_records_hurt_timestamp() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let mut cow = None;
+        for id in tracker.tracked_ids() {
+            if tracker.entity(id).is_some_and(|tracked| {
+                tracked
+                    .ai
+                    .as_ref()
+                    .is_some_and(|agent| agent.mob.kind == crate::entity_ai::ActorKind::Other)
+            }) {
+                cow = Some(id);
+                break;
+            }
+        }
+        let cow = cow.expect("session tracker spawns a cow");
+        let result = tracker.damage(cow, 1.0).expect("cow takes damage");
+        assert!(result.damaged);
+        let game_time = tracker.game_time();
+        let agent = tracker.entity(cow).unwrap().ai.as_ref().unwrap();
+        assert_eq!(agent.mob.last_hurt_by, Some(0));
+        assert_eq!(agent.mob.last_hurt_by_timestamp, game_time);
     }
 
     #[test]

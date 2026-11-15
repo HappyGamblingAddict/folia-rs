@@ -428,3 +428,71 @@ fn float_goal_jumps_in_water() {
     assert!(agent.mob.jump_requests > 0);
     assert!(agent.mob.in_water);
 }
+
+#[test]
+fn passive_panic_moves_away_from_attacker() {
+    let world = test_world();
+    let mut agent = AiAgent::passive(7, Vec3::new(5.0, 64.0, 0.0), 99);
+    agent.mob.last_hurt_by = Some(0);
+    agent.mob.last_hurt_by_timestamp = 0;
+    let player = ActorView::player(0, Vec3::new(0.0, 64.0, 0.0));
+    let actors = [player];
+    let mut look = LookControl::new();
+    let mut events = Vec::new();
+    let start_x = agent.mob.pos.x();
+    for _ in 0..30 {
+        let mut ctx = GoalContext {
+            mob: &mut agent.mob,
+            world: &world,
+            actors: &actors,
+            look: &mut look,
+            events: &mut events,
+            game_time: 1,
+        };
+        agent.goal_selector.tick(&mut ctx);
+        let mut pos = agent.mob.pos;
+        agent.mob.navigation.tick_with_world(&world, &mut pos);
+        agent.mob.pos = pos;
+    }
+    assert!(
+        (agent.mob.pos.x() - start_x).abs() > 0.5,
+        "panic did not move the mob: {} -> {}",
+        start_x,
+        agent.mob.pos.x()
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AiEvent::Attack { .. }))
+    );
+}
+
+#[test]
+fn passive_does_not_panic_without_hurt() {
+    let world = test_world();
+    let mut agent = AiAgent::passive(7, Vec3::new(5.0, 64.0, 0.0), 99);
+    let player = ActorView::player(0, Vec3::new(0.0, 64.0, 0.0));
+    let actors = [player];
+    let mut look = LookControl::new();
+    let mut events = Vec::new();
+    for _ in 0..30 {
+        let mut ctx = GoalContext {
+            mob: &mut agent.mob,
+            world: &world,
+            actors: &actors,
+            look: &mut look,
+            events: &mut events,
+            game_time: 1,
+        };
+        agent.goal_selector.tick(&mut ctx);
+        let mut pos = agent.mob.pos;
+        agent.mob.navigation.tick_with_world(&world, &mut pos);
+        agent.mob.pos = pos;
+    }
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AiEvent::Attack { .. }))
+    );
+    assert!(agent.mob.last_hurt_by.is_none());
+}

@@ -3181,7 +3181,8 @@ fn handle_entity_attack(
         entity.entity.y.floor() as i32,
         entity.entity.z.floor() as i32,
     );
-    let (damage, knockback_strength, _critical) = resolve_player_attack(session, cooldown);
+    let (damage, knockback_strength, critical, scale) = resolve_player_attack(session, cooldown);
+    let held = session.selected_item().cloned();
     let attack_result = if knockback_strength > 0.0 {
         let (knockback_x, knockback_z) = attack_knockback_direction(session.yaw);
         tracked.damage_with_knockback(target, damage, knockback_strength, knockback_x, knockback_z)
@@ -3196,6 +3197,18 @@ fn handle_entity_attack(
     }
     for packet in &result.packets {
         write_packet(stream, packet)?;
+    }
+    // Simplification: sweeping applies flat secondary damage without
+    // knockback/particles/sound and is evaluated before primary motion and
+    // death rewards are handled below.
+    if is_sweeping_attack(scale, critical, session.physics.sprinting, held.as_ref()) {
+        for sweep_id in tracked.sweep_targets(target, 1.0) {
+            if let Some(sweep) = tracked.damage(sweep_id, 1.0) {
+                for packet in &sweep.packets {
+                    write_packet(stream, packet)?;
+                }
+            }
+        }
     }
     // Send motion after damage metadata/death packets so knockback updates the
     // client's velocity, but before the death log/reward side effects.
@@ -3296,7 +3309,7 @@ fn spawn_mob_death_rewards(
 fn resolve_player_attack(
     session: &PlayerSession,
     cooldown: &mut AttackCooldown,
-) -> (f32, f64, bool) {
+) -> (f32, f64, bool, f32) {
     let speed = session
         .inventory
         .get(session.selected_slot.max(0) as usize)
@@ -3324,7 +3337,19 @@ fn resolve_player_attack(
         0.0
     };
     cooldown.reset();
-    (damage, knockback_strength, critical)
+    (damage, knockback_strength, critical, scale)
+}
+
+fn is_sweeping_attack(
+    scale: f32,
+    critical: bool,
+    sprinting: bool,
+    held: Option<&crate::inventory::ItemStack>,
+) -> bool {
+    scale > 0.9
+        && !critical
+        && !sprinting
+        && held.is_some_and(|stack| stack.item.ends_with("_sword"))
 }
 
 fn held_attack_damage(session: &PlayerSession) -> f32 {
@@ -7066,7 +7091,7 @@ mod tests {
         let mut session = PlayerSession::new("Attacker".into(), [0x93; 16], 0.0, 64.0, 0.0);
         equip_diamond_sword(&mut session);
         let mut cooldown = AttackCooldown::new(4.0);
-        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        let (damage, knockback, critical, _scale) = resolve_player_attack(&session, &mut cooldown);
         assert!((damage - 1.2071006).abs() < 1e-5, "damage {damage}");
         assert!(knockback.abs() < 1e-5, "knockback {knockback}");
         assert!(!critical);
@@ -7080,10 +7105,11 @@ mod tests {
         for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
-        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        let (damage, knockback, critical, scale) = resolve_player_attack(&session, &mut cooldown);
         assert!((damage - 6.0).abs() < 1e-5, "damage {damage}");
         assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
         assert!(!critical);
+        assert!(scale > 0.9);
     }
 
     #[test]
@@ -7098,7 +7124,8 @@ mod tests {
         for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
-        let (_damage, knockback, _critical) = resolve_player_attack(&session, &mut cooldown);
+        let (_damage, knockback, _critical, _scale) =
+            resolve_player_attack(&session, &mut cooldown);
         assert!((knockback - 1.4).abs() < 1e-5, "knockback {knockback}");
     }
 
@@ -7113,7 +7140,7 @@ mod tests {
         for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
-        let (damage, knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        let (damage, knockback, critical, _scale) = resolve_player_attack(&session, &mut cooldown);
         assert!(critical, "expected critical");
         assert!((damage - 9.0).abs() < 1e-5, "damage {damage}");
         assert!((knockback - 0.4).abs() < 1e-5, "knockback {knockback}");
@@ -7130,7 +7157,7 @@ mod tests {
         for _ in 0..cooldown.cooldown_ticks() {
             cooldown.tick();
         }
-        let (damage, _knockback, critical) = resolve_player_attack(&session, &mut cooldown);
+        let (damage, _knockback, critical, _scale) = resolve_player_attack(&session, &mut cooldown);
         assert!(!critical, "sprinting should cancel critical");
         assert!((damage - 6.0).abs() < 1e-5, "damage {damage}");
     }
@@ -8180,6 +8207,18 @@ mod tests {
     #[test]
     fn seed_command_formats_the_generator_seed() {
         assert_eq!(seed_message(123), "Seed: [123]");
+    }
+
+    #[test]
+    fn sweeping_requires_full_charge_sword_and_no_sprint() {
+        let sword = crate::inventory::ItemStack::new("minecraft:iron_sword", 1);
+        let stone = crate::inventory::ItemStack::new("minecraft:stone", 1);
+        assert!(!is_sweeping_attack(0.9, false, false, Some(&sword)));
+        assert!(is_sweeping_attack(0.91, false, false, Some(&sword)));
+        assert!(!is_sweeping_attack(0.91, true, false, Some(&sword)));
+        assert!(!is_sweeping_attack(0.91, false, true, Some(&sword)));
+        assert!(!is_sweeping_attack(0.91, false, false, Some(&stone)));
+        assert!(!is_sweeping_attack(0.91, false, false, None));
     }
 
     #[test]

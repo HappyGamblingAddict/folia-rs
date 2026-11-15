@@ -428,3 +428,32 @@ fn summoned_mob_gets_add_entity_packets() {
         |packet| packet_id(packet) == folia_core::entity_metadata::CLIENTBOUND_SET_ENTITY_DATA
     ));
 }
+
+#[test]
+fn sweep_targets_hits_adjacent_mobs() {
+    let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+    let zombie = tracker
+        .tracked_ids()
+        .into_iter()
+        .find(|id| {
+            tracker
+                .entity(*id)
+                .is_some_and(|tracked| tracked.entity.height > 1.9)
+        })
+        .expect("zombie");
+    let (zx, zy, zz) = {
+        let entity = tracker.entity(zombie).expect("zombie entity");
+        (entity.entity.x, entity.entity.y, entity.entity.z)
+    };
+    let cow = tracker
+        .spawn_mob("minecraft:cow", (zx + 0.5, zy, zz + 0.5), 123)
+        .expect("adjacent cow");
+    let sweep = tracker.sweep_targets(zombie, 1.0);
+    assert!(sweep.contains(&cow));
+    for id in sweep {
+        let result = tracker.damage(id, 1.0).expect("sweep damage");
+        assert!(result.damaged);
+    }
+    let cow_entity = tracker.entity(cow).expect("cow still tracked");
+    assert!(cow_entity.living.health < 10.0);
+}

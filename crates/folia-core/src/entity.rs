@@ -858,6 +858,27 @@ impl SessionEntityTracker {
             .collect()
     }
 
+    /// Other tracked session mobs within a horizontal sweep centered on the
+    /// primary target. Vertical separation is bounded to 1 block.
+    pub fn sweep_targets(&self, target_id: i32, radius: f64) -> Vec<i32> {
+        let Some(target) = self.entities.get(target_id) else {
+            return Vec::new();
+        };
+        let (tx, ty, tz) = (target.entity.x, target.entity.y, target.entity.z);
+        self.entities
+            .ids()
+            .filter(|&id| id != target_id)
+            .filter(|&id| {
+                self.entities.get(id).is_some_and(|tracked| {
+                    let dx = tracked.entity.x - tx;
+                    let dz = tracked.entity.z - tz;
+                    let dy = (tracked.entity.y - ty).abs();
+                    dx * dx + dz * dz <= radius * radius && dy <= 1.0
+                })
+            })
+            .collect()
+    }
+
     pub fn tracks(&self, id: i32) -> bool {
         self.entities.contains(id)
     }
@@ -1840,5 +1861,29 @@ mod tests {
             tracker.count_category(crate::spawn::MobCategory::Monster),
             1
         );
+    }
+
+    #[test]
+    fn sweep_targets_are_centered_on_the_target() {
+        let mut tracker = SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let zombie = tracker
+            .tracked_ids()
+            .into_iter()
+            .find(|id| {
+                tracker
+                    .entity(*id)
+                    .is_some_and(|tracked| tracked.entity.height > 1.9)
+            })
+            .expect("zombie");
+        let (zx, zy, zz) = {
+            let entity = tracker.entity(zombie).expect("zombie entity");
+            (entity.entity.x, entity.entity.y, entity.entity.z)
+        };
+        let cow = tracker
+            .spawn_mob("minecraft:cow", (zx + 0.5, zy, zz + 0.5), 123)
+            .expect("adjacent cow");
+        let targets = tracker.sweep_targets(zombie, 1.0);
+        assert!(targets.contains(&cow));
+        assert!(!targets.contains(&zombie));
     }
 }

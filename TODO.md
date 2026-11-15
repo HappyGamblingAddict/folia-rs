@@ -2277,6 +2277,13 @@ are still open.
   messages. 5 join tests. Simplifications: no lava fire-immunity countdown/
   armor enchant specifics. Expected 1,412 once CI confirms.
 
+- **Progress (2026-11-13):** session mob hazards (8333766) —
+  `MobHazards` timers on `TrackedEntity` (lava 4/10 ticks, fire 1/20,
+  cactus 1/10), `SessionEntityTick::hazard_deaths`, and join spawns the mob's
+  loot + XP when a hazard kills it. 2 tests (entity lava death +
+  join_entities signal). Still open: fire immunity, hazard damage for
+  non-session/global entities. CI green at 8333766 (1,414 tests).
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

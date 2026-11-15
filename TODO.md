@@ -2284,6 +2284,13 @@ are still open.
   join_entities signal). Still open: fire immunity, hazard damage for
   non-session/global entities. CI green at 8333766 (1,414 tests).
 
+- **Progress (2026-11-13):** passive panic goal (55c5c5f, pending CI) —
+  `PanicGoal` added at priority 1 for passive mobs, navigating ~5 blocks away
+  from the last attacker for 60-99 ticks when hurt within the last 100 ticks;
+  session mob damage now records the hurt timestamp from the tracker's game
+  time; `SessionEntityTracker::game_time()` accessor. 3 tests (2 entity_ai + 1
+  entity). Expected 1,417 once CI confirms.
+
 ### P5.5 Pathfinding and navigation `[~]` `XL`
 
 - **What:** Port node evaluators (walk, swim, fly, amphibious), A* pathfinding,

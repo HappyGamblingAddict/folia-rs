@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); world time + item slices should bring the gate to 1,462
+> Test status: **1,462 passing** at the a934a33 gate (0 failed, 1 ignored benchmark); consumables should bring the gate to 1,465
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1928,9 +1928,12 @@ instantly on start-destroy and places on use-item-on.
   `set_block`, wears the tool in survival, and saves the inventory. The fluid
   helper test covers a sturdy floor versus unsupported air. Buckets now pick up
   source water/lava with an empty bucket and place source fluid from filled
-  buckets, including survival refill to an empty bucket. 3 join tests. Still
-  open: fire-charge projectiles, lightning ignition, bucket mob interactions,
-  and a live join placement test.
+  buckets, including survival refill to an empty bucket. Eat/drink now uses a
+  hold-and-release timer, applies food/saturation clamps, swaps in use
+  remainders (glass bottle/bowl), consumes only in survival, and resets on
+  slot changes; milk/potion effects are explicitly not faked. 6 join tests.
+  Still open: fire-charge projectiles, potion effects, lightning ignition,
+  bucket mob interactions, and a live join placement test.
 
 ### P4.6 Full inventory and menu framework `[~]` `XL`
 

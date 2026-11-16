@@ -9,10 +9,11 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `91e807c` with 1,453 tests. World time, flint/steel, buckets, and
-  bone meal are completed locally and should bring the next gate to 1,462.
+  CI is green at `a934a33` with 1,462 tests. Consumables (eat/drink timing,
+  food/saturation, remainders) are completed locally and should bring the next
+  gate to 1,465.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,462. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,465. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -47,7 +48,8 @@ Last updated: 2026-11-16
    P7.5 now has `/time set`, `/time add`, `/weather`, login time sync, and a
    per-session ticking clock synced every 20 ticks; persistence and weather
    transitions remain. Flint and steel places fire; buckets pick up and place
-   source water/lava; bone meal grows immature crops.
+   source water/lava; bone meal grows immature crops; consumables apply food,
+   saturation, and use remainders on a hold-and-release timer.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -77,6 +79,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: consumables — hold-and-release eat/drink, vanilla food and
+  saturation clamps, glass-bottle/bowl remainders, survival-only consumption,
+  and slot-change cancellation. 3 join tests.
 - 2026-11-16: bone meal — biscuits grow immature wheat/carrots/potatoes/
   beetroots by the vanilla 2..=4 age increase and are consumed in survival.
   3 tests.
@@ -706,6 +711,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: consumables — hold-and-release eat/drink, vanilla food and
+  saturation clamps, glass-bottle/bowl remainders, survival-only consumption,
+  and slot-change cancellation. 3 join tests.
 - 2026-11-16: bone meal — biscuits grow immature wheat/carrots/potatoes/
   beetroots by the vanilla 2..=4 age increase and are consumed in survival.
   3 tests.
@@ -959,6 +967,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: consumables — hold-and-release eat/drink, vanilla food and
+  saturation clamps, glass-bottle/bowl remainders, survival-only consumption,
+  and slot-change cancellation. 3 join tests.
 - 2026-11-16: bone meal — biscuits grow immature wheat/carrots/potatoes/
   beetroots by the vanilla 2..=4 age increase and are consumed in survival.
   3 tests.

@@ -26,6 +26,7 @@ use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
 use crate::entity::{BlockCollider, SessionEntityTracker, WorldCollider};
 use crate::inventory;
 use crate::item_entity::{DropEntityStore, PickupTarget};
+use crate::item_prototypes::ConsumablePrototype;
 use crate::math::{BlockPos, Vec3};
 use crate::nbt::Tag;
 use crate::player::{
@@ -1496,6 +1497,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut world_day_time = world.day_time;
     let mut world_game_time = world.day_time;
     let mut bow_draw: Option<u64> = None;
+    // (start tick, item id, required hold ticks) for an in-progress eat/drink.
+    let mut eat_start: Option<(u64, String, i32)> = None;
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
     let mut pending_summon: Option<PendingSummon> = None;
     let mut pending_kill = false;
@@ -2446,6 +2449,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             player_entity,
                             game_tick,
                             &mut bow_draw,
+                            &mut eat_start,
                             &packet,
                         ) {
                             eprintln!("[join] use item failed: {error}");
@@ -2724,6 +2728,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut drop_rng,
                             game_tick,
                             &mut bow_draw,
+                            &mut eat_start,
                             player_entity,
                             &tracked_entities,
                             &packet,
@@ -2733,9 +2738,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     inventory::SERVERBOUND_SET_CARRIED_ITEM => {
-                        if let Err(error) =
-                            handle_set_carried(&mut stream, &mut session, &mut bow_draw, &packet)
-                        {
+                        if let Err(error) = handle_set_carried(
+                            &mut stream,
+                            &mut session,
+                            &mut bow_draw,
+                            &mut eat_start,
+                            &packet,
+                        ) {
                             eprintln!("[join] carried slot update failed: {error}");
                         }
                     }
@@ -3680,6 +3689,59 @@ fn handle_bucket_use(
     Ok(true)
 }
 
+/// Apply one completed consumable to `session`. Food values follow vanilla's
+/// `FoodData.add`: both clamp, and saturation cannot exceed the new food level.
+/// `food_exhaustion` is deliberately left untouched. In creative the held
+/// stack is left as-is (no consumption and no remainder), matching
+/// `hasInfiniteMaterials`. Milk/potion status effects are out of this slice:
+/// only the `minecraft:food` values are applied here, never faked effects.
+///
+/// Returns the selected slot so the caller can resync that inventory slot.
+fn apply_consumable(
+    session: &mut PlayerSession,
+    consumable: &ConsumablePrototype,
+    creative: bool,
+) -> Option<i64> {
+    if let Some(food) = &consumable.food {
+        session.food_level = (session.food_level + food.nutrition).clamp(0, 20);
+        session.food_saturation =
+            (session.food_saturation + food.saturation).clamp(0.0, session.food_level as f32);
+    }
+    let slot = session.selected_slot.max(0) as usize;
+    if creative {
+        return session.inventory.get(slot).map(|_| slot as i64);
+    }
+    let stack = session.inventory.get_mut(slot)?;
+    stack.shrink(1);
+    if stack.is_empty()
+        && let Some(remainder) = &consumable.use_remainder
+    {
+        *stack = remainder.clone();
+    }
+    Some(slot as i64)
+}
+
+/// Tick gate and item match for a hold-and-release consume. Always clears the
+/// in-progress eat: a too-early release or a changed held item drops it without
+/// consuming anything. A successful consume returns the slot to resync.
+fn finish_consumable(
+    eat_start: &mut Option<(u64, String, i32)>,
+    session: &mut PlayerSession,
+    game_tick: u64,
+) -> Option<i64> {
+    let (start, item, ticks) = eat_start.take()?;
+    if game_tick.saturating_sub(start) < ticks.max(0) as u64 {
+        return None;
+    }
+    if session.selected_item().is_none_or(|held| held.item != item) {
+        return None;
+    }
+    let consumable = crate::item_prototypes::consumable_for_stack(session.selected_item()?)?;
+    let creative = session.game_mode == 1;
+    apply_consumable(session, &consumable, creative)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn handle_use_item(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
@@ -3687,11 +3749,20 @@ fn handle_use_item(
     player_entity: i32,
     game_tick: u64,
     bow_draw: &mut Option<u64>,
+    eat_start: &mut Option<(u64, String, i32)>,
     packet: &[u8],
 ) -> io::Result<()> {
     let use_item = crate::protocol::parse_serverbound_use_item(packet)?;
     session.yaw = use_item.yaw;
     session.pitch = use_item.pitch;
+    if eat_start.is_none()
+        && let Some(held) = session.selected_item()
+        && let Some(consumable) = crate::item_prototypes::consumable_for_stack(held)
+        && (session.food_level < 20 || consumable.can_always_eat())
+    {
+        *eat_start = Some((game_tick, held.item.clone(), consumable.consume_ticks));
+        return Ok(());
+    }
     let Some((kind, velocity, consume_item)) = use_item_projectile(session) else {
         return Ok(());
     };
@@ -6531,6 +6602,7 @@ fn handle_block_action(
     drop_rng: &mut LegacyRandomSource,
     game_tick: u64,
     bow_draw: &mut Option<u64>,
+    eat_start: &mut Option<(u64, String, i32)>,
     player_entity: i32,
     tracked_entities: &SessionEntityTracker,
     packet: &[u8],
@@ -6546,6 +6618,21 @@ fn handle_block_action(
         SERVERBOUND_PLAYER_ACTION => {
             let action = crate::block_update::parse_player_action(packet)?;
             if action.action == block_breaking::ACTION_RELEASE_USE_ITEM {
+                if let Some(slot) = finish_consumable(eat_start, session, game_tick) {
+                    write_packet(stream, &health_packet(session))?;
+                    write_packet(
+                        stream,
+                        &inventory::inventory_packet(
+                            slot as i32,
+                            &session.inventory[slot as usize],
+                        ),
+                    )?;
+                    if let Err(error) =
+                        dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                    {
+                        eprintln!("[join] could not save consumable inventory: {error}");
+                    }
+                }
                 if let Some(start) = bow_draw.take() {
                     let ticks = game_tick.saturating_sub(start);
                     let power = bow_power_for_ticks(ticks);
@@ -7063,6 +7150,7 @@ fn handle_set_carried(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
     bow_draw: &mut Option<u64>,
+    eat_start: &mut Option<(u64, String, i32)>,
     packet: &[u8],
 ) -> io::Result<()> {
     let mut reader = PacketReader::new(packet);
@@ -7085,6 +7173,7 @@ fn handle_set_carried(
         }
         if changed {
             *bow_draw = None;
+            *eat_start = None;
         }
         println!("[join] selected hotbar slot {slot}");
     }
@@ -7670,6 +7759,105 @@ mod tests {
         assert_eq!(session.food_saturation, 5.0);
         assert_eq!(session.air, 300);
     }
+
+    #[test]
+    fn eating_apple_restores_food_and_saturation() {
+        let apple = crate::item_prototypes::consumable("minecraft:apple").expect("apple is food");
+        let food = apple.food.as_ref().expect("apple has food");
+        assert_eq!(food.nutrition, 4);
+        assert!((food.saturation - 2.4).abs() < 1e-5);
+        assert_eq!(apple.consume_ticks, 32);
+
+        let mut session = PlayerSession::new("Eater".into(), [0xD0; 16], 0.0, 64.0, 0.0);
+        session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
+        session.food_level = 10;
+        session.food_saturation = 0.0;
+        assert_eq!(apply_consumable(&mut session, &apple, false), Some(0));
+        assert_eq!(session.food_level, 14);
+        assert!((session.food_saturation - 2.4).abs() < 1e-5);
+        assert!(session.inventory[0].is_empty());
+
+        // Both bars clamp: food cannot exceed 20 and saturation cannot exceed
+        // the resulting food level.
+        session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
+        session.food_level = 19;
+        session.food_saturation = 0.0;
+        assert_eq!(apply_consumable(&mut session, &apple, false), Some(0));
+        assert_eq!(session.food_level, 20);
+        assert!((session.food_saturation - 2.4).abs() < 1e-5);
+
+        session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
+        session.food_level = 0;
+        session.food_saturation = 10.0;
+        let exhaustion = session.food_exhaustion;
+        assert_eq!(apply_consumable(&mut session, &apple, false), Some(0));
+        assert_eq!(session.food_level, 4);
+        assert!((session.food_saturation - 4.0).abs() < 1e-5);
+        assert_eq!(session.food_exhaustion, exhaustion);
+    }
+
+    #[test]
+    fn consumable_remainder_replaces_held_stack() {
+        let honey = crate::item_prototypes::consumable("minecraft:honey_bottle").unwrap();
+        let mut session = PlayerSession::new("Drinker".into(), [0xD1; 16], 0.0, 64.0, 0.0);
+        session.food_level = 10;
+        session.food_saturation = 0.0;
+        session.inventory[0] = inventory::ItemStack::new("minecraft:honey_bottle", 1);
+        assert_eq!(apply_consumable(&mut session, &honey, false), Some(0));
+        assert_eq!(session.inventory[0].item, "minecraft:glass_bottle");
+        assert_eq!(session.food_level, 16);
+        assert!((session.food_saturation - 1.2).abs() < 1e-5);
+
+        let stew = crate::item_prototypes::consumable("minecraft:mushroom_stew").unwrap();
+        session.inventory[0] = inventory::ItemStack::new("minecraft:mushroom_stew", 1);
+        assert_eq!(apply_consumable(&mut session, &stew, false), Some(0));
+        assert_eq!(session.inventory[0].item, "minecraft:bowl");
+
+        // Creative leaves the item in hand but still gains the food values.
+        session.food_level = 10;
+        session.food_saturation = 0.0;
+        session.inventory[0] = inventory::ItemStack::new("minecraft:honey_bottle", 1);
+        assert_eq!(apply_consumable(&mut session, &honey, true), Some(0));
+        assert_eq!(session.inventory[0].item, "minecraft:honey_bottle");
+        assert_eq!(session.food_level, 16);
+    }
+
+    #[test]
+    fn early_release_does_not_consume() {
+        let apple = crate::item_prototypes::consumable("minecraft:apple").unwrap();
+        let ticks = apple.consume_ticks;
+        let mut session = PlayerSession::new("Impatient".into(), [0xD2; 16], 0.0, 64.0, 0.0);
+        session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
+        session.food_level = 10;
+        session.food_saturation = 0.0;
+
+        let mut eat_start = Some((100, "minecraft:apple".to_string(), ticks));
+        assert_eq!(
+            finish_consumable(&mut eat_start, &mut session, 100 + ticks as u64 - 1),
+            None
+        );
+        assert!(eat_start.is_none(), "an early release clears the eat");
+        assert_eq!(session.food_level, 10);
+        assert!((session.food_saturation - 0.0).abs() < 1e-5);
+        assert_eq!(session.inventory[0].item, "minecraft:apple");
+
+        // Switching off the eaten item also drops the in-progress eat.
+        eat_start = Some((100, "minecraft:apple".to_string(), ticks));
+        session.inventory[0] = inventory::ItemStack::new("minecraft:stone", 1);
+        assert_eq!(finish_consumable(&mut eat_start, &mut session, 200), None);
+        assert_eq!(session.inventory[0].item, "minecraft:stone");
+
+        // A full hold consumes exactly one and fills food.
+        session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
+        eat_start = Some((100, "minecraft:apple".to_string(), ticks));
+        assert_eq!(
+            finish_consumable(&mut eat_start, &mut session, 100 + ticks as u64),
+            Some(0)
+        );
+        assert_eq!(session.food_level, 14);
+        assert!(session.inventory[0].is_empty());
+    }
+
     #[test]
     fn void_damage_applies_below_the_world_and_spares_spectators() {
         assert_eq!(void_damage_health(20.0, -128.1, 0), Some(16.0));

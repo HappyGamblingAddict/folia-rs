@@ -1466,6 +1466,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             session.xp_total,
         ),
     )?;
+    // Start the client at the time stored in level.dat. The captured
+    // ClientboundSetTime is filtered out of the replayed play packets, so this
+    // is the only time packet during login.
+    write_packet(
+        &mut stream,
+        &set_time_packet(world.day_time, world.day_time, true),
+    )?;
     // The position has to arrive before the chunk batch. The client stays on
     // the loading screen until it has both; the old order generated every
     // column first, so a 441-column join sat on the loading screen for the
@@ -1486,6 +1493,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut mob_spawner =
         crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
     let mut game_tick: u64 = 0;
+    let mut world_day_time = world.day_time;
+    let mut world_game_time = world.day_time;
     let mut bow_draw: Option<u64> = None;
     let mut pending_teleport: Option<(f64, f64, f64)> = None;
     let mut pending_summon: Option<PendingSummon> = None;
@@ -1807,6 +1816,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
             }
             game_tick = game_tick.wrapping_add(1);
+            advance_world_time(&mut world_day_time, &mut world_game_time);
+            if game_tick.is_multiple_of(20) {
+                write_packet(
+                    &mut stream,
+                    &set_time_packet(world_game_time, world_day_time, true),
+                )?;
+            }
             let (food, air) = tick_player_vitals(&mut session, game_tick, submerged);
             let air_changed = matches!(
                 air,
@@ -2076,6 +2092,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     day_time,
                     tick_day_time,
                 } => {
+                    world_game_time = game_time;
+                    world_day_time = day_time;
                     write_packet(
                         &mut stream,
                         &set_time_packet(game_time, day_time, tick_day_time),
@@ -2333,7 +2351,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut pending_summon,
                             &mut pending_kill,
                             player_entity,
-                            game_tick,
+                            &mut world_day_time,
+                            world_game_time,
                             &packet,
                         ) {
                             eprintln!("[join] command failed: {error}");
@@ -4075,6 +4094,22 @@ fn time_set_ticks(value: &str) -> Option<i64> {
     (ticks >= 0).then_some(ticks)
 }
 
+/// Parse the tick count for `/time add`. Vanilla accepts negatives and wraps
+/// them modulo 24000, but this slice keeps a monotonic day-time clock seeded
+/// from `level.dat`, so negatives are rejected explicitly rather than silently
+/// misrendering the sky. Junk and out-of-range values are rejected as well.
+fn time_add_ticks(value: &str) -> Option<i64> {
+    let ticks = value.parse::<i64>().ok()?;
+    (ticks >= 0).then_some(ticks)
+}
+
+/// Advance a session's local world clock by exactly one game tick. Both the
+/// time-of-day and the total game time advance together, as on vanilla.
+fn advance_world_time(day_time: &mut i64, game_time: &mut i64) {
+    *day_time += 1;
+    *game_time += 1;
+}
+
 /// Build the `ClientboundGameEvent` sequence for a `/weather` preset.
 ///
 /// Event ids: 1 = START_RAINING, 2 = STOP_RAINING, 7 = RAIN_LEVEL_CHANGE,
@@ -4097,7 +4132,8 @@ fn handle_command(
     pending_summon: &mut Option<PendingSummon>,
     pending_kill: &mut bool,
     player_entity: i32,
-    game_tick: u64,
+    world_day_time: &mut i64,
+    world_game_time: i64,
     packet: &[u8],
 ) -> io::Result<()> {
     let (command, update) = parse_command_packet(packet)?;
@@ -4446,40 +4482,53 @@ fn handle_command(
                 );
                 return Ok(());
             }
+            let usage = "/time <set <day|noon|night|midnight|ticks>|add <ticks>>";
             match parts.next() {
-                Some("set") => {}
-                Some("add") => {
-                    let message = "/time add is not modelled yet";
+                Some("set") => {
+                    let Some(value) = parts.next() else {
+                        println!("[join] {}: usage: {usage}", session.name);
+                        return Ok(());
+                    };
+                    let Some(day_time) = time_set_ticks(value) else {
+                        let message = format!("invalid time value: {value}");
+                        println!("[join] {}: {message}", session.name);
+                        write_packet(stream, &system_chat_packet(&message)?)?;
+                        return Ok(());
+                    };
+                    *world_day_time = day_time;
+                    let sent = broadcast_world_time(world_game_time, day_time, true);
+                    let message =
+                        format!("Set time to {day_time} (broadcast to {sent} session(s))");
                     println!("[join] {}: {message}", session.name);
-                    write_packet(stream, &system_chat_packet(message)?)?;
-                    return Ok(());
+                    write_packet(stream, &system_chat_packet(&message)?)?;
+                    Ok(())
+                }
+                Some("add") => {
+                    let Some(value) = parts.next() else {
+                        println!("[join] {}: usage: {usage}", session.name);
+                        return Ok(());
+                    };
+                    let Some(ticks) = time_add_ticks(value) else {
+                        let message = format!("invalid time amount: {value}");
+                        println!("[join] {}: {message}", session.name);
+                        write_packet(stream, &system_chat_packet(&message)?)?;
+                        return Ok(());
+                    };
+                    *world_day_time = (*world_day_time).saturating_add(ticks);
+                    let sent = broadcast_world_time(world_game_time, *world_day_time, true);
+                    let message = format!(
+                        "Added {ticks} to time (now {}; broadcast to {sent} session(s))",
+                        *world_day_time
+                    );
+                    println!("[join] {}: {message}", session.name);
+                    write_packet(stream, &system_chat_packet(&message)?)?;
+                    Ok(())
                 }
                 _ => {
-                    println!(
-                        "[join] {}: usage: /time set <day|noon|night|midnight|ticks>",
-                        session.name
-                    );
-                    return Ok(());
+                    println!("[join] {}: usage: {usage}", session.name);
+                    Ok(())
                 }
             }
-            let Some(value) = parts.next() else {
-                println!(
-                    "[join] {}: usage: /time set <day|noon|night|midnight|ticks>",
-                    session.name
-                );
-                return Ok(());
-            };
-            let Some(day_time) = time_set_ticks(value) else {
-                let message = format!("invalid time value: {value}");
-                println!("[join] {}: {message}", session.name);
-                write_packet(stream, &system_chat_packet(&message)?)?;
-                return Ok(());
-            };
-            let sent = broadcast_world_time(game_tick as i64, day_time, true);
-            let message = format!("Set time to {day_time} (broadcast to {sent} session(s))");
-            println!("[join] {}: {message}", session.name);
-            write_packet(stream, &system_chat_packet(&message)?)?;
-            Ok(())
         }
         Some("weather") => {
             if !is_operator(&session.name) {
@@ -5609,6 +5658,9 @@ struct WorldContext {
     trust_stored: bool,
     /// World spawn from `level.dat`, when the level has one.
     spawn: Option<(i32, i32, i32)>,
+    /// Overworld day time from `level.dat`, or 0 when the level has none.
+    /// This is the stored time-of-day in ticks that a joining client sees.
+    day_time: i64,
     /// Overworld generator seed, or the level's stored seed. Dimension
     /// generation uses the same seed for every dimension.
     seed: i64,
@@ -5639,10 +5691,12 @@ fn open_world() -> WorldContext {
         let seed = generator_seed
             .or_else(|| level.as_ref().and_then(|level| level.seed))
             .unwrap_or(0);
+        let day_time = level.as_ref().map_or(0, |level| level.day_time);
         return WorldContext {
             root: directory,
             trust_stored: true,
             spawn: level.and_then(|level| level.spawn),
+            day_time,
             seed,
         };
     }
@@ -5661,10 +5715,12 @@ fn open_world() -> WorldContext {
                 );
             }
             let seed = generator_seed.or(level.seed).unwrap_or(0);
+            let day_time = level.day_time;
             return WorldContext {
                 root: directory,
                 trust_stored: !level.own_level,
                 spawn: level.spawn,
+                day_time,
                 seed,
             };
         }
@@ -5679,6 +5735,7 @@ fn open_world() -> WorldContext {
                 root: directory,
                 trust_stored: true,
                 spawn: None,
+                day_time: 0,
                 seed: generator_seed.unwrap_or(0),
             };
         }
@@ -5695,6 +5752,7 @@ fn open_world() -> WorldContext {
             root: directory,
             trust_stored: true,
             spawn: None,
+            day_time: 0,
             seed: generator_seed.unwrap_or(0),
         };
     };
@@ -5717,6 +5775,7 @@ fn open_world() -> WorldContext {
                 root: directory,
                 trust_stored: false,
                 spawn: None,
+                day_time: 0,
                 seed,
             };
         }
@@ -5740,6 +5799,7 @@ fn open_world() -> WorldContext {
                 root: directory,
                 trust_stored: false,
                 spawn: Some(spawn),
+                day_time: 0,
                 seed,
             }
         }
@@ -5749,6 +5809,7 @@ fn open_world() -> WorldContext {
                 root: directory,
                 trust_stored: false,
                 spawn: None,
+                day_time: 0,
                 seed,
             }
         }
@@ -6839,6 +6900,41 @@ mod tests {
         assert_eq!(time_set_ticks("abc"), None);
         assert_eq!(time_set_ticks("1.5"), None);
         assert_eq!(time_set_ticks(" "), None);
+    }
+
+    #[test]
+    fn time_add_ticks_accepts_non_negative_values() {
+        assert_eq!(time_add_ticks("0"), Some(0));
+        assert_eq!(time_add_ticks("1"), Some(1));
+        assert_eq!(time_add_ticks("1000"), Some(1_000));
+        assert_eq!(time_add_ticks("24000"), Some(24_000));
+        assert_eq!(time_add_ticks("+600"), Some(600));
+    }
+
+    #[test]
+    fn time_add_ticks_rejects_negative_and_junk_values() {
+        assert_eq!(time_add_ticks(""), None);
+        assert_eq!(time_add_ticks("-1"), None);
+        assert_eq!(time_add_ticks("-24000"), None);
+        assert_eq!(time_add_ticks("abc"), None);
+        assert_eq!(time_add_ticks("1.5"), None);
+        assert_eq!(time_add_ticks(" "), None);
+    }
+
+    #[test]
+    fn world_time_advances_one_tick_per_update() {
+        let mut day_time = 18_000;
+        let mut game_time = 123_456;
+        advance_world_time(&mut day_time, &mut game_time);
+        assert_eq!((day_time, game_time), (18_001, 123_457));
+        for _ in 0..19 {
+            advance_world_time(&mut day_time, &mut game_time);
+        }
+        assert_eq!(
+            (day_time, game_time),
+            (18_020, 123_476),
+            "twenty updates advance both clocks by twenty ticks"
+        );
     }
 
     #[test]

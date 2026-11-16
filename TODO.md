@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,443 passing** at the 1e8f011 gate (0 failed, 1 ignored benchmark); doors + time/weather should bring the gate to 1,453
+> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); advancing world time should bring the gate to 1,456
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2817,13 +2817,16 @@ storage stay Overworld-only. No time/weather/portals.
   client time/weather packets.
 - **Why:** World atmosphere and mechanics (sleep, mobs, crops).
 - **Done when:** Time/weather packets match Java and affect gameplay.
-- **Progress (2026-11-16):** `/time set` and `/weather` commands (pending CI) —
-  operators can set named day/noon/night/midnight or arbitrary non-negative
-  ticks and broadcast `ClientboundSetTime`; `/weather clear|rain|thunder`
-  broadcasts the vanilla START/STOP_RAINING, rain-level, and thunder-level game
-  events. The optional duration argument is parsed but documented as ignored
-  because no persistent weather clock exists yet. 4 join tests. Still open: a
-  ticking shared clock (day/night advancement, moon phases), persistent
+- **Progress (2026-11-16):** `/time set` + `/time add` and `/weather`
+  commands (pending CI) — operators can set named day/noon/night/midnight or
+  arbitrary non-negative ticks, add ticks, and broadcast
+  `ClientboundSetTime`; `/weather clear|rain|thunder` broadcasts the vanilla
+  START/STOP_RAINING, rain-level, and thunder-level game events. The optional
+  duration argument is parsed but documented as ignored because no persistent
+  weather clock exists yet. The joining client now receives the stored
+  `level.dat` time; both session clocks advance one tick per game tick and sync
+  every 20 ticks, with broadcasts updating each session's local clock. 7 join
+  tests. Still open: persisting the advanced clock, moon phases, persistent
   weather timers/transitions, lightning, snow, and login weather sync.
 
 ### P7.6 World border, spawn, and game rules `[ ]` `M`

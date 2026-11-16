@@ -9,10 +9,11 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `1e8f011` with 1,443 tests. Door placement and `/time`/`/weather`
-  commands are completed locally and should bring the next gate to 1,451.
+  CI is green at `1e8f011` with 1,443 tests. Door placement (with hinge side),
+  `/time`/`/weather` commands, and the clippy fix are completed locally and
+  should bring the next gate to 1,453.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,451. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,453. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -80,8 +81,8 @@ Last updated: 2026-11-16
   weather duration is parsed but ignored until a persistent clock exists. 4
   join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
-  closed/unpowered defaults, upper-half obstruction check, and one-item
-  consumption. Hinge stays left (documented). 4 block_update tests.
+  click-derived hinge side, closed/unpowered defaults, upper-half obstruction
+  check, and one-item consumption. 6 block_update tests.
 - 2026-11-16: placement obstruction — solid placements are rejected against
   the player and session-mob collision AABBs before consumption. 6
   block_update tests.
@@ -696,8 +697,8 @@ Last updated: 2026-11-16
   weather duration is parsed but ignored until a persistent clock exists. 4
   join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
-  closed/unpowered defaults, upper-half obstruction check, and one-item
-  consumption. Hinge stays left (documented). 4 block_update tests.
+  click-derived hinge side, closed/unpowered defaults, upper-half obstruction
+  check, and one-item consumption. 6 block_update tests.
 - 2026-11-16: placement obstruction — solid placements are rejected against
   the player and session-mob collision AABBs before consumption. 6
   block_update tests.
@@ -936,8 +937,8 @@ Last updated: 2026-11-16
   weather duration is parsed but ignored until a persistent clock exists. 4
   join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
-  closed/unpowered defaults, upper-half obstruction check, and one-item
-  consumption. Hinge stays left (documented). 4 block_update tests.
+  click-derived hinge side, closed/unpowered defaults, upper-half obstruction
+  check, and one-item consumption. 6 block_update tests.
 - 2026-11-16: placement obstruction — solid placements are rejected against
   the player and session-mob collision AABBs before consumption. 6
   block_update tests.

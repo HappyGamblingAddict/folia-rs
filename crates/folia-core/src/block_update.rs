@@ -483,10 +483,38 @@ pub fn state_for_placement_with_yaw(
 /// `open`, and `powered` are only touched when the state actually declares them
 /// (vanilla doors always do).
 ///
-/// Known simplification: `hinge` is always `left`. Vanilla derives the hinge
-/// side from the click position inside the block (the hit axis and cursor),
-/// which this yaw-only placement path does not model yet.
+/// This compatibility helper always uses the `left` hinge; the live placement
+/// path uses [`door_states_with_hinge`] with [`door_hinge_from_click`].
 pub fn door_states(held: &BlockState, player_yaw: f32) -> Option<(BlockState, BlockState)> {
+    door_states_with_hinge(held, player_yaw, "left")
+}
+
+/// Vanilla door hinge side from the absolute click location.
+///
+/// `Direction.getClockWise` is the positive 2D-data neighbour, so the dot
+/// product of the click offset with that axis is positive on the right half of
+/// the target block.
+pub fn door_hinge_from_click(
+    player_yaw: f32,
+    hit_x: f64,
+    hit_z: f64,
+    target_x: f64,
+    target_z: f64,
+) -> &'static str {
+    let facing = crate::math::Direction::from_3d_data(direction_from_yaw(player_yaw) as i32);
+    let right = crate::math::Direction::from_2d_data(facing.data_2d() + 1);
+    let offset_x = hit_x - target_x;
+    let offset_z = hit_z - target_z;
+    let side = offset_x * f64::from(right.step_x()) + offset_z * f64::from(right.step_z());
+    if side > 0.5 { "right" } else { "left" }
+}
+
+/// Door placement states with an explicit hinge side.
+pub fn door_states_with_hinge(
+    held: &BlockState,
+    player_yaw: f32,
+    hinge: &str,
+) -> Option<(BlockState, BlockState)> {
     if !held.name.ends_with("_door") {
         return None;
     }
@@ -505,8 +533,8 @@ pub fn door_states(held: &BlockState, player_yaw: f32) -> Option<(BlockState, Bl
     upper = crate::redstone::with_facing(&upper, direction);
 
     if crate::redstone::property(&lower, "hinge").is_some() {
-        lower = crate::redstone::with_property(&lower, "hinge", "left");
-        upper = crate::redstone::with_property(&upper, "hinge", "left");
+        lower = crate::redstone::with_property(&lower, "hinge", hinge);
+        upper = crate::redstone::with_property(&upper, "hinge", hinge);
     }
     if crate::redstone::property(&lower, "open").is_some() {
         lower = crate::redstone::with_property(&lower, "open", "false");
@@ -845,6 +873,27 @@ mod tests {
     #[test]
     fn non_door_state_has_no_door_states() {
         assert!(door_states(&stone(), 0.0).is_none());
+    }
+
+    #[test]
+    fn door_hinge_follows_click_side() {
+        // Facing north, the clockwise/right side is east (positive X).
+        assert_eq!(door_hinge_from_click(180.0, 0.2, 0.5, 0.0, 0.0), "left");
+        assert_eq!(door_hinge_from_click(180.0, 0.8, 0.5, 0.0, 0.0), "right");
+        // Facing east, the right side is south (positive Z).
+        assert_eq!(door_hinge_from_click(-90.0, 0.5, 0.2, 0.0, 0.0), "left");
+        assert_eq!(door_hinge_from_click(-90.0, 0.5, 0.8, 0.0, 0.0), "right");
+    }
+
+    #[test]
+    fn door_states_with_hinge_sets_both_halves() {
+        let held = named_state(
+            "minecraft:oak_door",
+            &[("facing", "north"), ("half", "lower"), ("hinge", "left")],
+        );
+        let (lower, upper) = door_states_with_hinge(&held, 0.0, "right").expect("oak door states");
+        assert_eq!(crate::redstone::property(&lower, "hinge"), Some("right"));
+        assert_eq!(crate::redstone::property(&upper, "hinge"), Some("right"));
     }
 
     #[test]

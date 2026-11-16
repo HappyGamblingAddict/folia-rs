@@ -6419,7 +6419,15 @@ fn handle_block_action(
             if crate::block_update::placement_obstructed(target_pos, &new_state, &entity_boxes) {
                 return Ok(());
             }
-            if let Some((lower, upper)) = crate::block_update::door_states(&new_state, session.yaw)
+            let door_hinge = crate::block_update::door_hinge_from_click(
+                session.yaw,
+                f64::from(use_item.x) + f64::from(use_item.cursor_x),
+                f64::from(use_item.z) + f64::from(use_item.cursor_z),
+                f64::from(target_pos.x()),
+                f64::from(target_pos.z()),
+            );
+            if let Some((lower, upper)) =
+                crate::block_update::door_states_with_hinge(&new_state, session.yaw, door_hinge)
             {
                 let above_pos = target_pos.above();
                 let above_state = block_at(storage, above_pos)?;

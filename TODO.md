@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,443 passing** at the 1e8f011 gate (0 failed, 1 ignored benchmark); doors + time/weather should bring the gate to 1,451
+> Test status: **1,443 passing** at the 1e8f011 gate (0 failed, 1 ignored benchmark); doors + time/weather should bring the gate to 1,453
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1907,10 +1907,10 @@ instantly on start-destroy and places on use-item-on.
   Obstruction checks use the block collision shape against the player and session
   mob AABBs and reject placement before any consumption (both door halves are
   checked). 6 block_update tests. Two-block door placement sets lower/upper
-  halves, facing from yaw, closed/unpowered state, and writes both blocks while
-  consuming one item; hinge is always left (vanilla uses the click position).
-  4 door tests. Still open: stair corner shapes, hinge side, support checks,
-  sound/particle events, and exact vanilla property defaults on split slabs.
+  halves, facing from yaw, hinge side from the click position, closed/unpowered
+  state, and writes both blocks while consuming one item. 6 door tests. Still
+  open: stair corner shapes, support checks, sound/particle events, and exact
+  vanilla property defaults on split slabs.
 
 ### P4.5 Item use behaviors `[ ]` `L`
 

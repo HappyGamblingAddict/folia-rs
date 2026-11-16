@@ -9,10 +9,10 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `a1b6153` with 1,433 tests. The placement obstruction and door
-  slices are completed locally and should bring the next gate to 1,443.
-- Tests: **1,433 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,443. Parity is **98.75% block-class /
+  CI is green at `1e8f011` with 1,443 tests. Door placement and `/time`/`/weather`
+  commands are completed locally and should bring the next gate to 1,451.
+- Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); next gate expected 1,451. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -44,6 +44,8 @@ Last updated: 2026-11-16
    waterlogging, stairs facing/half, placement block entities, and
    entity-obstruction rejection and two-block doors landed; next are stair
    corner shapes, hinge side, support checks, and double-chest merging.
+   P7.5 now has `/time set` and `/weather` commands; a ticking clock and
+   persistent weather remain.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -73,6 +75,10 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: `/time set` + `/weather` commands — named/numeric time
+  broadcasts and vanilla clear/rain/thunder game-event sequences; optional
+  weather duration is parsed but ignored until a persistent clock exists. 4
+  join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
   closed/unpowered defaults, upper-half obstruction check, and one-item
   consumption. Hinge stays left (documented). 4 block_update tests.
@@ -685,6 +691,10 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: `/time set` + `/weather` commands — named/numeric time
+  broadcasts and vanilla clear/rain/thunder game-event sequences; optional
+  weather duration is parsed but ignored until a persistent clock exists. 4
+  join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
   closed/unpowered defaults, upper-half obstruction check, and one-item
   consumption. Hinge stays left (documented). 4 block_update tests.
@@ -921,6 +931,10 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: `/time set` + `/weather` commands — named/numeric time
+  broadcasts and vanilla clear/rain/thunder game-event sequences; optional
+  weather duration is parsed but ignored until a persistent clock exists. 4
+  join tests (clippy `map_or` fix included).
 - 2026-11-16: two-block door placement — lower/upper halves, yaw facing,
   closed/unpowered defaults, upper-half obstruction check, and one-item
   consumption. Hinge stays left (documented). 4 block_update tests.

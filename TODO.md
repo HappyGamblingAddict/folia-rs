@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,433 passing** at the a1b6153 gate (0 failed, 1 ignored benchmark); doors should bring the gate to 1,443
+> Test status: **1,443 passing** at the 1e8f011 gate (0 failed, 1 ignored benchmark); doors + time/weather should bring the gate to 1,451
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2811,12 +2811,20 @@ storage stay Overworld-only. No time/weather/portals.
 - **Why:** Dimensions are only usable with travel.
 - **Done when:** A player can travel between dimensions and respawn correctly.
 
-### P7.5 Time, weather, and lightning `[ ]` `M`
+### P7.5 Time, weather, and lightning `[~]` `M`
 
 - **What:** Day/night cycle, moon phases, rain/thunder, lightning, snow, and
   client time/weather packets.
 - **Why:** World atmosphere and mechanics (sleep, mobs, crops).
 - **Done when:** Time/weather packets match Java and affect gameplay.
+- **Progress (2026-11-16):** `/time set` and `/weather` commands (pending CI) —
+  operators can set named day/noon/night/midnight or arbitrary non-negative
+  ticks and broadcast `ClientboundSetTime`; `/weather clear|rain|thunder`
+  broadcasts the vanilla START/STOP_RAINING, rain-level, and thunder-level game
+  events. The optional duration argument is parsed but documented as ignored
+  because no persistent weather clock exists yet. 4 join tests. Still open: a
+  ticking shared clock (day/night advancement, moon phases), persistent
+  weather timers/transitions, lightning, snow, and login weather sync.
 
 ### P7.6 World border, spawn, and game rules `[ ]` `M`
 

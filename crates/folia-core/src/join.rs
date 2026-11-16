@@ -2333,6 +2333,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut pending_summon,
                             &mut pending_kill,
                             player_entity,
+                            game_tick,
                             &packet,
                         ) {
                             eprintln!("[join] command failed: {error}");
@@ -4055,6 +4056,38 @@ fn apply_enchantment_to_selected(
     Ok(())
 }
 
+/// Resolve a `/time set` value to a non-negative day time in ticks.
+///
+/// The named presets match vanilla (day/noon/night/midnight). Numeric values
+/// are accepted as-is because vanilla `/time set` accepts arbitrary ticks.
+/// Empty, negative, and unparsable values are rejected: vanilla would wrap
+/// negatives modulo 24000, but this slice has no persistent world clock to
+/// reconcile that against, so negatives are rejected explicitly rather than
+/// silently misrendering the sky.
+fn time_set_ticks(value: &str) -> Option<i64> {
+    let ticks = match value {
+        "day" => 1_000,
+        "noon" => 6_000,
+        "night" => 13_000,
+        "midnight" => 18_000,
+        other => other.parse::<i64>().ok()?,
+    };
+    (ticks >= 0).then_some(ticks)
+}
+
+/// Build the `ClientboundGameEvent` sequence for a `/weather` preset.
+///
+/// Event ids: 1 = START_RAINING, 2 = STOP_RAINING, 7 = RAIN_LEVEL_CHANGE,
+/// 8 = THUNDER_LEVEL_CHANGE. Unknown kinds return `None`.
+fn weather_events(kind: &str) -> Option<Vec<(u8, f32)>> {
+    match kind {
+        "clear" => Some(vec![(2, 0.0), (7, 0.0), (8, 0.0)]),
+        "rain" => Some(vec![(1, 0.0), (7, 1.0), (8, 0.0)]),
+        "thunder" => Some(vec![(1, 0.0), (7, 1.0), (8, 1.0)]),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_command(
     stream: &mut LoginStream,
@@ -4064,6 +4097,7 @@ fn handle_command(
     pending_summon: &mut Option<PendingSummon>,
     pending_kill: &mut bool,
     player_entity: i32,
+    game_tick: u64,
     packet: &[u8],
 ) -> io::Result<()> {
     let (command, update) = parse_command_packet(packet)?;
@@ -4402,6 +4436,89 @@ fn handle_command(
                 .map(|generator| generator.seed())
                 .unwrap_or(0);
             write_packet(stream, &system_chat_packet(&seed_message(seed))?)?;
+            Ok(())
+        }
+        Some("time") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /time",
+                    session.name
+                );
+                return Ok(());
+            }
+            match parts.next() {
+                Some("set") => {}
+                Some("add") => {
+                    let message = "/time add is not modelled yet";
+                    println!("[join] {}: {message}", session.name);
+                    write_packet(stream, &system_chat_packet(message)?)?;
+                    return Ok(());
+                }
+                _ => {
+                    println!(
+                        "[join] {}: usage: /time set <day|noon|night|midnight|ticks>",
+                        session.name
+                    );
+                    return Ok(());
+                }
+            }
+            let Some(value) = parts.next() else {
+                println!(
+                    "[join] {}: usage: /time set <day|noon|night|midnight|ticks>",
+                    session.name
+                );
+                return Ok(());
+            };
+            let Some(day_time) = time_set_ticks(value) else {
+                let message = format!("invalid time value: {value}");
+                println!("[join] {}: {message}", session.name);
+                write_packet(stream, &system_chat_packet(&message)?)?;
+                return Ok(());
+            };
+            let sent = broadcast_world_time(game_tick as i64, day_time, true);
+            let message = format!("Set time to {day_time} (broadcast to {sent} session(s))");
+            println!("[join] {}: {message}", session.name);
+            write_packet(stream, &system_chat_packet(&message)?)?;
+            Ok(())
+        }
+        Some("weather") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /weather",
+                    session.name
+                );
+                return Ok(());
+            }
+            let Some(kind) = parts.next() else {
+                println!(
+                    "[join] {}: usage: /weather <clear|rain|thunder> [duration]",
+                    session.name
+                );
+                return Ok(());
+            };
+            let Some(events) = weather_events(kind) else {
+                let message = format!("unknown weather kind: {kind}");
+                println!("[join] {}: {message}", session.name);
+                write_packet(stream, &system_chat_packet(&message)?)?;
+                return Ok(());
+            };
+            let duration = parts.next();
+            let parsed_duration = duration.and_then(|value| value.parse::<u64>().ok());
+            for (event, param) in &events {
+                broadcast_game_event(*event, *param);
+            }
+            let ignored_note = match (duration, parsed_duration) {
+                (Some(_raw), Some(seconds)) => format!(
+                    " (duration {seconds}s supplied but ignored: no persistent weather clock)"
+                ),
+                (Some(raw), None) => {
+                    format!(" (duration '{raw}' ignored: no persistent weather clock)")
+                }
+                (None, _) => String::new(),
+            };
+            let message = format!("Weather set to {kind}{ignored_note}");
+            println!("[join] {}: {message}", session.name);
+            write_packet(stream, &system_chat_packet(&message)?)?;
             Ok(())
         }
         Some(other) => {
@@ -6307,7 +6424,7 @@ fn handle_block_action(
                 let above_pos = target_pos.above();
                 let above_state = block_at(storage, above_pos)?;
                 let replaceable = |state: Option<&BlockState>| {
-                    state.map_or(true, |state| {
+                    state.is_none_or(|state| {
                         state.name == "minecraft:air" || crate::block_behaviour::replaceable(state)
                     })
                 };
@@ -6693,6 +6810,50 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn time_set_ticks_accepts_named_and_numeric_values() {
+        assert_eq!(time_set_ticks("day"), Some(1_000));
+        assert_eq!(time_set_ticks("noon"), Some(6_000));
+        assert_eq!(time_set_ticks("night"), Some(13_000));
+        assert_eq!(time_set_ticks("midnight"), Some(18_000));
+        assert_eq!(time_set_ticks("0"), Some(0));
+        assert_eq!(time_set_ticks("12345"), Some(12_345));
+        assert_eq!(time_set_ticks("24000"), Some(24_000));
+    }
+
+    #[test]
+    fn time_set_ticks_rejects_invalid_values() {
+        assert_eq!(time_set_ticks(""), None);
+        assert_eq!(time_set_ticks("-1"), None);
+        assert_eq!(time_set_ticks("-24000"), None);
+        assert_eq!(time_set_ticks("abc"), None);
+        assert_eq!(time_set_ticks("1.5"), None);
+        assert_eq!(time_set_ticks(" "), None);
+    }
+
+    #[test]
+    fn weather_events_match_vanilla_sequence() {
+        assert_eq!(
+            weather_events("clear"),
+            Some(vec![(2, 0.0), (7, 0.0), (8, 0.0)])
+        );
+        assert_eq!(
+            weather_events("rain"),
+            Some(vec![(1, 0.0), (7, 1.0), (8, 0.0)])
+        );
+        assert_eq!(
+            weather_events("thunder"),
+            Some(vec![(1, 0.0), (7, 1.0), (8, 1.0)])
+        );
+    }
+
+    #[test]
+    fn weather_events_reject_unknown_kind() {
+        assert_eq!(weather_events("sunny"), None);
+        assert_eq!(weather_events(""), None);
+        assert_eq!(weather_events("RAIN"), None);
     }
 
     #[test]

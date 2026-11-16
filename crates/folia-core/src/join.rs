@@ -6302,6 +6302,50 @@ fn handle_block_action(
             if crate::block_update::placement_obstructed(target_pos, &new_state, &entity_boxes) {
                 return Ok(());
             }
+            if let Some((lower, upper)) = crate::block_update::door_states(&new_state, session.yaw)
+            {
+                let above_pos = target_pos.above();
+                let above_state = block_at(storage, above_pos)?;
+                let replaceable = |state: Option<&BlockState>| {
+                    state.map_or(true, |state| {
+                        state.name == "minecraft:air" || crate::block_behaviour::replaceable(state)
+                    })
+                };
+                if !replaceable(target_current.as_ref()) || !replaceable(above_state.as_ref()) {
+                    return Ok(());
+                }
+                if crate::block_update::placement_obstructed(above_pos, &upper, &entity_boxes) {
+                    return Ok(());
+                }
+                if let Some(change) = crate::block_update::set_block(
+                    storage,
+                    target_pos.x(),
+                    target_pos.y(),
+                    target_pos.z(),
+                    lower,
+                )? {
+                    crate::block_update::broadcast_change(&change);
+                }
+                if let Some(change) = crate::block_update::set_block(
+                    storage,
+                    above_pos.x(),
+                    above_pos.y(),
+                    above_pos.z(),
+                    upper,
+                )? {
+                    crate::block_update::broadcast_change(&change);
+                }
+                if session.game_mode != 1 {
+                    session.consume_selected();
+                }
+                send_container_content(stream, session)?;
+                if let Err(error) =
+                    dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+                {
+                    eprintln!("[join] could not save door inventory: {error}");
+                }
+                return Ok(());
+            }
             let position = BlockEntityPos::new(target_pos.x(), target_pos.y(), target_pos.z());
             // Derive the container entity before `new_state` is moved into
             // `set_block`; sign/spawner and other untyped blocks yield `None`.

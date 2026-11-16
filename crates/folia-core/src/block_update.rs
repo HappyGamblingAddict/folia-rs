@@ -476,6 +476,52 @@ pub fn state_for_placement_with_yaw(
     state
 }
 
+/// Placement states for a two-block door.
+///
+/// Returns the lower and upper halves for a held door state, or `None` when the
+/// held state is not a door. `facing` follows the player yaw; `half`, `hinge`,
+/// `open`, and `powered` are only touched when the state actually declares them
+/// (vanilla doors always do).
+///
+/// Known simplification: `hinge` is always `left`. Vanilla derives the hinge
+/// side from the click position inside the block (the hit axis and cursor),
+/// which this yaw-only placement path does not model yet.
+pub fn door_states(held: &BlockState, player_yaw: f32) -> Option<(BlockState, BlockState)> {
+    if !held.name.ends_with("_door") {
+        return None;
+    }
+
+    let direction = crate::math::Direction::from_3d_data(direction_from_yaw(player_yaw) as i32);
+
+    let mut lower = held.clone();
+    let mut upper = held.clone();
+
+    if crate::redstone::property(&lower, "half").is_some() {
+        lower = crate::redstone::with_property(&lower, "half", "lower");
+        upper = crate::redstone::with_property(&upper, "half", "upper");
+    }
+
+    lower = crate::redstone::with_facing(&lower, direction);
+    upper = crate::redstone::with_facing(&upper, direction);
+
+    if crate::redstone::property(&lower, "hinge").is_some() {
+        lower = crate::redstone::with_property(&lower, "hinge", "left");
+        upper = crate::redstone::with_property(&upper, "hinge", "left");
+    }
+    if crate::redstone::property(&lower, "open").is_some() {
+        lower = crate::redstone::with_property(&lower, "open", "false");
+        upper = crate::redstone::with_property(&upper, "open", "false");
+    }
+    if crate::redstone::property(&lower, "powered").is_some() {
+        lower = crate::redstone::with_property(&lower, "powered", "false");
+        upper = crate::redstone::with_property(&upper, "powered", "false");
+    }
+
+    debug_assert_eq!(lower.name, upper.name);
+
+    Some((lower, upper))
+}
+
 /// Whether the collision shape of `state` placed at `block` strictly overlaps
 /// an entity AABB.
 ///
@@ -728,6 +774,77 @@ mod tests {
         // 45 degrees is exactly between SOUTH and WEST; round() rounds the
         // half-way quarter up, so it resolves to WEST (numeric 4).
         assert_eq!(direction_from_yaw(45.0), 4, "yaw 45 -> WEST numeric 4");
+    }
+
+    #[test]
+    fn door_states_sets_lower_and_upper_halves() {
+        let held = named_state(
+            "minecraft:oak_door",
+            &[
+                ("facing", "north"),
+                ("half", "lower"),
+                ("hinge", "right"),
+                ("open", "true"),
+                ("powered", "true"),
+            ],
+        );
+        let (lower, upper) = door_states(&held, 0.0).expect("oak door states");
+        assert_eq!(crate::redstone::property(&lower, "half"), Some("lower"));
+        assert_eq!(crate::redstone::property(&upper, "half"), Some("upper"));
+        assert_eq!(crate::redstone::property(&lower, "facing"), Some("south"));
+        assert_eq!(crate::redstone::property(&upper, "facing"), Some("south"));
+        assert_eq!(lower.name, upper.name);
+    }
+
+    #[test]
+    fn door_facing_follows_yaw() {
+        let held = named_state(
+            "minecraft:oak_door",
+            &[("facing", "north"), ("half", "lower")],
+        );
+        for (yaw, expected) in [
+            (0.0, "south"),
+            (90.0, "west"),
+            (180.0, "north"),
+            (-90.0, "east"),
+        ] {
+            let (lower, upper) = door_states(&held, yaw).expect("oak door states");
+            assert_eq!(
+                crate::redstone::property(&lower, "facing"),
+                Some(expected),
+                "yaw {yaw} lower facing"
+            );
+            assert_eq!(
+                crate::redstone::property(&upper, "facing"),
+                Some(expected),
+                "yaw {yaw} upper facing"
+            );
+        }
+    }
+
+    #[test]
+    fn door_defaults_are_closed_unpowered_left_hinged() {
+        let held = named_state(
+            "minecraft:oak_door",
+            &[
+                ("facing", "north"),
+                ("half", "lower"),
+                ("hinge", "right"),
+                ("open", "true"),
+                ("powered", "true"),
+            ],
+        );
+        let (lower, upper) = door_states(&held, 0.0).expect("oak door states");
+        for state in [&lower, &upper] {
+            assert_eq!(crate::redstone::property(state, "hinge"), Some("left"));
+            assert_eq!(crate::redstone::property(state, "open"), Some("false"));
+            assert_eq!(crate::redstone::property(state, "powered"), Some("false"));
+        }
+    }
+
+    #[test]
+    fn non_door_state_has_no_door_states() {
+        assert!(door_states(&stone(), 0.0).is_none());
     }
 
     #[test]

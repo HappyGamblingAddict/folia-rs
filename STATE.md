@@ -9,11 +9,10 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `91e807c` with 1,453 tests. Advancing world time (login sync,
-  periodic SetTime, `/time add`) is completed locally and should bring the next
-  gate to 1,456.
+  CI is green at `91e807c` with 1,453 tests. Advancing world time and flint/steel
+  are completed locally and should bring the next gate to 1,457.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,456. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,457. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -47,7 +46,7 @@ Last updated: 2026-11-16
    corner shapes, hinge side, support checks, and double-chest merging.
    P7.5 now has `/time set`, `/time add`, `/weather`, login time sync, and a
    per-session ticking clock synced every 20 ticks; persistence and weather
-   transitions remain.
+   transitions remain. Flint and steel now places and schedules fire.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -77,6 +76,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: flint and steel — places fire through the fluid fire-state
+  helper, checks support, schedules the fire tick, wears the tool in survival,
+  and saves inventory. 1 fluid test (pending CI).
 - 2026-11-16: advancing world time — `WorldContext` carries `level.dat`
   day time, login sends it, both clocks advance each tick with a 20-tick
   SetTime sync, broadcasts update each session's clock, and `/time add` works.
@@ -697,6 +699,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: flint and steel — places fire through the fluid fire-state
+  helper, checks support, schedules the fire tick, wears the tool in survival,
+  and saves inventory. 1 fluid test (pending CI).
 - 2026-11-16: advancing world time — `WorldContext` carries `level.dat`
   day time, login sends it, both clocks advance each tick with a 20-tick
   SetTime sync, broadcasts update each session's clock, and `/time add` works.
@@ -941,6 +946,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: flint and steel — places fire through the fluid fire-state
+  helper, checks support, schedules the fire tick, wears the tool in survival,
+  and saves inventory. 1 fluid test (pending CI).
 - 2026-11-16: advancing world time — `WorldContext` carries `level.dat`
   day time, login sends it, both clocks advance each tick with a 20-tick
   SetTime sync, broadcasts update each session's clock, and `/time add` works.

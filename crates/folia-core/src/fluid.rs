@@ -43,6 +43,7 @@ use crate::random::RandomSource;
 use crate::registry;
 use crate::tags;
 use crate::tick::{BlockBehavior, TickWorld};
+use crate::world::WorldStorage;
 use std::io;
 
 /// Vanilla `Direction.Plane.HORIZONTAL` order.
@@ -1271,6 +1272,29 @@ fn fire_can_survive(
     fire_is_valid_location(world, pos)
 }
 
+/// Crate-visible entry point for the flint-and-steel placement path in
+/// `join.rs`. Runs [`fire_placement_state`] against a short-lived [`TickWorld`].
+pub(crate) fn fire_placement_state_in(
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+    tick: u64,
+) -> io::Result<BlockState> {
+    let mut world = TickWorld::new(storage, tick);
+    fire_placement_state(&mut world, pos)
+}
+
+/// Crate-visible entry point for the flint-and-steel placement path in
+/// `join.rs`. Runs [`fire_can_survive`] against a short-lived [`TickWorld`].
+pub(crate) fn fire_can_survive_in(
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+    state: &BlockState,
+    tick: u64,
+) -> io::Result<bool> {
+    let mut world = TickWorld::new(storage, tick);
+    fire_can_survive(&mut world, pos, state)
+}
+
 /// `FireBlock.isValidFireLocation`: any of the six neighbours can burn.
 fn fire_is_valid_location(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<bool> {
     for direction in Direction::ALL {
@@ -1773,5 +1797,37 @@ mod tests {
         let fire = registry::default_block_state("minecraft:fire").expect("fire");
         assert_eq!(fire_age(&fire), Some(0));
         assert_eq!(fire_age(&state("minecraft:soul_fire", &[])), None);
+    }
+
+    #[test]
+    fn fire_placement_and_survival_helpers_work_over_a_sturdy_floor() {
+        let root = std::env::temp_dir().join(format!(
+            "folia-rs-fluid-fire-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut storage = WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(
+                &crate::chunk_packet::flat_chunk(0, 0),
+                crate::anvil::Compression::Zlib,
+            )
+            .expect("save flat chunk");
+
+        // The flat chunk has grass_block at y = -61 (fully occluding) and air
+        // above it, so a fire at y = -60 has a sturdy floor.
+        let pos = BlockPos::new(0, -60, 0);
+        let fire = fire_placement_state_in(&mut storage, pos, 0).expect("fire placement state");
+        assert_eq!(fire.name, "minecraft:fire");
+        assert!(fire_can_survive_in(&mut storage, pos, &fire, 0).expect("fire survives"));
+
+        // One block higher the floor is air and no neighbour is flammable.
+        let floating = BlockPos::new(0, -59, 0);
+        assert!(!fire_can_survive_in(&mut storage, floating, &fire, 0).expect("survival check"));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

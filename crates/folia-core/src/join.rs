@@ -2453,6 +2453,108 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
+                            if session
+                                .selected_item()
+                                .is_some_and(|held| held.item == "minecraft:flint_and_steel")
+                            {
+                                let use_item = match crate::block_update::parse_use_item_on(&packet)
+                                {
+                                    Ok(use_item) => use_item,
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[join] could not parse flint and steel use: {error}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let (dx, dy, dz) =
+                                    crate::block_update::direction_offset(use_item.direction);
+                                let (dx, dy, dz) = if (dx, dy, dz) == (0, 0, 0) {
+                                    (0, 1, 0)
+                                } else {
+                                    (dx, dy, dz)
+                                };
+                                let target = BlockPos::new(
+                                    use_item.x + dx,
+                                    use_item.y + dy,
+                                    use_item.z + dz,
+                                );
+                                let placed = {
+                                    let mut storage = crate::world::lock(current_storage);
+                                    let can_place =
+                                        block_at(&mut storage, target)?.is_none_or(|state| {
+                                            state.name == "minecraft:air"
+                                                || crate::block_behaviour::replaceable(&state)
+                                        });
+                                    if !can_place {
+                                        false
+                                    } else {
+                                        let fire = crate::fluid::fire_placement_state_in(
+                                            &mut storage,
+                                            target,
+                                            game_tick,
+                                        )?;
+                                        if !crate::fluid::fire_can_survive_in(
+                                            &mut storage,
+                                            target,
+                                            &fire,
+                                            game_tick,
+                                        )? {
+                                            false
+                                        } else {
+                                            if let Some(change) = crate::block_update::set_block(
+                                                &mut storage,
+                                                target.x(),
+                                                target.y(),
+                                                target.z(),
+                                                fire,
+                                            )? {
+                                                crate::block_update::broadcast_change(&change);
+                                            }
+                                            true
+                                        }
+                                    }
+                                };
+                                if placed {
+                                    if session.game_mode != 1 {
+                                        let slot = session.selected_slot.max(0) as usize;
+                                        if let Some(stack) = session.inventory.get_mut(slot) {
+                                            let wear =
+                                                block_breaking::apply_item_durability_with_rng(
+                                                    stack,
+                                                    1,
+                                                    false,
+                                                    &mut drop_rng,
+                                                );
+                                            if wear.broke {
+                                                println!(
+                                                    "[join] {} broke their flint and steel",
+                                                    session.name
+                                                );
+                                            }
+                                        }
+                                    }
+                                    let slot = session.selected_slot.max(0) as usize;
+                                    write_packet(
+                                        &mut stream,
+                                        &inventory::inventory_packet(
+                                            slot as i32,
+                                            &session.inventory[slot],
+                                        ),
+                                    )?;
+                                    if let Err(error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
+                                        eprintln!(
+                                            "[join] could not save flint and steel inventory: {error}"
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
                             if let Some(entity_name) = session
                                 .selected_item()
                                 .and_then(|held| spawn_egg_entity(&held.item))

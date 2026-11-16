@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); advancing world time should bring the gate to 1,456
+> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); world time + flint/steel should bring the gate to 1,457
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1922,6 +1922,12 @@ instantly on start-destroy and places on use-item-on.
   `UseOnContext`.
 - **Done when:** Each implemented item has a behavior test and the correct
   client packets.
+- **Progress (2026-11-16):** flint and steel (pending CI) — use-item-on places
+  a `minecraft:fire` block through `fluid::fire_placement_state_in`, rejects
+  unsupported/occupied targets, schedules the normal fire tick via
+  `set_block`, wears the tool in survival, and saves the inventory. The fluid
+  helper test covers a sturdy floor versus unsupported air. Still open:
+  fire-charge projectiles, lightning ignition, and a live join placement test.
 
 ### P4.6 Full inventory and menu framework `[~]` `XL`
 

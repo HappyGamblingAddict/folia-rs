@@ -9,11 +9,10 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `9455db6` with 1,423 tests. The placement, stairs, and
-  placement-block-entity slices are completed locally and should bring the next
-  gate to 1,437.
-- Tests: **1,423 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,437. Parity is **98.75% block-class /
+  CI is green at `a1b6153` with 1,433 tests. The placement obstruction slice is
+  completed locally and should bring the next gate to 1,439.
+- Tests: **1,433 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); next gate expected 1,439. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -42,9 +41,9 @@ Last updated: 2026-11-16
 ## Current focus
 
 1. P4.4/P1.5 placement rules: replaceable targets, double slabs, slab
-   waterlogging, stairs facing/half, and placement block entities landed; next
-   are corner shapes, support checks, double-chest merging, and entity-collision
-   checks.
+   waterlogging, stairs facing/half, placement block entities, and
+   entity-obstruction rejection landed; next are corner shapes, support checks,
+   and double-chest merging.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -74,6 +73,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: placement obstruction — solid placements are rejected against
+  the player and session-mob collision AABBs before consumption. 6
+  block_update tests.
 - 2026-11-16: placement block entities — chest/trapped chest, hopper,
   furnace/blast furnace/smoker, and brewing stand now create and persist typed
   block entities on placement. 4 block_entity tests.
@@ -680,6 +682,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: placement obstruction — solid placements are rejected against
+  the player and session-mob collision AABBs before consumption. 6
+  block_update tests.
 - 2026-11-16: placement block entities — chest/trapped chest, hopper,
   furnace/blast furnace/smoker, and brewing stand now create and persist typed
   block entities on placement. 4 block_entity tests.
@@ -910,6 +915,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: placement obstruction — solid placements are rejected against
+  the player and session-mob collision AABBs before consumption. 6
+  block_update tests.
 - 2026-11-16: placement block entities — chest/trapped chest, hopper,
   furnace/blast furnace/smoker, and brewing stand now create and persist typed
   block entities on placement. 4 block_entity tests.

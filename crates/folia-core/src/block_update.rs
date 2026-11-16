@@ -476,6 +476,63 @@ pub fn state_for_placement_with_yaw(
     state
 }
 
+/// Whether the collision shape of `state` placed at `block` strictly overlaps
+/// an entity AABB.
+///
+/// Collision boxes from `block_shapes` are block-local in world units (a full
+/// cube spans 0.0..1.0), so translating by the block origin is enough; they
+/// must not be rescaled. Face-touching boxes do not count as an intersection.
+pub fn entity_block_intersection(
+    block: BlockPos,
+    state: &BlockState,
+    min: [f64; 3],
+    max: [f64; 3],
+) -> bool {
+    if min[0] >= max[0] || min[1] >= max[1] || min[2] >= max[2] {
+        return false;
+    }
+    let boxes = crate::block_shapes::collision_boxes(block_state_id(state));
+    if boxes.is_empty() {
+        return false;
+    }
+    let origin = [
+        f64::from(block.x()),
+        f64::from(block.y()),
+        f64::from(block.z()),
+    ];
+    for bounds in boxes {
+        let box_min = [
+            origin[0] + bounds.min_x,
+            origin[1] + bounds.min_y,
+            origin[2] + bounds.min_z,
+        ];
+        let box_max = [
+            origin[0] + bounds.max_x,
+            origin[1] + bounds.max_y,
+            origin[2] + bounds.max_z,
+        ];
+        if (0..3).all(|axis| box_min[axis] < max[axis] && box_max[axis] > min[axis]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether placing `state` at `block` would put a solid block inside any of the
+/// supplied entity AABBs.
+///
+/// This is the counterpart of vanilla `Level.isUnobstructed`: block placement
+/// is rejected when the block would overlap the player or a living entity.
+pub fn placement_obstructed(
+    block: BlockPos,
+    state: &BlockState,
+    entities: &[([f64; 3], [f64; 3])],
+) -> bool {
+    entities
+        .iter()
+        .any(|&(min, max)| entity_block_intersection(block, state, min, max))
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -747,6 +804,80 @@ mod tests {
             crate::redstone::property(&state, "waterlogged"),
             Some("false")
         );
+    }
+
+    #[test]
+    fn stone_placement_inside_player_is_obstructed() {
+        let player = ([-0.3, 64.0, -0.3], [0.3, 65.8, 0.3]);
+        assert!(placement_obstructed(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            &[player]
+        ));
+    }
+
+    #[test]
+    fn stone_placement_adjacent_to_player_is_not_obstructed() {
+        let player = ([-0.3, 64.0, -0.3], [0.3, 65.8, 0.3]);
+        assert!(!placement_obstructed(
+            BlockPos::new(1, 64, 0),
+            &stone(),
+            &[player]
+        ));
+    }
+
+    #[test]
+    fn touching_faces_do_not_intersect() {
+        // A full cube at (0,64,0) spans y 64.0..65.0; the entity begins at the
+        // exact top face, so the strict comparison must not count it.
+        assert!(!entity_block_intersection(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            [-0.3, 65.0, -0.3],
+            [0.3, 66.0, 0.3]
+        ));
+    }
+
+    #[test]
+    fn collisionless_block_does_not_obstruct() {
+        let player = ([-0.3, 64.0, -0.3], [0.3, 65.8, 0.3]);
+        let air = named_state("minecraft:air", &[]);
+        assert!(!placement_obstructed(
+            BlockPos::new(0, 64, 0),
+            &air,
+            &[player]
+        ));
+    }
+
+    #[test]
+    fn any_entity_can_obstruct() {
+        let far = ([10.0, 64.0, 10.0], [10.6, 65.8, 10.6]);
+        let inside = ([-0.3, 64.0, -0.3], [0.3, 65.8, 0.3]);
+        assert!(!placement_obstructed(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            &[]
+        ));
+        assert!(!placement_obstructed(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            &[far]
+        ));
+        assert!(placement_obstructed(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            &[far, inside]
+        ));
+    }
+
+    #[test]
+    fn degenerate_entity_aabb_never_intersects() {
+        assert!(!entity_block_intersection(
+            BlockPos::new(0, 64, 0),
+            &stone(),
+            [0.2, 64.2, 0.2],
+            [0.2, 64.2, 0.2]
+        ));
     }
 
     #[test]

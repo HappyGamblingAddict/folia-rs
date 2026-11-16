@@ -2533,6 +2533,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             game_tick,
                             &mut bow_draw,
                             player_entity,
+                            &tracked_entities,
                             &packet,
                             id,
                         ) {
@@ -6040,6 +6041,7 @@ fn handle_block_action(
     game_tick: u64,
     bow_draw: &mut Option<u64>,
     player_entity: i32,
+    tracked_entities: &SessionEntityTracker,
     packet: &[u8],
     id: i32,
 ) -> io::Result<()> {
@@ -6282,6 +6284,24 @@ fn handle_block_action(
                 target_is_clicked,
                 session.yaw,
             );
+            // Vanilla `Level.isUnobstructed`: refuse a placement whose solid
+            // block would overlap the player or any session mob. This applies
+            // to survival and creative alike; no consumption or save happens.
+            let targets = tracked_entities.collision_targets();
+            let mut entity_boxes = Vec::with_capacity(targets.len() + 1);
+            entity_boxes.push((
+                [session.x - 0.3, session.y, session.z - 0.3],
+                [session.x + 0.3, session.y + 1.8, session.z + 0.3],
+            ));
+            for (_, bounds) in targets {
+                entity_boxes.push((
+                    [bounds.min_x, bounds.min_y, bounds.min_z],
+                    [bounds.max_x, bounds.max_y, bounds.max_z],
+                ));
+            }
+            if crate::block_update::placement_obstructed(target_pos, &new_state, &entity_boxes) {
+                return Ok(());
+            }
             let position = BlockEntityPos::new(target_pos.x(), target_pos.y(), target_pos.z());
             // Derive the container entity before `new_state` is moved into
             // `set_block`; sign/spawner and other untyped blocks yield `None`.

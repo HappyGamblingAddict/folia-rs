@@ -4,14 +4,14 @@
 > Update it after every completed task. Keep it short and factual.
 > `TODO.md` is the full roadmap. `AGENTS.md` is the operating manual.
 
-Last updated: 2026-11-13
+Last updated: 2026-11-16
 
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `4f24e17` (Ubuntu + Windows: fmt, clippy, 1,313 tests,
-  release build).
-- Tests: **1,313 passing** on the full merged gate (0 failed, 1 ignored benchmark); parity is **98.75% block-class / 95.88% exact-name**.
+  CI is green at `9455db6` with 1,423 tests on Ubuntu and Windows.
+- Tests: **1,423 passing** on the full gate (0 failed, 1 ignored benchmark).
+  Parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
   modifiers, recursive jigsaw + feature-pool placement, **1,202 shipped
@@ -38,10 +38,15 @@ Last updated: 2026-11-13
 
 ## Current focus
 
-1. P5 player hazards are wired; remaining is mob environmental hazards, minecarts, structure terrain adaptation, region isolation, and plugin chat events.
-2. P8.2 chat command codecs are wired; remaining is signature/argument validation for signed commands, broader command registry, Mojang trust roots, and plugin chat events.
-3. P2.8 cross-chunk feature writes and structure terrain adaptation.
-4. P9.3 plugin API/event breadth and remaining bridge depth.
+1. P4.4/P1.5 placement rules: replaceable targets, double slabs, slab
+   waterlogging are in progress (Hy4 subagent); next are support checks,
+   stairs/facing, entity-collision checks, and block-entity creation.
+2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
+   remain.
+3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
+   adaptation, structure entities/loot/block entities, and generator wiring
+   remain.
+4. P8.2 signed-command validation and Mojang trust roots; P9.3 event breadth.
 5. P10.3/P10.5 merge/split/transfer and parallel-region world isolation.
 
 ## Next queue
@@ -65,6 +70,13 @@ Last updated: 2026-11-13
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: spawn eggs (9455db6) — use-item-on resolves supported
+  `_spawn_egg` items to entity ids, spawns above the clicked face through the
+  shared tracker, sends add/metadata packets, consumes in survival, and saves
+  inventory. 3 join tests.
+- 2026-11-16: random structure palettes (056d6e6) — explicit palette setting,
+  one deterministic random draw per placement, palette-aware block resolution;
+  `place_into` stays palette 0. 3 structure_template tests.
 - 2026-11-13: bow ammo + projectile death rewards — survival
   bow shots consume one `minecraft:arrow`/`tipped_arrow`/`spectral_arrow` from
   the first matching inventory slot (`take_arrow`), send the changed slot and

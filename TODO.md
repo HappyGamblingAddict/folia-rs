@@ -1,9 +1,9 @@
 # Folia-RS Master TODO & Roadmap
 
-> Last updated: 2026-11-13
+> Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,246 passing** on the full merged gate (0 failed, 1 ignored benchmark); CI green at ba8ea95
+> Test status: **1,423 passing** at the 9455db6 gate (0 failed, 1 ignored benchmark); CI green at 9455db6
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1252,6 +1252,15 @@ errors are concentrated in `root_system`, `geode`, `freeze_top_layer`,
   shape updates, per-block state derivatives that need P1.5 block behaviour
   (stairs shape, door hinge, rail shape, …), and generator chunk-status wiring.
   Starts are not attached to the generator pipeline yet.
+- **Progress (2026-11-16):** random multi-palette selection (056d6e6) —
+  `StructurePlaceSettings` carries an explicit `Option<usize>` palette;
+  `place_into_with_random` draws one `next_int_bound(palette_count)` per
+  placement (or uses the explicit index) and routes every block through
+  `placement_blocks_for_palette`; `place_into`/`placement_blocks` keep palette
+  0 for compatibility. 3 focused tests (named, deterministic random, default
+  zero). Remaining: recursive jigsaw junctions, terrain adaptation, entity
+  spawning, loot-table/chest block entities, structure NBT serialization,
+  shape updates, and generator chunk-status wiring.
 - **Progress (2026-11-06, recursive jigsaw slice):** `jigsaw.rs` ports
   `JigsawPlacement.Placer`: deterministic start rotation/weighted element,
   optional `start_jigsaw_name`, front/back connector matching (`canAttach`),
@@ -2514,8 +2523,15 @@ are still open.
   distance branch, so the RNG draw still happens (4 tests pin RNG
   consumption/threshold/1024 boundary). 14 tests total (076a53a + 6778e8c).
   CI green at c856b5e (1,237 tests). Still open: integrate into the live mob
-  tick, persistence flags, spawn eggs, monster spawners, breeding, village
-  spawning, structure spawn overrides, and a Java spawn-count fixture.
+  tick, persistence flags, monster spawners, breeding, village spawning,
+  structure spawn overrides, and a Java spawn-count fixture.
+- **Progress (2026-11-16):** spawn eggs (9455db6) — `SERVERBOUND_USE_ITEM_ON`
+  resolves `minecraft:<mob>_spawn_egg` through `spawn::entity_type`, spawns at
+  clicked block + face normal via `SessionEntityTracker::spawn_mob`, writes the
+  add-entity/metadata packets, consumes one egg in survival, persists the
+  inventory, and skips block placement. 3 join tests. Unsupported entity types
+  and custom namespaces are rejected. Still open: monster spawners, breeding,
+  village spawning, and spawner persistence.
 
 ### P5.13 Entity tracking and packets `[~]` `M`
 

@@ -2,14 +2,15 @@
 //!
 //! The Java class is both the template data model and the world writer. This
 //! slice ports the data model, `StructurePlaceSettings` transforms, and the
-//! block-writing half of `placeInWorld`. Processor lists, waterlogging, shape
-//! updates, random palette selection, and entity spawning are intentionally
-//! left to later structure slices.
+//! block-writing half of `placeInWorld`. Random palette selection is available
+//! through [`StructureTemplate::place_into_with_random`]. Processor lists,
+//! waterlogging, shape updates, and entity spawning remain for later slices.
 
 use crate::chunk::{BlockState, is_air_state};
 use crate::nbt::{self, Tag};
 use crate::worldgen::feature::FeatureLevel;
 use folia_math::{Axis, BlockPos, Direction, Vec3};
+use folia_random::RandomSource;
 use std::io;
 
 /// `NbtUtils.getDataVersion(tag, 500)`: templates without a `DataVersion` use
@@ -222,6 +223,10 @@ pub struct StructurePlaceSettings {
     rotation_pivot: BlockPos,
     ignore_entities: bool,
     ignore_air: bool,
+    /// Explicit palette index used by
+    /// [`StructureTemplate::place_into_with_random`]. `None` lets the random
+    /// source choose one palette for the whole placement.
+    palette: Option<usize>,
 }
 
 impl Default for StructurePlaceSettings {
@@ -232,6 +237,7 @@ impl Default for StructurePlaceSettings {
             rotation_pivot: BlockPos::ZERO,
             ignore_entities: false,
             ignore_air: false,
+            palette: None,
         }
     }
 }
@@ -286,6 +292,21 @@ impl StructurePlaceSettings {
 
     pub fn ignore_air(self) -> bool {
         self.ignore_air
+    }
+
+    /// Explicit palette index, or `None` when placement should choose one.
+    pub fn palette(self) -> Option<usize> {
+        self.palette
+    }
+
+    /// Forces a palette index for
+    /// [`StructureTemplate::place_into_with_random`].
+    ///
+    /// Java's `StructurePlaceSettings.setPalette` takes the palette itself;
+    /// this port stores only the index because the template owns the palettes.
+    /// An out-of-range index falls back to palette 0 at placement time.
+    pub fn set_palette(&mut self, palette: Option<usize>) {
+        self.palette = palette;
     }
 }
 
@@ -426,10 +447,21 @@ impl StructureTemplate {
     /// normal/special/NBT grouping order (NBT-bearing blocks last, each group
     /// sorted by y, x, z).
     ///
-    /// The return value is relative to the placement origin. The first palette
-    /// is used; see the module docs for multi-palette selection.
+    /// The return value is relative to the placement origin. This
+    /// compatibility entry point always uses palette 0; use
+    /// [`StructureTemplate::placement_blocks_for_palette`] to choose one.
     pub fn placement_blocks(&self, settings: &StructurePlaceSettings) -> Vec<PlacedBlock> {
-        let Some(palette) = self.palettes.first() else {
+        self.placement_blocks_for_palette(settings, 0)
+    }
+
+    /// Same as [`StructureTemplate::placement_blocks`], but resolves every
+    /// block through `palette_index`. An invalid index yields no blocks.
+    pub fn placement_blocks_for_palette(
+        &self,
+        settings: &StructurePlaceSettings,
+        palette_index: usize,
+    ) -> Vec<PlacedBlock> {
+        let Some(palette) = self.palettes.get(palette_index) else {
             return Vec::new();
         };
 
@@ -454,7 +486,7 @@ impl StructureTemplate {
             .collect()
     }
 
-    /// Writes the transformed template into `level`.
+    /// Writes the transformed template into `level` using palette 0.
     ///
     /// `origin` is Java's `offset` argument: relative block/entity positions
     /// are transformed with the rotation pivot, then translated by `origin`.
@@ -467,9 +499,49 @@ impl StructureTemplate {
         origin: BlockPos,
         settings: &StructurePlaceSettings,
     ) -> StructurePlacement {
+        self.place_into_for_palette(level, origin, settings, 0)
+    }
+
+    /// Writes the transformed template into `level` after selecting one
+    /// palette for the whole placement, matching Java's
+    /// `StructurePlaceSettings.getRandomPalette(random, pos)`.
+    ///
+    /// If `settings.palette()` is `Some(index)`, that index is used directly.
+    /// An out-of-range explicit index falls back to palette 0 (clamping would
+    /// silently select a neighbouring palette; Java's list lookup fails
+    /// loudly, so this port chooses the least surprising valid palette).
+    /// Otherwise a single `random.next_int_bound(palette_count)` draw picks the
+    /// index and every block in this placement uses it. A template with no
+    /// palettes writes no blocks and does not consume the random source.
+    ///
+    /// All other behaviour (rotation, mirror, NBT, entities, written/rejected
+    /// counts) is identical to [`StructureTemplate::place_into`].
+    pub fn place_into_with_random(
+        &self,
+        level: &mut dyn FeatureLevel,
+        origin: BlockPos,
+        settings: &StructurePlaceSettings,
+        random: &mut dyn RandomSource,
+    ) -> StructurePlacement {
+        let palette_index = match settings.palette() {
+            Some(index) if index < self.palettes.len() => index,
+            Some(_) => 0,
+            None if self.palettes.is_empty() => 0,
+            None => random.next_int_bound(self.palettes.len() as i32) as usize,
+        };
+        self.place_into_for_palette(level, origin, settings, palette_index)
+    }
+
+    fn place_into_for_palette(
+        &self,
+        level: &mut dyn FeatureLevel,
+        origin: BlockPos,
+        settings: &StructurePlaceSettings,
+        palette_index: usize,
+    ) -> StructurePlacement {
         let mut placement = StructurePlacement::default();
 
-        for block in self.placement_blocks(settings) {
+        for block in self.placement_blocks_for_palette(settings, palette_index) {
             let pos = origin.offset_by(block.pos);
             if level.set_block(pos, block.state.clone()) {
                 placement.written += 1;

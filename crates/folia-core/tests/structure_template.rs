@@ -1,6 +1,7 @@
-﻿use folia_core::chunk::BlockState;
+use folia_core::chunk::BlockState;
 use folia_core::math::{BlockPos, Vec3};
 use folia_core::nbt::Tag;
+use folia_core::random::{LegacyRandomSource, RandomSource};
 use folia_core::worldgen::feature::FeatureLevel;
 use folia_core::worldgen::structure::template::{
     Mirror, Rotation, StructurePlaceSettings, StructureTemplate, transform, transform_vec3,
@@ -655,6 +656,139 @@ fn transform_helpers_match_java_vectors() {
     assert_eq!(
         transform_vec3(vec, Mirror::None, Rotation::Clockwise90, pivot),
         Vec3::new(2.0, 4.0, 0.0)
+    );
+}
+
+fn two_palette_template() -> StructureTemplate {
+    let palettes = Tag::List(vec![
+        Tag::List(vec![
+            palette_entry("minecraft:stone"),
+            palette_entry("minecraft:dirt"),
+        ]),
+        Tag::List(vec![
+            palette_entry("minecraft:stone"),
+            palette_entry("minecraft:grass_block"),
+        ]),
+    ]);
+    StructureTemplate::from_nbt(&root(vec![
+        ("size", ints(&[1, 1, 1])),
+        ("palettes", palettes),
+        ("blocks", Tag::List(vec![block(&[0, 0, 0], 1)])),
+    ]))
+    .expect("synthetic two-palette template parses")
+}
+
+#[test]
+fn named_palette_selection_uses_that_palette() {
+    let template = two_palette_template();
+    let mut settings = StructurePlaceSettings::new();
+    settings.set_palette(Some(1));
+    assert_eq!(settings.palette(), Some(1));
+
+    let mut level = MockLevel::new(0, 384);
+    let mut random = LegacyRandomSource::new(0);
+    let placement =
+        template.place_into_with_random(&mut level, BlockPos::ZERO, &settings, &mut random);
+    assert_eq!(placement.written, 1);
+    assert_eq!(placement.rejected, 0);
+    assert_eq!(
+        level.get_block(BlockPos::ZERO).expect("written block").name,
+        "minecraft:grass_block",
+        "explicit palette 1 must win over the random source"
+    );
+
+    // An explicit palette must not consume a random draw.
+    assert_eq!(
+        random.next_int_bound(2),
+        LegacyRandomSource::new(0).next_int_bound(2)
+    );
+}
+
+#[test]
+fn random_palette_selection_is_deterministic() {
+    let template = two_palette_template();
+    assert_eq!(template.palette_count(), 2);
+
+    let mut saw_palette_0 = false;
+    let mut saw_palette_1 = false;
+    // Sequential small seeds all produce the same first `next_int_bound(2)`
+    // draw under LegacyRandomSource, so scan far enough to cover both outcomes.
+    for seed in 0..8192 {
+        let mut first = LegacyRandomSource::new(seed);
+        let mut level_a = MockLevel::new(0, 384);
+        let placement_a = template.place_into_with_random(
+            &mut level_a,
+            BlockPos::ZERO,
+            &StructurePlaceSettings::new(),
+            &mut first,
+        );
+        assert_eq!(placement_a.written, 1);
+        let name_a = level_a
+            .get_block(BlockPos::ZERO)
+            .expect("written block")
+            .name
+            .clone();
+
+        let mut second = LegacyRandomSource::new(seed);
+        let mut level_b = MockLevel::new(0, 384);
+        template.place_into_with_random(
+            &mut level_b,
+            BlockPos::ZERO,
+            &StructurePlaceSettings::new(),
+            &mut second,
+        );
+        let name_b = level_b
+            .get_block(BlockPos::ZERO)
+            .expect("written block")
+            .name
+            .clone();
+        assert_eq!(name_a, name_b, "same seed must pick the same palette");
+        assert_eq!(
+            first.next_int_bound(2),
+            second.next_int_bound(2),
+            "same seed must leave the random source in the same state"
+        );
+
+        match name_a.as_str() {
+            "minecraft:dirt" => saw_palette_0 = true,
+            "minecraft:grass_block" => saw_palette_1 = true,
+            other => panic!("unexpected block state {other}"),
+        }
+    }
+    assert!(saw_palette_0, "seeds 0..8192 must include palette 0");
+    assert!(saw_palette_1, "seeds 0..8192 must include palette 1");
+}
+
+#[test]
+fn default_placement_still_uses_palette_zero() {
+    let template = two_palette_template();
+    assert_eq!(StructurePlaceSettings::new().palette(), None);
+
+    let mut level = MockLevel::new(0, 384);
+    let placement = template.place_into(&mut level, BlockPos::ZERO, &StructurePlaceSettings::new());
+    assert_eq!(placement.written, 1);
+    assert_eq!(
+        level.get_block(BlockPos::ZERO).expect("written block").name,
+        "minecraft:dirt"
+    );
+    assert_eq!(
+        template.placement_blocks(&StructurePlaceSettings::new())[0]
+            .state
+            .name,
+        "minecraft:dirt"
+    );
+
+    let mut explicit_zero = StructurePlaceSettings::new();
+    explicit_zero.set_palette(Some(0));
+    let mut level2 = MockLevel::new(0, 384);
+    let mut random = LegacyRandomSource::new(42);
+    template.place_into_with_random(&mut level2, BlockPos::ZERO, &explicit_zero, &mut random);
+    assert_eq!(
+        level2
+            .get_block(BlockPos::ZERO)
+            .expect("written block")
+            .name,
+        "minecraft:dirt"
     );
 }
 

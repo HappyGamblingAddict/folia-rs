@@ -2453,6 +2453,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
+                            if handle_bucket_use(
+                                &mut stream,
+                                &mut session,
+                                current_storage,
+                                &packet,
+                            )? {
+                                continue;
+                            }
                             if session
                                 .selected_item()
                                 .is_some_and(|held| held.item == "minecraft:flint_and_steel")
@@ -3467,6 +3475,135 @@ fn spawn_egg_entity(item: &str) -> Option<&'static str> {
         return None;
     }
     Some(crate::spawn::entity_type(mob)?.name)
+}
+
+/// Fluid a filled bucket item will place, if any.
+fn bucket_fluid_source(item: &str) -> Option<&'static str> {
+    match item {
+        "minecraft:water_bucket" => Some("minecraft:water"),
+        "minecraft:lava_bucket" => Some("minecraft:lava"),
+        _ => None,
+    }
+}
+
+/// Filled bucket produced when an empty bucket picks up a source fluid state.
+/// Flowing fluid (`level` other than `0`) cannot be picked up by a bucket.
+fn bucket_for_fluid(state: &BlockState) -> Option<&'static str> {
+    let fluid = crate::block_behaviour::fluid(state)?;
+    let is_source = state
+        .properties
+        .iter()
+        .find(|(key, _)| key == "level")
+        .is_none_or(|(_, value)| value == "0");
+    if !is_source {
+        return None;
+    }
+    match fluid {
+        "minecraft:water" => Some("minecraft:water_bucket"),
+        "minecraft:lava" => Some("minecraft:lava_bucket"),
+        _ => None,
+    }
+}
+
+/// Handles an empty `minecraft:bucket` picking up a source fluid or a filled
+/// water/lava bucket placing it. Returns `true` when a bucket action was
+/// performed (the caller must not run generic placement); `false` means the
+/// held item was not a bucket, or no fluid/valid target existed, so normal
+/// handling continues.
+fn handle_bucket_use(
+    stream: &mut LoginStream,
+    session: &mut PlayerSession,
+    current_storage: &Mutex<WorldStorage>,
+    packet: &[u8],
+) -> io::Result<bool> {
+    let held = session.selected_item().map(|stack| stack.item.as_str());
+    let empty_bucket = held == Some("minecraft:bucket");
+    let fill_fluid = held.and_then(bucket_fluid_source);
+    if !empty_bucket && fill_fluid.is_none() {
+        return Ok(false);
+    }
+
+    let use_item = match crate::block_update::parse_use_item_on(packet) {
+        Ok(use_item) => use_item,
+        Err(error) => {
+            eprintln!("[join] could not parse bucket use: {error}");
+            return Ok(true);
+        }
+    };
+    let slot = session.selected_slot.max(0) as usize;
+
+    if empty_bucket {
+        let mut storage = crate::world::lock(current_storage);
+        let Some(clicked) = block_at(
+            &mut storage,
+            BlockPos::new(use_item.x, use_item.y, use_item.z),
+        )?
+        else {
+            return Ok(false);
+        };
+        let Some(bucket_item) = bucket_for_fluid(&clicked) else {
+            return Ok(false);
+        };
+        if let Some(change) = crate::block_update::set_block(
+            &mut storage,
+            use_item.x,
+            use_item.y,
+            use_item.z,
+            BlockState {
+                name: "minecraft:air".into(),
+                properties: vec![],
+            },
+        )? {
+            crate::block_update::broadcast_change(&change);
+        }
+        drop(storage);
+        if let Some(stack) = session.inventory.get_mut(slot) {
+            *stack = crate::item_components::ItemStack::new(bucket_item, 1);
+        }
+    } else {
+        let fluid_name = fill_fluid.expect("filled bucket has a fluid");
+        let (dx, dy, dz) = crate::block_update::direction_offset(use_item.direction);
+        let (dx, dy, dz) = if (dx, dy, dz) == (0, 0, 0) {
+            (0, 1, 0)
+        } else {
+            (dx, dy, dz)
+        };
+        let target = BlockPos::new(use_item.x + dx, use_item.y + dy, use_item.z + dz);
+        let mut storage = crate::world::lock(current_storage);
+        let can_place = block_at(&mut storage, target)?.is_none_or(|state| {
+            state.name == "minecraft:air" || crate::block_behaviour::replaceable(&state)
+        });
+        if !can_place {
+            return Ok(false);
+        }
+        if let Some(change) = crate::block_update::set_block(
+            &mut storage,
+            target.x(),
+            target.y(),
+            target.z(),
+            BlockState {
+                name: fluid_name.into(),
+                properties: vec![],
+            },
+        )? {
+            crate::block_update::broadcast_change(&change);
+        }
+        drop(storage);
+        if session.game_mode != 1
+            && let Some(stack) = session.inventory.get_mut(slot)
+        {
+            *stack = crate::item_components::ItemStack::new("minecraft:bucket", 1);
+        }
+    }
+
+    write_packet(
+        stream,
+        &inventory::inventory_packet(slot as i32, &session.inventory[slot]),
+    )?;
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
+        eprintln!("[join] could not save bucket inventory: {error}");
+    }
+    Ok(true)
 }
 
 fn handle_use_item(
@@ -9336,5 +9473,51 @@ mod tests {
                 .any(|packet| packet_id(packet).ok() == Some(97)),
             "expected an entity metadata packet (id 97)"
         );
+    }
+
+    fn bucket_test_state(name: &str, properties: &[(&str, &str)]) -> BlockState {
+        BlockState {
+            name: name.into(),
+            properties: properties
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn bucket_source_and_fill_mappings() {
+        assert_eq!(
+            bucket_fluid_source("minecraft:water_bucket"),
+            Some("minecraft:water")
+        );
+        assert_eq!(
+            bucket_fluid_source("minecraft:lava_bucket"),
+            Some("minecraft:lava")
+        );
+
+        let water_source = bucket_test_state("minecraft:water", &[("level", "0")]);
+        assert_eq!(
+            bucket_for_fluid(&water_source),
+            Some("minecraft:water_bucket")
+        );
+        let lava_source = bucket_test_state("minecraft:lava", &[("level", "0")]);
+        assert_eq!(
+            bucket_for_fluid(&lava_source),
+            Some("minecraft:lava_bucket")
+        );
+
+        let flowing_water = bucket_test_state("minecraft:water", &[("level", "5")]);
+        assert_eq!(bucket_for_fluid(&flowing_water), None);
+        let stone = bucket_test_state("minecraft:stone", &[]);
+        assert_eq!(bucket_for_fluid(&stone), None);
+    }
+
+    #[test]
+    fn bucket_fluid_source_rejects_junk() {
+        assert_eq!(bucket_fluid_source("minecraft:stone"), None);
+        assert_eq!(bucket_fluid_source("minecraft:bucket"), None);
+        assert_eq!(bucket_fluid_source("minecraft:WATER_BUCKET"), None);
+        assert_eq!(bucket_fluid_source(""), None);
     }
 }

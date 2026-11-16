@@ -417,6 +417,65 @@ pub fn state_for_placement(
     state
 }
 
+/// Map a player yaw in degrees to a face direction in the same numeric domain
+/// as [`direction_offset`]: 0=DOWN, 1=UP, 2=NORTH, 3=SOUTH, 4=WEST, 5=EAST.
+///
+/// Minecraft's horizontal facing order is SOUTH(0), WEST(1), NORTH(2),
+/// EAST(3), which differs from that 3D ordering, so the yaw-facing value is
+/// translated explicitly (SOUTH->3, WEST->4, NORTH->2, EAST->5). The yaw is
+/// normalized with `rem_euclid(360.0)` and rounded to the nearest quarter
+/// turn; an exact half-turn boundary (for example 45 degrees) rounds up to the
+/// next quarter, matching Java's `Direction.fromYRot`.
+pub fn direction_from_yaw(yaw: f32) -> u8 {
+    let normalized = yaw.rem_euclid(360.0);
+    let quarter = ((normalized / 90.0).round() as i32).rem_euclid(4);
+    crate::math::Direction::from_2d_data(quarter).data_3d() as u8
+}
+
+/// Yaw-aware placement state.
+///
+/// Starts from [`state_for_placement`] so slab merging and waterlogging are
+/// unchanged. For stairs the `facing` follows the player yaw and `half`
+/// follows the clicked face and cursor height, while `shape` is forced to
+/// `straight` when that property is present. The existing waterlogged result
+/// from `state_for_placement` is preserved.
+///
+/// Known simplification: stair corner shapes need neighbouring stair context,
+/// so `shape` stays `straight` here instead of being derived from neighbours.
+pub fn state_for_placement_with_yaw(
+    clicked_state: Option<&BlockState>,
+    target_current: Option<&BlockState>,
+    held_block: &BlockState,
+    clicked_face: u8,
+    cursor_y: f32,
+    target_is_clicked: bool,
+    player_yaw: f32,
+) -> BlockState {
+    let mut state = state_for_placement(
+        clicked_state,
+        target_current,
+        held_block,
+        clicked_face,
+        cursor_y,
+        target_is_clicked,
+    );
+
+    if state.name.ends_with("_stairs") {
+        let direction = direction_from_yaw(player_yaw);
+        state = crate::redstone::with_facing(
+            &state,
+            crate::math::Direction::from_3d_data(direction as i32),
+        );
+        let top = clicked_face == 0 || (clicked_face != 1 && cursor_y > 0.5);
+        state = crate::redstone::with_property(&state, "half", if top { "top" } else { "bottom" });
+        if crate::redstone::property(&state, "shape").is_some() {
+            state = crate::redstone::with_property(&state, "shape", "straight");
+        }
+    }
+
+    state
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -520,6 +579,18 @@ mod tests {
         )
     }
 
+    fn stairs(waterlogged: bool) -> BlockState {
+        named_state(
+            "minecraft:oak_stairs",
+            &[
+                ("facing", "north"),
+                ("half", "bottom"),
+                ("shape", "straight"),
+                ("waterlogged", if waterlogged { "true" } else { "false" }),
+            ],
+        )
+    }
+
     #[test]
     fn replaceable_clicked_is_replaced_in_place() {
         let air = named_state("minecraft:air", &[]);
@@ -587,6 +658,69 @@ mod tests {
 
         let state = state_for_placement(None, None, &held, 3, 0.1, false);
         assert_eq!(crate::redstone::property(&state, "type"), Some("bottom"));
+    }
+
+    #[test]
+    fn direction_from_yaw_maps_quarters() {
+        assert_eq!(direction_from_yaw(0.0), 3, "yaw 0 -> SOUTH numeric 3");
+        assert_eq!(direction_from_yaw(90.0), 4, "yaw 90 -> WEST numeric 4");
+        assert_eq!(direction_from_yaw(180.0), 2, "yaw 180 -> NORTH numeric 2");
+        assert_eq!(direction_from_yaw(-90.0), 5, "yaw -90 -> EAST numeric 5");
+        assert_eq!(direction_from_yaw(270.0), 5, "yaw 270 -> EAST numeric 5");
+        assert_eq!(direction_from_yaw(360.0), 3, "yaw 360 -> SOUTH numeric 3");
+        // 45 degrees is exactly between SOUTH and WEST; round() rounds the
+        // half-way quarter up, so it resolves to WEST (numeric 4).
+        assert_eq!(direction_from_yaw(45.0), 4, "yaw 45 -> WEST numeric 4");
+    }
+
+    #[test]
+    fn stairs_facing_follows_player_yaw() {
+        let held = stairs(false);
+        let south = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, 0.0);
+        assert_eq!(crate::redstone::property(&south, "facing"), Some("south"));
+        let north = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, 180.0);
+        assert_eq!(crate::redstone::property(&north, "facing"), Some("north"));
+        let east = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, -90.0);
+        assert_eq!(crate::redstone::property(&east, "facing"), Some("east"));
+        let west = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, 90.0);
+        assert_eq!(crate::redstone::property(&west, "facing"), Some("west"));
+    }
+
+    #[test]
+    fn stairs_half_follows_face_and_cursor() {
+        let held = stairs(false);
+        let down = state_for_placement_with_yaw(None, None, &held, 0, 0.9, false, 0.0);
+        assert_eq!(crate::redstone::property(&down, "half"), Some("top"));
+        let up = state_for_placement_with_yaw(None, None, &held, 1, 0.9, false, 0.0);
+        assert_eq!(crate::redstone::property(&up, "half"), Some("bottom"));
+        let high = state_for_placement_with_yaw(None, None, &held, 3, 0.75, false, 0.0);
+        assert_eq!(crate::redstone::property(&high, "half"), Some("top"));
+        let low = state_for_placement_with_yaw(None, None, &held, 3, 0.25, false, 0.0);
+        assert_eq!(crate::redstone::property(&low, "half"), Some("bottom"));
+    }
+
+    #[test]
+    fn stairs_keep_waterlogging() {
+        let held = stairs(false);
+        let source = named_state("minecraft:water", &[("level", "0")]);
+        let state = state_for_placement_with_yaw(None, Some(&source), &held, 3, 0.75, false, 90.0);
+        assert_eq!(
+            crate::redstone::property(&state, "waterlogged"),
+            Some("true")
+        );
+        assert_eq!(crate::redstone::property(&state, "half"), Some("top"));
+        assert_eq!(crate::redstone::property(&state, "facing"), Some("west"));
+        assert_eq!(crate::redstone::property(&state, "shape"), Some("straight"));
+    }
+
+    #[test]
+    fn slabs_ignore_yaw() {
+        let held = slab("bottom", false);
+        let facing_zero = state_for_placement_with_yaw(None, None, &held, 3, 0.9, false, 0.0);
+        let facing_137 = state_for_placement_with_yaw(None, None, &held, 3, 0.9, false, 137.0);
+        let plain = state_for_placement(None, None, &held, 3, 0.9, false);
+        assert_eq!(facing_zero, facing_137);
+        assert_eq!(facing_zero, plain);
     }
 
     #[test]

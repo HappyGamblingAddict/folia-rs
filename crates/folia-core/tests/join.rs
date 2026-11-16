@@ -147,7 +147,7 @@ fn login_reaches_play_state_with_captured_world() {
     action
         .write_varint(folia_core::block_update::ACTION_STOP_DESTROY_BLOCK)
         .unwrap();
-    action.write_i64(block_pos_long(0, -61, 0)).unwrap();
+    action.write_i64(block_pos_long(1, -61, 0)).unwrap();
     action.write_u8(1).unwrap();
     action.write_varint(0).unwrap();
     write_packet(&mut client, &action.into_inner()).expect("send block break");
@@ -166,7 +166,7 @@ fn login_reaches_play_state_with_captured_world() {
     let block_update = block_update.expect("block update");
     let mut reader = PacketReader::new(&block_update);
     assert_eq!(reader.read_varint().unwrap(), 8);
-    assert_eq!(reader.read_i64().unwrap(), block_pos_long(0, -61, 0));
+    assert_eq!(reader.read_i64().unwrap(), block_pos_long(1, -61, 0));
     assert_eq!(reader.read_varint().unwrap(), 0, "broken block becomes air");
 
     let light_update = light_update.expect("light update");
@@ -331,7 +331,7 @@ fn login_reaches_play_state_with_captured_world() {
         .expect("load persisted chunk")
         .expect("chunk exists");
     assert_eq!(
-        chunk.block_state(0, -61, 0).unwrap().name,
+        chunk.block_state(1, -61, 0).unwrap().name,
         "minecraft:air",
         "broken block persisted through WorldStorage"
     );

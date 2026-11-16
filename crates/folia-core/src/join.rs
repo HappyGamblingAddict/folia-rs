@@ -6273,13 +6273,14 @@ fn handle_block_action(
                 &block,
             );
             let target_current = block_at(storage, target_pos)?;
-            let new_state = crate::block_update::state_for_placement(
+            let new_state = crate::block_update::state_for_placement_with_yaw(
                 clicked_state.as_ref(),
                 target_current.as_ref(),
                 &block,
                 use_item.direction,
                 use_item.cursor_y,
                 target_is_clicked,
+                session.yaw,
             );
             if let Some(change) = crate::block_update::set_block(
                 storage,

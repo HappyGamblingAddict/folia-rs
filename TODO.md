@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,423 passing** at the 9455db6 gate (0 failed, 1 ignored benchmark); CI green at 9455db6
+> Test status: **1,423 passing** at the 9455db6 gate (0 failed, 1 ignored benchmark); the placement+stairs slice should bring the gate to 1,433
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1894,16 +1894,19 @@ instantly on start-destroy and places on use-item-on.
   most vanilla rules.
 - **Done when:** Placement fixtures match Java for slabs, stairs, waterlogged
   blocks, plants, and block entities.
-- **Progress (2026-11-16):** placement target + slabs (pending CI) —
+- **Progress (2026-11-16):** placement targets, slabs, stairs (pending CI) —
   `block_update::is_replaceable_for_item` replaces ordinary replaceable blocks
   and same-type non-double slabs in place; `placement_target` otherwise offsets
   by the clicked face; `state_for_placement` merges same slabs to `type=double`
   (waterlogged=false), chooses slab `top`/`bottom` from face and cursor height,
   and waterlogs states placed into a water source (flowing water is excluded).
-  join's use-item-on path now reads clicked/target states and writes the
-  resolved state. 5 block_update tests. Still open: stairs/facing, support
-  checks, entity-collision rejection, block-entity creation, sound/particle
-  events, and exact vanilla property defaults on split slabs.
+  `state_for_placement_with_yaw` maps player yaw to stair `facing` (Java
+  quarters), sets `half` from face/cursor, and keeps `shape=straight`;
+  join passes `session.yaw`. 10 block_update tests; the join fixture now breaks
+  a neighbouring block so the existing placement click lands on a solid face.
+  Still open: stair corner shapes, support checks, entity-collision rejection,
+  block-entity creation, sound/particle events, and exact vanilla property
+  defaults on split slabs.
 
 ### P4.5 Item use behaviors `[ ]` `L`
 

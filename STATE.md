@@ -9,10 +9,11 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `9455db6` with 1,423 tests. The placement + stairs slice is
-  completed locally and should bring the next gate to 1,433.
+  CI is green at `9455db6` with 1,423 tests. The placement, stairs, and
+  placement-block-entity slices are completed locally and should bring the next
+  gate to 1,437.
 - Tests: **1,423 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,433. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,437. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -41,8 +42,9 @@ Last updated: 2026-11-16
 ## Current focus
 
 1. P4.4/P1.5 placement rules: replaceable targets, double slabs, slab
-   waterlogging, and stairs facing/half landed; next are corner shapes,
-   support checks, entity-collision checks, and block-entity creation.
+   waterlogging, stairs facing/half, and placement block entities landed; next
+   are corner shapes, support checks, double-chest merging, and entity-collision
+   checks.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -72,6 +74,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: placement block entities — chest/trapped chest, hopper,
+  furnace/blast furnace/smoker, and brewing stand now create and persist typed
+  block entities on placement. 4 block_entity tests.
 - 2026-11-16: block placement rules — replaceable-target and same-slab double
   merging, slab top/bottom selection, water-source waterlogging, stair
   facing/half from player yaw, and join wiring. 10 block_update tests; join
@@ -675,6 +680,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: placement block entities — chest/trapped chest, hopper,
+  furnace/blast furnace/smoker, and brewing stand now create and persist typed
+  block entities on placement. 4 block_entity tests.
 - 2026-11-16: block placement rules — replaceable-target and same-slab double
   merging, slab top/bottom selection, water-source waterlogging, stair
   facing/half from player yaw, and join wiring. 10 block_update tests; join
@@ -902,6 +910,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: placement block entities — chest/trapped chest, hopper,
+  furnace/blast furnace/smoker, and brewing stand now create and persist typed
+  block entities on placement. 4 block_entity tests.
 - 2026-11-16: block placement rules — replaceable-target and same-slab double
   merging, slab top/bottom selection, water-source waterlogging, stair
   facing/half from player yaw, and join wiring. 10 block_update tests; join

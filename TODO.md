@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,423 passing** at the 9455db6 gate (0 failed, 1 ignored benchmark); the placement+stairs slice should bring the gate to 1,433
+> Test status: **1,423 passing** at the 9455db6 gate (0 failed, 1 ignored benchmark); placement/stairs/block-entity slices should bring the gate to 1,437
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1905,8 +1905,7 @@ instantly on start-destroy and places on use-item-on.
   join passes `session.yaw`. 10 block_update tests; the join fixture now breaks
   a neighbouring block so the existing placement click lands on a solid face.
   Still open: stair corner shapes, support checks, entity-collision rejection,
-  block-entity creation, sound/particle events, and exact vanilla property
-  defaults on split slabs.
+  sound/particle events, and exact vanilla property defaults on split slabs.
 
 ### P4.5 Item use behaviors `[ ]` `L`
 
@@ -1963,9 +1962,14 @@ instantly on start-destroy and places on use-item-on.
   get/insert/remove and drops an entity when its block position is edited.
   Furnace smelting reuses `crafting::FurnaceState`, and an explicit
   `BlockEntityTicker` exists. Chest/furnace/brewing menus, right-click opening,
-  click persistence, and close-on-break landed on 2026-11-07. Still open:
-  hopper/dispenser/shulker menus, placement, spawning, sign editing, other
-  block-entity types, and a Java differential NBT fixture.
+  click persistence, and close-on-break landed on 2026-11-07.
+- **Progress (2026-11-16):** placement creates typed entities — placing chest,
+  trapped chest, hopper, furnace/blast furnace/smoker, or brewing stand inserts
+  the matching block entity and persists the chunk's entity map after the block
+  update. Sign/spawner/dispenser/dropper/campfire placement stays untyped and is
+  documented. 4 block_entity tests. Still open: hopper/dispenser/shulker menus,
+  double-chest merging, sign editing, spawner placement, other block-entity
+  types, and a Java differential NBT fixture.
 
 ### P4.8 Crafting and recipe system `[~]` `L`
 

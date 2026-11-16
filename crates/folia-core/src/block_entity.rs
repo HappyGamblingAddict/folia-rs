@@ -245,6 +245,34 @@ impl BlockEntity {
     }
 }
 
+/// Build the persisted block entity for a container block a player just placed.
+///
+/// Returns `None` for blocks that this port does not model as typed entities.
+/// Signs, spawners, dispensers, droppers, campfires, and every other block stay
+/// untyped: they are only created from NBT when an existing chunk is read, and
+/// placing one does not yet write a block entity. This keeps the placement path
+/// explicit instead of silently inventing a partial entity for a block whose
+/// vanilla state has not been modelled.
+///
+/// The furnace ids are resolved through the same [`furnace_kind`] helper used
+/// by NBT decoding so placement and loading agree on the kind.
+pub fn for_placed_block(name: &str, pos: BlockEntityPos) -> Option<BlockEntity> {
+    match name {
+        "minecraft:chest" | "minecraft:trapped_chest" => {
+            Some(BlockEntity::Chest(ChestBlockEntity::with_id(pos, name)))
+        }
+        "minecraft:hopper" => Some(BlockEntity::Hopper(HopperBlockEntity::new(pos))),
+        "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
+            let kind = furnace_kind(name)?;
+            Some(BlockEntity::Furnace(FurnaceBlockEntity::new(pos, kind)))
+        }
+        "minecraft:brewing_stand" => Some(BlockEntity::BrewingStand(Box::new(
+            BrewingStandBlockEntity::new(pos),
+        ))),
+        _ => None,
+    }
+}
+
 /// A chest (or trapped chest) with its 27 item slots and loot-table fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChestBlockEntity {
@@ -1780,5 +1808,80 @@ mod tests {
             ])]),
         )]);
         assert!(decode_block_entities(&root).is_err());
+    }
+
+    #[test]
+    fn placed_chest_creates_a_container() {
+        for name in ["minecraft:chest", "minecraft:trapped_chest"] {
+            let entity = for_placed_block(name, pos()).expect("chest should have a block entity");
+            assert_eq!(entity.id(), name);
+            assert_eq!(entity.pos(), pos());
+            let BlockEntity::Chest(chest) = &entity else {
+                panic!("{name} should create a chest entity");
+            };
+            assert_eq!(chest.items.len(), CHEST_SLOTS);
+            assert!(chest.items.iter().all(ItemStack::is_empty));
+        }
+    }
+
+    #[test]
+    fn placed_furnace_uses_the_right_kind() {
+        for (name, kind) in [
+            ("minecraft:furnace", FurnaceKind::Furnace),
+            ("minecraft:blast_furnace", FurnaceKind::BlastFurnace),
+            ("minecraft:smoker", FurnaceKind::Smoker),
+        ] {
+            let entity = for_placed_block(name, pos()).expect("furnace should have a block entity");
+            assert_eq!(entity.id(), name);
+            assert_eq!(entity.pos(), pos());
+            let BlockEntity::Furnace(furnace) = &entity else {
+                panic!("{name} should create a furnace entity");
+            };
+            assert_eq!(furnace.kind, kind);
+            assert_eq!(furnace.items.len(), FURNACE_SLOTS);
+            assert!(furnace.items.iter().all(ItemStack::is_empty));
+        }
+    }
+
+    #[test]
+    fn placed_hopper_and_brewing_stand_create_typed_entities() {
+        let hopper_entity =
+            for_placed_block("minecraft:hopper", pos()).expect("hopper should have a block entity");
+        assert_eq!(hopper_entity.id(), "minecraft:hopper");
+        assert_eq!(hopper_entity.pos(), pos());
+        let BlockEntity::Hopper(hopper) = &hopper_entity else {
+            panic!("hopper should create a hopper entity");
+        };
+        assert_eq!(hopper.items.len(), HOPPER_SLOTS);
+        assert!(hopper.items.iter().all(ItemStack::is_empty));
+
+        let stand_entity = for_placed_block("minecraft:brewing_stand", pos())
+            .expect("brewing stand should have a block entity");
+        assert_eq!(stand_entity.id(), "minecraft:brewing_stand");
+        assert_eq!(stand_entity.pos(), pos());
+        let BlockEntity::BrewingStand(stand) = &stand_entity else {
+            panic!("brewing stand should create a brewing stand entity");
+        };
+        assert_eq!(stand.state.slots().len(), BREWING_SLOT_COUNT);
+        assert!(stand.state.slots().iter().all(ItemStack::is_empty));
+    }
+
+    #[test]
+    fn placed_non_container_block_has_no_block_entity() {
+        for name in [
+            "minecraft:stone",
+            "minecraft:campfire",
+            "minecraft:sign",
+            "minecraft:hanging_sign",
+            "minecraft:spawner",
+            "minecraft:dispenser",
+            "minecraft:dropper",
+        ] {
+            assert_eq!(
+                for_placed_block(name, pos()),
+                None,
+                "{name} should stay untyped"
+            );
+        }
     }
 }

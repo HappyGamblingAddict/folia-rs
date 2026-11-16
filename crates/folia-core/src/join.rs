@@ -6282,6 +6282,10 @@ fn handle_block_action(
                 target_is_clicked,
                 session.yaw,
             );
+            let position = BlockEntityPos::new(target_pos.x(), target_pos.y(), target_pos.z());
+            // Derive the container entity before `new_state` is moved into
+            // `set_block`; sign/spawner and other untyped blocks yield `None`.
+            let placed_entity = crate::block_entity::for_placed_block(&new_state.name, position);
             if let Some(change) = crate::block_update::set_block(
                 storage,
                 target_pos.x(),
@@ -6290,6 +6294,17 @@ fn handle_block_action(
                 new_state,
             )? {
                 crate::block_update::broadcast_change(&change);
+                if let Some(entity) = placed_entity {
+                    storage.insert_block_entity(entity)?;
+                    if let Some(chunk) =
+                        storage.load_chunk(position.chunk_x(), position.chunk_z())?
+                    {
+                        // `update_chunk` keeps the cached chunk and top-level
+                        // fields while writing the new block-entity map. Do not
+                        // use `save_chunk`, which clears the map.
+                        storage.update_chunk(&chunk, Compression::Zlib, &[])?;
+                    }
+                }
                 if session.game_mode != 1 {
                     session.consume_selected();
                 }

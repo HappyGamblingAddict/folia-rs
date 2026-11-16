@@ -54,6 +54,23 @@ pub fn grow(state: &BlockState, amount: u8) -> BlockState {
     with_age(state, age)
 }
 
+/// Bone-meal age increase (vanilla `CropBlock.getBonemealAgeIncrease`): 2..=4.
+pub fn bone_meal_amount(random: &mut impl RandomSource) -> u8 {
+    2 + random.next_int_bound(3) as u8
+}
+
+/// Returns the bone-meal-grown state only for an immature crop.
+///
+/// Fully grown crops and non-crop blocks return `None`, matching vanilla where
+/// `CropBlock.isBonemealSuccess` fails and bone meal is not consumed.
+pub fn bone_meal_crop(state: &BlockState, amount: u8) -> Option<BlockState> {
+    if is_crop(state) && age(state) < max_age(state) {
+        Some(grow(state, amount))
+    } else {
+        None
+    }
+}
+
 fn light_ok(world: &mut TickWorld<'_>, pos: crate::math::BlockPos) -> bool {
     world
         .storage()
@@ -93,5 +110,52 @@ impl BlockBehavior for CropBehavior {
         state: &BlockState,
     ) -> io::Result<()> {
         random_tick(world, pos, state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use folia_random::LegacyRandomSource;
+
+    #[test]
+    fn bone_meal_amount_is_two_to_four() {
+        for seed in 0..32_i64 {
+            let mut random = LegacyRandomSource::new(seed);
+            for _ in 0..16 {
+                let amount = bone_meal_amount(&mut random);
+                assert!((2..=4).contains(&amount), "seed {seed}: got {amount}");
+            }
+        }
+    }
+
+    #[test]
+    fn bone_meal_crop_grows_only_immature_crops() {
+        let wheat = BlockState {
+            name: "minecraft:wheat".into(),
+            properties: vec![("age".into(), "0".into())],
+        };
+        let grown = bone_meal_crop(&wheat, 3).expect("immature wheat grows");
+        assert_eq!(grown.name, "minecraft:wheat");
+        assert_eq!(age(&grown), 3);
+
+        let beetroots = BlockState {
+            name: "minecraft:beetroots".into(),
+            properties: vec![("age".into(), "1".into())],
+        };
+        let grown = bone_meal_crop(&beetroots, 3).expect("immature beetroots grow");
+        assert_eq!(age(&grown), max_age(&beetroots));
+
+        let stone = BlockState {
+            name: "minecraft:stone".into(),
+            properties: vec![],
+        };
+        assert!(bone_meal_crop(&stone, 3).is_none());
+
+        let mature = BlockState {
+            name: "minecraft:wheat".into(),
+            properties: vec![("age".into(), "7".into())],
+        };
+        assert!(bone_meal_crop(&mature, 3).is_none());
     }
 }

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); world time + flint/steel + buckets should bring the gate to 1,459
+> Test status: **1,453 passing** at the 91e807c gate (0 failed, 1 ignored benchmark); world time + item slices should bring the gate to 1,462
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2708,12 +2708,16 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
 - **Why:** Explosions affect terrain, combat, and redstone.
 - **Done when:** Explosion block/damage results match Java fixtures.
 
-### P6.7 Random-tick behaviors `[ ]` `L`
+### P6.7 Random-tick behaviors `[~]` `L`
 
 - **What:** Crop growth, sapling growth, leaf decay, grass/mycelium spread,
   fire spread, snow/ice formation/melt, vine growth, and bone meal.
 - **Why:** The world needs to change over time without player input.
 - **Done when:** Growth timings and block results match Java.
+- **Progress (2026-11-16):** bone meal on crops (pending CI) — the crop helper
+  draws vanilla's 2..=4 age increase only for immature wheat/carrots/potatoes/
+  beetroots; join consumes one bone meal in survival and writes the grown state.
+  Saplings, grass spread, and particles remain open. 3 tests.
 
 ### P6.8 Sculk sensors, vibrations, and game events `[ ]` `M`
 

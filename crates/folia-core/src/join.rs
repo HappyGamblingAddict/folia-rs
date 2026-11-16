@@ -2453,6 +2453,68 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
+                            // Bone meal on crops. Saplings, grass spread, and
+                            // bone-meal particles are not modelled in this
+                            // slice, so a click that is not an immature crop
+                            // falls through to the generic handling below
+                            // without consuming the item.
+                            if session
+                                .selected_item()
+                                .is_some_and(|held| held.item == "minecraft:bone_meal")
+                            {
+                                let use_item = match crate::block_update::parse_use_item_on(&packet)
+                                {
+                                    Ok(use_item) => use_item,
+                                    Err(error) => {
+                                        eprintln!("[join] could not parse bone meal use: {error}");
+                                        continue;
+                                    }
+                                };
+                                let clicked = BlockPos::new(use_item.x, use_item.y, use_item.z);
+                                let grown = {
+                                    let mut storage = crate::world::lock(current_storage);
+                                    match block_at(&mut storage, clicked)? {
+                                        Some(state) => bone_meal_grow_crop(&state, &mut drop_rng),
+                                        None => None,
+                                    }
+                                };
+                                if let Some(grown) = grown {
+                                    {
+                                        let mut storage = crate::world::lock(current_storage);
+                                        if let Some(change) = crate::block_update::set_block(
+                                            &mut storage,
+                                            clicked.x(),
+                                            clicked.y(),
+                                            clicked.z(),
+                                            grown,
+                                        )? {
+                                            crate::block_update::broadcast_change(&change);
+                                        }
+                                    }
+                                    if session.game_mode != 1 {
+                                        session.consume_selected();
+                                    }
+                                    let slot = session.selected_slot.max(0) as usize;
+                                    write_packet(
+                                        &mut stream,
+                                        &inventory::inventory_packet(
+                                            slot as i32,
+                                            &session.inventory[slot],
+                                        ),
+                                    )?;
+                                    if let Err(error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
+                                        eprintln!(
+                                            "[join] could not save bone meal inventory: {error}"
+                                        );
+                                    }
+                                    continue;
+                                }
+                            }
                             if handle_bucket_use(
                                 &mut stream,
                                 &mut session,
@@ -3503,6 +3565,18 @@ fn bucket_for_fluid(state: &BlockState) -> Option<&'static str> {
         "minecraft:lava" => Some("minecraft:lava_bucket"),
         _ => None,
     }
+}
+
+/// Grows an immature crop with bone meal. The RNG is drawn only on success so
+/// click-through cases (non-crops, mature crops) leave the drop RNG stream
+/// untouched for generic placement.
+fn bone_meal_grow_crop(
+    state: &BlockState,
+    random: &mut impl folia_random::RandomSource,
+) -> Option<BlockState> {
+    crate::crops::bone_meal_crop(state, 0)?;
+    let amount = crate::crops::bone_meal_amount(random);
+    crate::crops::bone_meal_crop(state, amount)
 }
 
 /// Handles an empty `minecraft:bucket` picking up a source fluid or a filled
@@ -7118,6 +7192,39 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn bone_meal_grow_crop_gates_failures_and_draws_rng_only_on_success() {
+        use folia_random::{LegacyRandomSource, RandomSource};
+
+        let wheat = BlockState {
+            name: "minecraft:wheat".into(),
+            properties: vec![("age".into(), "2".into())],
+        };
+        let mut random = LegacyRandomSource::new(7);
+        let grown = bone_meal_grow_crop(&wheat, &mut random).expect("immature wheat grows");
+        assert!((3..=7).contains(&crate::crops::age(&grown)));
+
+        for state in [
+            BlockState {
+                name: "minecraft:stone".into(),
+                properties: vec![],
+            },
+            BlockState {
+                name: "minecraft:wheat".into(),
+                properties: vec![("age".into(), "7".into())],
+            },
+        ] {
+            let mut control = LegacyRandomSource::new(7);
+            let mut attempted = LegacyRandomSource::new(7);
+            assert!(bone_meal_grow_crop(&state, &mut attempted).is_none());
+            assert_eq!(
+                control.next_int(),
+                attempted.next_int(),
+                "a failed bone meal must not draw RNG"
+            );
+        }
     }
 
     #[test]

@@ -1894,6 +1894,16 @@ instantly on start-destroy and places on use-item-on.
   most vanilla rules.
 - **Done when:** Placement fixtures match Java for slabs, stairs, waterlogged
   blocks, plants, and block entities.
+- **Progress (2026-11-16):** placement target + slabs (pending CI) —
+  `block_update::is_replaceable_for_item` replaces ordinary replaceable blocks
+  and same-type non-double slabs in place; `placement_target` otherwise offsets
+  by the clicked face; `state_for_placement` merges same slabs to `type=double`
+  (waterlogged=false), chooses slab `top`/`bottom` from face and cursor height,
+  and waterlogs states placed into a water source (flowing water is excluded).
+  join's use-item-on path now reads clicked/target states and writes the
+  resolved state. 5 block_update tests. Still open: stairs/facing, support
+  checks, entity-collision rejection, block-entity creation, sound/particle
+  events, and exact vanilla property defaults on split slabs.
 
 ### P4.5 Item use behaviors `[ ]` `L`
 

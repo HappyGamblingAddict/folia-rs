@@ -6257,13 +6257,36 @@ fn handle_block_action(
             let Some(block) = inventory::block_for_item(&held.item) else {
                 return Ok(());
             };
-            let (dx, dy, dz) = crate::block_update::direction_offset(use_item.direction);
+            let clicked_pos = BlockPos::new(use_item.x, use_item.y, use_item.z);
+            let air = BlockState {
+                name: "minecraft:air".into(),
+                properties: Vec::new(),
+            };
+            let clicked_state = block_at(storage, clicked_pos)?;
+            let clicked_ref = clicked_state.as_ref().unwrap_or(&air);
+            let target_is_clicked =
+                crate::block_update::is_replaceable_for_item(clicked_ref, &block);
+            let target_pos = crate::block_update::placement_target(
+                clicked_pos,
+                use_item.direction,
+                clicked_ref,
+                &block,
+            );
+            let target_current = block_at(storage, target_pos)?;
+            let new_state = crate::block_update::state_for_placement(
+                clicked_state.as_ref(),
+                target_current.as_ref(),
+                &block,
+                use_item.direction,
+                use_item.cursor_y,
+                target_is_clicked,
+            );
             if let Some(change) = crate::block_update::set_block(
                 storage,
-                use_item.x + dx,
-                use_item.y + dy,
-                use_item.z + dz,
-                block,
+                target_pos.x(),
+                target_pos.y(),
+                target_pos.z(),
+                new_state,
             )? {
                 crate::block_update::broadcast_change(&change);
                 if session.game_mode != 1 {

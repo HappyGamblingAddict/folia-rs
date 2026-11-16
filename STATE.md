@@ -9,7 +9,8 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `9455db6` with 1,423 tests on Ubuntu and Windows.
+  CI is green at `ed95cc0` (docs); last code gate `9455db6` has 1,423 tests.
+  The placement slice is pushed next and should bring the gate to 1,428.
 - Tests: **1,423 passing** on the full gate (0 failed, 1 ignored benchmark).
   Parity is **98.75% block-class / 95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
@@ -39,8 +40,8 @@ Last updated: 2026-11-16
 ## Current focus
 
 1. P4.4/P1.5 placement rules: replaceable targets, double slabs, slab
-   waterlogging are in progress (Hy4 subagent); next are support checks,
-   stairs/facing, entity-collision checks, and block-entity creation.
+   waterlogging landed; next are support checks, stairs/facing,
+   entity-collision checks, and block-entity creation.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -70,6 +71,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-16: block placement rules (pending CI) — replaceable-target and
+  same-slab double merging, slab top/bottom selection, water-source
+  waterlogging, and join wiring. 5 block_update tests.
 - 2026-11-16: spawn eggs (9455db6) — use-item-on resolves supported
   `_spawn_egg` items to entity ids, spawns above the clicked face through the
   shared tracker, sends add/metadata packets, consumes in survival, and saves
@@ -669,6 +673,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: block placement rules (pending CI) — replaceable-target and
+  same-slab double merging, slab top/bottom selection, water-source
+  waterlogging, and join wiring. 5 block_update tests.
 - 2026-11-06: P7 dimension generation slice - `generator::Dimension` models
   the shipped Overworld/Nether/End type fields and
   `generate_dimension(dimension, x, z, seed)` dispatches without touching the
@@ -892,6 +899,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-16: block placement rules (pending CI) — replaceable-target and
+  same-slab double merging, slab top/bottom selection, water-source
+  waterlogging, and join wiring. 5 block_update tests.
 
 - 2026-11-06: First structure-template slice — `worldgen/structure/` loads
   gzip structure NBT (`empty.nbt`, igloo middle, desert camel spawn, nether

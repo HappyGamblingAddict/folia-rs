@@ -341,6 +341,82 @@ pub fn direction_offset(direction: u8) -> (i32, i32, i32) {
     }
 }
 
+/// Whether a state is a slab whose `type` is not `double`.
+fn is_mergeable_slab(state: &BlockState) -> bool {
+    state.name.ends_with("_slab") && crate::redstone::property(state, "type") != Some("double")
+}
+
+/// Whether placing `held_block` against `clicked` replaces `clicked` in place,
+/// mirroring vanilla `Block.canBeReplaced`: ordinary replaceable blocks and a
+/// non-double slab of the same type are overwritten rather than offset from.
+pub fn is_replaceable_for_item(clicked: &BlockState, held_block: &BlockState) -> bool {
+    crate::block_behaviour::replaceable(clicked)
+        || (is_mergeable_slab(clicked) && held_block.name == clicked.name)
+}
+
+/// The block position a placement writes to: the clicked block when it can be
+/// replaced in place, otherwise the neighbour in the clicked face direction.
+/// An out-of-range face falls back to the block above.
+pub fn placement_target(
+    clicked: BlockPos,
+    direction: u8,
+    clicked_state: &BlockState,
+    held_block: &BlockState,
+) -> BlockPos {
+    if is_replaceable_for_item(clicked_state, held_block) {
+        return clicked;
+    }
+    let (dx, dy, dz) = if direction > 5 {
+        (0, 1, 0)
+    } else {
+        direction_offset(direction)
+    };
+    BlockPos::new(clicked.x() + dx, clicked.y() + dy, clicked.z() + dz)
+}
+
+/// The state written at a resolved placement target.
+///
+/// Clicking a non-double slab with the same slab merges it into a double slab;
+/// a fresh slab's `type` follows the clicked face and cursor height; and a
+/// waterloggable state placed into a water *source* becomes waterlogged
+/// (flowing water never waterlogs, matching `Fluids.WATER` only).
+pub fn state_for_placement(
+    clicked_state: Option<&BlockState>,
+    target_current: Option<&BlockState>,
+    held_block: &BlockState,
+    direction: u8,
+    cursor_y: f32,
+    target_is_clicked: bool,
+) -> BlockState {
+    let mut state = held_block.clone();
+
+    let merges = target_is_clicked
+        && clicked_state
+            .is_some_and(|clicked| is_mergeable_slab(clicked) && clicked.name == held_block.name)
+        && target_current
+            .is_some_and(|current| is_mergeable_slab(current) && current.name == held_block.name);
+    if merges {
+        state = crate::redstone::with_property(&state, "type", "double");
+        state = crate::redstone::with_property(&state, "waterlogged", "false");
+        return state;
+    }
+
+    if state.name.ends_with("_slab") {
+        let top = direction == 0 || (direction != 1 && cursor_y > 0.5);
+        state = crate::redstone::with_property(&state, "type", if top { "top" } else { "bottom" });
+    }
+
+    if crate::redstone::property(&state, "waterlogged").is_some()
+        && target_current.is_some_and(|current| {
+            crate::block_behaviour::fluid(current) == Some("minecraft:water")
+        })
+    {
+        state = crate::redstone::with_property(&state, "waterlogged", "true");
+    }
+
+    state
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -422,6 +498,121 @@ mod tests {
             name: "minecraft:stone".into(),
             properties: vec![],
         }
+    }
+
+    fn named_state(name: &str, properties: &[(&str, &str)]) -> BlockState {
+        BlockState {
+            name: name.into(),
+            properties: properties
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect(),
+        }
+    }
+
+    fn slab(kind: &str, waterlogged: bool) -> BlockState {
+        named_state(
+            "minecraft:oak_slab",
+            &[
+                ("type", kind),
+                ("waterlogged", if waterlogged { "true" } else { "false" }),
+            ],
+        )
+    }
+
+    #[test]
+    fn replaceable_clicked_is_replaced_in_place() {
+        let air = named_state("minecraft:air", &[]);
+        assert!(is_replaceable_for_item(&air, &stone()));
+        let clicked = BlockPos::new(3, 4, 5);
+        assert_eq!(
+            placement_target(clicked, 1, &air, &stone()),
+            clicked,
+            "a replaceable clicked block is the placement target"
+        );
+    }
+
+    #[test]
+    fn solid_clicked_places_on_the_clicked_face() {
+        let solid = stone();
+        assert!(!is_replaceable_for_item(&solid, &stone()));
+        let clicked = BlockPos::new(3, 4, 5);
+        assert_eq!(
+            placement_target(clicked, 1, &solid, &stone()),
+            BlockPos::new(3, 5, 5),
+            "UP face places one block above a solid clicked block"
+        );
+        assert_eq!(
+            placement_target(clicked, 9, &solid, &stone()),
+            BlockPos::new(3, 5, 5),
+            "an invalid face falls back to the block above"
+        );
+    }
+
+    #[test]
+    fn same_slab_merges_into_double_and_is_not_waterlogged() {
+        let bottom = slab("bottom", false);
+        let held = slab("bottom", false);
+        assert!(is_replaceable_for_item(&bottom, &held));
+        let state = state_for_placement(Some(&bottom), Some(&bottom), &held, 1, 0.1, true);
+        assert_eq!(crate::redstone::property(&state, "type"), Some("double"));
+        assert_eq!(
+            crate::redstone::property(&state, "waterlogged"),
+            Some("false")
+        );
+
+        let double = slab("double", false);
+        assert!(
+            !is_replaceable_for_item(&double, &held),
+            "a double slab cannot merge again"
+        );
+        let stone_held = stone();
+        assert!(
+            !is_replaceable_for_item(&bottom, &stone_held),
+            "a different block cannot merge a slab"
+        );
+    }
+
+    #[test]
+    fn slab_type_follows_face_and_cursor_height() {
+        let held = slab("bottom", false);
+        let state = state_for_placement(None, None, &held, 0, 0.9, false);
+        assert_eq!(crate::redstone::property(&state, "type"), Some("top"));
+
+        let state = state_for_placement(None, None, &held, 1, 0.9, false);
+        assert_eq!(crate::redstone::property(&state, "type"), Some("bottom"));
+
+        let state = state_for_placement(None, None, &held, 3, 0.9, false);
+        assert_eq!(crate::redstone::property(&state, "type"), Some("top"));
+
+        let state = state_for_placement(None, None, &held, 3, 0.1, false);
+        assert_eq!(crate::redstone::property(&state, "type"), Some("bottom"));
+    }
+
+    #[test]
+    fn water_source_waterlogs_but_flowing_water_does_not() {
+        let held = slab("bottom", false);
+        let source = named_state("minecraft:water", &[("level", "0")]);
+        assert_eq!(
+            crate::block_behaviour::fluid(&source),
+            Some("minecraft:water")
+        );
+        let state = state_for_placement(None, Some(&source), &held, 1, 0.1, false);
+        assert_eq!(
+            crate::redstone::property(&state, "waterlogged"),
+            Some("true")
+        );
+
+        let flowing = named_state("minecraft:water", &[("level", "1")]);
+        assert_eq!(
+            crate::block_behaviour::fluid(&flowing),
+            Some("minecraft:flowing_water")
+        );
+        let state = state_for_placement(None, Some(&flowing), &held, 1, 0.1, false);
+        assert_eq!(
+            crate::redstone::property(&state, "waterlogged"),
+            Some("false")
+        );
     }
 
     #[test]

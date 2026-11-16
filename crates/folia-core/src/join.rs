@@ -2433,6 +2433,66 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     SERVERBOUND_PLAYER_ACTION | SERVERBOUND_USE_ITEM_ON => {
                         if id == SERVERBOUND_USE_ITEM_ON {
+                            if let Some(entity_name) = session
+                                .selected_item()
+                                .and_then(|held| spawn_egg_entity(&held.item))
+                            {
+                                let use_item = match crate::block_update::parse_use_item_on(&packet)
+                                {
+                                    Ok(use_item) => use_item,
+                                    Err(error) => {
+                                        eprintln!("[join] could not parse spawn-egg use: {error}");
+                                        continue;
+                                    }
+                                };
+                                let (dx, dy, dz) =
+                                    crate::block_update::direction_offset(use_item.direction);
+                                let (dx, dy, dz) = if (dx, dy, dz) == (0, 0, 0) {
+                                    (0, 1, 0)
+                                } else {
+                                    (dx, dy, dz)
+                                };
+                                let clicked = BlockPos::new(
+                                    use_item.x + dx,
+                                    use_item.y + dy,
+                                    use_item.z + dz,
+                                );
+                                let centre = (
+                                    f64::from(clicked.x()) + 0.5,
+                                    f64::from(clicked.y()),
+                                    f64::from(clicked.z()) + 0.5,
+                                );
+                                let seed = game_tick as i64 ^ 0x5A17;
+                                if let Some(egg_id) =
+                                    tracked_entities.spawn_mob(entity_name, centre, seed)
+                                {
+                                    for packet in tracked_entities.enter_packets_for(egg_id) {
+                                        write_packet(&mut stream, &packet)?;
+                                    }
+                                    if session.game_mode != 1 {
+                                        session.consume_selected();
+                                    }
+                                    let slot = session.selected_slot.max(0) as usize;
+                                    write_packet(
+                                        &mut stream,
+                                        &inventory::inventory_packet(
+                                            session.selected_slot,
+                                            &session.inventory[slot],
+                                        ),
+                                    )?;
+                                    if let Err(error) =
+                                        dimension::save_playerdata_preserving_dimension(
+                                            &session,
+                                            playerdata_dir(),
+                                        )
+                                    {
+                                        eprintln!(
+                                            "[join] could not save spawn-egg inventory: {error}"
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
                             let portal = {
                                 let mut storage = crate::world::lock(current_storage);
                                 portal_click(&mut storage, &packet)?
@@ -3270,6 +3330,20 @@ fn take_arrow(session: &mut PlayerSession) -> Option<(usize, crate::inventory::I
         }
     }
     None
+}
+
+/// Maps a spawn-egg item id to the entity id it spawns.
+///
+/// Accepts `minecraft:<name>_spawn_egg` and bare `<name>_spawn_egg`; the
+/// derived id is returned only when `crate::spawn::entity_type` knows the mob.
+/// Non-eggs and eggs for unsupported entity types return `None`.
+fn spawn_egg_entity(item: &str) -> Option<&'static str> {
+    let name = item.strip_prefix("minecraft:").unwrap_or(item);
+    let mob = name.strip_suffix("_spawn_egg")?;
+    if mob.is_empty() {
+        return None;
+    }
+    Some(crate::spawn::entity_type(mob)?.name)
 }
 
 fn handle_use_item(
@@ -8739,5 +8813,58 @@ mod tests {
         );
         assert!(saw_packets, "expected add-entity packets for a spawned mob");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spawn_egg_entity_maps_supported_mobs() {
+        assert_eq!(
+            spawn_egg_entity("minecraft:cow_spawn_egg"),
+            Some("minecraft:cow")
+        );
+        assert_eq!(
+            spawn_egg_entity("minecraft:pig_spawn_egg"),
+            Some("minecraft:pig")
+        );
+        assert_eq!(
+            spawn_egg_entity("minecraft:zombie_spawn_egg"),
+            Some("minecraft:zombie")
+        );
+        assert_eq!(
+            spawn_egg_entity("minecraft:sheep_spawn_egg"),
+            Some("minecraft:sheep")
+        );
+        assert_eq!(spawn_egg_entity("minecraft:stone"), None);
+        assert_eq!(spawn_egg_entity("minecraft:not_a_mob_spawn_egg"), None);
+    }
+
+    #[test]
+    fn spawn_egg_entity_rejects_malformed() {
+        assert_eq!(spawn_egg_entity("cow_spawn_egg"), Some("minecraft:cow"));
+        assert_eq!(spawn_egg_entity("_spawn_egg"), None);
+        assert_eq!(spawn_egg_entity("spawn_egg"), None);
+        assert_eq!(spawn_egg_entity("minecraft:cow_spawn_egg_extra"), None);
+        assert_eq!(spawn_egg_entity("other:cow_spawn_egg"), None);
+    }
+
+    #[test]
+    fn spawn_egg_enter_packets_include_add_and_metadata() {
+        let mut tracker =
+            crate::entity::SessionEntityTracker::deterministic((0.5, 63.0, 0.5), 63, 7);
+        let id = tracker
+            .spawn_mob("minecraft:cow", (4.5, 63.0, 8.5), 0x5A17)
+            .expect("cow should spawn");
+        let packets = tracker.enter_packets_for(id);
+        assert!(
+            packets
+                .iter()
+                .any(|packet| packet_id(packet).ok() == Some(1)),
+            "expected an Add Entity packet"
+        );
+        assert!(
+            packets
+                .iter()
+                .any(|packet| packet_id(packet).ok() == Some(97)),
+            "expected an entity metadata packet (id 97)"
+        );
     }
 }

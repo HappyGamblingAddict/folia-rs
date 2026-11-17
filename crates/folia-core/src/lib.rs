@@ -45,6 +45,7 @@ pub mod spawn;
 pub mod status;
 pub mod tags;
 pub mod tick;
+pub mod tnt;
 pub mod varint;
 pub mod world;
 pub mod worldgen;

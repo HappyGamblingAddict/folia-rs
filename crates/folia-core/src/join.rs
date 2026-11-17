@@ -41,6 +41,7 @@ use crate::protocol::{
     build_player_chat_packet, parse_encryption_response, parse_login_start, parse_serverbound_chat,
     parse_serverbound_chat_session_update,
 };
+use crate::tnt::{ExplosionEvent, TntStore, TntTick};
 use crate::world::WorldStorage;
 use folia_random::LegacyRandomSource;
 use std::collections::{HashMap, HashSet};
@@ -1491,6 +1492,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_move_at = Instant::now();
     let mut drop_entities = DropEntityStore::new();
     let mut projectiles = crate::projectile::ProjectileStore::new();
+    let mut primed_tnt = TntStore::new();
     let mut mob_spawner =
         crate::spawn::NaturalSpawner::new(289, crate::spawn::SpawnSettings::default());
     let mut game_tick: u64 = 0;
@@ -1609,6 +1611,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 tick,
                 drop_tick,
                 projectile_tick,
+                tnt_tick,
+                tnt_changes,
                 inventory_before,
                 submerged,
                 spawn_packets,
@@ -1670,6 +1674,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
+                let tnt_tick: TntTick = primed_tnt.tick();
+                let mut tnt_changes = Vec::new();
+                for event in &tnt_tick.explosions {
+                    tnt_changes.extend(explode_tnt(&mut storage, event, game_tick)?);
+                }
                 let hazard_death_rewards: Vec<(String, crate::math::BlockPos)> = tick
                     .hazard_deaths
                     .iter()
@@ -1722,6 +1731,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     tick,
                     drop_tick,
                     projectile_tick,
+                    tnt_tick,
+                    tnt_changes,
                     inventory_before,
                     submerged,
                     spawn_packets,
@@ -1785,6 +1796,21 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                     return Err(error);
                 }
+            }
+            for packet in &tnt_tick.packets {
+                if let Err(error) = write_packet(&mut stream, packet) {
+                    if is_disconnect(&error) {
+                        tracked_entities.clear();
+                        drop_entities.clear();
+                        projectiles.clear();
+                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            for change in &tnt_changes {
+                crate::block_update::broadcast_change(change);
             }
             for packet in &spawn_packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
@@ -2573,6 +2599,42 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     use_item.y + dy,
                                     use_item.z + dz,
                                 );
+                                let clicked = BlockPos::new(use_item.x, use_item.y, use_item.z);
+                                let clicked_is_tnt = {
+                                    let mut storage = crate::world::lock(current_storage);
+                                    block_at(&mut storage, clicked)?
+                                        .is_some_and(|state| state.name == "minecraft:tnt")
+                                };
+                                if clicked_is_tnt {
+                                    {
+                                        let mut storage = crate::world::lock(current_storage);
+                                        let air = BlockState {
+                                            name: "minecraft:air".into(),
+                                            properties: Vec::new(),
+                                        };
+                                        if let Some(change) = crate::block_update::set_block(
+                                            &mut storage,
+                                            clicked.x(),
+                                            clicked.y(),
+                                            clicked.z(),
+                                            air,
+                                        )? {
+                                            crate::block_update::broadcast_change(&change);
+                                        }
+                                    }
+                                    for packet in primed_tnt.ignite(
+                                        [
+                                            f64::from(clicked.x()) + 0.5,
+                                            f64::from(clicked.y()),
+                                            f64::from(clicked.z()) + 0.5,
+                                        ],
+                                        80,
+                                    ) {
+                                        write_packet(&mut stream, &packet)?;
+                                    }
+                                    wear_flint_and_steel(&mut stream, &mut session, &mut drop_rng)?;
+                                    continue;
+                                }
                                 let placed = {
                                     let mut storage = crate::world::lock(current_storage);
                                     let can_place =
@@ -2610,42 +2672,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     }
                                 };
                                 if placed {
-                                    if session.game_mode != 1 {
-                                        let slot = session.selected_slot.max(0) as usize;
-                                        if let Some(stack) = session.inventory.get_mut(slot) {
-                                            let wear =
-                                                block_breaking::apply_item_durability_with_rng(
-                                                    stack,
-                                                    1,
-                                                    false,
-                                                    &mut drop_rng,
-                                                );
-                                            if wear.broke {
-                                                println!(
-                                                    "[join] {} broke their flint and steel",
-                                                    session.name
-                                                );
-                                            }
-                                        }
-                                    }
-                                    let slot = session.selected_slot.max(0) as usize;
-                                    write_packet(
-                                        &mut stream,
-                                        &inventory::inventory_packet(
-                                            slot as i32,
-                                            &session.inventory[slot],
-                                        ),
-                                    )?;
-                                    if let Err(error) =
-                                        dimension::save_playerdata_preserving_dimension(
-                                            &session,
-                                            playerdata_dir(),
-                                        )
-                                    {
-                                        eprintln!(
-                                            "[join] could not save flint and steel inventory: {error}"
-                                        );
-                                    }
+                                    wear_flint_and_steel(&mut stream, &mut session, &mut drop_rng)?;
                                 }
                                 continue;
                             }
@@ -7014,6 +7041,78 @@ fn block_at(storage: &mut WorldStorage, pos: BlockPos) -> io::Result<Option<Bloc
             pos.z().rem_euclid(16) as usize,
         )
         .cloned())
+}
+
+/// Wear the flint and steel in survival, then send the inventory update and
+/// save the playerdata. Shared by the fire-placement and TNT-ignition paths.
+fn wear_flint_and_steel(
+    stream: &mut LoginStream,
+    session: &mut PlayerSession,
+    drop_rng: &mut LegacyRandomSource,
+) -> io::Result<()> {
+    if session.game_mode != 1 {
+        let slot = session.selected_slot.max(0) as usize;
+        if let Some(stack) = session.inventory.get_mut(slot) {
+            let wear = block_breaking::apply_item_durability_with_rng(stack, 1, false, drop_rng);
+            if wear.broke {
+                println!("[join] {} broke their flint and steel", session.name);
+            }
+        }
+    }
+    let slot = session.selected_slot.max(0) as usize;
+    write_packet(
+        stream,
+        &inventory::inventory_packet(slot as i32, &session.inventory[slot]),
+    )?;
+    if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
+        eprintln!("[join] could not save flint and steel inventory: {error}");
+    }
+    Ok(())
+}
+
+/// Apply one primed-TNT explosion: compute the vanilla ray-shaped block set
+/// and replace every affected solid block with air, returning the changes for
+/// the caller to broadcast.
+///
+/// This first P6.6 slice does not model drops, entity/player damage,
+/// knockback, chain reactions, or sounds/particles.
+fn explode_tnt(
+    storage: &mut WorldStorage,
+    event: &ExplosionEvent,
+    tick: u64,
+) -> io::Result<Vec<crate::block_update::BlockChange>> {
+    use crate::tnt::explosion_blocks;
+
+    let positions = explosion_blocks(
+        [event.x, event.y, event.z],
+        4.0,
+        (tick as i64) ^ 0xE7C1,
+        |pos| {
+            block_at(storage, pos)
+                .ok()
+                .flatten()
+                .map(|state| crate::block_behaviour::blast_resistance(&state))
+        },
+    );
+    let air = BlockState {
+        name: "minecraft:air".into(),
+        properties: Vec::new(),
+    };
+    let mut changes = Vec::new();
+    for pos in positions {
+        if block_at(storage, pos)?
+            .as_ref()
+            .is_some_and(|state| state.name == "minecraft:air")
+        {
+            continue;
+        }
+        if let Some(change) =
+            crate::block_update::set_block(storage, pos.x(), pos.y(), pos.z(), air.clone())?
+        {
+            changes.push(change);
+        }
+    }
+    Ok(changes)
 }
 
 fn mining_context(session: &PlayerSession, storage: &mut WorldStorage) -> MiningContext {

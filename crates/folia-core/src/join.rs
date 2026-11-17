@@ -6949,7 +6949,16 @@ fn menu_contents(
             Vec::new(),
         )),
         BlockEntity::Sign(_) | BlockEntity::Spawner(_) => None,
-        BlockEntity::Unknown(_) => None,
+        BlockEntity::Unknown(unknown) => {
+            let dispenser = unknown.as_dispenser()?;
+            Some((
+                inventory::MenuKind::Dispenser {
+                    dropper: unknown.id == "minecraft:dropper",
+                },
+                dispenser.items.clone(),
+                Vec::new(),
+            ))
+        }
     }
 }
 
@@ -9065,6 +9074,75 @@ mod tests {
         let first = inventory::read_item_stack(&mut reader).expect("first hopper slot");
         assert_eq!(first.item, "minecraft:gold_ingot");
         assert_eq!(first.count, 4);
+    }
+
+    #[test]
+    fn open_menu_from_dispenser_and_dropper_writes_generic_3x3_screen() {
+        use crate::block_entity::DispenserBlockEntity;
+        use std::net::TcpListener;
+
+        for (block_id, expected_title) in [
+            ("minecraft:dispenser", "container.dispenser"),
+            ("minecraft:dropper", "container.dropper"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let client_stream = TcpStream::connect(address).unwrap();
+            let (server_stream, _) = listener.accept().unwrap();
+            let mut server = Connection::new(server_stream);
+            let mut client = Connection::new(client_stream);
+
+            let position = BlockEntityPos::new(2, 64, 3);
+            let mut dispenser = DispenserBlockEntity::with_id(position, block_id);
+            dispenser.set_slot(0, inventory::ItemStack::new("minecraft:arrow", 5));
+            let entity = crate::block_entity::BlockEntity::dispenser(dispenser).unwrap();
+            assert!(matches!(entity, BlockEntity::Unknown(_)));
+            let mut menus = inventory::SessionMenus::new();
+            let session =
+                PlayerSession::new("DispenserMenuTest".into(), [0x44; 16], 0.5, 64.0, 0.5);
+
+            assert!(
+                open_menu_from_entity(&mut server, &mut menus, &session, position, &entity)
+                    .unwrap()
+            );
+            assert!(menus.is_open());
+            assert_eq!(
+                menus.open().unwrap().kind,
+                inventory::MenuKind::Dispenser {
+                    dropper: block_id == "minecraft:dropper"
+                }
+            );
+
+            let open = read_packet(&mut client).unwrap();
+            let mut reader = PacketReader::new(&open);
+            assert_eq!(
+                reader.read_varint().unwrap(),
+                inventory::CLIENTBOUND_OPEN_SCREEN
+            );
+            assert_eq!(reader.read_varint().unwrap(), 1);
+            assert_eq!(
+                reader.read_varint().unwrap(),
+                inventory::MENU_TYPE_GENERIC_3X3
+            );
+            let title = reader.read_nbt_any().unwrap();
+            assert_eq!(
+                title.get("translate").and_then(Tag::as_str),
+                Some(expected_title)
+            );
+
+            let content = read_packet(&mut client).unwrap();
+            let mut reader = PacketReader::new(&content);
+            assert_eq!(
+                reader.read_varint().unwrap(),
+                inventory::CLIENTBOUND_CONTAINER_SET_CONTENT
+            );
+            assert_eq!(reader.read_varint().unwrap(), 1);
+            assert_eq!(reader.read_varint().unwrap(), 0);
+            assert_eq!(reader.read_varint().unwrap(), (9 + 36) as i32);
+            let first = inventory::read_item_stack(&mut reader).expect("first dispenser slot");
+            assert_eq!(first.item, "minecraft:arrow");
+            assert_eq!(first.count, 5);
+        }
     }
 
     #[test]

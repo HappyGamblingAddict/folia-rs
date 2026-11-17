@@ -27,6 +27,8 @@ pub const SERVERBOUND_SET_CARRIED_ITEM: i32 = 52;
 
 /// `MenuType` registry ids, in `MenuType` static-field registration order.
 pub const MENU_TYPE_GENERIC_9X3: i32 = 2;
+/// `MenuType.GENERIC_3X3`, shared by dispensers and droppers.
+pub const MENU_TYPE_GENERIC_3X3: i32 = 6;
 pub const MENU_TYPE_BLAST_FURNACE: i32 = 10;
 pub const MENU_TYPE_BREWING_STAND: i32 = 11;
 pub const MENU_TYPE_FURNACE: i32 = 14;
@@ -220,6 +222,11 @@ pub enum MenuKind {
     Furnace(FurnaceMenuKind),
     BrewingStand,
     Hopper,
+    /// Dispenser and dropper share the `GENERIC_3X3` menu layout and differ
+    /// only in the screen title.
+    Dispenser {
+        dropper: bool,
+    },
 }
 
 impl MenuKind {
@@ -230,6 +237,7 @@ impl MenuKind {
             Self::Furnace(_) => crate::block_entity::FURNACE_SLOTS,
             Self::BrewingStand => crate::crafting::BREWING_SLOT_COUNT,
             Self::Hopper => crate::block_entity::HOPPER_SLOTS,
+            Self::Dispenser { .. } => crate::block_entity::DISPENSER_SLOTS,
         }
     }
 
@@ -242,6 +250,7 @@ impl MenuKind {
             Self::Furnace(FurnaceMenuKind::Furnace) => MENU_TYPE_FURNACE,
             Self::BrewingStand => MENU_TYPE_BREWING_STAND,
             Self::Hopper => MENU_TYPE_HOPPER,
+            Self::Dispenser { .. } => MENU_TYPE_GENERIC_3X3,
         }
     }
 
@@ -255,6 +264,8 @@ impl MenuKind {
             Self::Furnace(FurnaceMenuKind::Furnace) => "container.furnace",
             Self::BrewingStand => "container.brewing",
             Self::Hopper => "container.hopper",
+            Self::Dispenser { dropper: true } => "container.dropper",
+            Self::Dispenser { dropper: false } => "container.dispenser",
         }
     }
 
@@ -265,6 +276,7 @@ impl MenuKind {
             Self::Furnace(_) => FURNACE_DATA_SLOTS,
             Self::BrewingStand => BREWING_DATA_SLOTS,
             Self::Hopper => 0,
+            Self::Dispenser { .. } => 0,
         }
     }
 }
@@ -573,7 +585,7 @@ impl OpenMenu {
             return true;
         }
         match self.kind {
-            MenuKind::Chest | MenuKind::Hopper => true,
+            MenuKind::Chest | MenuKind::Hopper | MenuKind::Dispenser { .. } => true,
             MenuKind::Furnace(_) => match slot {
                 2 => false,
                 1 => crate::crafting::fuel_burn_time(&stack.item).is_some(),
@@ -691,7 +703,7 @@ impl OpenMenu {
         let in_main = (main_start..main_end).contains(&slot);
         let in_hotbar = (hotbar_start..hotbar_end).contains(&slot);
         match self.kind {
-            MenuKind::Chest | MenuKind::Hopper => {
+            MenuKind::Chest | MenuKind::Hopper | MenuKind::Dispenser { .. } => {
                 self.move_stack_to_range(inventory, slot, 0, start, false)
             }
             MenuKind::Furnace(kind) => {
@@ -1594,5 +1606,79 @@ mod tests {
         assert_eq!(slots[5].item, "");
         assert_eq!(slots[32].item, "minecraft:stone");
         assert_eq!(slots[33].item, "minecraft:dirt");
+    }
+
+    #[test]
+    fn dispenser_menu_uses_vanilla_ids_and_layout() {
+        assert_eq!(MENU_TYPE_GENERIC_3X3, 6);
+        for dropper in [false, true] {
+            let kind = MenuKind::Dispenser { dropper };
+            assert_eq!(kind.menu_type_id(), 6);
+            assert_eq!(kind.container_slots(), crate::block_entity::DISPENSER_SLOTS);
+            assert_eq!(kind.container_slots(), 9);
+            assert_eq!(kind.data_slots(), 0);
+            assert_eq!(
+                kind.title_key(),
+                if dropper {
+                    "container.dropper"
+                } else {
+                    "container.dispenser"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn dispenser_content_packet_has_container_and_player_slots() {
+        let position = crate::block_entity::BlockEntityPos::new(0, 64, 0);
+        let mut container = vec![ItemStack::empty(); crate::block_entity::DISPENSER_SLOTS];
+        container[0] = ItemStack::new("minecraft:arrow", 5);
+        let inventory = default_inventory();
+        let cursor = ItemStack::empty();
+        let mut menus = SessionMenus::new();
+        let packets = menus
+            .open_menu(
+                MenuKind::Dispenser { dropper: false },
+                position,
+                container,
+                &[],
+                &inventory,
+                &cursor,
+            )
+            .expect("dispenser menu opens");
+
+        let open = menus.open().expect("dispenser menu is open");
+        assert_eq!(open.inventory_start(), 9);
+        assert_eq!(open.menu_slots(), 9 + INVENTORY_SLOTS);
+        assert_eq!(open.menu_slot_for_inventory(0), Some(36));
+
+        let mut screen = PacketReader::new(&packets.open_screen);
+        assert_eq!(screen.read_varint().unwrap(), CLIENTBOUND_OPEN_SCREEN);
+        assert_eq!(screen.read_varint().unwrap(), 1);
+        assert_eq!(screen.read_varint().unwrap(), MENU_TYPE_GENERIC_3X3);
+        let title = screen.read_nbt_any().unwrap();
+        assert_eq!(
+            title.get("translate").and_then(crate::nbt::Tag::as_str),
+            Some("container.dispenser")
+        );
+        assert!(packets.data.is_empty());
+
+        let mut reader = PacketReader::new(&packets.content);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            CLIENTBOUND_CONTAINER_SET_CONTENT
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert_eq!(reader.read_varint().unwrap(), (9 + INVENTORY_SLOTS) as i32);
+        let mut slots = Vec::new();
+        for _ in 0..9 + INVENTORY_SLOTS {
+            slots.push(read_item_stack(&mut reader).expect("content slot"));
+        }
+        assert_eq!(slots[0].item, "minecraft:arrow");
+        assert_eq!(slots[0].count, 5);
+        assert!(slots[1..9].iter().all(ItemStack::is_empty));
+        assert_eq!(slots[36].item, "minecraft:stone");
+        assert_eq!(slots[37].item, "minecraft:dirt");
     }
 }

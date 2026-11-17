@@ -10,10 +10,10 @@ Last updated: 2026-11-16
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `9ecb375` with 1,481 tests. Growth, wall torches, container
-  facing, and potion effects are completed locally and should bring the next
-  gate to 1,495.
+  facing, potion effects, and TNT gravity are completed locally and should
+  bring the next gate to 1,497.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,495. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,497. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -57,7 +57,7 @@ Last updated: 2026-11-16
    a full solid top face; cactus and sugar cane grow on random ticks; side-face
    torch placement creates wall torches with click-face support; chests,
    barrels, and furnaces face opposite the player gaze; drinking potions
-   applies effects and milk clears them.
+   applies effects and milk clears them; primed TNT falls and rests on blocks.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -87,6 +87,8 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: TNT gravity — primed TNT reuses entity physics to fall/collide,
+  syncs positions, and explodes at its resting position. 2 tnt tests.
 - 2026-11-17: potion effects — drinking applies base/custom potion_contents
   effects with packets; milk clears all effects. 3 join tests.
 - 2026-11-17: container facing — chests/trapped chests/barrels and the furnace
@@ -741,6 +743,8 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: TNT gravity — primed TNT reuses entity physics to fall/collide,
+  syncs positions, and explodes at its resting position. 2 tnt tests.
 - 2026-11-17: potion effects — drinking applies base/custom potion_contents
   effects with packets; milk clears all effects. 3 join tests.
 - 2026-11-17: container facing — chests/trapped chests/barrels and the furnace
@@ -1019,6 +1023,8 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: TNT gravity — primed TNT reuses entity physics to fall/collide,
+  syncs positions, and explodes at its resting position. 2 tnt tests.
 - 2026-11-17: potion effects — drinking applies base/custom potion_contents
   effects with packets; milk clears all effects. 3 join tests.
 - 2026-11-17: container facing — chests/trapped chests/barrels and the furnace

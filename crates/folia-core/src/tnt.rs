@@ -8,9 +8,15 @@
 //! explosion picks the ray strength, and the ray walks 0.3 blocks at a time,
 //! losing power to each block's blast resistance.
 //!
-//! Explicit simplifications in this slice:
-//! - Primed TNT is stationary: no gravity, no motion, no bouncing. The
-//!   fuse simply counts down in ticks and then detonates in place.
+//! Physics and simplifications in this slice:
+//! - Primed TNT reuses the shared `Entity::tick_physics` for gravity, drag and
+//!   AABB collision against the world, so it falls and comes to rest on solid
+//!   blocks before detonating. That path uses the shared living-entity gravity
+//!   constant (`0.08`) rather than vanilla TNT's `0.04`; drag (`0.98`) matches.
+//!   TNT therefore falls about twice as fast as vanilla, a deliberate
+//!   approximation to avoid duplicating a second physics implementation.
+//! - TNT does not bounce or inherit a launch velocity from explosions; only
+//!   the shared vertical gravity/collision path is reused.
 //! - Block drops (with a 1/radius decay approximation), TNT chain reactions,
 //!   and their add-entity packets are produced by `join.rs` around this shape.
 //! - No entity/player damage, knockback, or sounds/particles are produced by
@@ -31,13 +37,12 @@ pub struct ExplosionEvent {
     pub z: f64,
 }
 
-/// A single stationary primed-TNT entity with a tick countdown.
+/// A single primed-TNT entity with a tick countdown.
+///
+/// Motion lives in the shared [`Entity`]; only the fuse is TNT-specific.
 #[derive(Clone, Debug, PartialEq)]
 struct PrimedTnt {
-    id: i32,
-    x: f64,
-    y: f64,
-    z: f64,
+    entity: Entity,
     fuse: i32,
 }
 
@@ -82,33 +87,39 @@ impl TntStore {
         let mut entity = Entity::new(id, uuid, entity_type, position[0], position[1], position[2]);
         entity.width = 0.98;
         entity.height = 0.98;
-        self.tnts.push(PrimedTnt {
-            id,
-            x: position[0],
-            y: position[1],
-            z: position[2],
-            fuse,
-        });
-        vec![entity::add_entity_packet(&entity)]
+        let packet = entity::add_entity_packet(&entity);
+        self.tnts.push(PrimedTnt { entity, fuse });
+        vec![packet]
     }
 
-    /// Decrement every fuse, detonating those that reach zero.
+    /// Advance gravity/collision for every TNT, then decrement its fuse and
+    /// detonate those that reach zero.
     ///
-    /// Detonated entities are removed with a single remove-entities packet
-    /// and reported as [`ExplosionEvent`]s at their current position.
-    pub fn tick(&mut self) -> TntTick {
+    /// Each TNT reuses [`Entity::tick_physics`] so it falls and collides with
+    /// the world before the fuse is advanced. When the entity moved this tick,
+    /// a position-sync packet is emitted. Detonated entities are removed with
+    /// a single remove-entities packet and reported as [`ExplosionEvent`]s at
+    /// their current (post-physics) position.
+    ///
+    /// See the module docs for the gravity approximation: shared living-entity
+    /// gravity (`0.08`) is used instead of vanilla TNT's `0.04`.
+    pub fn tick(&mut self, collider: &mut impl crate::entity::BlockCollider) -> TntTick {
         let mut tick = TntTick::default();
         let mut kept = Vec::with_capacity(self.tnts.len());
         let mut removed = Vec::new();
 
         for mut tnt in self.tnts.drain(..) {
+            if tnt.entity.tick_physics(collider) {
+                tick.packets
+                    .push(entity::entity_position_sync_packet(&tnt.entity));
+            }
             tnt.fuse = tnt.fuse.wrapping_sub(1);
             if tnt.fuse <= 0 {
-                removed.push(tnt.id);
+                removed.push(tnt.entity.id);
                 tick.explosions.push(ExplosionEvent {
-                    x: tnt.x,
-                    y: tnt.y,
-                    z: tnt.z,
+                    x: tnt.entity.x,
+                    y: tnt.entity.y,
+                    z: tnt.entity.z,
                 });
             } else {
                 kept.push(tnt);
@@ -224,6 +235,7 @@ pub fn explosion_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::FlatCollider;
 
     fn resistance_at_none(_pos: BlockPos) -> Option<f32> {
         None
@@ -339,6 +351,7 @@ mod tests {
     #[test]
     fn tnt_store_fuse_ignites_and_explodes() {
         let mut store = TntStore::new();
+        let mut collider = FlatCollider { ground_y: 0 };
         assert!(store.is_empty());
 
         let packets = store.ignite([1.5, 64.0, 2.5], 2);
@@ -361,19 +374,89 @@ mod tests {
             "minecraft:tnt entity type id"
         );
 
-        let first = store.tick();
+        let first = store.tick(&mut collider);
         assert!(first.explosions.is_empty(), "fuse 1 has not detonated");
-        assert!(first.packets.is_empty());
+        assert_eq!(
+            first.packets,
+            vec![entity::entity_position_sync_packet(&store.tnts[0].entity)],
+            "the falling TNT emits a position-sync packet"
+        );
         assert_eq!(store.len(), 1);
 
-        let second = store.tick();
+        let second = store.tick(&mut collider);
         assert_eq!(second.explosions.len(), 1);
         let event = second.explosions[0];
-        assert_eq!([event.x, event.y, event.z], [1.5, 64.0, 2.5]);
+        assert_eq!([event.x, event.z], [1.5, 2.5]);
+        assert!(
+            event.y < 64.0,
+            "the TNT fell under gravity before detonating"
+        );
         assert_eq!(
-            second.packets,
-            vec![entity::remove_entities_packet(&[entity_id])]
+            second.packets.last(),
+            Some(&entity::remove_entities_packet(&[entity_id])),
+            "detonation removes the entity"
         );
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn tnt_falls_and_stops_on_the_ground() {
+        let mut store = TntStore::new();
+        let mut collider = FlatCollider { ground_y: 1 };
+        store.ignite([0.5, 5.0, 0.5], 40);
+        assert_eq!(store.len(), 1);
+
+        let mut last_y = store.tnts[0].entity.y;
+        let mut saw_decrease = false;
+        let mut stopped_y = None;
+        let mut explosion = None;
+        for _ in 0..80 {
+            let tick = store.tick(&mut collider);
+            if let Some(event) = tick.explosions.first() {
+                explosion = Some(*event);
+                break;
+            }
+            let y = store.tnts[0].entity.y;
+            if y < last_y {
+                saw_decrease = true;
+            } else if saw_decrease && stopped_y.is_none() {
+                stopped_y = Some(y);
+            }
+            last_y = y;
+        }
+
+        assert!(saw_decrease, "the TNT must fall under gravity");
+        let stopped = stopped_y.expect("the TNT must come to rest before detonating");
+        assert!(
+            stopped >= 1.0,
+            "the TNT must rest on top of the floor at y=1, got {stopped}"
+        );
+        let event = explosion.expect("the TNT must detonate within 80 ticks");
+        assert!(
+            (event.y - stopped).abs() < 1.0e-9,
+            "explosion must occur at the resting position: {} vs {}",
+            event.y,
+            stopped
+        );
+        assert!((event.x - 0.5).abs() < 1.0e-9 && (event.z - 0.5).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn tnt_does_not_move_through_blocks() {
+        let mut store = TntStore::new();
+        let ground_y = 5;
+        let mut collider = FlatCollider { ground_y };
+        store.ignite([0.5, 20.0, 0.5], 80);
+
+        for _ in 0..80 {
+            let tick = store.tick(&mut collider);
+            if tick.explosions.is_empty() {
+                let y = store.tnts[0].entity.y;
+                assert!(
+                    y >= f64::from(ground_y),
+                    "the TNT must not fall through the solid floor: y={y}"
+                );
+            }
+        }
     }
 }

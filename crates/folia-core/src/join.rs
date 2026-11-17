@@ -1676,7 +1676,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
-                let tnt_tick: TntTick = primed_tnt.tick();
+                let tnt_tick: TntTick = primed_tnt.tick(&mut collider);
                 let mut tnt_changes = Vec::new();
                 let mut tnt_packets = Vec::new();
                 for event in &tnt_tick.explosions {

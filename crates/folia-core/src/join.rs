@@ -1942,6 +1942,26 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     }
                 }
             }
+            for block_hit in &projectile_tick.block_hits {
+                // The session-owned projectile store only holds projectiles
+                // thrown by this player, so an ender pearl hit here always
+                // belongs to this session's player (the store's owner_id is
+                // set to player_entity on the spawn path).
+                if block_hit.kind != crate::projectile::ProjectileKind::EnderPearl {
+                    continue;
+                }
+                session.teleport(
+                    block_hit.position[0],
+                    block_hit.position[1],
+                    block_hit.position[2],
+                    false,
+                );
+                session.reset_physics();
+                // TODO(P4.5): vanilla applies 5 fall damage on a long ender
+                // pearl teleport; that damage is not modelled in this slice.
+                teleport_id += 1;
+                write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+            }
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player_with_rng(
                     &mut session,
@@ -3501,6 +3521,11 @@ fn use_item_projectile(
         )),
         "minecraft:egg" => Some((
             crate::projectile::ProjectileKind::Egg,
+            [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
+            true,
+        )),
+        "minecraft:ender_pearl" => Some((
+            crate::projectile::ProjectileKind::EnderPearl,
             [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
             true,
         )),

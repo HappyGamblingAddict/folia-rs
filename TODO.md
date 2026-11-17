@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,462 passing** at the a934a33 gate (0 failed, 1 ignored benchmark); consumables should bring the gate to 1,465
+> Test status: **1,465 passing** at the c3b8e00 gate (0 failed, 1 ignored benchmark); ender pearls should bring the gate to 1,468
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1931,9 +1931,12 @@ instantly on start-destroy and places on use-item-on.
   buckets, including survival refill to an empty bucket. Eat/drink now uses a
   hold-and-release timer, applies food/saturation clamps, swaps in use
   remainders (glass bottle/bowl), consumes only in survival, and resets on
-  slot changes; milk/potion effects are explicitly not faked. 6 join tests.
-  Still open: fire-charge projectiles, potion effects, lightning ignition,
-  bucket mob interactions, and a live join placement test.
+  slot changes; milk/potion effects are explicitly not faked. Ender pearls are
+  projectile entities that report block impacts, remove themselves, and
+  teleport the thrower (fall damage is an explicit TODO). 10 join/projectile
+  tests. Still open: fire-charge projectiles, potion effects, pearl fall
+  damage, lightning ignition, bucket mob interactions, and a live join
+  placement test.
 
 ### P4.6 Full inventory and menu framework `[~]` `XL`
 

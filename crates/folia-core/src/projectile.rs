@@ -9,20 +9,21 @@ pub enum ProjectileKind {
     Arrow,
     Snowball,
     Egg,
+    EnderPearl,
 }
 
 impl ProjectileKind {
     pub fn base_damage(self) -> f32 {
         match self {
             Self::Arrow => 2.0,
-            Self::Snowball | Self::Egg => 0.0,
+            Self::Snowball | Self::Egg | Self::EnderPearl => 0.0,
         }
     }
 
     pub fn gravity(self) -> f64 {
         match self {
             Self::Arrow => 0.05,
-            Self::Snowball | Self::Egg => 0.03,
+            Self::Snowball | Self::Egg | Self::EnderPearl => 0.03,
         }
     }
 
@@ -35,11 +36,13 @@ impl ProjectileKind {
             Self::Arrow => "minecraft:arrow",
             Self::Snowball => "minecraft:snowball",
             Self::Egg => "minecraft:egg",
+            Self::EnderPearl => "minecraft:ender_pearl",
         };
         registry::entity_type_id(name).unwrap_or(match self {
             Self::Arrow => 9,
             Self::Snowball => 73,
             Self::Egg => 62,
+            Self::EnderPearl => 44,
         })
     }
 
@@ -59,6 +62,15 @@ pub struct ProjectileHit {
     pub target_id: i32,
     pub damage: f32,
     pub critical: bool,
+}
+
+/// A projectile hitting a block. Ender pearls consume this event to teleport
+/// their owner; other projectile kinds remain stuck at the reported position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectileBlockHit {
+    pub projectile_id: i32,
+    pub kind: ProjectileKind,
+    pub position: [f64; 3],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,7 +172,7 @@ impl Projectile {
                 let damage = (speed * 2.0).ceil() as i32 as f32;
                 if self.critical { damage * 2.0 } else { damage }
             }
-            ProjectileKind::Snowball | ProjectileKind::Egg => 0.0,
+            ProjectileKind::Snowball | ProjectileKind::Egg | ProjectileKind::EnderPearl => 0.0,
         }
     }
 
@@ -334,6 +346,7 @@ fn move_axis(
 pub struct ProjectileStoreTick {
     pub packets: Vec<Vec<u8>>,
     pub hits: Vec<ProjectileHit>,
+    pub block_hits: Vec<ProjectileBlockHit>,
     pub removed: Vec<i32>,
 }
 
@@ -394,16 +407,29 @@ impl ProjectileStore {
     ) -> ProjectileStoreTick {
         let mut packets = Vec::new();
         let mut hits = Vec::new();
+        let mut block_hits = Vec::new();
         let mut removed = Vec::new();
         let mut kept = Vec::with_capacity(self.projectiles.len());
 
         for mut projectile in self.projectiles.drain(..) {
             let tick = projectile.tick(collider);
             if tick.hit_block {
-                if tick.moved {
-                    packets.push(projectile.position_sync_packet());
+                block_hits.push(ProjectileBlockHit {
+                    projectile_id: projectile.id,
+                    kind: projectile.kind,
+                    position: [projectile.x, projectile.y, projectile.z],
+                });
+                if projectile.kind == ProjectileKind::EnderPearl {
+                    // Ender pearls vanish on block impact; the consumer uses the
+                    // block-hit event to teleport the owner.
+                    removed.push(projectile.id);
+                    packets.push(crate::entity::remove_entities_packet(&[projectile.id]));
+                } else {
+                    if tick.moved {
+                        packets.push(projectile.position_sync_packet());
+                    }
+                    kept.push(projectile);
                 }
-                kept.push(projectile);
             } else if let Some(hit) = projectile.try_hit(targets) {
                 hits.push(hit);
                 removed.push(projectile.id);
@@ -423,6 +449,7 @@ impl ProjectileStore {
         ProjectileStoreTick {
             packets,
             hits,
+            block_hits,
             removed,
         }
     }
@@ -434,5 +461,68 @@ impl Default for ProjectileStore {
             projectiles: Vec::new(),
             next_id: 30_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::FlatCollider;
+
+    fn drop_onto_floor(kind: ProjectileKind) -> (ProjectileStore, i32, ProjectileStoreTick) {
+        let mut store = ProjectileStore::new();
+        store.spawn(kind, Some(7), [0.5, 1.5, 0.5], [0.0, -1.0, 0.0]);
+        let id = store.projectiles()[0].id;
+        let mut collider = FlatCollider { ground_y: 0 };
+        for _ in 0..100 {
+            let tick = store.tick(&mut collider, &[]);
+            if !tick.block_hits.is_empty() {
+                return (store, id, tick);
+            }
+        }
+        panic!("projectile never hit the floor");
+    }
+
+    #[test]
+    fn ender_pearl_kind_uses_the_registry_entity_id() {
+        assert_eq!(ProjectileKind::EnderPearl.entity_type_id(), 44);
+        assert_eq!(
+            ProjectileKind::EnderPearl.entity_type_id(),
+            registry::entity_type_id("minecraft:ender_pearl").unwrap()
+        );
+        assert_eq!(ProjectileKind::EnderPearl.base_damage(), 0.0);
+    }
+
+    #[test]
+    fn ender_pearl_block_impact_is_reported_and_removed() {
+        let (store, id, tick) = drop_onto_floor(ProjectileKind::EnderPearl);
+        assert_eq!(tick.block_hits.len(), 1);
+        let hit = &tick.block_hits[0];
+        assert_eq!(hit.projectile_id, id);
+        assert_eq!(hit.kind, ProjectileKind::EnderPearl);
+        assert_eq!(hit.position[0], 0.5);
+        assert!(tick.removed.contains(&id));
+        assert!(store.is_empty());
+        assert!(
+            tick.packets
+                .contains(&crate::entity::remove_entities_packet(&[id]))
+        );
+    }
+
+    #[test]
+    fn snowball_block_impact_stays_stuck_and_reports_event() {
+        let (store, id, tick) = drop_onto_floor(ProjectileKind::Snowball);
+        assert_eq!(tick.block_hits.len(), 1);
+        assert_eq!(tick.block_hits[0].kind, ProjectileKind::Snowball);
+        assert_eq!(tick.block_hits[0].projectile_id, id);
+        assert!(tick.removed.is_empty());
+        assert_eq!(store.len(), 1);
+        assert!(store.projectiles()[0].stuck);
+        assert_eq!(store.projectiles()[0].id, id);
+        assert!(
+            !tick
+                .packets
+                .contains(&crate::entity::remove_entities_packet(&[id]))
+        );
     }
 }

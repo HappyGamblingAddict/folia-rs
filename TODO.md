@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); breeding core is expected to bring the gate to 1,503
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); breeding is expected to bring the gate to 1,504
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2564,6 +2564,11 @@ are still open.
   CI green at c856b5e (1,237 tests). Still open: integrate into the live mob
   tick, persistence flags, monster spawners, breeding, village spawning,
   structure spawn overrides, and a Java spawn-count fixture.
+- **Progress (2026-11-17):** animal breeding — feeding adult cows/sheep wheat,
+  pigs carrots/potatoes/beetroots, or chickens seeds sets love mode and consumes
+  one item in survival; two loved adults of the same species within 8 blocks
+  spawn a half-size baby with `DATA_BABY` and a 6000-tick cooldown. Hearts,
+  love-mode metadata, and baby aging are explicit gaps. 5 tests.
 - **Progress (2026-11-16):** spawn eggs (9455db6) — `SERVERBOUND_USE_ITEM_ON`
   resolves `minecraft:<mob>_spawn_egg` through `spawn::entity_type`, spawns at
   clicked block + face normal via `SessionEntityTracker::spawn_mob`, writes the

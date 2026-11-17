@@ -1,7 +1,7 @@
 use crate::block_shapes::Aabb;
 use crate::chunk::{BlockState, Chunk};
 use crate::entity_ai::{ActorView, AiAgent, AiEvent, MemoryWorld};
-use crate::entity_metadata::{Attribute, DATA_BABY, HurtResult, LivingEntity, MetadataValue};
+use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
 use crate::math::Vec3;
 use crate::protocol::PacketWriter;
 use crate::world::WorldStorage;
@@ -1591,6 +1591,7 @@ pub fn is_tracked(id: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity_metadata::{DATA_BABY, MetadataValue};
     use crate::protocol::PacketReader;
 
     fn hex(bytes: &[u8]) -> String {

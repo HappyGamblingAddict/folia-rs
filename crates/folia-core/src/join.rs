@@ -1672,6 +1672,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         .as_ref()
                         .is_some_and(|s| s.name == "minecraft:cactus");
                 let tick = tracked_entities.tick((session.x, session.y, session.z), &mut collider);
+                // Hearts particles, love-mode metadata, and baby aging are not modelled;
+                // this only counts down love/cooldowns, pairs adults, and spawns babies.
+                let babies = tracked_entities.tick_breeding(game_tick as i64);
+                let mut baby_packets = Vec::new();
+                for baby in babies {
+                    baby_packets.extend(tracked_entities.enter_packets_for(baby));
+                }
                 let targets = tracked_entities.collision_targets();
                 let inventory_before = session.inventory.clone();
                 let drop_tick = drop_entities.tick(&mut collider, &mut session);
@@ -1722,7 +1729,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         &mut drop_rng,
                     ));
                 }
-                let spawn_packets = if !awaiting_respawn && game_tick % 100 == 99 {
+                let mut spawn_packets = if !awaiting_respawn && game_tick % 100 == 99 {
                     let chunk = crate::spawn::ChunkPos::new(
                         (session.x.floor() as i32).div_euclid(16),
                         (session.z.floor() as i32).div_euclid(16),
@@ -1739,6 +1746,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 } else {
                     Vec::new()
                 };
+                spawn_packets.extend(baby_packets);
                 (
                     tick,
                     drop_tick,
@@ -2655,7 +2663,27 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                     }
                     SERVERBOUND_INTERACT => {
-                        if let Some(target) = parse_attack(&packet)
+                        if let Some(target) = parse_interact(&packet)
+                            && tracked_entities.tracks(target)
+                            && let Some(held_item) = session.selected_item().map(|s| s.item.clone())
+                            && tracked_entities.feed_breed(target, &held_item)
+                        {
+                            if session.game_mode != 1 {
+                                session.consume_selected();
+                            }
+                            let slot = session.selected_slot.max(0) as usize;
+                            write_packet(
+                                &mut stream,
+                                &inventory::inventory_packet(slot as i32, &session.inventory[slot]),
+                            )?;
+                            if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                &session,
+                                playerdata_dir(),
+                            ) {
+                                eprintln!("[join] could not save breeding inventory: {error}");
+                            }
+                            println!("[join] {} fed entity {target}", session.name);
+                        } else if let Some(target) = parse_attack(&packet)
                             && let Err(error) = handle_entity_attack(
                                 &mut stream,
                                 &mut session,
@@ -4070,6 +4098,18 @@ fn handle_use_item(
         write_packet(stream, &packet)?;
     }
     Ok(())
+}
+
+fn parse_interact(payload: &[u8]) -> Option<i32> {
+    let mut reader = PacketReader::new(payload);
+    if reader.read_varint().ok()? != SERVERBOUND_INTERACT {
+        return None;
+    }
+    let entity_id = reader.read_varint().ok()?;
+    if reader.read_varint().ok()? != 0 {
+        return None;
+    }
+    Some(entity_id)
 }
 
 fn parse_attack(payload: &[u8]) -> Option<i32> {
@@ -8792,6 +8832,23 @@ mod tests {
         writer.write_varint(0).unwrap(); // hand
         writer.write_u8(0).unwrap();
         assert_eq!(parse_attack(&writer.into_inner()), None);
+    }
+
+    #[test]
+    fn parse_interact_accepts_type_zero_and_rejects_attack() {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(SERVERBOUND_INTERACT).unwrap();
+        writer.write_varint(42).unwrap();
+        writer.write_varint(0).unwrap(); // interact
+        writer.write_varint(1).unwrap(); // hand
+        assert_eq!(parse_interact(&writer.into_inner()), Some(42));
+
+        let mut writer = PacketWriter::new();
+        writer.write_varint(SERVERBOUND_INTERACT).unwrap();
+        writer.write_varint(42).unwrap();
+        writer.write_varint(1).unwrap(); // attack
+        writer.write_u8(0).unwrap();
+        assert_eq!(parse_interact(&writer.into_inner()), None);
     }
 
     #[test]

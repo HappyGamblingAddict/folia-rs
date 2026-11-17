@@ -47,6 +47,8 @@ fn tracked(id: i32, x: f64, y: f64, z: f64) -> TrackedEntity {
         living: LivingEntity::new(id),
         ai: None,
         hazards: Default::default(),
+        love_ticks: 0,
+        breed_cooldown: 0,
     }
 }
 

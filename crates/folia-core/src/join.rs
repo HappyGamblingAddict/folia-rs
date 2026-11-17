@@ -1758,7 +1758,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     Vec::new()
                 };
                 spawn_packets.extend(baby_packets);
-                if game_tick % 20 == 0 {
+                if game_tick.is_multiple_of(20) {
                     spawn_packets.extend(tick_session_spawners(
                         &mut storage,
                         &mut tracked_entities,
@@ -2130,16 +2130,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 pos,
                                 &fire,
                                 game_tick,
+                            )? && let Some(change) = crate::block_update::set_block(
+                                &mut storage,
+                                pos.x(),
+                                pos.y(),
+                                pos.z(),
+                                fire,
                             )? {
-                                if let Some(change) = crate::block_update::set_block(
-                                    &mut storage,
-                                    pos.x(),
-                                    pos.y(),
-                                    pos.z(),
-                                    fire,
-                                )? {
-                                    crate::block_update::broadcast_change(&change);
-                                }
+                                crate::block_update::broadcast_change(&change);
                             }
                         }
                     }
@@ -3713,7 +3711,7 @@ fn tick_session_spawners(
             }
         }
     }
-    spawners.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
+    spawners.sort_by_key(|a| (a.0, a.1, a.2));
 
     let mut changed_chunks: HashSet<(i32, i32)> = HashSet::new();
     let mut packets = Vec::new();

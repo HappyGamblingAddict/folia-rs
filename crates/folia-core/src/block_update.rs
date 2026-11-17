@@ -471,6 +471,22 @@ pub fn state_for_placement_with_yaw(
         if crate::redstone::property(&state, "shape").is_some() {
             state = crate::redstone::with_property(&state, "shape", "straight");
         }
+    } else if matches!(
+        state.name.as_str(),
+        "minecraft:chest"
+            | "minecraft:trapped_chest"
+            | "minecraft:barrel"
+            | "minecraft:furnace"
+            | "minecraft:blast_furnace"
+            | "minecraft:smoker"
+    ) {
+        // Vanilla horizontal containers and furnaces face the player when
+        // placed: `getHorizontalDirection().getOpposite()` of the gaze.
+        if crate::redstone::property(&state, "facing").is_some() {
+            let direction = direction_from_yaw(player_yaw);
+            let facing = crate::math::Direction::from_3d_data(direction as i32).opposite();
+            state = crate::redstone::with_facing(&state, facing);
+        }
     }
 
     state
@@ -1066,6 +1082,70 @@ mod tests {
         assert_eq!(crate::redstone::property(&state, "half"), Some("top"));
         assert_eq!(crate::redstone::property(&state, "facing"), Some("west"));
         assert_eq!(crate::redstone::property(&state, "shape"), Some("straight"));
+    }
+
+    fn container(name: &str) -> BlockState {
+        named_state(name, &[("facing", "north")])
+    }
+
+    #[test]
+    fn chest_barrel_and_furnaces_face_the_player() {
+        // Yaw 0 is a southward gaze; the block faces the opposite way (north).
+        for name in [
+            "minecraft:chest",
+            "minecraft:trapped_chest",
+            "minecraft:barrel",
+            "minecraft:furnace",
+            "minecraft:blast_furnace",
+            "minecraft:smoker",
+        ] {
+            let held = container(name);
+            let state = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, 0.0);
+            assert_eq!(
+                crate::redstone::property(&state, "facing"),
+                Some("north"),
+                "{name} at yaw 0 faces north (opposite a southward gaze)"
+            );
+        }
+
+        // Chest and furnace cover all four quarter turns.
+        for name in ["minecraft:chest", "minecraft:furnace"] {
+            let held = container(name);
+            for (yaw, expected) in [
+                (0.0, "north"),
+                (90.0, "east"),
+                (180.0, "south"),
+                (-90.0, "west"),
+            ] {
+                let state = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, yaw);
+                assert_eq!(
+                    crate::redstone::property(&state, "facing"),
+                    Some(expected),
+                    "{name} at yaw {yaw} faces {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chest_facing_preserves_lit() {
+        let held = named_state("minecraft:furnace", &[("facing", "north"), ("lit", "true")]);
+        let state = state_for_placement_with_yaw(None, None, &held, 1, 0.1, false, 0.0);
+        assert_eq!(crate::redstone::property(&state, "facing"), Some("north"));
+        assert_eq!(crate::redstone::property(&state, "lit"), Some("true"));
+    }
+
+    #[test]
+    fn stairs_and_slabs_keep_their_existing_facing_rules() {
+        // Stairs follow the gaze direction (south at yaw 0), not its opposite.
+        let south = state_for_placement_with_yaw(None, None, &stairs(false), 1, 0.1, false, 0.0);
+        assert_eq!(crate::redstone::property(&south, "facing"), Some("south"));
+
+        // Slabs (and other non-container blocks) ignore yaw entirely.
+        let held = slab("bottom", false);
+        let zero = state_for_placement_with_yaw(None, None, &held, 3, 0.9, false, 0.0);
+        let ninety = state_for_placement_with_yaw(None, None, &held, 3, 0.9, false, 90.0);
+        assert_eq!(zero, ninety);
     }
 
     #[test]

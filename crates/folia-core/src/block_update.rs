@@ -607,6 +607,65 @@ pub fn placement_obstructed(
         .any(|&(min, max)| entity_block_intersection(block, state, min, max))
 }
 
+/// Whether `state` needs a solid block directly below it to be placed.
+///
+/// This is the P4.4 support subset: floor torches, redstone dust, and every
+/// block in the `minecraft:rails` block tag. Wall-mounted torches, ladders, and
+/// other side-attached blocks are deliberately out of scope here.
+pub fn requires_solid_top_support(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:torch"
+            | "minecraft:soul_torch"
+            | "minecraft:redstone_torch"
+            | "minecraft:redstone_wire"
+    ) || crate::tags::block_has("minecraft:rails", &state.name)
+}
+
+/// Whether a placement of `state` has an adequate block below it.
+///
+/// Simplified `isFaceSturdy(UP)` analogue. Support is only checked for the
+/// blocks in [`requires_solid_top_support`]; everything else ignores `below`.
+/// When support is required, `below` must exist, must not be air, and must
+/// occlude its UP face. `face_occludes` projects the outermost outline slice, so
+/// a bottom slab's top at y=0.5 would otherwise look like a full face; the
+/// extra top-boundary check rejects it while accepting top slabs and full
+/// cubes. Wall-mounted variants and support behind ladders are later work.
+pub fn placement_has_support(below: Option<&BlockState>, state: &BlockState) -> bool {
+    if !requires_solid_top_support(state) {
+        return true;
+    }
+    let Some(below) = below else {
+        return false;
+    };
+    if crate::worldgen::feature::is_air_name(&below.name) {
+        return false;
+    }
+    let below_id = block_state_id(below);
+    if !crate::light::face_occludes(below_id, crate::math::Direction::Up) {
+        return false;
+    }
+    covers_full_upper_face(below_id)
+}
+
+/// Whether an outline covers the full XZ square at the top of its block space.
+///
+/// `face_occludes` projects the outermost outline slice even when that slice is
+/// below y=1 (a bottom slab tops out at y=0.5). Requiring the slice to reach y=1
+/// matches vanilla's `isSideSolidFullSquare(UP)` for slab support.
+fn covers_full_upper_face(state_id: i32) -> bool {
+    const EPS: f64 = 1e-4;
+    crate::block_shapes::outline_boxes(state_id)
+        .iter()
+        .any(|bounds| {
+            bounds.max_y >= 1.0 - EPS
+                && bounds.min_x <= EPS
+                && bounds.max_x >= 1.0 - EPS
+                && bounds.min_z <= EPS
+                && bounds.max_z >= 1.0 - EPS
+        })
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -1044,6 +1103,46 @@ mod tests {
             [0.2, 64.2, 0.2],
             [0.2, 64.2, 0.2]
         ));
+    }
+
+    #[test]
+    fn torch_needs_a_solid_block_below() {
+        let torch = named_state("minecraft:torch", &[]);
+        let air = named_state("minecraft:air", &[]);
+        assert!(requires_solid_top_support(&torch));
+        assert!(placement_has_support(Some(&stone()), &torch));
+        assert!(!placement_has_support(Some(&air), &torch));
+        assert!(!placement_has_support(None, &torch));
+    }
+
+    #[test]
+    fn torch_rejects_bottom_slab_and_accepts_top_slab() {
+        let torch = named_state("minecraft:torch", &[]);
+        assert!(!placement_has_support(Some(&slab("bottom", false)), &torch));
+        assert!(placement_has_support(Some(&slab("top", false)), &torch));
+    }
+
+    #[test]
+    fn rails_and_redstone_wire_need_support() {
+        let rail = named_state("minecraft:rail", &[("shape", "north_south")]);
+        let wire = named_state("minecraft:redstone_wire", &[("power", "0")]);
+        let air = named_state("minecraft:air", &[]);
+        for state in [&rail, &wire] {
+            assert!(requires_solid_top_support(state));
+            assert!(placement_has_support(Some(&stone()), state));
+            assert!(!placement_has_support(Some(&air), state));
+        }
+    }
+
+    #[test]
+    fn ordinary_blocks_ignore_the_block_below() {
+        let dirt = named_state("minecraft:dirt", &[]);
+        let air = named_state("minecraft:air", &[]);
+        for state in [&stone(), &dirt] {
+            assert!(!requires_solid_top_support(state));
+            assert!(placement_has_support(None, state));
+            assert!(placement_has_support(Some(&air), state));
+        }
     }
 
     #[test]

@@ -7017,6 +7017,13 @@ fn handle_block_action(
                 target_is_clicked,
                 session.yaw,
             );
+            // P4.4: torches, redstone dust, and rails need a solid block below.
+            // Doors and every other block ignore this check, so a door placed on
+            // air is unaffected. Rejection happens before consumption or save.
+            let below_state = block_at(storage, target_pos.below())?;
+            if !crate::block_update::placement_has_support(below_state.as_ref(), &new_state) {
+                return Ok(());
+            }
             // Vanilla `Level.isUnobstructed`: refuse a placement whose solid
             // block would overlap the player or any session mob. This applies
             // to survival and creative alike; no consumption or save happens.

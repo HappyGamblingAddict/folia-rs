@@ -9,10 +9,11 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `9ecb375` with 1,481 tests. The recent placement, item, and TNT
-  slices are completed locally and should bring the next gate to 1,499.
+  CI is green at `9ecb375` with 1,481 tests. The recent placement/item/TNT slices
+  plus the breeding core are completed locally and should bring the next gate
+  to 1,503.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,499. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,503. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -58,7 +59,7 @@ Last updated: 2026-11-16
    barrels, and furnaces face opposite the player gaze; drinking potions
    applies effects and milk clears them; primed TNT falls and rests on blocks;
    ender pearls damage survival throwers on landing; fire charges ignite on
-   impact.
+   impact; cows/pigs/sheep/chickens have love/breed state and spawn babies.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -88,6 +89,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: breeding core — DATA_BABY metadata, half-size baby spawning,
+  species food checks, love/cooldown timers, and 8-block same-species pairing.
+  4 entity tests; join interaction wiring is next.
 - 2026-11-17: fire charges — small-fireball projectile removed on impact that
   ignites fire in an air/replaceable hit block. 1 projectile test.
 - 2026-11-17: pearl fall damage — survival ender-pearl landing deals 5 fall
@@ -748,6 +752,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: breeding core — DATA_BABY metadata, half-size baby spawning,
+  species food checks, love/cooldown timers, and 8-block same-species pairing.
+  4 entity tests; join interaction wiring is next.
 - 2026-11-17: fire charges — small-fireball projectile removed on impact that
   ignites fire in an air/replaceable hit block. 1 projectile test.
 - 2026-11-17: pearl fall damage — survival ender-pearl landing deals 5 fall
@@ -1032,6 +1039,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: breeding core — DATA_BABY metadata, half-size baby spawning,
+  species food checks, love/cooldown timers, and 8-block same-species pairing.
+  4 entity tests; join interaction wiring is next.
 - 2026-11-17: fire charges — small-fireball projectile removed on impact that
   ignites fire in an air/replaceable hit block. 1 projectile test.
 - 2026-11-17: pearl fall damage — survival ender-pearl landing deals 5 fall

@@ -1,7 +1,7 @@
 use crate::block_shapes::Aabb;
 use crate::chunk::{BlockState, Chunk};
 use crate::entity_ai::{ActorView, AiAgent, AiEvent, MemoryWorld};
-use crate::entity_metadata::{Attribute, HurtResult, LivingEntity};
+use crate::entity_metadata::{Attribute, DATA_BABY, HurtResult, LivingEntity, MetadataValue};
 use crate::math::Vec3;
 use crate::protocol::PacketWriter;
 use crate::world::WorldStorage;
@@ -395,6 +395,10 @@ pub struct TrackedEntity {
     /// the player.
     pub ai: Option<AiAgent>,
     pub hazards: MobHazards,
+    /// Ticks of love left after being fed breeding food; `0` when not in love.
+    pub love_ticks: i32,
+    /// Ticks left before this animal may breed again.
+    pub breed_cooldown: i32,
 }
 
 impl std::fmt::Debug for TrackedEntity {
@@ -404,6 +408,8 @@ impl std::fmt::Debug for TrackedEntity {
             .field("entity", &self.entity)
             .field("living", &self.living)
             .field("ai", &self.ai.as_ref().map(|agent| agent.mob.id))
+            .field("love_ticks", &self.love_ticks)
+            .field("breed_cooldown", &self.breed_cooldown)
             .finish()
     }
 }
@@ -842,6 +848,8 @@ impl SessionEntityTracker {
                 living,
                 ai,
                 hazards: MobHazards::default(),
+                love_ticks: 0,
+                breed_cooldown: 0,
             });
         }
 
@@ -988,8 +996,143 @@ impl SessionEntityTracker {
             living,
             ai,
             hazards: MobHazards::default(),
+            love_ticks: 0,
+            breed_cooldown: 0,
         });
         Some(id)
+    }
+
+    /// Spawn an ageable mob as a baby: half the adult hitbox with the synched
+    /// baby flag set. Health and AI keep their adult defaults; growth and aging
+    /// into an adult are a later slice.
+    pub fn spawn_baby(&mut self, name: &str, pos: (f64, f64, f64), seed: i64) -> Option<i32> {
+        let id = self.spawn_mob(name, pos, seed)?;
+        let tracked = self.entities.get_mut(id).expect("mob was just spawned");
+        tracked.entity.width /= 2.0;
+        tracked.entity.height /= 2.0;
+        if let Some(agent) = tracked.ai.as_mut() {
+            agent.mob.width = tracked.entity.width as f32;
+            agent.mob.height = tracked.entity.height as f32;
+        }
+        tracked.living.set_baby(true);
+        Some(id)
+    }
+
+    /// Feed an adult farm animal its breeding food, putting it in love for 600
+    /// ticks. Rejects babies, unrecognized species, wrong food, and animals that
+    /// are still on their breeding cooldown.
+    pub fn feed_breed(&mut self, id: i32, item: &str) -> bool {
+        let Some(tracked) = self.entities.get(id) else {
+            return false;
+        };
+        if tracked.living.is_baby() || tracked.breed_cooldown != 0 {
+            return false;
+        }
+        let Some(entity_type) = crate::spawn::entity_type_by_id(tracked.entity.entity_type) else {
+            return false;
+        };
+        let accepted = match entity_type.name {
+            "minecraft:cow" | "minecraft:sheep" => matches!(item, "minecraft:wheat"),
+            "minecraft:pig" => matches!(
+                item,
+                "minecraft:carrot" | "minecraft:potato" | "minecraft:beetroot"
+            ),
+            "minecraft:chicken" => matches!(
+                item,
+                "minecraft:wheat_seeds"
+                    | "minecraft:melon_seeds"
+                    | "minecraft:pumpkin_seeds"
+                    | "minecraft:beetroot_seeds"
+            ),
+            _ => false,
+        };
+        if !accepted {
+            return false;
+        }
+        self.entities.get_mut(id).expect("read above").love_ticks = 600;
+        true
+    }
+
+    /// One session tick of animal breeding. Love and cooldown timers count down
+    /// for every tracked mob, then loved, non-babied adults of the same species
+    /// within 8 blocks pair up. Each adult breeds at most once per tick, pairs
+    /// are found by ascending entity id, and the new baby ids are returned.
+    pub fn tick_breeding(&mut self, seed: i64) -> Vec<i32> {
+        let countdown_ids: Vec<i32> = self.entities.ids().collect();
+        for id in countdown_ids {
+            if let Some(tracked) = self.entities.get_mut(id) {
+                tracked.love_ticks = tracked.love_ticks.saturating_sub(1);
+                tracked.breed_cooldown = tracked.breed_cooldown.saturating_sub(1);
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        struct Candidate {
+            id: i32,
+            entity_type: i32,
+            name: &'static str,
+            x: f64,
+            y: f64,
+            z: f64,
+        }
+
+        let candidates: Vec<Candidate> = self
+            .entities
+            .ids()
+            .filter_map(|id| {
+                let tracked = self.entities.get(id)?;
+                if tracked.living.is_baby() || tracked.love_ticks == 0 {
+                    return None;
+                }
+                let entity_type = crate::spawn::entity_type_by_id(tracked.entity.entity_type)?;
+                Some(Candidate {
+                    id,
+                    entity_type: tracked.entity.entity_type,
+                    name: entity_type.name,
+                    x: tracked.entity.x,
+                    y: tracked.entity.y,
+                    z: tracked.entity.z,
+                })
+            })
+            .collect();
+
+        let mut used = BTreeSet::new();
+        let mut babies = Vec::new();
+        for (index, left) in candidates.iter().enumerate() {
+            if used.contains(&left.id) {
+                continue;
+            }
+            for right in candidates.iter().skip(index + 1) {
+                if used.contains(&right.id) || right.entity_type != left.entity_type {
+                    continue;
+                }
+                let dx = right.x - left.x;
+                let dy = right.y - left.y;
+                let dz = right.z - left.z;
+                if dx * dx + dy * dy + dz * dz > 64.0 {
+                    continue;
+                }
+                let pos = (
+                    (left.x + right.x) / 2.0,
+                    (left.y + right.y) / 2.0,
+                    (left.z + right.z) / 2.0,
+                );
+                let Some(baby) = self.spawn_baby(left.name, pos, seed) else {
+                    continue;
+                };
+                used.insert(left.id);
+                used.insert(right.id);
+                for parent_id in [left.id, right.id] {
+                    if let Some(parent) = self.entities.get_mut(parent_id) {
+                        parent.love_ticks = 0;
+                        parent.breed_cooldown = 6000;
+                    }
+                }
+                babies.push(baby);
+                break;
+            }
+        }
+        babies
     }
 
     /// Add Entity, metadata, equipment, and active effects for one tracked entity.
@@ -2049,5 +2192,121 @@ mod tests {
         let targets = tracker.sweep_targets(zombie, 1.0);
         assert!(targets.contains(&cow));
         assert!(!targets.contains(&zombie));
+    }
+
+    fn empty_tracker() -> SessionEntityTracker {
+        let mut tracker = SessionEntityTracker::deterministic((0.0, 63.0, 0.0), 63, 7);
+        tracker.clear();
+        tracker
+    }
+
+    #[test]
+    fn baby_metadata_uses_index_sixteen_and_is_dirty() {
+        assert_eq!(DATA_BABY, 16);
+        let mut tracker = empty_tracker();
+        let baby = tracker
+            .spawn_baby("minecraft:chicken", (1.0, 63.0, 1.0), 7)
+            .expect("baby chicken");
+        let tracked = tracker.entity(baby).expect("baby");
+        assert_eq!(
+            tracked.living.metadata.get(DATA_BABY),
+            Some(&MetadataValue::Boolean(true))
+        );
+        assert!(tracked.living.metadata.is_dirty());
+
+        let adult = tracker
+            .spawn_mob("minecraft:cow", (3.0, 63.0, 1.0), 7)
+            .expect("adult cow");
+        assert_eq!(
+            tracker
+                .entity(adult)
+                .unwrap()
+                .living
+                .metadata
+                .get(DATA_BABY),
+            None
+        );
+        let changed = tracker
+            .entities
+            .get_mut(adult)
+            .unwrap()
+            .living
+            .set_baby(false);
+        assert!(!changed);
+        assert!(!tracker.entity(adult).unwrap().living.metadata.is_dirty());
+    }
+
+    #[test]
+    fn feed_breed_sets_love_and_rejects_wrong_food_or_baby() {
+        let mut tracker = empty_tracker();
+        let cow = tracker
+            .spawn_mob("minecraft:cow", (1.0, 63.0, 1.0), 7)
+            .expect("cow");
+        assert!(tracker.feed_breed(cow, "minecraft:wheat"));
+        assert_eq!(tracker.entity(cow).unwrap().love_ticks, 600);
+        assert!(!tracker.feed_breed(cow, "minecraft:stone"));
+        assert_eq!(tracker.entity(cow).unwrap().love_ticks, 600);
+
+        let baby = tracker
+            .spawn_baby("minecraft:cow", (2.0, 63.0, 1.0), 7)
+            .expect("baby cow");
+        assert!(!tracker.feed_breed(baby, "minecraft:wheat"));
+        assert_eq!(tracker.entity(baby).unwrap().love_ticks, 0);
+    }
+
+    #[test]
+    fn two_loved_cows_spawn_one_baby_and_reset_cooldowns() {
+        let mut tracker = empty_tracker();
+        let a = tracker
+            .spawn_mob("minecraft:cow", (0.5, 63.0, 0.5), 7)
+            .expect("cow a");
+        let b = tracker
+            .spawn_mob("minecraft:cow", (4.5, 63.0, 0.5), 7)
+            .expect("cow b");
+        let (adult_width, adult_height) = {
+            let entity = &tracker.entity(a).unwrap().entity;
+            (entity.width, entity.height)
+        };
+        assert!(tracker.feed_breed(a, "minecraft:wheat"));
+        assert!(tracker.feed_breed(b, "minecraft:wheat"));
+
+        let babies = tracker.tick_breeding(7);
+        assert_eq!(babies.len(), 1);
+        assert_eq!(tracker.entity(a).unwrap().love_ticks, 0);
+        assert_eq!(tracker.entity(b).unwrap().love_ticks, 0);
+        assert_eq!(tracker.entity(a).unwrap().breed_cooldown, 6000);
+        assert_eq!(tracker.entity(b).unwrap().breed_cooldown, 6000);
+        let baby = tracker.entity(babies[0]).expect("new baby");
+        assert!((baby.entity.width - adult_width / 2.0).abs() < 1e-12);
+        assert!((baby.entity.height - adult_height / 2.0).abs() < 1e-12);
+        assert_eq!(
+            baby.living.metadata.get(DATA_BABY),
+            Some(&MetadataValue::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn breeding_pairs_only_same_species_and_range() {
+        let mut tracker = empty_tracker();
+        let cow = tracker
+            .spawn_mob("minecraft:cow", (0.5, 63.0, 0.5), 7)
+            .expect("cow");
+        let pig = tracker
+            .spawn_mob("minecraft:pig", (2.5, 63.0, 0.5), 7)
+            .expect("pig");
+        assert!(tracker.feed_breed(cow, "minecraft:wheat"));
+        assert!(tracker.feed_breed(pig, "minecraft:carrot"));
+        assert!(tracker.tick_breeding(7).is_empty());
+
+        let mut tracker = empty_tracker();
+        let cow_a = tracker
+            .spawn_mob("minecraft:cow", (0.5, 63.0, 0.5), 7)
+            .expect("cow a");
+        let cow_b = tracker
+            .spawn_mob("minecraft:cow", (20.5, 63.0, 0.5), 7)
+            .expect("cow b");
+        assert!(tracker.feed_breed(cow_a, "minecraft:wheat"));
+        assert!(tracker.feed_breed(cow_b, "minecraft:wheat"));
+        assert!(tracker.tick_breeding(7).is_empty());
     }
 }

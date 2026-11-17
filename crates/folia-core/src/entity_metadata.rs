@@ -53,6 +53,11 @@ pub const DATA_TICKS_FROZEN: u8 = 7;
 pub const DATA_LIVING_ENTITY_FLAGS: u8 = 8;
 pub const DATA_HEALTH: u8 = 9;
 
+/// `AgeableMob.DATA_AGE` synched-data index. This slice models the baby flag as
+/// a `Boolean` here and only sets it on baby mobs, so players, monsters, and
+/// adult animals never receive a bogus field.
+pub const DATA_BABY: u8 = 16;
+
 /// `Entity` shared-flag bit positions (`Entity.setSharedFlag`).
 pub const FLAG_ON_FIRE: u8 = 0;
 pub const FLAG_SHIFT_KEY_DOWN: u8 = 1;
@@ -1489,6 +1494,28 @@ impl LivingEntity {
         }
         packets.extend(self.tick_effects());
         packets
+    }
+
+    /// `AgeableMob.isBaby()` for the modeled baby flag. Adults do not carry
+    /// `DATA_BABY` at all, so they read as non-babies.
+    pub fn is_baby(&self) -> bool {
+        matches!(
+            self.metadata.get(DATA_BABY),
+            Some(MetadataValue::Boolean(true))
+        )
+    }
+
+    /// Set the synched baby flag at [`DATA_BABY`] and return whether it changed.
+    ///
+    /// A `false` value on a mob that never had the field is a no-op: adult mobs
+    /// keep their vanilla metadata layout instead of gaining an unused entry.
+    pub fn set_baby(&mut self, baby: bool) -> bool {
+        if !baby && self.metadata.get(DATA_BABY).is_none() {
+            return false;
+        }
+        self.metadata
+            .set(DATA_BABY, MetadataValue::Boolean(baby))
+            .unwrap_or(false)
     }
 
     pub fn all_metadata_packet(&self) -> Vec<u8> {

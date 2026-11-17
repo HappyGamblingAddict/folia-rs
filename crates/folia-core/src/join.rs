@@ -33,6 +33,7 @@ use crate::nbt::Tag;
 use crate::player::{
     ChatPublicKey, PlayerSession, ProfilePublicKey, RemoteChatSession, SignedMessage, uuid_string,
 };
+use crate::player_info::{player_info_add_packet, player_info_remove_packet};
 use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
 use crate::protocol::{
     Connection, EncryptionRequest, GameProfile, Handshake, LAST_SEEN_MESSAGES_WINDOW,
@@ -284,13 +285,25 @@ enum SessionCommand {
     },
     /// Open the chest/furnace/brewing-stand menu backed by this position.
     OpenMenu { position: BlockEntityPos },
+    /// `ClientboundPlayerInfoUpdate` adding one entry to the tab list.
+    PlayerInfoAdd {
+        uuid: [u8; 16],
+        name: String,
+        properties: Vec<ProfileProperty>,
+        game_mode: i32,
+    },
+    /// `ClientboundPlayerInfoRemove` dropping one tab-list entry.
+    PlayerInfoRemove { uuid: [u8; 16] },
 }
 
 struct ActiveSession {
     /// Unique per connection, so a reconnect with the same UUID cannot have its
     /// registration removed by the previous connection's guard.
     id: u64,
+    uuid: [u8; 16],
     name: String,
+    properties: Vec<ProfileProperty>,
+    game_mode: i32,
     sender: mpsc::Sender<SessionCommand>,
 }
 
@@ -308,20 +321,71 @@ struct SessionCommandGuard {
 }
 
 impl SessionCommandGuard {
-    fn register(name: &str, uuid: [u8; 16]) -> (Self, mpsc::Receiver<SessionCommand>) {
+    fn register(
+        name: &str,
+        uuid: [u8; 16],
+        properties: Vec<ProfileProperty>,
+        game_mode: i32,
+    ) -> (Self, mpsc::Receiver<SessionCommand>) {
         let id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst) as u64;
         let (sender, receiver) = mpsc::channel();
-        SESSIONS
+        let mut sessions = SESSIONS
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Give the joining client every already-connected player's tab entry
+        // before it sees itself. Snapshot first so this happens under one lock
+        // acquisition and without broadcasting through a nested lock.
+        let existing: Vec<([u8; 16], String, Vec<ProfileProperty>, i32)> = sessions
+            .values()
+            .filter(|session| session.uuid != uuid)
+            .map(|session| {
+                (
+                    session.uuid,
+                    session.name.clone(),
+                    session.properties.clone(),
+                    session.game_mode,
+                )
+            })
+            .collect();
+        for (existing_uuid, existing_name, existing_properties, existing_game_mode) in existing {
+            let _ = sender.send(SessionCommand::PlayerInfoAdd {
+                uuid: existing_uuid,
+                name: existing_name,
+                properties: existing_properties,
+                game_mode: existing_game_mode,
+            });
+        }
+
+        // Announce the joining player to everyone, including itself. Vanilla
+        // clients show their own entry in the tab list, so this self-add is
+        // intentional and tolerated by the client.
+        for session in sessions.values() {
+            let _ = session.sender.send(SessionCommand::PlayerInfoAdd {
                 uuid,
-                ActiveSession {
-                    id,
-                    name: name.to_owned(),
-                    sender,
-                },
-            );
+                name: name.to_owned(),
+                properties: properties.clone(),
+                game_mode,
+            });
+        }
+        let _ = sender.send(SessionCommand::PlayerInfoAdd {
+            uuid,
+            name: name.to_owned(),
+            properties: properties.clone(),
+            game_mode,
+        });
+
+        sessions.insert(
+            uuid,
+            ActiveSession {
+                id,
+                uuid,
+                name: name.to_owned(),
+                properties,
+                game_mode,
+                sender,
+            },
+        );
         (Self { id, uuid }, receiver)
     }
 }
@@ -336,6 +400,11 @@ impl Drop for SessionCommandGuard {
             .is_some_and(|session| session.id == self.id)
         {
             sessions.remove(&self.uuid);
+            for session in sessions.values() {
+                let _ = session
+                    .sender
+                    .send(SessionCommand::PlayerInfoRemove { uuid: self.uuid });
+            }
         }
     }
 }
@@ -1594,8 +1663,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
     let mut next_chat_index = 0i32;
     let mut attack_cooldown = AttackCooldown::new(4.0);
-    let (_console_guard, console_commands) =
-        SessionCommandGuard::register(&session.name, session.uuid);
+    let (_console_guard, console_commands) = SessionCommandGuard::register(
+        &session.name,
+        session.uuid,
+        profile_properties,
+        session.game_mode,
+    );
 
     loop {
         if shutdown_requested() {
@@ -2438,6 +2511,20 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             start.name, position.x, position.y, position.z
                         );
                     }
+                }
+                SessionCommand::PlayerInfoAdd {
+                    uuid,
+                    name,
+                    properties,
+                    game_mode,
+                } => {
+                    write_packet(
+                        &mut stream,
+                        &player_info_add_packet(uuid, &name, &properties, game_mode),
+                    )?;
+                }
+                SessionCommand::PlayerInfoRemove { uuid } => {
+                    write_packet(&mut stream, &player_info_remove_packet(uuid))?;
                 }
             }
         }
@@ -8748,7 +8835,8 @@ mod tests {
     }
     #[test]
     fn console_gamemode_reaches_a_registered_session() {
-        let (guard, receiver) = SessionCommandGuard::register("ConsoleTarget", [0x9a; 16]);
+        let (guard, receiver) =
+            SessionCommandGuard::register("ConsoleTarget", [0x9a; 16], Vec::new(), 0);
         let worker = std::thread::spawn(move || {
             loop {
                 match receiver.recv_timeout(Duration::from_secs(2)) {
@@ -8775,7 +8863,10 @@ mod tests {
     #[test]
     fn bridge_commands_reach_the_registered_live_session() {
         let uuid = [0x9b; 16];
-        let (guard, receiver) = SessionCommandGuard::register("BridgeQueue", uuid);
+        let (guard, receiver) = SessionCommandGuard::register("BridgeQueue", uuid, Vec::new(), 0);
+        // Registration queues tab-list adds (one per existing session plus our
+        // own); discard that startup noise before checking bridge commands.
+        while receiver.try_recv().is_ok() {}
 
         assert!(send_player_chat(uuid, "hello"));
         assert!(matches!(
@@ -8944,7 +9035,8 @@ mod tests {
     fn unsigned_player_chat_is_broadcast_as_disguised_chat() {
         let mut session = PlayerSession::new("ChatSender".into(), [0x91; 16], 0.0, 64.0, 0.0);
         session.uuid = [0x91; 16];
-        let (_guard, receiver) = SessionCommandGuard::register(&session.name, session.uuid);
+        let (_guard, receiver) =
+            SessionCommandGuard::register(&session.name, session.uuid, Vec::new(), 0);
         let mut remote = None;
         let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
         let update =
@@ -8969,7 +9061,8 @@ mod tests {
     fn signed_player_chat_verifies_the_session_key_and_sequence() {
         let uuid = [0x92; 16];
         let session = PlayerSession::new("SignedSender".into(), uuid, 0.0, 64.0, 0.0);
-        let (_guard, receiver) = SessionCommandGuard::register(&session.name, session.uuid);
+        let (_guard, receiver) =
+            SessionCommandGuard::register(&session.name, session.uuid, Vec::new(), 0);
         let now_ms = epoch_millis();
         let mut signing =
             ChatSigningSession::deterministic_for_tests(uuid, [0x24; 16], [0x5A; 32], now_ms)

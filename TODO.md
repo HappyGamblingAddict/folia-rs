@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices are expected to bring the gate to 1,520
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices are expected to bring the gate to 1,524
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2078,13 +2078,20 @@ instantly on start-destroy and places on use-item-on.
   `ChatType`.
 - **Done when:** Vanilla commands and plugin commands work from chat/console.
 
-### P4.13 Tab list, scoreboard, teams, titles, boss bars `[ ]` `M`
+### P4.13 Tab list, scoreboard, teams, titles, boss bars `[~]` `M`
 
 - **What:** Implement player info, scoreboard objectives/teams, titles/action
   bar, boss bars, and sidebar display.
 - **Why:** Plugins use these constantly for UI.
 - **Done when:** A test plugin can create a scoreboard/title and the client
   receives the correct packets.
+- **Progress (2026-11-17):** tab-list player info (pending CI) — protocol 774
+  `ClientboundPlayerInfoUpdate` (68) and `Remove` (67) builders, action mask
+  0x1D (add/gamemode/listed/latency), and a session registry that snapshots
+  existing players to newcomers, broadcasts self/join adds, and removes entries
+  on disconnect. 4 packet tests + join coverage. Still open: live gamemode
+  updates, display names, player entities/world visibility, scoreboard, teams,
+  titles/action bar, and boss bars.
 
 ### P4.14 Sounds, particles, and world events `[ ]` `M`
 

@@ -1812,6 +1812,97 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             for change in &tnt_changes {
                 crate::block_update::broadcast_change(change);
             }
+            for event in &tnt_tick.explosions {
+                if !awaiting_respawn {
+                    let dx = session.x - event.x;
+                    let dy = session.y + 0.9 - event.y;
+                    let dz = session.z - event.z;
+                    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                    let amount = crate::tnt::explosion_damage(4.0, distance);
+                    if amount > 0.0 {
+                        let result = damage_player_with_rng(
+                            &mut session,
+                            player_entity,
+                            amount,
+                            &mut drop_rng,
+                            crate::effects::DamageKind::Explosion,
+                        );
+                        for packet in &result.packets {
+                            write_packet(&mut stream, packet)?;
+                        }
+                        if result.died {
+                            drop_player_death_items(
+                                &mut stream,
+                                &mut drop_entities,
+                                &mut drop_rng,
+                                &mut session,
+                            )?;
+                            let message = format!("{} blew up", session.name);
+                            write_packet(&mut stream, &combat_kill_packet(&message))?;
+                            awaiting_respawn = true;
+                            death_at = Some(Instant::now());
+                            if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                                &session,
+                                playerdata_dir(),
+                            ) {
+                                eprintln!("[join] could not save explosion death: {error}");
+                            }
+                        }
+                    }
+                }
+            }
+            for event in &tnt_tick.explosions {
+                for id in tracked_entities.tracked_ids() {
+                    if !tracked_entities.tracks(id) {
+                        continue;
+                    }
+                    let Some(center) = tracked_entities.entity(id).map(|tracked| {
+                        [
+                            tracked.entity.x,
+                            tracked.entity.y + tracked.entity.height * 0.5,
+                            tracked.entity.z,
+                        ]
+                    }) else {
+                        continue;
+                    };
+                    let dx = center[0] - event.x;
+                    let dy = center[1] - event.y;
+                    let dz = center[2] - event.z;
+                    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                    let amount = crate::tnt::explosion_damage(4.0, distance);
+                    if amount <= 0.0 {
+                        continue;
+                    }
+                    if let Some(result) = tracked_entities.damage(id, amount) {
+                        for packet in &result.packets {
+                            write_packet(&mut stream, packet)?;
+                        }
+                        if result.died {
+                            let target_info = tracked_entities.entity(id).map(|tracked| {
+                                (
+                                    crate::registry::entity_type_name(tracked.entity.entity_type)
+                                        .map(str::to_owned),
+                                    BlockPos::new(
+                                        tracked.entity.x.floor() as i32,
+                                        tracked.entity.y.floor() as i32,
+                                        tracked.entity.z.floor() as i32,
+                                    ),
+                                )
+                            });
+                            if let Some((Some(entity_type), pos)) = target_info {
+                                spawn_mob_death_rewards(
+                                    &mut stream,
+                                    &mut drop_entities,
+                                    &mut drop_rng,
+                                    &session,
+                                    pos,
+                                    &entity_type,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
             for packet in &spawn_packets {
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {

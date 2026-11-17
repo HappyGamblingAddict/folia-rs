@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,468 passing** at the 94aa12f gate (0 failed, 1 ignored benchmark); TNT should bring the gate to 1,472
+> Test status: **1,468 passing** at the 94aa12f gate (0 failed, 1 ignored benchmark); TNT + damage should bring the gate to 1,475
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 

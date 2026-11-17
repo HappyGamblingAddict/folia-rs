@@ -130,6 +130,22 @@ impl Default for TntStore {
     }
 }
 
+/// Vanilla `Explosion` damage at `distance` from the centre of an explosion of
+/// `radius`, returned as `f32` like the entity health it is applied to.
+///
+/// The exposure factor is treated as `1.0`: this is the damage an entity with
+/// an unobstructed line of sight to the explosion centre takes. Exposure
+/// occlusion (rays cast against blocks between the centre and the victim) is
+/// not modelled in this slice.
+pub fn explosion_damage(radius: f32, distance: f64) -> f32 {
+    if distance >= f64::from(radius) {
+        return 0.0;
+    }
+    let d = 1.0 - distance / f64::from(radius);
+    let raw = (d * d + d) / 2.0 * 7.0 * f64::from(radius) + 1.0;
+    raw as f32
+}
+
 /// Return the sorted, unique set of blocks an explosion of `radius` at
 /// `center` would destroy, using `seed` for the vanilla ray-strength draws.
 ///
@@ -199,6 +215,49 @@ mod tests {
 
     fn resistance_at_none(_pos: BlockPos) -> Option<f32> {
         None
+    }
+
+    #[test]
+    fn explosion_damage_is_zero_at_and_beyond_radius() {
+        assert_eq!(explosion_damage(4.0, 4.0), 0.0, "at the edge");
+        assert_eq!(explosion_damage(4.0, 5.0), 0.0, "beyond the edge");
+        assert_eq!(explosion_damage(0.0, 0.0), 0.0, "zero radius never damages");
+    }
+
+    #[test]
+    fn explosion_damage_is_positive_and_decreases_inward() {
+        let radius = 4.0;
+        let mut previous = f32::INFINITY;
+        for step in 0..=8 {
+            let distance = step as f64 * 0.5;
+            let amount = explosion_damage(radius, distance);
+            if distance >= f64::from(radius) {
+                assert_eq!(amount, 0.0, "no damage at distance {distance}");
+            } else {
+                assert!(amount > 0.0, "damage must be positive at {distance}");
+                assert!(
+                    amount < previous,
+                    "damage must fall as distance grows: {amount} at {distance}, previous {previous}"
+                );
+            }
+            previous = amount;
+        }
+    }
+
+    #[test]
+    fn explosion_damage_center_is_maximum_for_radius_four() {
+        let center = explosion_damage(4.0, 0.0);
+        assert_eq!(
+            center, 29.0,
+            "vanilla yields (2/2)*7*4 + 1 = 29 at the centre"
+        );
+        for step in 1..40 {
+            let distance = step as f64 * 0.1;
+            assert!(
+                explosion_damage(4.0, distance) < center,
+                "no point inside radius 4 may exceed the centre damage"
+            );
+        }
     }
 
     #[test]

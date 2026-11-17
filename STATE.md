@@ -9,10 +9,11 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `94aa12f` with 1,468 tests. Primed TNT and ray-shaped block
-  destruction are completed locally and should bring the next gate to 1,472.
+  CI is green at `94aa12f` with 1,468 tests. Primed TNT, block destruction, and
+  explosion damage are completed locally and should bring the next gate to
+  1,475.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,472. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,475. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -50,7 +51,8 @@ Last updated: 2026-11-16
    source water/lava; bone meal grows immature crops; consumables apply food,
    saturation, and use remainders on a hold-and-release timer; ender pearls
    teleport their thrower on block impact (fall damage still open); primed TNT
-   explodes into a ray-shaped block set (drops/damage/chain reactions open).
+   explodes into a ray-shaped block set and applies vanilla distance falloff
+   damage to players/mobs (drops/knockback/chain reactions open).
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -80,6 +82,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: explosion damage — vanilla radius falloff applied to the player
+  and session mobs, with player/mob death handling and rewards; exposure is
+  treated as unobstructed. 3 tnt tests.
 - 2026-11-17: primed TNT — stationary fuse entity, flint-and-steel ignition,
   vanilla 16³ explosion ray with resistance decay, and air-block broadcasts.
   4 tnt tests; drops/damage/chain reactions remain open.
@@ -717,6 +722,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: explosion damage — vanilla radius falloff applied to the player
+  and session mobs, with player/mob death handling and rewards; exposure is
+  treated as unobstructed. 3 tnt tests.
 - 2026-11-17: primed TNT — stationary fuse entity, flint-and-steel ignition,
   vanilla 16³ explosion ray with resistance decay, and air-block broadcasts.
   4 tnt tests; drops/damage/chain reactions remain open.
@@ -978,6 +986,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: explosion damage — vanilla radius falloff applied to the player
+  and session mobs, with player/mob death handling and rewards; exposure is
+  treated as unobstructed. 3 tnt tests.
 - 2026-11-17: primed TNT — stationary fuse entity, flint-and-steel ignition,
   vanilla 16³ explosion ray with resistance decay, and air-block broadcasts.
   4 tnt tests; drops/damage/chain reactions remain open.

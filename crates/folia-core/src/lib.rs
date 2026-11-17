@@ -47,6 +47,7 @@ pub mod tags;
 pub mod tick;
 pub mod tnt;
 pub mod varint;
+pub mod weather;
 pub mod world;
 pub mod worldgen;
 

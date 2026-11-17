@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); breeding is expected to bring the gate to 1,504
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); weather ticking is expected to bring the gate to 1,515
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2856,8 +2856,10 @@ storage stay Overworld-only. No time/weather/portals.
   weather clock exists yet. The joining client now receives the stored
   `level.dat` time; both session clocks advance one tick per game tick and sync
   every 20 ticks, with broadcasts updating each session's local clock. 7 join
-  tests. Still open: persisting the advanced clock, moon phases, persistent
-  weather timers/transitions, lightning, snow, and login weather sync.
+  7 join tests. `weather.rs` adds a rain/thunder clock with timer expiry,
+  `/weather`-driven state, per-tick transitions, and fallback timers for
+  sessions receiving broadcasts; 11 weather tests. Still open: persisting time
+  and weather, moon phases, automatic thunder starts, lightning, and snow.
 
 ### P7.6 World border, spawn, and game rules `[ ]` `M`
 

@@ -43,6 +43,7 @@ use crate::protocol::{
     parse_serverbound_chat_session_update,
 };
 use crate::tnt::{ExplosionEvent, TntStore, TntTick};
+use crate::weather::Weather;
 use crate::world::WorldStorage;
 use folia_random::LegacyRandomSource;
 use std::collections::{HashMap, HashSet};
@@ -1476,6 +1477,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         &mut stream,
         &set_time_packet(world.day_time, world.day_time, true),
     )?;
+    // The world starts clear. Announce the initial rain/thunder levels so the
+    // client's render state matches this session's weather clock.
+    for (event, param) in crate::weather::weather_events("clear").expect("clear weather events") {
+        write_packet(&mut stream, &game_event_packet(event, param))?;
+    }
     // The position has to arrive before the chunk batch. The client stays on
     // the loading screen until it has both; the old order generated every
     // column first, so a 441-column join sat on the loading screen for the
@@ -1511,6 +1517,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         .unwrap_or(0)
         ^ i64::from_le_bytes(session.uuid[..8].try_into().expect("uuid half"));
     let mut drop_rng = LegacyRandomSource::new(seed);
+    let mut weather = Weather::new();
+    let mut weather_rng = LegacyRandomSource::new(0x9E37);
     // Session-owned mobs are announced between the position and the chunk
     // batch. The client keeps them until their columns arrive, and the join
     // test's captured chunk loop ignores non-chunk packets.
@@ -1608,6 +1616,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
+            for (event, param) in weather.tick(&mut weather_rng) {
+                write_packet(&mut stream, &game_event_packet(event, param))?;
+            }
             let (
                 tick,
                 drop_tick,
@@ -2340,6 +2351,34 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 SessionCommand::GameEvent { event, param } => {
                     write_packet(&mut stream, &game_event_packet(event, param))?;
+                    match event {
+                        1 => {
+                            // The broadcast carries no duration; give sessions
+                            // that did not originate the command a fallback
+                            // timer so their next tick does not immediately
+                            // stop the rain. The originating session already
+                            // has the real duration from `Weather::set`.
+                            if !weather.raining {
+                                weather.rain_ticks = 12_000;
+                            }
+                            weather.raining = true;
+                        }
+                        2 => {
+                            weather.raining = false;
+                            weather.thundering = false;
+                            weather.rain_ticks = 0;
+                            weather.thunder_ticks = 0;
+                        }
+                        7 => weather.rain_level = param,
+                        8 => {
+                            if param > 0.0 && !weather.thundering {
+                                weather.thunder_ticks = 3_600;
+                            }
+                            weather.thundering = param > 0.0;
+                            weather.thunder_level = param;
+                        }
+                        _ => {}
+                    }
                 }
                 SessionCommand::Sound {
                     sound,
@@ -2592,6 +2631,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             player_entity,
                             &mut world_day_time,
                             world_game_time,
+                            &mut weather,
+                            &mut weather_rng,
                             &packet,
                         ) {
                             eprintln!("[join] command failed: {error}");
@@ -4806,19 +4847,6 @@ fn advance_world_time(day_time: &mut i64, game_time: &mut i64) {
     *game_time += 1;
 }
 
-/// Build the `ClientboundGameEvent` sequence for a `/weather` preset.
-///
-/// Event ids: 1 = START_RAINING, 2 = STOP_RAINING, 7 = RAIN_LEVEL_CHANGE,
-/// 8 = THUNDER_LEVEL_CHANGE. Unknown kinds return `None`.
-fn weather_events(kind: &str) -> Option<Vec<(u8, f32)>> {
-    match kind {
-        "clear" => Some(vec![(2, 0.0), (7, 0.0), (8, 0.0)]),
-        "rain" => Some(vec![(1, 0.0), (7, 1.0), (8, 0.0)]),
-        "thunder" => Some(vec![(1, 0.0), (7, 1.0), (8, 1.0)]),
-        _ => None,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn handle_command(
     stream: &mut LoginStream,
@@ -4830,6 +4858,8 @@ fn handle_command(
     player_entity: i32,
     world_day_time: &mut i64,
     world_game_time: i64,
+    weather: &mut Weather,
+    weather_rng: &mut LegacyRandomSource,
     packet: &[u8],
 ) -> io::Result<()> {
     let (command, update) = parse_command_packet(packet)?;
@@ -5241,23 +5271,26 @@ fn handle_command(
                 );
                 return Ok(());
             };
-            let Some(events) = weather_events(kind) else {
+            let duration = parts.next();
+            let parsed_duration = duration.and_then(|value| value.parse::<i64>().ok());
+            let ticks = parsed_duration
+                .map(|seconds| seconds.max(0).saturating_mul(20).min(i64::from(i32::MAX)) as i32)
+                .unwrap_or(0);
+            let Some(events) = weather.set(kind, ticks, &mut *weather_rng) else {
                 let message = format!("unknown weather kind: {kind}");
                 println!("[join] {}: {message}", session.name);
                 write_packet(stream, &system_chat_packet(&message)?)?;
                 return Ok(());
             };
-            let duration = parts.next();
-            let parsed_duration = duration.and_then(|value| value.parse::<u64>().ok());
             for (event, param) in &events {
                 broadcast_game_event(*event, *param);
             }
             let ignored_note = match (duration, parsed_duration) {
-                (Some(_raw), Some(seconds)) => format!(
-                    " (duration {seconds}s supplied but ignored: no persistent weather clock)"
-                ),
+                (Some(_raw), Some(seconds)) => {
+                    format!(" (duration {seconds}s applied locally; not persisted)")
+                }
                 (Some(raw), None) => {
-                    format!(" (duration '{raw}' ignored: no persistent weather clock)")
+                    format!(" (duration '{raw}' ignored: invalid; not persisted)")
                 }
                 (None, _) => String::new(),
             };
@@ -7925,24 +7958,24 @@ mod tests {
     #[test]
     fn weather_events_match_vanilla_sequence() {
         assert_eq!(
-            weather_events("clear"),
+            crate::weather::weather_events("clear"),
             Some(vec![(2, 0.0), (7, 0.0), (8, 0.0)])
         );
         assert_eq!(
-            weather_events("rain"),
+            crate::weather::weather_events("rain"),
             Some(vec![(1, 0.0), (7, 1.0), (8, 0.0)])
         );
         assert_eq!(
-            weather_events("thunder"),
+            crate::weather::weather_events("thunder"),
             Some(vec![(1, 0.0), (7, 1.0), (8, 1.0)])
         );
     }
 
     #[test]
     fn weather_events_reject_unknown_kind() {
-        assert_eq!(weather_events("sunny"), None);
-        assert_eq!(weather_events(""), None);
-        assert_eq!(weather_events("RAIN"), None);
+        assert_eq!(crate::weather::weather_events("sunny"), None);
+        assert_eq!(crate::weather::weather_events(""), None);
+        assert_eq!(crate::weather::weather_events("RAIN"), None);
     }
 
     #[test]

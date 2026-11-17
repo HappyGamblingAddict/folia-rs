@@ -1092,6 +1092,36 @@ impl SpawnerBlockEntity {
         }
     }
 
+    /// Decide whether this spawner should spawn one mob during a session tick.
+    ///
+    /// This is the session-level approximation: there are no light or biome
+    /// checks, and spawn counts are decided by the caller. The caller supplies
+    /// `nearby` (the number of already-tracked mobs of this spawner's type) and
+    /// `player_in_range`; the spawner only owns its delay and configuration.
+    ///
+    /// Returns the configured entity id when spawning is allowed and the delay
+    /// has elapsed, resetting `delay` to a fresh draw in
+    /// `min_spawn_delay..=max_spawn_delay`. Otherwise returns `None`.
+    pub fn tick_spawn(
+        &mut self,
+        nearby: i32,
+        player_in_range: bool,
+        elapsed: i32,
+        random: &mut impl RandomSource,
+    ) -> Option<String> {
+        if !player_in_range || nearby >= self.max_nearby_entities {
+            return None;
+        }
+        let entity_id = self.entity_id.clone()?;
+        if self.delay > elapsed {
+            self.delay -= elapsed;
+            return None;
+        }
+        let span = (self.max_spawn_delay - self.min_spawn_delay + 1).max(1);
+        self.delay = self.min_spawn_delay + random.next_int_bound(span);
+        Some(entity_id)
+    }
+
     pub fn extra_fields(&self) -> &[(String, Tag)] {
         &self.extras
     }
@@ -1681,6 +1711,7 @@ fn write_spawner_delay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use folia_random::LegacyRandomSource;
 
     fn pos() -> BlockEntityPos {
         BlockEntityPos::new(3, 64, -7)
@@ -1883,5 +1914,58 @@ mod tests {
                 "{name} should stay untyped"
             );
         }
+    }
+
+    fn armed_spawner() -> SpawnerBlockEntity {
+        let mut spawner = SpawnerBlockEntity::new(pos());
+        spawner.set_entity_id("minecraft:zombie");
+        spawner.delay = 5;
+        spawner.min_spawn_delay = 200;
+        spawner.max_spawn_delay = 800;
+        spawner
+    }
+
+    #[test]
+    fn spawner_tick_spawn_requires_player_in_range() {
+        let mut spawner = armed_spawner();
+        let mut random = LegacyRandomSource::new(12345);
+        assert_eq!(spawner.tick_spawn(0, false, 100, &mut random), None);
+        assert_eq!(spawner.delay, 5, "no time passes without a nearby player");
+    }
+
+    #[test]
+    fn spawner_tick_spawn_respects_nearby_cap() {
+        let mut spawner = armed_spawner();
+        let mut random = LegacyRandomSource::new(12345);
+        assert_eq!(
+            spawner.tick_spawn(spawner.max_nearby_entities, true, 100, &mut random),
+            None
+        );
+        assert_eq!(spawner.delay, 5, "a capped spawner does not tick down");
+    }
+
+    #[test]
+    fn spawner_tick_spawn_countdown_then_spawns_and_resets() {
+        let mut spawner = armed_spawner();
+        let mut random = LegacyRandomSource::new(12345);
+        assert_eq!(spawner.tick_spawn(0, true, 3, &mut random), None);
+        assert_eq!(spawner.delay, 2);
+        assert_eq!(
+            spawner.tick_spawn(0, true, 2, &mut random),
+            Some("minecraft:zombie".to_owned())
+        );
+        assert!(
+            (200..=800).contains(&spawner.delay),
+            "delay {} reset within min..max",
+            spawner.delay
+        );
+    }
+
+    #[test]
+    fn spawner_tick_spawn_requires_an_entity_id() {
+        let mut spawner = SpawnerBlockEntity::new(pos());
+        spawner.delay = 0;
+        let mut random = LegacyRandomSource::new(12345);
+        assert_eq!(spawner.tick_spawn(0, true, 20, &mut random), None);
     }
 }

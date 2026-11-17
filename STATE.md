@@ -10,10 +10,10 @@ Last updated: 2026-11-16
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `9ecb375` with 1,481 tests. The recent placement/item/TNT,
-  breeding, and weather slices are completed locally and should bring the next
-  gate to 1,515.
+  breeding/weather, and monster-spawner slices are completed locally and should
+  bring the next gate to 1,519.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,515. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,519. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -60,7 +60,8 @@ Last updated: 2026-11-16
    applies effects and milk clears them; primed TNT falls and rests on blocks;
    ender pearls damage survival throwers on landing; fire charges ignite on
    impact; cows/pigs/sheep/chickens breed from their foods and spawn half-size
-   babies (hearts/aging open); rain/thunder timers tick and broadcast state.
+   babies (hearts/aging open); rain/thunder timers tick and broadcast state;
+   monster spawners activate for nearby players.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -90,6 +91,9 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: monster spawners — `tick_spawn` delay/range/cap logic and a
+  20-tick session scan that spawns tracked mobs on supported air blocks.
+  4 block_entity tests; persistence/particles remain open.
 - 2026-11-17: weather ticking — `weather.rs` state/timers, `/weather` durations,
   per-tick transitions, and broadcast fallback timers. 11 weather tests.
 - 2026-11-17: breeding wiring — interact type 0 feeds adults and consumes food
@@ -758,6 +762,9 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: monster spawners — `tick_spawn` delay/range/cap logic and a
+  20-tick session scan that spawns tracked mobs on supported air blocks.
+  4 block_entity tests; persistence/particles remain open.
 - 2026-11-17: weather ticking — `weather.rs` state/timers, `/weather` durations,
   per-tick transitions, and broadcast fallback timers. 11 weather tests.
 - 2026-11-17: breeding wiring — interact type 0 feeds adults and consumes food
@@ -1050,6 +1057,9 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: monster spawners — `tick_spawn` delay/range/cap logic and a
+  20-tick session scan that spawns tracked mobs on supported air blocks.
+  4 block_entity tests; persistence/particles remain open.
 - 2026-11-17: weather ticking — `weather.rs` state/timers, `/weather` durations,
   per-tick transitions, and broadcast fallback timers. 11 weather tests.
 - 2026-11-17: breeding wiring — interact type 0 feeds adults and consumes food

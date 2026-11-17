@@ -16,7 +16,7 @@
 
 use crate::anvil::Compression;
 use crate::block_breaking::{self, DigStart, DigState, DigStop, MiningContext};
-use crate::block_entity::{BlockEntity, BlockEntityPos};
+use crate::block_entity::{BlockEntity, BlockEntityPos, SpawnerBlockEntity};
 use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
@@ -1758,6 +1758,15 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     Vec::new()
                 };
                 spawn_packets.extend(baby_packets);
+                if game_tick % 20 == 0 {
+                    spawn_packets.extend(tick_session_spawners(
+                        &mut storage,
+                        &mut tracked_entities,
+                        (session.x, session.y, session.z),
+                        game_tick,
+                        &mut drop_rng,
+                    ));
+                }
                 (
                     tick,
                     drop_tick,
@@ -3624,6 +3633,109 @@ fn spawn_snapshot(
         }
     }
     Some(world)
+}
+
+/// Count tracked session mobs whose registry entity type name matches `name`.
+fn count_tracked_of_type(tracker: &crate::entity::SessionEntityTracker, name: Option<&str>) -> i32 {
+    let Some(name) = name else {
+        return 0;
+    };
+    tracker
+        .tracked_ids()
+        .into_iter()
+        .filter(|&id| {
+            tracker
+                .entity(id)
+                .and_then(|tracked| crate::registry::entity_type_name(tracked.entity.entity_type))
+                == Some(name)
+        })
+        .count() as i32
+}
+
+/// Try up to eight random offsets for an air block with solid support below.
+fn find_spawner_spawn_pos(
+    storage: &mut crate::world::WorldStorage,
+    spawner: &SpawnerBlockEntity,
+    random: &mut impl folia_random::RandomSource,
+) -> Option<(f64, f64, f64)> {
+    let range = spawner.spawn_range.max(0);
+    let width = 2 * range + 1;
+    for _ in 0..8 {
+        let dx = random.next_int_bound(width) - range;
+        let dz = random.next_int_bound(width) - range;
+        let dy = random.next_int_bound(3) - 1;
+        let (x, y, z) = (spawner.pos.x + dx, spawner.pos.y + dy, spawner.pos.z + dz);
+        let Some(target) = storage.block_state_at(x, y, z) else {
+            continue;
+        };
+        if !crate::block_breaking::is_air(&target) {
+            continue;
+        }
+        let Some(below) = storage.block_state_at(x, y - 1, z) else {
+            continue;
+        };
+        if !crate::block_behaviour::is_solid(&below) {
+            continue;
+        }
+        return Some((x as f64 + 0.5, y as f64, z as f64 + 0.5));
+    }
+    None
+}
+
+/// Session-level monster-spawner tick. Every 20 game ticks this scans the 5x5
+/// chunk window around the player for loaded spawners and gives each one a
+/// chance to spawn a tracked session mob. Chunks are never generated here and
+/// unrelated block entities are left in place.
+fn tick_session_spawners(
+    storage: &mut crate::world::WorldStorage,
+    tracker: &mut crate::entity::SessionEntityTracker,
+    player: (f64, f64, f64),
+    game_tick: u64,
+    random: &mut impl folia_random::RandomSource,
+) -> Vec<Vec<u8>> {
+    let player_cx = (player.0.floor() as i32).div_euclid(16);
+    let player_cz = (player.2.floor() as i32).div_euclid(16);
+    let loaded: HashSet<(i32, i32)> = storage.loaded_chunk_coords().into_iter().collect();
+
+    let mut spawners: Vec<(i32, i32, BlockEntityPos, SpawnerBlockEntity)> = Vec::new();
+    for cz in (player_cz - 2)..=(player_cz + 2) {
+        for cx in (player_cx - 2)..=(player_cx + 2) {
+            if !loaded.contains(&(cx, cz)) {
+                continue;
+            }
+            let Ok(Some(map)) = storage.block_entities(cx, cz) else {
+                continue;
+            };
+            for (pos, entity) in map {
+                if let BlockEntity::Spawner(spawner) = entity {
+                    spawners.push((cx, cz, *pos, spawner.clone()));
+                }
+            }
+        }
+    }
+    spawners.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
+
+    let mut packets = Vec::new();
+    for (_cx, _cz, pos, mut spawner) in spawners {
+        let center = (pos.x as f64 + 0.5, pos.y as f64 + 0.5, pos.z as f64 + 0.5);
+        let dx = player.0 - center.0;
+        let dy = player.1 - center.1;
+        let dz = player.2 - center.2;
+        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+        let player_in_range = distance <= f64::from(spawner.required_player_range);
+        let nearby = count_tracked_of_type(tracker, spawner.entity_id.as_deref());
+        let spawned = spawner.tick_spawn(nearby, player_in_range, 20, random);
+        if let Some(name) = spawned
+            && let Some(spawn_pos) = find_spawner_spawn_pos(storage, &spawner, random)
+            && let Some(id) = tracker.spawn_mob(&name, spawn_pos, game_tick as i64 ^ 0x5A17)
+        {
+            packets.extend(tracker.enter_packets_for(id));
+        }
+        if let Err(error) = storage.insert_block_entity(BlockEntity::Spawner(spawner)) {
+            eprintln!("[join] could not persist spawner at {pos:?}: {error}");
+        }
+    }
+    packets
 }
 
 fn run_session_spawn_cycle(

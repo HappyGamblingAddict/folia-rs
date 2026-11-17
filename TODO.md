@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,497
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,498
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1935,8 +1935,10 @@ instantly on start-destroy and places on use-item-on.
   `potion_contents` effects with update packets. Ender pearls are
   projectile entities that report block impacts, remove themselves, and
   teleport the thrower (fall damage is an explicit TODO). 10 join/projectile
-  tests. Still open: fire-charge projectiles, pearl fall damage, lightning
-  ignition, bucket mob interactions, and a live join placement test.
+  Ender pearls now deal 5 fall damage to survival players (creative/adventure/
+  spectator exempt) with death/drop handling. Still open: fire-charge
+  projectiles, lightning ignition, bucket mob interactions, and a live join
+  placement test.
 
 ### P4.6 Full inventory and menu framework `[~]` `XL`
 

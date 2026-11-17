@@ -2087,10 +2087,44 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     false,
                 );
                 session.reset_physics();
-                // TODO(P4.5): vanilla applies 5 fall damage on a long ender
-                // pearl teleport; that damage is not modelled in this slice.
                 teleport_id += 1;
                 write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                let fall_damage = pearl_fall_damage(session.game_mode);
+                if !awaiting_respawn && fall_damage > 0.0 {
+                    let result = damage_player_with_rng(
+                        &mut session,
+                        player_entity,
+                        fall_damage,
+                        &mut drop_rng,
+                        crate::effects::DamageKind::Fall,
+                    );
+                    for packet in &result.packets {
+                        write_packet(&mut stream, packet)?;
+                    }
+                    if result.died {
+                        drop_player_death_items(
+                            &mut stream,
+                            &mut drop_entities,
+                            &mut drop_rng,
+                            &mut session,
+                        )?;
+                        write_packet(
+                            &mut stream,
+                            &combat_kill_packet(&format!(
+                                "{} hit the ground too hard",
+                                session.name
+                            )),
+                        )?;
+                        awaiting_respawn = true;
+                        death_at = Some(Instant::now());
+                        if let Err(error) = dimension::save_playerdata_preserving_dimension(
+                            &session,
+                            playerdata_dir(),
+                        ) {
+                            eprintln!("[join] could not save pearl death: {error}");
+                        }
+                    }
+                }
             }
             if tick.player_damage > 0.0 && !awaiting_respawn {
                 let result = damage_player_with_rng(
@@ -5481,6 +5515,15 @@ fn void_damage_health(health: f32, y: f64, game_mode: i32) -> Option<f32> {
     (game_mode != 3 && y < VOID_DAMAGE_Y).then(|| (health - VOID_DAMAGE).max(0.0))
 }
 
+/// Fall damage applied by an ender-pearl teleport. This simplifies the vanilla
+/// rule: a pearl deals 5 fall damage to a surviving (survival-mode) player,
+/// while creative/adventure/spectator players take none. The caller still
+/// routes the amount through the living-entity damage model, so armour and
+/// protection are respected.
+fn pearl_fall_damage(game_mode: i32) -> f32 {
+    if game_mode == 0 { 5.0 } else { 0.0 }
+}
+
 /// Apply vanilla fall damage. Creative and spectator players are immune
 /// (`Player.causeFallDamage` returns false when the abilities allow flying);
 /// survival and adventure players take damage and receive a health update.
@@ -7609,6 +7652,14 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn pearl_fall_damage_is_survival_only() {
+        assert_eq!(pearl_fall_damage(0), 5.0);
+        assert_eq!(pearl_fall_damage(1), 0.0);
+        assert_eq!(pearl_fall_damage(2), 0.0);
+        assert_eq!(pearl_fall_damage(3), 0.0);
     }
 
     #[test]

@@ -9138,7 +9138,7 @@ mod tests {
             );
             assert_eq!(reader.read_varint().unwrap(), 1);
             assert_eq!(reader.read_varint().unwrap(), 0);
-            assert_eq!(reader.read_varint().unwrap(), (9 + 36) as i32);
+            assert_eq!(reader.read_varint().unwrap(), 9 + 36);
             let first = inventory::read_item_stack(&mut reader).expect("first dispenser slot");
             assert_eq!(first.item, "minecraft:arrow");
             assert_eq!(first.count, 5);

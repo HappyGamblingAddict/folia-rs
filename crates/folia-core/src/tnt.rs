@@ -11,8 +11,10 @@
 //! Explicit simplifications in this slice:
 //! - Primed TNT is stationary: no gravity, no motion, no bouncing. The
 //!   fuse simply counts down in ticks and then detonates in place.
-//! - No item drops, entity/player damage, knockback, chain reactions, or
-//!   sounds/particles are produced by the explosion.
+//! - Block drops (with a 1/radius decay approximation), TNT chain reactions,
+//!   and their add-entity packets are produced by `join.rs` around this shape.
+//! - No entity/player damage, knockback, or sounds/particles are produced by
+//!   the explosion shape itself.
 //! - The block set is written to the world by `join.rs`, which owns the
 //!   session and the broadcast path.
 
@@ -146,6 +148,16 @@ pub fn explosion_damage(radius: f32, distance: f64) -> f32 {
     raw as f32
 }
 
+/// Fuse length for primed TNT ignited by another explosion's blast.
+///
+/// Vanilla TNT's `onCaughtInExplosion` arms a new primed-TNT entity with
+/// `10 + random.nextInt(21)` ticks, i.e. an inclusive `10..=30` range. The
+/// supplied source is the explosion's drop RNG, so a chain fuse is
+/// reproducible for a given seed.
+pub fn chain_fuse(random: &mut impl RandomSource) -> i32 {
+    10 + random.next_int_bound(21)
+}
+
 /// Return the sorted, unique set of blocks an explosion of `radius` at
 /// `center` would destroy, using `seed` for the vanilla ray-strength draws.
 ///
@@ -258,6 +270,23 @@ mod tests {
                 "no point inside radius 4 may exceed the centre damage"
             );
         }
+    }
+
+    #[test]
+    fn chain_fuse_is_between_ten_and_thirty() {
+        let mut saw_min = false;
+        let mut saw_max = false;
+        for seed in 0..2048_i64 {
+            let mut random = LegacyRandomSource::new(seed);
+            let fuse = chain_fuse(&mut random);
+            assert!(
+                (10..=30).contains(&fuse),
+                "seed {seed} produced out-of-range fuse {fuse}"
+            );
+            saw_min |= fuse == 10;
+            saw_max |= fuse == 30;
+        }
+        assert!(saw_min && saw_max, "both fuse endpoints must be reachable");
     }
 
     #[test]

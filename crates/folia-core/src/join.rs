@@ -1613,6 +1613,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 projectile_tick,
                 tnt_tick,
                 tnt_changes,
+                tnt_packets,
                 inventory_before,
                 submerged,
                 spawn_packets,
@@ -1676,8 +1677,18 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 let projectile_tick = projectiles.tick(&mut collider, &targets);
                 let tnt_tick: TntTick = primed_tnt.tick();
                 let mut tnt_changes = Vec::new();
+                let mut tnt_packets = Vec::new();
                 for event in &tnt_tick.explosions {
-                    tnt_changes.extend(explode_tnt(&mut storage, event, game_tick)?);
+                    let result = explode_tnt(
+                        &mut storage,
+                        event,
+                        game_tick,
+                        &mut drop_entities,
+                        &mut drop_rng,
+                        &mut primed_tnt,
+                    )?;
+                    tnt_changes.extend(result.changes);
+                    tnt_packets.extend(result.packets);
                 }
                 let hazard_death_rewards: Vec<(String, crate::math::BlockPos)> = tick
                     .hazard_deaths
@@ -1733,6 +1744,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     projectile_tick,
                     tnt_tick,
                     tnt_changes,
+                    tnt_packets,
                     inventory_before,
                     submerged,
                     spawn_packets,
@@ -1797,7 +1809,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     return Err(error);
                 }
             }
-            for packet in &tnt_tick.packets {
+            for packet in tnt_tick.packets.iter().chain(&tnt_packets) {
                 if let Err(error) = write_packet(&mut stream, packet) {
                     if is_disconnect(&error) {
                         tracked_entities.clear();
@@ -7161,18 +7173,35 @@ fn wear_flint_and_steel(
     Ok(())
 }
 
-/// Apply one primed-TNT explosion: compute the vanilla ray-shaped block set
-/// and replace every affected solid block with air, returning the changes for
-/// the caller to broadcast.
+/// Block updates and entity packets produced by one primed-TNT explosion.
+#[derive(Debug, Default)]
+struct ExplosionResult {
+    changes: Vec<crate::block_update::BlockChange>,
+    packets: Vec<Vec<u8>>,
+}
+
+/// Apply one primed-TNT explosion: compute the vanilla ray-shaped block set,
+/// replace every affected solid block with air, and return the changes for the
+/// caller to broadcast together with the packets for any entities it spawned.
 ///
-/// This first P6.6 slice does not model drops, entity/player damage,
-/// knockback, chain reactions, or sounds/particles.
+/// TNT blocks in the blast are not dropped: each one instead arms a new primed
+/// TNT with a [`crate::tnt::chain_fuse`] length, so it detonates on a later tick.
+/// Other blocks roll the vanilla drop-decay approximation (a 1/radius chance,
+/// `0.25` for radius 4) and, on success, spawn their table-driven item drops as
+/// item entities. Experience orbs are not produced by explosions in vanilla.
+///
+/// Entity/player damage, knockback, and sounds/particles are applied by the
+/// play loop, not here.
 fn explode_tnt(
     storage: &mut WorldStorage,
     event: &ExplosionEvent,
     tick: u64,
-) -> io::Result<Vec<crate::block_update::BlockChange>> {
-    use crate::tnt::explosion_blocks;
+    drop_entities: &mut DropEntityStore,
+    drop_rng: &mut LegacyRandomSource,
+    primed_tnt: &mut TntStore,
+) -> io::Result<ExplosionResult> {
+    use crate::tnt::{chain_fuse, explosion_blocks};
+    use folia_random::RandomSource;
 
     let positions = explosion_blocks(
         [event.x, event.y, event.z],
@@ -7189,21 +7218,38 @@ fn explode_tnt(
         name: "minecraft:air".into(),
         properties: Vec::new(),
     };
-    let mut changes = Vec::new();
+    let mut result = ExplosionResult::default();
     for pos in positions {
-        if block_at(storage, pos)?
-            .as_ref()
-            .is_some_and(|state| state.name == "minecraft:air")
-        {
+        let Some(state) = block_at(storage, pos)? else {
             continue;
+        };
+        if state.name == "minecraft:air" {
+            continue;
+        }
+        if state.name == "minecraft:tnt" {
+            // Chain-react instead of dropping the block. The block is about to
+            // be overwritten with air, so this position is only ignited once.
+            result.packets.extend(primed_tnt.ignite(
+                [
+                    f64::from(pos.x()) + 0.5,
+                    f64::from(pos.y()),
+                    f64::from(pos.z()) + 0.5,
+                ],
+                chain_fuse(drop_rng),
+            ));
+        } else if drop_rng.next_float() < 0.25 {
+            let drops = block_breaking::block_drops(&state, None, None);
+            result
+                .packets
+                .extend(drop_entities.spawn_stacks(pos, &drops.items, drop_rng));
         }
         if let Some(change) =
             crate::block_update::set_block(storage, pos.x(), pos.y(), pos.z(), air.clone())?
         {
-            changes.push(change);
+            result.changes.push(change);
         }
     }
-    Ok(changes)
+    Ok(result)
 }
 
 fn mining_context(session: &PlayerSession, storage: &mut WorldStorage) -> MiningContext {
@@ -7496,6 +7542,88 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn explode_tnt_chain_reacts_and_spawns_drops() {
+        let root = temp_region_dir("explode-tnt");
+        let mut storage = WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&flat_chunk(0, 0), Compression::Zlib)
+            .unwrap();
+        storage.flush().unwrap();
+
+        let center = BlockPos::new(8, -60, 8);
+        let mut tnt_positions = Vec::new();
+        for dx in -2..=2 {
+            for dy in -1..=1 {
+                for dz in -2..=2 {
+                    if (dx, dy, dz) == (0, 0, 0) {
+                        continue;
+                    }
+                    let pos = BlockPos::new(center.x() + dx, center.y() + dy, center.z() + dz);
+                    let name = if (dx + dz).rem_euclid(3) == 0 {
+                        tnt_positions.push(pos);
+                        "minecraft:tnt"
+                    } else {
+                        "minecraft:stone"
+                    };
+                    crate::block_update::set_block(
+                        &mut storage,
+                        pos.x(),
+                        pos.y(),
+                        pos.z(),
+                        BlockState {
+                            name: name.into(),
+                            properties: Vec::new(),
+                        },
+                    )
+                    .unwrap();
+                }
+            }
+        }
+
+        let mut drop_entities = DropEntityStore::new();
+        let mut drop_rng = LegacyRandomSource::new(0x5EED);
+        let mut primed_tnt = TntStore::new();
+        let event = ExplosionEvent {
+            x: f64::from(center.x()) + 0.5,
+            y: f64::from(center.y()),
+            z: f64::from(center.z()) + 0.5,
+        };
+        let result = explode_tnt(
+            &mut storage,
+            &event,
+            42,
+            &mut drop_entities,
+            &mut drop_rng,
+            &mut primed_tnt,
+        )
+        .unwrap();
+
+        assert!(!result.changes.is_empty(), "blast writes air changes");
+        let destroyed_tnt = tnt_positions
+            .iter()
+            .filter(|pos| {
+                block_at(&mut storage, **pos)
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|state| state.name == "minecraft:air")
+            })
+            .count();
+        assert!(destroyed_tnt > 0, "the blast destroys TNT blocks");
+        assert_eq!(
+            primed_tnt.len(),
+            destroyed_tnt,
+            "every destroyed TNT block is ignited exactly once"
+        );
+        assert!(!drop_entities.is_empty(), "stone blocks roll item drops");
+        assert!(
+            !result.packets.is_empty(),
+            "chain and drop entities emit packets"
+        );
+
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

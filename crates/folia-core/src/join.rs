@@ -7008,7 +7008,7 @@ fn handle_block_action(
                 &block,
             );
             let target_current = block_at(storage, target_pos)?;
-            let new_state = crate::block_update::state_for_placement_with_yaw(
+            let mut new_state = crate::block_update::state_for_placement_with_yaw(
                 clicked_state.as_ref(),
                 target_current.as_ref(),
                 &block,
@@ -7017,6 +7017,27 @@ fn handle_block_action(
                 target_is_clicked,
                 session.yaw,
             );
+            // A floor torch placed against a wall becomes that torch's wall
+            // variant with `facing` pointed away from the clicked face.
+            let torch_state =
+                crate::block_update::torch_state_for_face(&new_state, use_item.direction);
+            let is_wall_torch = torch_state
+                .as_ref()
+                .is_some_and(crate::block_update::is_wall_torch);
+            if let Some(state) = torch_state {
+                new_state = state;
+            }
+            // Wall torches need a sturdy block in the clicked wall; a missing
+            // or thin wall rejects the placement before any consumption.
+            if is_wall_torch
+                && !crate::block_update::placement_has_wall_support(
+                    clicked_state.as_ref(),
+                    &new_state,
+                    use_item.direction,
+                )
+            {
+                return Ok(());
+            }
             // P4.4: torches, redstone dust, and rails need a solid block below.
             // Doors and every other block ignore this check, so a door placed on
             // air is unaffected. Rejection happens before consumption or save.

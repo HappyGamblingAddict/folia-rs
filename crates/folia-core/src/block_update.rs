@@ -666,6 +666,79 @@ fn covers_full_upper_face(state_id: i32) -> bool {
         })
 }
 
+/// Wall-torch state for a held floor torch placed against `face`.
+///
+/// Vanilla has separate block names for the wall-mounted variants of torches,
+/// soul torches, and redstone torches. Clicking the UP face keeps a floor torch
+/// (`held.clone()`); DOWN and out-of-range faces have no placement state. For a
+/// side face the torch's `facing` points away from the clicked wall, that is
+/// along the clicked-face direction. Every other property (notably the
+/// redstone torch `lit` flag) is preserved.
+pub fn torch_state_for_face(held: &BlockState, face: u8) -> Option<BlockState> {
+    let wall_name = match held.name.as_str() {
+        "minecraft:torch" => "minecraft:wall_torch",
+        "minecraft:soul_torch" => "minecraft:soul_wall_torch",
+        "minecraft:redstone_torch" => "minecraft:redstone_wall_torch",
+        _ => return None,
+    };
+    match face {
+        1 => Some(held.clone()),
+        2..=5 => {
+            let mut state = held.clone();
+            state.name = wall_name.into();
+            Some(crate::redstone::with_facing(
+                &state,
+                crate::math::Direction::from_3d_data(i32::from(face)),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `state` is one of the three wall-mounted torch blocks.
+pub fn is_wall_torch(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:wall_torch" | "minecraft:soul_wall_torch" | "minecraft:redstone_wall_torch"
+    )
+}
+
+/// Whether a wall-torch placement has a sturdy block in the clicked wall.
+///
+/// Non-wall-torch states (including floor torches) are unrestricted and return
+/// `true`; floor torches keep their separate below-support check in
+/// [`placement_has_support`]. A wall torch needs a side face (`2..=5`), an
+/// existing non-air `clicked` block, and that block must occlude the clicked
+/// face.
+///
+/// Simplified full-face check: instead of vanilla's
+/// `isFaceSturdy`/`isSideSolidFullSquare`, this reuses `face_occludes`, which
+/// tests whether any outline slice covers the face. Partial shapes such as
+/// stairs may therefore be accepted where vanilla would require a full square;
+/// full cubes and ordinary walls behave correctly.
+pub fn placement_has_wall_support(
+    clicked: Option<&BlockState>,
+    state: &BlockState,
+    face: u8,
+) -> bool {
+    if !is_wall_torch(state) {
+        return true;
+    }
+    if !(2..=5).contains(&face) {
+        return false;
+    }
+    let Some(clicked) = clicked else {
+        return false;
+    };
+    if crate::worldgen::feature::is_air_name(&clicked.name) {
+        return false;
+    }
+    crate::light::face_occludes(
+        block_state_id(clicked),
+        crate::math::Direction::from_3d_data(i32::from(face)),
+    )
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -1120,6 +1193,73 @@ mod tests {
         let torch = named_state("minecraft:torch", &[]);
         assert!(!placement_has_support(Some(&slab("bottom", false)), &torch));
         assert!(placement_has_support(Some(&slab("top", false)), &torch));
+    }
+
+    #[test]
+    fn floor_torch_face_stays_floor() {
+        for name in [
+            "minecraft:torch",
+            "minecraft:soul_torch",
+            "minecraft:redstone_torch",
+        ] {
+            let held = named_state(name, &[("lit", "true")]);
+            let state = torch_state_for_face(&held, 1).expect("floor torch on UP face");
+            assert_eq!(state, held, "{name} on UP face stays a floor torch");
+            assert!(torch_state_for_face(&held, 0).is_none());
+            assert!(torch_state_for_face(&held, 9).is_none());
+        }
+    }
+
+    #[test]
+    fn wall_torch_faces_clicked_face() {
+        let variants = [
+            ("minecraft:torch", "minecraft:wall_torch"),
+            ("minecraft:soul_torch", "minecraft:soul_wall_torch"),
+            ("minecraft:redstone_torch", "minecraft:redstone_wall_torch"),
+        ];
+        let faces = [(2u8, "north"), (3, "south"), (4, "west"), (5, "east")];
+        for (floor, wall) in variants {
+            let held = named_state(floor, &[("lit", "true")]);
+            for (face, facing) in faces {
+                let state = torch_state_for_face(&held, face).expect("wall torch state");
+                assert_eq!(state.name, wall, "{floor} face {face} wall name");
+                assert!(is_wall_torch(&state));
+                assert_eq!(
+                    crate::redstone::property(&state, "facing"),
+                    Some(facing),
+                    "{floor} face {face} facing"
+                );
+                assert_eq!(
+                    crate::redstone::property(&state, "lit"),
+                    Some("true"),
+                    "{floor} preserves lit"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wall_torch_requires_sturdy_clicked_face() {
+        let wall = named_state("minecraft:wall_torch", &[("facing", "north")]);
+        let air = named_state("minecraft:air", &[]);
+        assert!(placement_has_wall_support(Some(&stone()), &wall, 2));
+        assert!(!placement_has_wall_support(Some(&air), &wall, 2));
+        assert!(!placement_has_wall_support(None, &wall, 2));
+        assert!(!placement_has_wall_support(
+            Some(&slab("bottom", false)),
+            &wall,
+            2
+        ));
+        assert!(!placement_has_wall_support(Some(&stone()), &wall, 1));
+    }
+
+    #[test]
+    fn non_torch_has_no_wall_torch_state() {
+        let air = named_state("minecraft:air", &[]);
+        assert!(torch_state_for_face(&stone(), 2).is_none());
+        let floor = named_state("minecraft:torch", &[]);
+        assert!(placement_has_wall_support(None, &floor, 0));
+        assert!(placement_has_wall_support(Some(&air), &stone(), 5));
     }
 
     #[test]

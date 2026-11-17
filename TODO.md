@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); cactus/cane growth should bring the gate to 1,485
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); growth + wall torches should bring the gate to 1,489
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 

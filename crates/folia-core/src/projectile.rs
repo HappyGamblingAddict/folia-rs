@@ -10,13 +10,14 @@ pub enum ProjectileKind {
     Snowball,
     Egg,
     EnderPearl,
+    FireCharge,
 }
 
 impl ProjectileKind {
     pub fn base_damage(self) -> f32 {
         match self {
             Self::Arrow => 2.0,
-            Self::Snowball | Self::Egg | Self::EnderPearl => 0.0,
+            Self::Snowball | Self::Egg | Self::EnderPearl | Self::FireCharge => 0.0,
         }
     }
 
@@ -24,6 +25,7 @@ impl ProjectileKind {
         match self {
             Self::Arrow => 0.05,
             Self::Snowball | Self::Egg | Self::EnderPearl => 0.03,
+            Self::FireCharge => 0.0,
         }
     }
 
@@ -37,12 +39,14 @@ impl ProjectileKind {
             Self::Snowball => "minecraft:snowball",
             Self::Egg => "minecraft:egg",
             Self::EnderPearl => "minecraft:ender_pearl",
+            Self::FireCharge => "minecraft:small_fireball",
         };
         registry::entity_type_id(name).unwrap_or(match self {
             Self::Arrow => 9,
             Self::Snowball => 73,
             Self::Egg => 62,
             Self::EnderPearl => 44,
+            Self::FireCharge => 118,
         })
     }
 
@@ -172,7 +176,10 @@ impl Projectile {
                 let damage = (speed * 2.0).ceil() as i32 as f32;
                 if self.critical { damage * 2.0 } else { damage }
             }
-            ProjectileKind::Snowball | ProjectileKind::Egg | ProjectileKind::EnderPearl => 0.0,
+            ProjectileKind::Snowball
+            | ProjectileKind::Egg
+            | ProjectileKind::EnderPearl
+            | ProjectileKind::FireCharge => 0.0,
         }
     }
 
@@ -419,9 +426,14 @@ impl ProjectileStore {
                     kind: projectile.kind,
                     position: [projectile.x, projectile.y, projectile.z],
                 });
-                if projectile.kind == ProjectileKind::EnderPearl {
+                if matches!(
+                    projectile.kind,
+                    ProjectileKind::EnderPearl | ProjectileKind::FireCharge
+                ) {
                     // Ender pearls vanish on block impact; the consumer uses the
-                    // block-hit event to teleport the owner.
+                    // block-hit event to teleport the owner. Fire charges ignite
+                    // on impact and are consumed (the consumer uses the same event
+                    // to place fire). Both still report ProjectileBlockHit.
                     removed.push(projectile.id);
                     packets.push(crate::entity::remove_entities_packet(&[projectile.id]));
                 } else {
@@ -501,6 +513,30 @@ mod tests {
         assert_eq!(hit.projectile_id, id);
         assert_eq!(hit.kind, ProjectileKind::EnderPearl);
         assert_eq!(hit.position[0], 0.5);
+        assert!(tick.removed.contains(&id));
+        assert!(store.is_empty());
+        assert!(
+            tick.packets
+                .contains(&crate::entity::remove_entities_packet(&[id]))
+        );
+    }
+
+    #[test]
+    fn fire_charge_uses_small_fireball_and_is_removed_on_block_hit() {
+        assert_eq!(ProjectileKind::FireCharge.entity_type_id(), 118);
+        assert_eq!(
+            ProjectileKind::FireCharge.entity_type_id(),
+            registry::entity_type_id("minecraft:small_fireball").unwrap()
+        );
+        assert_eq!(ProjectileKind::FireCharge.base_damage(), 0.0);
+        assert_eq!(ProjectileKind::FireCharge.gravity(), 0.0);
+        assert_eq!(ProjectileKind::FireCharge.drag(), 0.99);
+
+        let (store, id, tick) = drop_onto_floor(ProjectileKind::FireCharge);
+        assert_eq!(tick.block_hits.len(), 1);
+        let hit = &tick.block_hits[0];
+        assert_eq!(hit.projectile_id, id);
+        assert_eq!(hit.kind, ProjectileKind::FireCharge);
         assert!(tick.removed.contains(&id));
         assert!(store.is_empty());
         assert!(

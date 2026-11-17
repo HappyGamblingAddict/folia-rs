@@ -2073,6 +2073,50 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
             for block_hit in &projectile_tick.block_hits {
+                // A fire charge ignites fire at its impact position. The
+                // projectile has already been removed from the store and the
+                // item was consumed at launch, so nothing is consumed here.
+                // This slice performs no adjacent-face inference: fire is only
+                // attempted in the block occupied by the impact position (the
+                // vanilla face/neighbour selects an adjacent block in general).
+                if block_hit.kind == crate::projectile::ProjectileKind::FireCharge {
+                    let pos = BlockPos::new(
+                        block_hit.position[0].floor() as i32,
+                        block_hit.position[1].floor() as i32,
+                        block_hit.position[2].floor() as i32,
+                    );
+                    {
+                        let mut storage = crate::world::lock(current_storage);
+                        let placeable = block_at(&mut storage, pos)?.is_none_or(|state| {
+                            state.name == "minecraft:air"
+                                || crate::block_behaviour::replaceable(&state)
+                        });
+                        if placeable {
+                            let fire = crate::fluid::fire_placement_state_in(
+                                &mut storage,
+                                pos,
+                                game_tick,
+                            )?;
+                            if crate::fluid::fire_can_survive_in(
+                                &mut storage,
+                                pos,
+                                &fire,
+                                game_tick,
+                            )? {
+                                if let Some(change) = crate::block_update::set_block(
+                                    &mut storage,
+                                    pos.x(),
+                                    pos.y(),
+                                    pos.z(),
+                                    fire,
+                                )? {
+                                    crate::block_update::broadcast_change(&change);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 // The session-owned projectile store only holds projectiles
                 // thrown by this player, so an ender pearl hit here always
                 // belongs to this session's player (the store's owner_id is
@@ -3691,6 +3735,11 @@ fn use_item_projectile(
         )),
         "minecraft:ender_pearl" => Some((
             crate::projectile::ProjectileKind::EnderPearl,
+            [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
+            true,
+        )),
+        "minecraft:fire_charge" => Some((
+            crate::projectile::ProjectileKind::FireCharge,
             [dir[0] * 1.5, dir[1] * 1.5, dir[2] * 1.5],
             true,
         )),

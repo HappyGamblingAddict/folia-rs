@@ -30,6 +30,7 @@ pub const MENU_TYPE_GENERIC_9X3: i32 = 2;
 pub const MENU_TYPE_BLAST_FURNACE: i32 = 10;
 pub const MENU_TYPE_BREWING_STAND: i32 = 11;
 pub const MENU_TYPE_FURNACE: i32 = 14;
+pub const MENU_TYPE_HOPPER: i32 = 16;
 pub const MENU_TYPE_SMOKER: i32 = 22;
 
 pub const FURNACE_DATA_SLOTS: usize = 4;
@@ -218,6 +219,7 @@ pub enum MenuKind {
     Chest,
     Furnace(FurnaceMenuKind),
     BrewingStand,
+    Hopper,
 }
 
 impl MenuKind {
@@ -227,6 +229,7 @@ impl MenuKind {
             Self::Chest => crate::block_entity::CHEST_SLOTS,
             Self::Furnace(_) => crate::block_entity::FURNACE_SLOTS,
             Self::BrewingStand => crate::crafting::BREWING_SLOT_COUNT,
+            Self::Hopper => crate::block_entity::HOPPER_SLOTS,
         }
     }
 
@@ -238,6 +241,7 @@ impl MenuKind {
             Self::Furnace(FurnaceMenuKind::Smoker) => MENU_TYPE_SMOKER,
             Self::Furnace(FurnaceMenuKind::Furnace) => MENU_TYPE_FURNACE,
             Self::BrewingStand => MENU_TYPE_BREWING_STAND,
+            Self::Hopper => MENU_TYPE_HOPPER,
         }
     }
 
@@ -250,6 +254,7 @@ impl MenuKind {
             Self::Furnace(FurnaceMenuKind::Smoker) => "container.smoker",
             Self::Furnace(FurnaceMenuKind::Furnace) => "container.furnace",
             Self::BrewingStand => "container.brewing",
+            Self::Hopper => "container.hopper",
         }
     }
 
@@ -259,6 +264,7 @@ impl MenuKind {
             Self::Chest => 0,
             Self::Furnace(_) => FURNACE_DATA_SLOTS,
             Self::BrewingStand => BREWING_DATA_SLOTS,
+            Self::Hopper => 0,
         }
     }
 }
@@ -567,7 +573,7 @@ impl OpenMenu {
             return true;
         }
         match self.kind {
-            MenuKind::Chest => true,
+            MenuKind::Chest | MenuKind::Hopper => true,
             MenuKind::Furnace(_) => match slot {
                 2 => false,
                 1 => crate::crafting::fuel_burn_time(&stack.item).is_some(),
@@ -685,7 +691,9 @@ impl OpenMenu {
         let in_main = (main_start..main_end).contains(&slot);
         let in_hotbar = (hotbar_start..hotbar_end).contains(&slot);
         match self.kind {
-            MenuKind::Chest => self.move_stack_to_range(inventory, slot, 0, start, false),
+            MenuKind::Chest | MenuKind::Hopper => {
+                self.move_stack_to_range(inventory, slot, 0, start, false)
+            }
             MenuKind::Furnace(kind) => {
                 let stack = self
                     .slot_stack(inventory, slot)
@@ -1521,5 +1529,70 @@ mod tests {
         let leftover = add_stack(&mut full, ItemStack::new("minecraft:dirt", 3));
         assert_eq!(leftover.item, "minecraft:dirt");
         assert_eq!(leftover.count, 3);
+    }
+
+    #[test]
+    fn hopper_menu_uses_vanilla_ids_and_layout() {
+        assert_eq!(MENU_TYPE_HOPPER, 16);
+        assert_eq!(MenuKind::Hopper.menu_type_id(), 16);
+        assert_eq!(
+            MenuKind::Hopper.container_slots(),
+            crate::block_entity::HOPPER_SLOTS
+        );
+        assert_eq!(MenuKind::Hopper.container_slots(), 5);
+        assert_eq!(MenuKind::Hopper.data_slots(), 0);
+        assert_eq!(MenuKind::Hopper.title_key(), "container.hopper");
+    }
+
+    #[test]
+    fn hopper_content_packet_has_container_and_player_slots() {
+        let position = crate::block_entity::BlockEntityPos::new(0, 64, 0);
+        let container = vec![ItemStack::empty(); crate::block_entity::HOPPER_SLOTS];
+        let inventory = default_inventory();
+        let cursor = ItemStack::empty();
+        let mut menus = SessionMenus::new();
+        let packets = menus
+            .open_menu(
+                MenuKind::Hopper,
+                position,
+                container,
+                &[],
+                &inventory,
+                &cursor,
+            )
+            .expect("hopper menu opens");
+
+        let open = menus.open().expect("hopper menu is open");
+        assert_eq!(open.inventory_start(), 5);
+        assert_eq!(open.menu_slots(), 5 + INVENTORY_SLOTS);
+        assert_eq!(open.menu_slot_for_inventory(0), Some(32));
+
+        let mut screen = PacketReader::new(&packets.open_screen);
+        assert_eq!(screen.read_varint().unwrap(), CLIENTBOUND_OPEN_SCREEN);
+        assert_eq!(screen.read_varint().unwrap(), 1);
+        assert_eq!(screen.read_varint().unwrap(), MENU_TYPE_HOPPER);
+        let title = screen.read_nbt_any().unwrap();
+        assert_eq!(
+            title.get("translate").and_then(crate::nbt::Tag::as_str),
+            Some("container.hopper")
+        );
+        assert!(packets.data.is_empty());
+
+        let mut reader = PacketReader::new(&packets.content);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            CLIENTBOUND_CONTAINER_SET_CONTENT
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert_eq!(reader.read_varint().unwrap(), (5 + INVENTORY_SLOTS) as i32);
+        let mut slots = Vec::new();
+        for _ in 0..5 + INVENTORY_SLOTS {
+            slots.push(read_item_stack(&mut reader).expect("content slot"));
+        }
+        assert!(slots[..5].iter().all(ItemStack::is_empty));
+        assert_eq!(slots[5].item, "");
+        assert_eq!(slots[32].item, "minecraft:stone");
+        assert_eq!(slots[33].item, "minecraft:dirt");
     }
 }

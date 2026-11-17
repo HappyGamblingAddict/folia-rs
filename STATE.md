@@ -10,10 +10,10 @@ Last updated: 2026-11-16
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `9ecb375` with 1,481 tests. The recent placement/item/TNT,
-  breeding/weather, spawner, and tab-list slices are completed locally and
-  should bring the next gate to 1,524.
+  breeding/weather, spawner, tab-list, and hopper-menu slices are completed
+  locally and should bring the next gate to 1,527.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,524. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,527. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -62,7 +62,8 @@ Last updated: 2026-11-16
    impact; cows/pigs/sheep/chickens breed from their foods and spawn half-size
    babies (hearts/aging open); rain/thunder timers tick and broadcast state;
    monster spawners activate for nearby players and persist their delays;
-   tab-list player info is exchanged across sessions.
+   tab-list player info is exchanged across sessions; hopper menus open and
+   persist.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -92,6 +93,8 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and
+  persistence, and a live open-screen/content test. 3 tests.
 - 2026-11-17: tab-list player info — protocol 68/67 builders, join-time
   registry snapshots/broadcasts/removals. 4 player_info tests; entities remain
   separate.
@@ -768,6 +771,8 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and
+  persistence, and a live open-screen/content test. 3 tests.
 - 2026-11-17: tab-list player info — protocol 68/67 builders, join-time
   registry snapshots/broadcasts/removals. 4 player_info tests; entities remain
   separate.
@@ -1068,6 +1073,8 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and
+  persistence, and a live open-screen/content test. 3 tests.
 - 2026-11-17: tab-list player info — protocol 68/67 builders, join-time
   registry snapshots/broadcasts/removals. 4 player_info tests; entities remain
   separate.

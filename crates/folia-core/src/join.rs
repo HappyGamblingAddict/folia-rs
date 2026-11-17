@@ -6943,7 +6943,12 @@ fn menu_contents(
             stand.state.slots().to_vec(),
             stand.menu_data().to_vec(),
         )),
-        BlockEntity::Hopper(_) | BlockEntity::Sign(_) | BlockEntity::Spawner(_) => None,
+        BlockEntity::Hopper(hopper) => Some((
+            inventory::MenuKind::Hopper,
+            hopper.items.clone(),
+            Vec::new(),
+        )),
+        BlockEntity::Sign(_) | BlockEntity::Spawner(_) => None,
         BlockEntity::Unknown(_) => None,
     }
 }
@@ -9008,6 +9013,58 @@ mod tests {
             .unwrap();
         close.write_varint(7).unwrap();
         assert_eq!(parse_container_close(&close.into_inner()).unwrap(), 7);
+    }
+
+    #[test]
+    fn open_menu_from_hopper_writes_hopper_screen_and_content() {
+        use crate::block_entity::HopperBlockEntity;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client_stream = TcpStream::connect(address).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let mut server = Connection::new(server_stream);
+        let mut client = Connection::new(client_stream);
+
+        let position = BlockEntityPos::new(1, 64, -2);
+        let mut hopper = HopperBlockEntity::new(position);
+        hopper.set_slot(0, inventory::ItemStack::new("minecraft:gold_ingot", 4));
+        let entity = BlockEntity::Hopper(hopper);
+        let mut menus = inventory::SessionMenus::new();
+        let session = PlayerSession::new("HopperMenuTest".into(), [0x33; 16], 0.5, 64.0, 0.5);
+
+        assert!(
+            open_menu_from_entity(&mut server, &mut menus, &session, position, &entity).unwrap()
+        );
+        assert!(menus.is_open());
+
+        let open = read_packet(&mut client).unwrap();
+        let mut reader = PacketReader::new(&open);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            inventory::CLIENTBOUND_OPEN_SCREEN
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_varint().unwrap(), inventory::MENU_TYPE_HOPPER);
+        let title = reader.read_nbt_any().unwrap();
+        assert_eq!(
+            title.get("translate").and_then(Tag::as_str),
+            Some("container.hopper")
+        );
+
+        let content = read_packet(&mut client).unwrap();
+        let mut reader = PacketReader::new(&content);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            inventory::CLIENTBOUND_CONTAINER_SET_CONTENT
+        );
+        assert_eq!(reader.read_varint().unwrap(), 1);
+        assert_eq!(reader.read_varint().unwrap(), 0);
+        assert_eq!(reader.read_varint().unwrap(), 41);
+        let first = inventory::read_item_stack(&mut reader).expect("first hopper slot");
+        assert_eq!(first.item, "minecraft:gold_ingot");
+        assert_eq!(first.count, 4);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices are expected to bring the gate to 1,524
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices are expected to bring the gate to 1,527
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1963,9 +1963,10 @@ instantly on start-destroy and places on use-item-on.
   throw, outside-slot drops, and double-click collecting; per-session cursor,
   container id, and 15-bit state id are authoritative. Changes persist through
   `WorldStorage` block-entity APIs and the chunk file, and menus close on block
-  removal or disconnect. Still open: hopper/dispenser/shulker/crafting-table
-  menus, drag (`QUICK_CRAFT`) and recipe-book placement, armor/off-hand slots,
-  and drop/pickup entities.
+  removal or disconnect. Hopper menus now open with the vanilla id (16), five
+  container slots, standard quick-move behavior, and persistence. Still open:
+  dispenser/shulker/crafting-table menus, drag (`QUICK_CRAFT`) and recipe-book
+  placement, armor/off-hand slots, and drop/pickup entities.
 
 ### P4.7 Block entities `[~]` `XL`
 

@@ -25,6 +25,7 @@ use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
 use crate::entity::{BlockCollider, SessionEntityTracker, WorldCollider};
 use crate::inventory;
+use crate::item_components::{ComponentValue, ItemStack};
 use crate::item_entity::{DropEntityStore, PickupTarget};
 use crate::item_prototypes::ConsumablePrototype;
 use crate::math::{BlockPos, Vec3};
@@ -3876,14 +3877,44 @@ fn apply_consumable(
     Some(slot as i64)
 }
 
+/// Apply the status effects granted by a consumable that has just finished.
+/// Milk clears every active effect; a `potion_contents` component applies each
+/// of its effects in Java order. The returned packets are ready for the caller
+/// to write after the health/inventory updates. `session` is kept so the helper
+/// can be called alongside the rest of the consume state without re-querying it.
+fn apply_consumed_effects(
+    session: &PlayerSession,
+    player_entity: i32,
+    stack: &ItemStack,
+) -> Vec<Vec<u8>> {
+    let _ = session;
+    let mut store = crate::entity_metadata::living_entities();
+    let player = store.entry_player(player_entity);
+    if stack.item == "minecraft:milk_bucket" {
+        return player.clear_effects();
+    }
+    let Some(ComponentValue::PotionContents(contents)) =
+        stack.get_component("minecraft:potion_contents")
+    else {
+        return Vec::new();
+    };
+    let mut packets = Vec::new();
+    for effect in crate::effects::potion_contents_effects(contents) {
+        packets.extend(player.apply_effect(effect).packets);
+    }
+    packets
+}
+
 /// Tick gate and item match for a hold-and-release consume. Always clears the
 /// in-progress eat: a too-early release or a changed held item drops it without
-/// consuming anything. A successful consume returns the slot to resync.
+/// consuming anything. A successful consume returns the slot to resync and any
+/// effect packets to write for the player.
 fn finish_consumable(
     eat_start: &mut Option<(u64, String, i32)>,
     session: &mut PlayerSession,
+    player_entity: i32,
     game_tick: u64,
-) -> Option<i64> {
+) -> Option<(i64, Vec<Vec<u8>>)> {
     let (start, item, ticks) = eat_start.take()?;
     if game_tick.saturating_sub(start) < ticks.max(0) as u64 {
         return None;
@@ -3892,8 +3923,11 @@ fn finish_consumable(
         return None;
     }
     let consumable = crate::item_prototypes::consumable_for_stack(session.selected_item()?)?;
+    let stack = session.selected_item()?.clone();
     let creative = session.game_mode == 1;
-    apply_consumable(session, &consumable, creative)
+    let slot = apply_consumable(session, &consumable, creative)?;
+    let packets = apply_consumed_effects(session, player_entity, &stack);
+    Some((slot, packets))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6773,7 +6807,9 @@ fn handle_block_action(
         SERVERBOUND_PLAYER_ACTION => {
             let action = crate::block_update::parse_player_action(packet)?;
             if action.action == block_breaking::ACTION_RELEASE_USE_ITEM {
-                if let Some(slot) = finish_consumable(eat_start, session, game_tick) {
+                if let Some((slot, effect_packets)) =
+                    finish_consumable(eat_start, session, player_entity, game_tick)
+                {
                     write_packet(stream, &health_packet(session))?;
                     write_packet(
                         stream,
@@ -6782,6 +6818,9 @@ fn handle_block_action(
                             &session.inventory[slot as usize],
                         ),
                     )?;
+                    for packet in effect_packets {
+                        write_packet(stream, &packet)?;
+                    }
                     if let Err(error) =
                         dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
                     {
@@ -8202,9 +8241,15 @@ mod tests {
         session.food_level = 10;
         session.food_saturation = 0.0;
 
+        let entity_id = 9_001_050;
         let mut eat_start = Some((100, "minecraft:apple".to_string(), ticks));
         assert_eq!(
-            finish_consumable(&mut eat_start, &mut session, 100 + ticks as u64 - 1),
+            finish_consumable(
+                &mut eat_start,
+                &mut session,
+                entity_id,
+                100 + ticks as u64 - 1
+            ),
             None
         );
         assert!(eat_start.is_none(), "an early release clears the eat");
@@ -8215,18 +8260,85 @@ mod tests {
         // Switching off the eaten item also drops the in-progress eat.
         eat_start = Some((100, "minecraft:apple".to_string(), ticks));
         session.inventory[0] = inventory::ItemStack::new("minecraft:stone", 1);
-        assert_eq!(finish_consumable(&mut eat_start, &mut session, 200), None);
+        assert_eq!(
+            finish_consumable(&mut eat_start, &mut session, entity_id, 200),
+            None
+        );
         assert_eq!(session.inventory[0].item, "minecraft:stone");
 
         // A full hold consumes exactly one and fills food.
         session.inventory[0] = inventory::ItemStack::new("minecraft:apple", 1);
         eat_start = Some((100, "minecraft:apple".to_string(), ticks));
         assert_eq!(
-            finish_consumable(&mut eat_start, &mut session, 100 + ticks as u64),
+            finish_consumable(&mut eat_start, &mut session, entity_id, 100 + ticks as u64)
+                .map(|(slot, _)| slot),
             Some(0)
         );
         assert_eq!(session.food_level, 14);
         assert!(session.inventory[0].is_empty());
+    }
+
+    #[test]
+    fn drinking_speed_potion_applies_effects() {
+        let entity_id = 9_001_060;
+        let mut stack = inventory::ItemStack::new("minecraft:potion", 1);
+        stack.set_component(ComponentValue::PotionContents(
+            crate::item_components::PotionContents::new("minecraft:swiftness"),
+        ));
+        let session = PlayerSession::new("PotionDrinker".into(), [0xE0; 16], 0.0, 64.0, 0.0);
+        let packets = apply_consumed_effects(&session, entity_id, &stack);
+        assert!(!packets.is_empty(), "adding speed emits an update packet");
+        {
+            let store = crate::entity_metadata::living_entities();
+            let player = store.get(entity_id).expect("player registered by apply");
+            assert!(player.effects.has(crate::effects::StatusEffectKind::Speed));
+        }
+        let _ = crate::entity_metadata::living_entities().remove(entity_id);
+    }
+
+    #[test]
+    fn milk_clears_effects() {
+        let entity_id = 9_001_061;
+        {
+            let mut store = crate::entity_metadata::living_entities();
+            let player = store.entry_player(entity_id);
+            player.apply_effect(crate::effects::StatusEffect::new(
+                crate::effects::StatusEffectKind::Speed,
+                100,
+                0,
+            ));
+        }
+        let session = PlayerSession::new("MilkDrinker".into(), [0xE1; 16], 0.0, 64.0, 0.0);
+        let milk = inventory::ItemStack::new("minecraft:milk_bucket", 1);
+        let packets = apply_consumed_effects(&session, entity_id, &milk);
+        assert!(
+            !packets.is_empty(),
+            "clearing an effect emits a remove packet"
+        );
+        {
+            let store = crate::entity_metadata::living_entities();
+            let player = store.get(entity_id).expect("player registered");
+            assert!(player.effects.is_empty());
+        }
+        let _ = crate::entity_metadata::living_entities().remove(entity_id);
+    }
+
+    #[test]
+    fn plain_apple_has_no_effect_packets() {
+        let entity_id = 9_001_062;
+        let session = PlayerSession::new("AppleEater".into(), [0xE2; 16], 0.0, 64.0, 0.0);
+        let apple = inventory::ItemStack::new("minecraft:apple", 1);
+        let packets = apply_consumed_effects(&session, entity_id, &apple);
+        assert!(packets.is_empty());
+        {
+            let store = crate::entity_metadata::living_entities();
+            assert!(
+                store
+                    .get(entity_id)
+                    .is_none_or(|player| player.effects.is_empty())
+            );
+        }
+        let _ = crate::entity_metadata::living_entities().remove(entity_id);
     }
 
     #[test]

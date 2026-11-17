@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,477 passing** at the 3559293 gate (0 failed, 1 ignored benchmark); placement support should bring the gate to 1,481
+> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); cactus/cane growth should bring the gate to 1,485
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2720,6 +2720,10 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   fire spread, snow/ice formation/melt, vine growth, and bone meal.
 - **Why:** The world needs to change over time without player input.
 - **Done when:** Growth timings and block results match Java.
+- **Progress (2026-11-17):** cactus/sugar-cane growth (pending CI) — a
+  `GrowingPlantBehavior` ages both plants one step per random tick and, at age
+  15 with space above and stack height < 3, places a default-properties block
+  above and resets the age. 1 tick lib test + 3 ticks integration tests.
 - **Progress (2026-11-16):** bone meal on crops (pending CI) — the crop helper
   draws vanilla's 2..=4 age increase only for immature wheat/carrots/potatoes/
   beetroots; join consumes one bone meal in survival and writes the grown state.

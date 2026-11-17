@@ -9,11 +9,10 @@ Last updated: 2026-11-16
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `3559293` with 1,477 tests. Placement support for torches,
-  redstone dust, and rails is completed locally and should bring the next gate
-  to 1,481.
+  CI is green at `9ecb375` with 1,481 tests. Cactus/sugar-cane random-tick growth
+  is completed locally and should bring the next gate to 1,485.
 - Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,481. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,485. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -54,7 +53,7 @@ Last updated: 2026-11-16
    explodes into a ray-shaped block set and applies vanilla distance falloff
    damage to players/mobs; drops and TNT chain reactions now land too
    (knockback/sounds/physics open). Floor torches, dust, and rails now require
-   a full solid top face.
+   a full solid top face; cactus and sugar cane grow on random ticks.
 2. P5.12: spawn eggs landed; monster spawners, breeding, and village spawning
    remain.
 3. P2.8: random palettes landed; recursive jigsaw junctions, terrain
@@ -84,6 +83,8 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-17: cactus/sugar-cane growth — age promotion and up-to-3-block
+  random-tick growth. 4 tests.
 - 2026-11-17: placement support — floor torches, redstone dust, and rails are
   rejected without a full upper solid face below (top slabs accepted, bottom
   slabs/stairs/air rejected). 4 block_update tests.
@@ -730,6 +731,8 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: cactus/sugar-cane growth — age promotion and up-to-3-block
+  random-tick growth. 4 tests.
 - 2026-11-17: placement support — floor torches, redstone dust, and rails are
   rejected without a full upper solid face below (top slabs accepted, bottom
   slabs/stairs/air rejected). 4 block_update tests.
@@ -1000,6 +1003,8 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-17: cactus/sugar-cane growth — age promotion and up-to-3-block
+  random-tick growth. 4 tests.
 - 2026-11-17: placement support — floor torches, redstone dust, and rails are
   rejected without a full upper solid face below (top slabs accepted, bottom
   slabs/stairs/air rejected). 4 block_update tests.

@@ -1106,6 +1106,9 @@ static PLANT: PlantBehavior = PlantBehavior;
 struct GrassBehavior;
 static GRASS: GrassBehavior = GrassBehavior;
 
+struct GrowingPlantBehavior;
+static GROWING_PLANT: GrowingPlantBehavior = GrowingPlantBehavior;
+
 /// Returns the built-in behaviour for a block state.
 pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
     if crate::fluid::fluid_state(state).is_some() {
@@ -1156,6 +1159,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::fluid::FIRE
     } else if is_falling_block(state.name.as_str()) {
         &FALLING
+    } else if is_growing_plant(state) {
+        &GROWING_PLANT
     } else if plant_soil(state).is_some() {
         &PLANT
     } else if state.name == "minecraft:grass_block" {
@@ -1218,6 +1223,13 @@ fn is_free(state: &BlockState) -> bool {
         || tags::block_has("fire", state.name.as_str())
         || matches!(state.name.as_str(), "minecraft:water" | "minecraft:lava")
         || tags::block_has("replaceable", state.name.as_str())
+}
+
+fn is_growing_plant(state: &BlockState) -> bool {
+    matches!(
+        state.name.as_str(),
+        "minecraft:cactus" | "minecraft:sugar_cane"
+    )
 }
 
 fn is_falling_block(name: &str) -> bool {
@@ -1285,6 +1297,16 @@ fn property<'a>(state: &'a BlockState, key: &str) -> Option<&'a str> {
         .iter()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.as_str())
+}
+
+fn with_age(state: &BlockState, value: u8) -> BlockState {
+    let mut next = state.clone();
+    if let Some((_, current)) = next.properties.iter_mut().find(|(key, _)| key == "age") {
+        *current = value.to_string();
+    } else {
+        next.properties.push(("age".to_owned(), value.to_string()));
+    }
+    next
 }
 
 fn air() -> BlockState {
@@ -1510,6 +1532,58 @@ impl BlockBehavior for GrassBehavior {
                 .is_some_and(|above| is_snowy_setting(&above));
             world.set_block(target, grass_block(snowy))?;
         }
+        Ok(())
+    }
+}
+
+impl BlockBehavior for GrowingPlantBehavior {
+    fn is_randomly_ticking(&self, state: &BlockState) -> bool {
+        is_growing_plant(state)
+    }
+
+    fn random_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        if !is_growing_plant(state) {
+            return Ok(());
+        }
+        let Some(age) = property(state, "age").and_then(|value| value.parse::<u8>().ok()) else {
+            return Ok(());
+        };
+        if age < 15 {
+            world.set_block(pos, with_age(state, age + 1))?;
+            return Ok(());
+        }
+
+        if world
+            .block_state(pos.above())?
+            .is_some_and(|above| !is_air_state(&above))
+        {
+            return Ok(());
+        }
+
+        const MAX_HEIGHT: u8 = 3;
+        let mut height = 1u8;
+        while height < MAX_HEIGHT {
+            let Some(below) = world.block_state(pos.below_n(i32::from(height)))? else {
+                break;
+            };
+            if below.name != state.name {
+                break;
+            }
+            height += 1;
+        }
+        if height >= MAX_HEIGHT {
+            return Ok(());
+        }
+
+        let default =
+            crate::registry::default_block_state(&state.name).unwrap_or_else(|| with_age(state, 0));
+        world.set_block(pos.above(), default)?;
+        world.set_block(pos, with_age(state, 0))?;
         Ok(())
     }
 }
@@ -2083,6 +2157,22 @@ mod tests {
             behavior_for(&state("minecraft:fire")),
             &fluid::FIRE as &dyn BlockBehavior
         ));
+    }
+
+    #[test]
+    fn growing_plant_behavior_is_registered() {
+        for name in ["minecraft:cactus", "minecraft:sugar_cane"] {
+            let state = state(name);
+            let behavior = behavior_for(&state);
+            assert!(
+                std::ptr::addr_eq(behavior, &GROWING_PLANT as &dyn BlockBehavior),
+                "{name} routes to the growing-plant behavior"
+            );
+            assert!(behavior.is_randomly_ticking(&state));
+        }
+        assert!(
+            !behavior_for(&state("minecraft:stone")).is_randomly_ticking(&state("minecraft:stone"))
+        );
     }
 
     struct FixedContainer(i32);

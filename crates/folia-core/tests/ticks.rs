@@ -55,6 +55,33 @@ fn short_grass() -> BlockState {
     state("minecraft:short_grass")
 }
 
+fn cactus(age: u8) -> BlockState {
+    BlockState {
+        name: "minecraft:cactus".into(),
+        properties: vec![("age".into(), age.to_string())],
+    }
+}
+
+fn sugar_cane(age: u8) -> BlockState {
+    BlockState {
+        name: "minecraft:sugar_cane".into(),
+        properties: vec![("age".into(), age.to_string())],
+    }
+}
+
+fn age_at(storage: &WorldStorage, x: i32, y: i32, z: i32) -> u8 {
+    storage
+        .block_state_at(x, y, z)
+        .expect("block is in a cached chunk")
+        .properties
+        .iter()
+        .find(|(key, _)| key == "age")
+        .expect("growing plant has an age property")
+        .1
+        .parse()
+        .expect("age is numeric")
+}
+
 fn storage_with_chunk(name: &str, chunk: Chunk) -> WorldStorage {
     let root = temp_dir(name);
     let mut storage = WorldStorage::new(root.join("region"));
@@ -324,6 +351,95 @@ fn unsupported_random_ticks_are_reported_not_silently_dropped() {
             .unsupported_random_ticks
             .contains("minecraft:oak_sapling"),
         "the gap is recorded instead of disappearing"
+    );
+}
+
+#[test]
+fn cactus_promotes_age_and_grows_to_height_three() {
+    let mut storage = flat_storage("cactus-growth");
+    let (x, y, z) = (3, -60, 3);
+    set_block(&mut storage, x, y - 1, z, sand())
+        .unwrap()
+        .expect("sand support");
+    set_block(&mut storage, x, y, z, cactus(15))
+        .unwrap()
+        .expect("mature cactus");
+
+    assert!(tick::random_tick_at(&mut storage, 1, BlockPos::new(x, y, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y, z), "minecraft:cactus");
+    assert_eq!(age_at(&storage, x, y, z), 0);
+    assert_eq!(block_name(&storage, x, y + 1, z), "minecraft:cactus");
+    assert_eq!(age_at(&storage, x, y + 1, z), 0);
+
+    set_block(&mut storage, x, y + 1, z, cactus(15))
+        .unwrap()
+        .expect("mature upper cactus");
+    assert!(tick::random_tick_at(&mut storage, 2, BlockPos::new(x, y + 1, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y + 2, z), "minecraft:cactus");
+    assert_eq!(age_at(&storage, x, y + 1, z), 0);
+
+    set_block(&mut storage, x, y + 2, z, cactus(15))
+        .unwrap()
+        .expect("mature top cactus");
+    assert!(!tick::random_tick_at(&mut storage, 3, BlockPos::new(x, y + 2, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y + 3, z), "minecraft:air");
+    assert_eq!(age_at(&storage, x, y + 2, z), 15);
+}
+
+#[test]
+fn sugar_cane_grows_on_sand_and_caps_at_three() {
+    let mut storage = flat_storage("sugar-cane-growth");
+    let (x, y, z) = (6, -60, 6);
+    set_block(&mut storage, x, y - 1, z, sand())
+        .unwrap()
+        .expect("sand support");
+    set_block(&mut storage, x, y, z, sugar_cane(15))
+        .unwrap()
+        .expect("mature sugar cane");
+
+    assert!(tick::random_tick_at(&mut storage, 1, BlockPos::new(x, y, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y + 1, z), "minecraft:sugar_cane");
+    assert_eq!(age_at(&storage, x, y, z), 0);
+    assert_eq!(age_at(&storage, x, y + 1, z), 0);
+
+    set_block(&mut storage, x, y + 1, z, sugar_cane(15))
+        .unwrap()
+        .expect("mature upper sugar cane");
+    assert!(tick::random_tick_at(&mut storage, 2, BlockPos::new(x, y + 1, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y + 2, z), "minecraft:sugar_cane");
+    assert_eq!(age_at(&storage, x, y + 1, z), 0);
+
+    set_block(&mut storage, x, y + 2, z, sugar_cane(15))
+        .unwrap()
+        .expect("mature top sugar cane");
+    assert!(!tick::random_tick_at(&mut storage, 3, BlockPos::new(x, y + 2, z)).unwrap());
+    assert_eq!(block_name(&storage, x, y + 3, z), "minecraft:air");
+}
+
+#[test]
+fn immature_cactus_increments_age_without_growing() {
+    let mut storage = flat_storage("cactus-age");
+    let (x, y, z) = (9, -60, 9);
+    set_block(&mut storage, x, y - 1, z, sand())
+        .unwrap()
+        .expect("sand support");
+    set_block(&mut storage, x, y, z, cactus(0))
+        .unwrap()
+        .expect("young cactus");
+
+    assert!(tick::random_tick_at(&mut storage, 1, BlockPos::new(x, y, z)).unwrap());
+    assert_eq!(age_at(&storage, x, y, z), 1);
+    assert_eq!(block_name(&storage, x, y + 1, z), "minecraft:air");
+
+    set_block(&mut storage, x, y, z, cactus(14))
+        .unwrap()
+        .expect("nearly mature cactus");
+    assert!(tick::random_tick_at(&mut storage, 2, BlockPos::new(x, y, z)).unwrap());
+    assert_eq!(age_at(&storage, x, y, z), 15);
+    assert_eq!(
+        block_name(&storage, x, y + 1, z),
+        "minecraft:air",
+        "an age increment never places a block above"
     );
 }
 

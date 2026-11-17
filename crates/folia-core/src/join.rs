@@ -3715,8 +3715,9 @@ fn tick_session_spawners(
     }
     spawners.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
 
+    let mut changed_chunks: HashSet<(i32, i32)> = HashSet::new();
     let mut packets = Vec::new();
-    for (_cx, _cz, pos, mut spawner) in spawners {
+    for (cx, cz, pos, mut spawner) in spawners {
         let center = (pos.x as f64 + 0.5, pos.y as f64 + 0.5, pos.z as f64 + 0.5);
         let dx = player.0 - center.0;
         let dy = player.1 - center.1;
@@ -3733,9 +3734,35 @@ fn tick_session_spawners(
         }
         if let Err(error) = storage.insert_block_entity(BlockEntity::Spawner(spawner)) {
             eprintln!("[join] could not persist spawner at {pos:?}: {error}");
+        } else {
+            changed_chunks.insert((cx, cz));
         }
     }
+    persist_spawner_chunks(storage, changed_chunks);
     packets
+}
+
+fn persist_spawner_chunks(
+    storage: &mut crate::world::WorldStorage,
+    chunks: impl IntoIterator<Item = (i32, i32)>,
+) {
+    for (chunk_x, chunk_z) in chunks {
+        match storage.load_chunk(chunk_x, chunk_z) {
+            Ok(Some(chunk)) => {
+                if let Err(error) = storage.update_chunk(&chunk, Compression::Zlib, &[]) {
+                    eprintln!(
+                        "[join] could not persist spawner chunk ({chunk_x},{chunk_z}): {error}"
+                    );
+                }
+            }
+            Ok(None) => {
+                eprintln!("[join] spawner chunk ({chunk_x},{chunk_z}) is not loaded");
+            }
+            Err(error) => {
+                eprintln!("[join] could not load spawner chunk ({chunk_x},{chunk_z}): {error}");
+            }
+        }
+    }
 }
 
 fn run_session_spawn_cycle(
@@ -7886,6 +7913,41 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn spawner_delay_persists_through_a_flush() {
+        let root = temp_region_dir("spawner-delay-persist");
+        let region = root.join("region");
+        let mut storage = WorldStorage::new(&region);
+        storage
+            .save_chunk(&flat_chunk(0, 0), Compression::Zlib)
+            .unwrap();
+
+        let pos = BlockEntityPos::new(8, -60, 8);
+        let mut spawner = SpawnerBlockEntity::new(pos);
+        spawner.delay = 123;
+        spawner.set_entity_id("minecraft:zombie");
+        storage
+            .insert_block_entity(BlockEntity::Spawner(spawner))
+            .unwrap();
+
+        persist_spawner_chunks(&mut storage, [(0, 0)]);
+        storage.flush().unwrap();
+
+        let mut reopened = WorldStorage::new(&region);
+        let stored = reopened
+            .block_entity(pos)
+            .unwrap()
+            .expect("spawner reloads")
+            .clone();
+        let BlockEntity::Spawner(stored) = stored else {
+            panic!("reloaded entity is a spawner");
+        };
+        assert_eq!(stored.delay, 123);
+        assert_eq!(stored.entity_id.as_deref(), Some("minecraft:zombie"));
+
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

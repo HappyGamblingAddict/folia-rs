@@ -12,10 +12,10 @@ Last updated: 2026-11-21
   CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
   P1.2 typed keys (menu + particle migration), explosion feedback, status,
   max-player guard, P7.6 game rules, game-event model, P4.15 player entities,
-  P8.9 protocol fuzz and P11.3 data fuzz tests are complete locally; expected
-  next gate is 1,592.
+  P8.9 protocol fuzz, P11.3 data fuzz, and the P10.8 region watchdog are
+  complete locally; expected next gate is 1,595.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,592. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,595. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -97,6 +97,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P10.8 watchdog — per-region tick timing, configurable 250 ms
+  budget, slow-region reports in the tick report, and server logging; 3 tests.
 - 2026-11-21: P11.3 data fuzz — 5 deterministic tests for NBT/SNBT, palettes,
   mutated JSON, and item components; no source fixes needed.
 - 2026-11-21: P8.9 protocol fuzz — 9 deterministic tests for VarInts, framing,
@@ -809,6 +811,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P10.8 watchdog — per-region tick timing, configurable 250 ms
+  budget, slow-region reports in the tick report, and server logging; 3 tests.
 - 2026-11-21: P11.3 data fuzz — 5 deterministic tests for NBT/SNBT, palettes,
   mutated JSON, and item components; no source fixes needed.
 - 2026-11-21: P8.9 protocol fuzz — 9 deterministic tests for VarInts, framing,
@@ -1145,6 +1149,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P10.8 watchdog — per-region tick timing, configurable 250 ms
+  budget, slow-region reports in the tick report, and server logging; 3 tests.
 - 2026-11-21: P11.3 data fuzz — 5 deterministic tests for NBT/SNBT, palettes,
   mutated JSON, and item components; no source fixes needed.
 - 2026-11-21: P8.9 protocol fuzz — 9 deterministic tests for VarInts, framing,

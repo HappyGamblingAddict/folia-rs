@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,592
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,595
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3408,8 +3408,16 @@ per-region world state is P10.3.
 - **Progress (2026-11-07):** Ownership failures are reported per driver tick
   and other regions keep running; a cross-region parallel task returns an
   error instead of panicking, and `main.rs` still calls `flush_shared` after
-  `shutdown_sessions`. Watchdogs, per-region budgets, and crash isolation
-  remain.
+  `shutdown_sessions`. Watchdog now measures each `tick_one()` with a
+  configurable 250 ms budget and reports slow regions into
+  `RegionTickReport.slow_regions`; the server logs them. Reporting-only: no
+  interruption or crash isolation yet. 3 region tests. Watchdog now measures each `tick_one()` with a configurable 250 ms
+  budget and reports slow regions into `RegionTickReport.slow_regions`; the
+  server logs them. Reporting-only: no interruption/crash isolation yet.
+  3 region tests. Watchdog now measures each `tick_one()` with a configurable 250 ms
+  budget and reports slow regions into `RegionTickReport.slow_regions`; the
+  server logs them. Reporting-only: no interruption/crash isolation yet.
+  3 region tests.
 
 ### P10.9 Concurrency testing `[ ]` `L`
 

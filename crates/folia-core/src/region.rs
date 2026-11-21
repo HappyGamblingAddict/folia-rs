@@ -38,6 +38,7 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 pub type TaskId = u64;
 
@@ -52,6 +53,10 @@ pub const CHUNK_REGION_SIZE: i32 = 8;
 pub const SECTION_REGION_SIZE: i32 = 4;
 /// Default scheduler grid size, in chunks.
 pub const DEFAULT_REGION_GRID_SIZE: u32 = 8;
+/// Default per-region tick budget for the reporting-only watchdog. Regions
+/// that take longer than this are flagged in [`RegionTickReport::slow_regions`];
+/// they are never interrupted or skipped (TODO P10.8).
+pub const DEFAULT_WATCHDOG_BUDGET: Duration = Duration::from_millis(250);
 
 /// Sentinel key for the global (non-regionized) queue. It can never be a
 /// real chunk region because real region keys are bounded by chunk
@@ -1329,7 +1334,10 @@ impl RegionScheduler {
 // ---------------------------------------------------------------------------
 
 /// Aggregated result of one [`RegionTickDriver`] tick.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// Not `Copy`: [`RegionTickReport::slow_regions`] holds one entry per slow
+/// region, so copying a report would duplicate the watchdog diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RegionTickReport {
     /// Game tick that was simulated.
     pub tick: u64,
@@ -1349,6 +1357,10 @@ pub struct RegionTickReport {
     pub block_changes: usize,
     /// True when a region exceeded the chained neighbour-update limit.
     pub overflowed: bool,
+    /// Regions whose tick took longer than the driver's watchdog budget,
+    /// paired with the measured duration. Reporting only: a slow region is
+    /// flagged after the fact, never interrupted or skipped (TODO P10.8).
+    pub slow_regions: Vec<(RegionKey, Duration)>,
 }
 
 /// Error raised by a region tick. World I/O and ownership failures are kept
@@ -1432,6 +1444,7 @@ impl RegionTickOutcome {
 pub struct RegionTickDriver {
     map: RegionMap,
     scheduler: RegionScheduler,
+    watchdog_budget: Duration,
 }
 
 impl RegionTickDriver {
@@ -1439,6 +1452,7 @@ impl RegionTickDriver {
         Self {
             map: RegionMap::new(grid_size),
             scheduler: RegionScheduler::new(grid_size),
+            watchdog_budget: DEFAULT_WATCHDOG_BUDGET,
         }
     }
 
@@ -1451,7 +1465,21 @@ impl RegionTickDriver {
         Self {
             map,
             scheduler: RegionScheduler::from_region_map(map),
+            watchdog_budget: DEFAULT_WATCHDOG_BUDGET,
         }
+    }
+
+    /// Set the per-region watchdog budget. A region whose tick exceeds this
+    /// duration is reported in [`RegionTickReport::slow_regions`]; the
+    /// watchdog is reporting-only and never interrupts or skips the region.
+    pub fn with_watchdog_budget(mut self, budget: Duration) -> Self {
+        self.watchdog_budget = budget;
+        self
+    }
+
+    /// The per-region watchdog budget (default [`DEFAULT_WATCHDOG_BUDGET`]).
+    pub fn watchdog_budget(&self) -> Duration {
+        self.watchdog_budget
     }
 
     pub fn region_map(&self) -> RegionMap {
@@ -1756,6 +1784,7 @@ impl RegionTickDriver {
         tick: u64,
         has_world: bool,
     ) -> RegionTickOutcome {
+        let started = Instant::now();
         self.scheduler.ensure_region(key);
         let task_outcome = self.scheduler.tick_region_outcome(key);
         let mut report = RegionTickReport {
@@ -1780,6 +1809,11 @@ impl RegionTickDriver {
             }
         }
 
+        let elapsed = started.elapsed();
+        if elapsed > self.watchdog_budget {
+            report.slow_regions.push((key, elapsed));
+        }
+
         RegionTickOutcome { report, error }
     }
 }
@@ -1792,6 +1826,9 @@ fn merge_report(target: &mut RegionTickReport, source: &RegionTickReport) {
     target.neighbor_updates += source.neighbor_updates;
     target.block_changes += source.block_changes;
     target.overflowed |= source.overflowed;
+    target
+        .slow_regions
+        .extend(source.slow_regions.iter().copied());
 }
 
 fn merge_world_report(target: &mut RegionTickReport, world: &crate::tick::TickReport) {
@@ -1978,5 +2015,48 @@ mod tests {
         assert_eq!(count.load(Ordering::Relaxed), 16);
         assert_eq!(scheduler.region_count(), 16);
         assert_eq!(scheduler.task_count(), 0);
+    }
+
+    #[test]
+    fn watchdog_reports_a_slow_region() {
+        let key = RegionKey::new(0, 0);
+        let mut driver = RegionTickDriver::vanilla().with_watchdog_budget(Duration::from_millis(1));
+        driver.schedule_for_region(key, 0, 0, || {
+            std::thread::sleep(Duration::from_millis(5));
+        });
+        let mut storage = WorldStorage::new(std::env::temp_dir().join("folia-rs-watchdog-slow"));
+
+        let report = driver.tick(&mut storage, 1).unwrap();
+        assert_eq!(report.slow_regions.len(), 1);
+        assert_eq!(report.slow_regions[0].0, key);
+        assert!(report.slow_regions[0].1 >= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn watchdog_does_not_flag_fast_ticks() {
+        assert_eq!(
+            RegionTickDriver::vanilla().watchdog_budget(),
+            DEFAULT_WATCHDOG_BUDGET
+        );
+        let mut driver = RegionTickDriver::vanilla();
+        let mut storage = WorldStorage::new(std::env::temp_dir().join("folia-rs-watchdog-fast"));
+
+        let report = driver.tick(&mut storage, 1).unwrap();
+        assert!(report.slow_regions.is_empty());
+    }
+
+    #[test]
+    fn watchdog_reports_a_slow_region_in_single_region_tick() {
+        let key = RegionKey::new(1, 0);
+        let mut driver = RegionTickDriver::vanilla().with_watchdog_budget(Duration::from_millis(1));
+        driver.schedule_for_region(key, 0, 0, || {
+            std::thread::sleep(Duration::from_millis(5));
+        });
+        let mut storage = WorldStorage::new(std::env::temp_dir().join("folia-rs-watchdog-single"));
+
+        let report = driver.tick_region(&mut storage, key, 1).unwrap();
+        assert_eq!(report.slow_regions.len(), 1);
+        assert_eq!(report.slow_regions[0].0, key);
+        assert!(report.slow_regions[0].1 >= Duration::from_millis(1));
     }
 }

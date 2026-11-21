@@ -137,6 +137,15 @@ fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()
                 outcome.report.tasks, outcome.report.regions
             );
         }
+        // Reporting-only watchdog: a slow region is flagged after the tick;
+        // no region is interrupted or skipped (TODO P10.8).
+        for (key, elapsed) in &outcome.report.slow_regions {
+            eprintln!(
+                "[rust] watchdog: region {key:?} took {:?} over tick {ticks} (budget {:?})",
+                elapsed,
+                regions.watchdog_budget()
+            );
+        }
         if let Some(error) = outcome.error {
             eprintln!("[rust] region tick {ticks} failed: {error}");
         }

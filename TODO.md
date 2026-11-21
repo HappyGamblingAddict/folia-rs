@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); version guard + typed keys should bring the gate to 1,539
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,542
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -783,7 +783,10 @@ stacks only carry `item + count`.
   raw IDs.
 - **Progress (2026-11-21):** Foundation only — `src/registry_key.rs` adds
   `RegistryKey<T>` (marker-typed id/name pair), `IdMap<T>`, `RegistryKeyError`,
-  and four tests. No call sites migrated yet; that is the next slice.
+  and four tests. Menu types are now the first migrated call site:
+  `inventory.rs` has a typed `MenuTypeKey`, an 8-entry `IdMap`, name/id lookup,
+  and `MenuKind::menu_type_id()` resolving through the typed map (3 tests).
+  Other registries still need migration.
 
 ### P1.3 Port tags `[~]` `M`
 

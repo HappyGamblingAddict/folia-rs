@@ -1,7 +1,10 @@
+use std::sync::OnceLock;
+
 use crate::block_entity::BlockEntityPos;
 use crate::chunk::BlockState;
 use crate::crafting::FurnaceKind;
 use crate::protocol::{PacketReader, PacketWriter};
+use crate::registry_key::{IdMap, RegistryKey};
 
 pub use crate::item_components::{
     ComponentMap, ComponentType, ComponentValue, ItemStack, component_id, component_name,
@@ -31,9 +34,55 @@ pub const MENU_TYPE_GENERIC_9X3: i32 = 2;
 pub const MENU_TYPE_GENERIC_3X3: i32 = 6;
 pub const MENU_TYPE_BLAST_FURNACE: i32 = 10;
 pub const MENU_TYPE_BREWING_STAND: i32 = 11;
+/// `MenuType.CRAFTING` id; no `MenuKind` opens this menu yet, but it is part of
+/// the shipped registry so the typed map stays complete.
+pub const MENU_TYPE_CRAFTING: i32 = 12;
 pub const MENU_TYPE_FURNACE: i32 = 14;
 pub const MENU_TYPE_HOPPER: i32 = 16;
 pub const MENU_TYPE_SMOKER: i32 = 22;
+
+/// Registry marker for the `Registries.MENU` (`MenuType`) registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuType;
+
+/// A typed key into the `MenuType` registry.
+pub type MenuTypeKey = RegistryKey<MenuType>;
+
+static MENU_TYPE_MAP: OnceLock<IdMap<MenuTypeKey>> = OnceLock::new();
+
+/// The shipped `MenuType` entries as `(id, namespaced name)` pairs, in
+/// `MenuType` static-field registration order.
+const MENU_TYPE_ENTRIES: &[(i32, &str)] = &[
+    (MENU_TYPE_GENERIC_9X3, "minecraft:generic_9x3"),
+    (MENU_TYPE_GENERIC_3X3, "minecraft:generic_3x3"),
+    (MENU_TYPE_BLAST_FURNACE, "minecraft:blast_furnace"),
+    (MENU_TYPE_BREWING_STAND, "minecraft:brewing_stand"),
+    (MENU_TYPE_CRAFTING, "minecraft:crafting"),
+    (MENU_TYPE_FURNACE, "minecraft:furnace"),
+    (MENU_TYPE_HOPPER, "minecraft:hopper"),
+    (MENU_TYPE_SMOKER, "minecraft:smoker"),
+];
+
+fn menu_type_map() -> &'static IdMap<MenuTypeKey> {
+    MENU_TYPE_MAP.get_or_init(|| {
+        let mut map = IdMap::new();
+        for &(id, name) in MENU_TYPE_ENTRIES {
+            map.insert(MenuTypeKey::new(id, name), id, name)
+                .expect("shipped MenuType entries must have unique, non-negative ids/names");
+        }
+        map
+    })
+}
+
+/// Resolve a `MenuType` key by its numeric registry id.
+pub fn menu_type_key(id: i32) -> Option<MenuTypeKey> {
+    menu_type_map().by_id(id).cloned()
+}
+
+/// Resolve a `MenuType` key by its namespaced name (e.g. `minecraft:hopper`).
+pub fn menu_type_by_name(name: &str) -> Option<MenuTypeKey> {
+    menu_type_map().by_name(name).cloned()
+}
 
 pub const FURNACE_DATA_SLOTS: usize = 4;
 pub const BREWING_DATA_SLOTS: usize = 2;
@@ -241,8 +290,33 @@ impl MenuKind {
         }
     }
 
+    /// Namespaced `MenuType` registry name for this menu.
+    pub const fn menu_type_name(self) -> &'static str {
+        match self {
+            Self::Chest => "minecraft:generic_9x3",
+            Self::Furnace(FurnaceMenuKind::BlastFurnace) => "minecraft:blast_furnace",
+            Self::Furnace(FurnaceMenuKind::Smoker) => "minecraft:smoker",
+            Self::Furnace(FurnaceMenuKind::Furnace) => "minecraft:furnace",
+            Self::BrewingStand => "minecraft:brewing_stand",
+            Self::Hopper => "minecraft:hopper",
+            Self::Dispenser { .. } => "minecraft:generic_3x3",
+        }
+    }
+
     /// `Registries.MENU` numeric id used by `ClientboundOpenScreenPacket`.
-    pub const fn menu_type_id(self) -> i32 {
+    ///
+    /// Resolved through the typed `MenuType` key; `legacy_menu_type_id` is kept
+    /// as a documented fallback if a key were ever absent from the static map.
+    /// The unit tests assert that every variant resolves to a typed key, so a
+    /// missing mapping fails loudly in CI rather than being silently guessed.
+    pub fn menu_type_id(self) -> i32 {
+        match menu_type_by_name(self.menu_type_name()) {
+            Some(key) => key.id(),
+            None => self.legacy_menu_type_id(),
+        }
+    }
+
+    const fn legacy_menu_type_id(self) -> i32 {
         match self {
             Self::Chest => MENU_TYPE_GENERIC_9X3,
             Self::Furnace(FurnaceMenuKind::BlastFurnace) => MENU_TYPE_BLAST_FURNACE,
@@ -1680,5 +1754,104 @@ mod tests {
         assert!(slots[1..9].iter().all(ItemStack::is_empty));
         assert_eq!(slots[36].item, "minecraft:stone");
         assert_eq!(slots[37].item, "minecraft:dirt");
+    }
+
+    #[test]
+    fn every_menu_kind_resolves_to_a_typed_key() {
+        let cases: &[(MenuKind, i32, &str)] = &[
+            (
+                MenuKind::Chest,
+                MENU_TYPE_GENERIC_9X3,
+                "minecraft:generic_9x3",
+            ),
+            (
+                MenuKind::Furnace(FurnaceMenuKind::Furnace),
+                MENU_TYPE_FURNACE,
+                "minecraft:furnace",
+            ),
+            (
+                MenuKind::Furnace(FurnaceMenuKind::BlastFurnace),
+                MENU_TYPE_BLAST_FURNACE,
+                "minecraft:blast_furnace",
+            ),
+            (
+                MenuKind::Furnace(FurnaceMenuKind::Smoker),
+                MENU_TYPE_SMOKER,
+                "minecraft:smoker",
+            ),
+            (
+                MenuKind::BrewingStand,
+                MENU_TYPE_BREWING_STAND,
+                "minecraft:brewing_stand",
+            ),
+            (MenuKind::Hopper, MENU_TYPE_HOPPER, "minecraft:hopper"),
+            (
+                MenuKind::Dispenser { dropper: false },
+                MENU_TYPE_GENERIC_3X3,
+                "minecraft:generic_3x3",
+            ),
+            (
+                MenuKind::Dispenser { dropper: true },
+                MENU_TYPE_GENERIC_3X3,
+                "minecraft:generic_3x3",
+            ),
+        ];
+        for &(kind, id, name) in cases {
+            assert_eq!(kind.menu_type_name(), name);
+
+            let by_id = menu_type_key(id).unwrap_or_else(|| panic!("missing key for id {id}"));
+            assert_eq!(by_id.name(), name);
+
+            let by_name =
+                menu_type_by_name(name).unwrap_or_else(|| panic!("missing key for {name}"));
+            assert_eq!(by_name, by_id);
+
+            assert_eq!(kind.menu_type_id(), id);
+            assert_eq!(kind.menu_type_id(), by_id.id());
+        }
+    }
+
+    #[test]
+    fn menu_type_by_name_hopper_and_unknowns() {
+        let hopper = menu_type_by_name("minecraft:hopper").expect("hopper key");
+        assert_eq!(hopper.name(), "minecraft:hopper");
+        assert_eq!(hopper.id(), 16);
+
+        assert_eq!(menu_type_by_name("minecraft:unknown"), None);
+        assert_eq!(menu_type_by_name("hopper"), None);
+        assert_eq!(menu_type_key(-1), None);
+        assert_eq!(menu_type_key(9999), None);
+
+        let crafting = menu_type_key(MENU_TYPE_CRAFTING).expect("crafting key");
+        assert_eq!(crafting.name(), "minecraft:crafting");
+        assert_eq!(crafting.id(), MENU_TYPE_CRAFTING);
+    }
+
+    #[test]
+    fn menu_type_map_is_non_empty_with_unique_ids() {
+        let map = menu_type_map();
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), MENU_TYPE_ENTRIES.len());
+
+        let ids = [
+            MENU_TYPE_GENERIC_9X3,
+            MENU_TYPE_GENERIC_3X3,
+            MENU_TYPE_BLAST_FURNACE,
+            MENU_TYPE_BREWING_STAND,
+            MENU_TYPE_CRAFTING,
+            MENU_TYPE_FURNACE,
+            MENU_TYPE_HOPPER,
+            MENU_TYPE_SMOKER,
+        ];
+        let mut names = std::collections::HashSet::new();
+        for &id in &ids {
+            let key = menu_type_key(id).unwrap_or_else(|| panic!("missing key for id {id}"));
+            assert!(
+                names.insert(key.name().to_owned()),
+                "duplicate name for id {id}"
+            );
+            assert_eq!(key.id(), id);
+        }
+        assert_eq!(names.len(), ids.len());
     }
 }

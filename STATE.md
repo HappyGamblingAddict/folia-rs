@@ -10,9 +10,10 @@ Last updated: 2026-11-21
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
-  P1.2 typed-key foundation are complete locally; expected next gate is 1,539.
+  P1.2 typed-key foundation + menu migration are complete locally; expected
+  next gate is 1,542.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,539. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,542. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -94,8 +95,10 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P1.2 menu migration — typed `MenuTypeKey` map resolves all
+  `MenuKind` ids/names; 3 tests.
 - 2026-11-21: P1.2 typed-key foundation — `RegistryKey<T>`, `IdMap<T>`, and
-  duplicate/negative-id guards with 4 tests; call-site migration is next.
+  duplicate/negative-id guards with 4 tests.
 - 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
   and -Force paths plus ASSETS.md docs; full regen blocked by missing external
   Java toolchain (BLOCKERS.md), no new tests.
@@ -781,8 +784,10 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.2 menu migration — typed `MenuTypeKey` map resolves all
+  `MenuKind` ids/names; 3 tests.
 - 2026-11-21: P1.2 typed-key foundation — `RegistryKey<T>`, `IdMap<T>`, and
-  duplicate/negative-id guards with 4 tests; call-site migration is next.
+  duplicate/negative-id guards with 4 tests.
 - 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
   and -Force paths plus ASSETS.md docs; full regen blocked by missing external
   Java toolchain (BLOCKERS.md), no new tests.
@@ -1092,8 +1097,10 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.2 menu migration — typed `MenuTypeKey` map resolves all
+  `MenuKind` ids/names; 3 tests.
 - 2026-11-21: P1.2 typed-key foundation — `RegistryKey<T>`, `IdMap<T>`, and
-  duplicate/negative-id guards with 4 tests; call-site migration is next.
+  duplicate/negative-id guards with 4 tests.
 - 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
   and -Force paths plus ASSETS.md docs; full regen blocked by missing external
   Java toolchain (BLOCKERS.md), no new tests.

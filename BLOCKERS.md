@@ -1278,3 +1278,31 @@ These are expected gaps, not reasons to stop:
 - Workaround / next task: treat visible seams as a known limitation; prefer
   testing trees away from chunk borders. Do not regenerate stamps for this
   alone until the write path is ready.
+
+## 2026-11-21 - P0.5 oracle regeneration cannot run in this Linux checkout
+
+- Blocker: `scripts/dump-oracle.ps1` is written and statically validated, but
+  full regeneration was **not** executed here. The external Java reference tree
+  required by `AGENTS.md` is absent from this checkout. Resolved reference root
+  candidates `/root/rustfol` and `C:\Users\austr\Downloads\rustfol` do not
+  exist, and none of the required material is present under `/root`:
+  `decompiled/` (decompiled Folia 1.21.11), `java-tools/`, `libraries/`,
+  `java-worldgen/` (capture server + oracle fixtures), and
+  `folia-1.21.11-14.jar`. The extractors (`extract_block_shapes.ps1`,
+  `extract_item_prototypes.ps1`, etc.) boot this jar/JVM and read the
+  decompiled data tree, so they cannot produce byte-identical assets here.
+- `pwsh` is also not installed in this environment, so the PowerShell script
+  could not be executed even in `-Check` mode. It was instead validated
+  statically: all blocks are balanced, the eight extractors are invoked in the
+  specified dependency order, every passed parameter is declared by its target
+  script, and the target scripts exist.
+- What still works: `cargo test -p folia-core --test assets` (run directly in
+  this checkout) validates `VERSION.txt` (1.21.11 / DataVersion 4788) and all
+  pinned asset hashes/line counts. `scripts/dump-oracle.ps1 -Check` will do the
+  same version/hash verification with no Java dependency once PowerShell is
+  available, but it cannot be run from this host.
+- What is needed: run `.\scripts\dump-oracle.ps1 -Force -ReferenceRoot <dir>`
+  on the Windows host that has the `C:\Users\austr\Downloads\rustfol` reference
+  tree and `pwsh`, then confirm the printed SHA-256 manifest and Cargo guards.
+  No fake regeneration or placeholder assets were written; do not claim P0.5
+  regeneration parity until that run succeeds.

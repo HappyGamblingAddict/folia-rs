@@ -712,7 +712,7 @@ clean, reproducible baseline makes every later regression harder to attribute.
   (this checkout cannot push); it also requires the generated assets and
   `world/region` fixture to be committed, which is still pending P0.6.
 
-### P0.5 Make oracle data reproducible `[ ]` `M`
+### P0.5 Make oracle data reproducible `[~]` `M`
 
 - **What:** Replace manual copy/paste of Java dump files with scripts that:
   start the capture server, run the dump plugin, normalize output, write into
@@ -720,6 +720,13 @@ clean, reproducible baseline makes every later regression harder to attribute.
 - **Why:** Every parity claim depends on the oracle being reproducible.
 - **Done when:** `scripts/dump-oracle.ps1` regenerates all fixtures and a test
   verifies their hashes.
+- **Progress (2026-11-21):** `scripts/dump-oracle.ps1` is written and statically
+  validated; `-Check` verifies VERSION.txt + pinned hashes via the Cargo asset
+  guard, and the regeneration path checks all five reference trees, refuses
+  overwrites without `-Force`, runs the eight extractors in order, and prints a
+  SHA-256 manifest. `assets/ASSETS.md` documents it. Full regeneration is
+  blocked in this Linux checkout: the Java reference material from AGENTS.md
+  and `pwsh` are absent (recorded in BLOCKERS.md); no fake assets were written.
 
 ### P0.6 Decide the commit/backup policy `[x]` `S`
 

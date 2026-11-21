@@ -9,8 +9,8 @@ Last updated: 2026-11-21
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `1bb0e39` with 1,530 tests. The P1.8 version guard is complete
-  locally and should bring the next gate to 1,535.
+  CI is green at `1bb0e39` with 1,530 tests. P1.8 and the P0.5 orchestration
+  script are complete locally; expected next gate is 1,535.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
   benchmark); next gate expected 1,535. Parity is **98.75% block-class /
   95.88% exact-name**.
@@ -27,7 +27,8 @@ Last updated: 2026-11-21
   portal-driven live dimension switching, region-scoped ticking, and live
   bridge chat/effects.
 - Legacy note: check `git log` for the current CI-green HEAD.
-- Major gaps: P0.5 oracle extraction scripts require the Java dump toolchain,
+- Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
+  reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,
   plugin `AsyncChatEvent` dispatch, live AI goals and per-type ranges, real
   multi-region world parallelism, dragon entity fight, and terrain adaptation
@@ -93,6 +94,9 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
+  and -Force paths plus ASSETS.md docs; full regen blocked by missing external
+  Java toolchain (BLOCKERS.md), no new tests.
 - 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
   of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,
@@ -775,6 +779,9 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
+  and -Force paths plus ASSETS.md docs; full regen blocked by missing external
+  Java toolchain (BLOCKERS.md), no new tests.
 - 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
   of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,
@@ -1081,6 +1088,9 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P0.5 oracle orchestration — `scripts/dump-oracle.ps1` with -Check
+  and -Force paths plus ASSETS.md docs; full regen blocked by missing external
+  Java toolchain (BLOCKERS.md), no new tests.
 - 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
   of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,

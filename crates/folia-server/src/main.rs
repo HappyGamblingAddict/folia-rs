@@ -271,6 +271,9 @@ fn start_status_server(properties: &ServerProperties, root: &std::path::Path) ->
         motd: properties.motd.clone(),
         max_players: properties.max_players,
         online_players: 0,
+        // Status pings report the live play-session count; the static field
+        // above stays as the fallback for tests and the legacy ping path.
+        online_provider: Some(Arc::new(folia_core::join::active_session_count)),
         accept_logins: true,
         enforces_secure_chat: folia_core::config::enforces_secure_chat(),
         favicon,

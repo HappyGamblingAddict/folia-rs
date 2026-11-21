@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,552
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,557
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3018,7 +3018,7 @@ chat signing.
 - **Done when:** A packet coverage report shows each ID mapped to a handler or
   an explicit unsupported path.
 
-### P8.4 Connection handling and limits `[ ]` `M`
+### P8.4 Connection handling and limits `[~]` `M`
 
 - **What:** Add per-connection threads/tasks, read/write timeouts, keepalive
   timing, packet size limits, rate limits, backpressure, and slow-client

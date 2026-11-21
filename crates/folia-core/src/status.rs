@@ -8,19 +8,42 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StatusConfig {
     pub version_name: String,
     pub protocol_version: i32,
     pub motd: String,
     pub max_players: i32,
     pub online_players: i32,
+    /// Optional dynamic source for the advertised online-player count. When
+    /// present, `status_json` calls it on every ping instead of reading the
+    /// static `online_players` field.
+    pub online_provider: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
     /// When true, login attempts are handed to the captured 1.21.11 join flow.
     pub accept_logins: bool,
     /// Advertised as `enforcesSecureChat` in the status JSON.
     pub enforces_secure_chat: bool,
     /// Server-list favicon as a `data:image/png;base64,...` URI, when present.
     pub favicon: Option<String>,
+}
+
+impl std::fmt::Debug for StatusConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StatusConfig")
+            .field("version_name", &self.version_name)
+            .field("protocol_version", &self.protocol_version)
+            .field("motd", &self.motd)
+            .field("max_players", &self.max_players)
+            .field("online_players", &self.online_players)
+            .field(
+                "online_provider",
+                &self.online_provider.as_ref().map(|_| "closure"),
+            )
+            .field("accept_logins", &self.accept_logins)
+            .field("enforces_secure_chat", &self.enforces_secure_chat)
+            .field("favicon", &self.favicon)
+            .finish()
+    }
 }
 
 impl Default for StatusConfig {
@@ -31,6 +54,7 @@ impl Default for StatusConfig {
             motd: "Folia-RS".into(),
             max_players: 20,
             online_players: 0,
+            online_provider: None,
             accept_logins: false,
             enforces_secure_chat: false,
             favicon: None,
@@ -39,6 +63,11 @@ impl Default for StatusConfig {
 }
 
 pub fn status_json(config: &StatusConfig) -> String {
+    let online = config
+        .online_provider
+        .as_ref()
+        .map(|provider| provider() as i32)
+        .unwrap_or(config.online_players);
     let mut value = json!({
         "version": {
             "name": config.version_name,
@@ -46,7 +75,7 @@ pub fn status_json(config: &StatusConfig) -> String {
         },
         "players": {
             "max": config.max_players,
-            "online": config.online_players,
+            "online": online,
             "sample": [],
         },
         "description": {
@@ -233,7 +262,7 @@ fn handle_status(stream: &mut TcpStream, config: &StatusConfig) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     fn temp_path(label: &str) -> std::path::PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -249,6 +278,71 @@ mod tests {
         assert_eq!(value["version"]["name"], "1.21.11");
         assert_eq!(value["description"]["text"], "Folia-RS");
         assert_eq!(value["players"]["max"], 20);
+    }
+
+    #[test]
+    fn status_json_default_uses_static_online_players() {
+        let config = StatusConfig {
+            online_players: 7,
+            ..StatusConfig::default()
+        };
+        assert!(config.online_provider.is_none());
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(value["players"]["online"], 7);
+    }
+
+    #[test]
+    fn status_json_provider_overrides_static_online_players() {
+        let config = StatusConfig {
+            online_players: 3,
+            online_provider: Some(Arc::new(|| 9usize)),
+            ..StatusConfig::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(value["players"]["online"], 9);
+    }
+
+    #[test]
+    fn status_json_provider_zero_is_respected() {
+        let config = StatusConfig {
+            online_players: 5,
+            online_provider: Some(Arc::new(|| 0usize)),
+            ..StatusConfig::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(value["players"]["online"], 0);
+    }
+
+    #[test]
+    fn status_json_provider_is_evaluated_per_ping() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let read_counter = Arc::clone(&counter);
+        let config = StatusConfig {
+            online_provider: Some(Arc::new(move || read_counter.load(Ordering::SeqCst))),
+            ..StatusConfig::default()
+        };
+        let first: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(first["players"]["online"], 0);
+        counter.store(4, Ordering::SeqCst);
+        let second: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(second["players"]["online"], 4);
+    }
+
+    #[test]
+    fn status_json_provider_preserves_version_protocol_and_favicon() {
+        let uri = "data:image/png;base64,iVBORw0KGgo=".to_owned();
+        let config = StatusConfig {
+            version_name: "custom".into(),
+            protocol_version: 123,
+            favicon: Some(uri.clone()),
+            online_provider: Some(Arc::new(|| 2usize)),
+            ..StatusConfig::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(value["version"]["name"], "custom");
+        assert_eq!(value["version"]["protocol"], 123);
+        assert_eq!(value["favicon"], uri);
+        assert_eq!(value["players"]["online"], 2);
     }
 
     #[test]

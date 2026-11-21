@@ -437,6 +437,16 @@ fn active_session_names() -> Vec<String> {
     names
 }
 
+/// Number of currently registered live play sessions. This is the source of
+/// truth for the server-list online count: a session is registered once its
+/// play loop starts and removed when its command guard drops on disconnect.
+pub fn active_session_count() -> usize {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .len()
+}
+
 /// Push one command to the live session for `uuid`. Returns false when the
 /// player is not connected (or the session has already closed its channel).
 pub fn send_player_chat(uuid: [u8; 16], message: &str) -> bool {

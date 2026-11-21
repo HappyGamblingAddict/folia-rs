@@ -10,10 +10,10 @@ Last updated: 2026-11-21
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
-  P1.2 typed keys, explosion feedback, and the P8.7 status favicon are complete
-  locally; expected next gate is 1,552.
+  P1.2 typed keys, explosion feedback, status favicon, and the live status
+  player count are complete locally; expected next gate is 1,557.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,552. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,557. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -95,6 +95,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: live status count — optional online-count provider wired to the
+  session registry; 5 status tests.
 - 2026-11-21: P8.7 status favicon — optional `server-icon.png` data URI with
   PNG validation and dependency-free base64; 8 tests.
 - 2026-11-21: explosion feedback — TNT prime/explosion sounds and particles
@@ -788,6 +790,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: live status count — optional online-count provider wired to the
+  session registry; 5 status tests.
 - 2026-11-21: P8.7 status favicon — optional `server-icon.png` data URI with
   PNG validation and dependency-free base64; 8 tests.
 - 2026-11-21: explosion feedback — TNT prime/explosion sounds and particles
@@ -1105,6 +1109,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: live status count — optional online-count provider wired to the
+  session registry; 5 status tests.
 - 2026-11-21: P8.7 status favicon — optional `server-icon.png` data URI with
   PNG validation and dependency-free base64; 8 tests.
 - 2026-11-21: explosion feedback — TNT prime/explosion sounds and particles

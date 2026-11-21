@@ -2020,11 +2020,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             write_packet(&mut stream, packet)?;
                         }
                         if result.died {
-                            drop_player_death_items(
+                            apply_death_item_policy(
                                 &mut stream,
+                                &mut session,
                                 &mut drop_entities,
                                 &mut drop_rng,
-                                &mut session,
                             )?;
                             let message = format!("{} blew up", session.name);
                             write_packet(&mut stream, &combat_kill_packet(&message))?;
@@ -2172,11 +2172,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 write_packet(&mut stream, &health_packet(&session))?;
             }
             if session.health <= 0.0 && !awaiting_respawn {
-                drop_player_death_items(
+                apply_death_item_policy(
                     &mut stream,
+                    &mut session,
                     &mut drop_entities,
                     &mut drop_rng,
-                    &mut session,
                 )?;
                 if let Some(message) = vitals_death_message(food, air) {
                     write_packet(&mut stream, &combat_kill_packet(message))?;
@@ -2203,11 +2203,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     write_packet(&mut stream, packet)?;
                 }
                 if result.died && !awaiting_respawn {
-                    drop_player_death_items(
+                    apply_death_item_policy(
                         &mut stream,
+                        &mut session,
                         &mut drop_entities,
                         &mut drop_rng,
-                        &mut session,
                     )?;
                     write_packet(&mut stream, &combat_kill_packet(message))?;
                     awaiting_respawn = true;
@@ -2329,11 +2329,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         write_packet(&mut stream, packet)?;
                     }
                     if result.died {
-                        drop_player_death_items(
+                        apply_death_item_policy(
                             &mut stream,
+                            &mut session,
                             &mut drop_entities,
                             &mut drop_rng,
-                            &mut session,
                         )?;
                         write_packet(
                             &mut stream,
@@ -2373,11 +2373,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     )?;
                 }
                 if result.died {
-                    drop_player_death_items(
+                    apply_death_item_policy(
                         &mut stream,
+                        &mut session,
                         &mut drop_entities,
                         &mut drop_rng,
-                        &mut session,
                     )?;
                     write_packet(
                         &mut stream,
@@ -2857,11 +2857,11 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     write_packet(&mut stream, packet)?;
                                 }
                                 if result.died {
-                                    drop_player_death_items(
+                                    apply_death_item_policy(
                                         &mut stream,
+                                        &mut session,
                                         &mut drop_entities,
                                         &mut drop_rng,
-                                        &mut session,
                                     )?;
                                     write_packet(
                                         &mut stream,
@@ -5834,6 +5834,28 @@ fn take_player_death_drops(session: &mut PlayerSession) -> Vec<crate::item_compo
     drops
 }
 
+/// True when the vanilla `keepInventory` game rule is enabled. A dying player
+/// then keeps their inventory, armor, and XP instead of dropping them.
+fn player_keeps_inventory() -> bool {
+    crate::game_rules::bool_rule("keep_inventory").unwrap_or(false)
+}
+
+/// Apply the `keepInventory` death policy before any items or XP are dropped.
+///
+/// Death messages and the `awaiting_respawn` transition stay with the caller;
+/// this helper only decides whether the item/XP loss happens.
+fn apply_death_item_policy(
+    stream: &mut LoginStream,
+    session: &mut PlayerSession,
+    drops: &mut DropEntityStore,
+    rng: &mut dyn crate::random::RandomSource,
+) -> io::Result<()> {
+    if player_keeps_inventory() {
+        return Ok(());
+    }
+    drop_player_death_items(stream, drops, rng, session)
+}
+
 fn drop_player_death_items(
     stream: &mut LoginStream,
     drops: &mut DropEntityStore,
@@ -6108,7 +6130,7 @@ fn apply_void_damage(
         // below the void line. `hurt` rejects zero-health entities, so drive
         // the death/respawn flow directly instead of falling forever.
         *last_damage = Instant::now();
-        drop_player_death_items(stream, drops, rng, session)?;
+        apply_death_item_policy(stream, session, drops, rng)?;
         write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
@@ -6136,7 +6158,7 @@ fn apply_void_damage(
         write_packet(stream, packet)?;
     }
     if result.died {
-        drop_player_death_items(stream, drops, rng, session)?;
+        apply_death_item_policy(stream, session, drops, rng)?;
         write_packet(stream, &combat_kill_packet("Player fell out of the world"))?;
         return Ok(true);
     }
@@ -10259,6 +10281,78 @@ mod tests {
         assert_eq!(session.xp_level, 0);
         assert!(session.xp_progress.abs() < 1e-6);
         assert_eq!(session.xp_total, 0);
+    }
+
+    #[test]
+    fn player_keeps_inventory_tracks_the_global_rule() {
+        assert_eq!(
+            player_keeps_inventory(),
+            crate::game_rules::bool_rule("keep_inventory").unwrap_or(false)
+        );
+        assert_eq!(
+            player_keeps_inventory(),
+            crate::game_rules::bool_rule("keepInventory").unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn keep_inventory_rule_keeps_items_and_queues_no_drops() {
+        use std::net::{TcpListener, TcpStream};
+
+        assert!(crate::game_rules::set_rule("keep_inventory", true));
+        let result = (|| -> io::Result<()> {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let client_stream = TcpStream::connect(listener.local_addr()?)?;
+            let (server_stream, _) = listener.accept()?;
+            let mut server = Connection::new(server_stream);
+            let mut client = Connection::new(client_stream);
+
+            let mut session =
+                PlayerSession::new("KeepInventory".to_string(), [0xD5; 16], 0.0, 64.0, 0.0);
+            for stack in &mut session.inventory {
+                *stack = inventory::ItemStack::empty();
+            }
+            session.inventory[0] = inventory::ItemStack::new("minecraft:stone".to_string(), 5);
+            session.armor[2] =
+                inventory::ItemStack::new("minecraft:diamond_chestplate".to_string(), 1);
+            session.cursor = inventory::ItemStack::new("minecraft:dirt".to_string(), 3);
+            session.xp_level = 4;
+            session.xp_progress = 0.5;
+            session.xp_total = 37;
+
+            let mut drops = DropEntityStore::new();
+            let mut rng = LegacyRandomSource::new(0x5EED);
+            apply_death_item_policy(&mut server, &mut session, &mut drops, &mut rng)?;
+
+            assert!(drops.is_empty());
+            assert_eq!(session.inventory[0].item, "minecraft:stone");
+            assert_eq!(session.inventory[0].count, 5);
+            assert_eq!(session.armor[2].item, "minecraft:diamond_chestplate");
+            assert_eq!(session.armor[2].count, 1);
+            assert_eq!(session.cursor.item, "minecraft:dirt");
+            assert_eq!(session.cursor.count, 3);
+            assert_eq!(session.xp_level, 4);
+            assert!((session.xp_progress - 0.5).abs() < 1e-6);
+            assert_eq!(session.xp_total, 37);
+
+            client
+                .get_mut()
+                .set_read_timeout(Some(Duration::from_millis(50)))?;
+            let error = client
+                .read_packet()
+                .expect_err("keepInventory must not queue drop packets");
+            assert!(
+                matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ),
+                "unexpected read error: {error}"
+            );
+            Ok(())
+        })();
+        // Restore the vanilla default so later tests are unaffected.
+        assert!(crate::game_rules::set_rule("keep_inventory", false));
+        result.unwrap();
     }
 
     #[test]

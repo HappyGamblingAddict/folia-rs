@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,568
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,570
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2901,8 +2901,9 @@ storage stay Overworld-only. No time/weather/portals.
 - **Progress (2026-11-21):** Game-rule store with four vanilla defaults,
   `/gamerule` query/set with camelCase/snake_case aliases, and `doDaylightCycle`
   gating of the session clock; 7 tests. World border, spawn chunks, difficulty,
-  spawn protection, keepInventory/doTileDrops gameplay hooks, and persistence
-  remain open.
+  spawn protection, doTileDrops gameplay hooks, and persistence remain open;
+  keepInventory is now honored at all death paths (2 join tests). keepInventory is now honored at all player-death sites (2 join
+  tests).
 
 ### P7.7 Save, autosave, backup, and migration `[ ]` `M`
 

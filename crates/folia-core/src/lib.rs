@@ -1,6 +1,7 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 pub mod anvil;
+pub mod asset_version;
 pub mod block_behaviour;
 pub mod block_breaking;
 pub mod block_entity;

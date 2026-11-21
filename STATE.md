@@ -4,16 +4,15 @@
 > Update it after every completed task. Keep it short and factual.
 > `TODO.md` is the full roadmap. `AGENTS.md` is the operating manual.
 
-Last updated: 2026-11-16
+Last updated: 2026-11-21
 
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `9ecb375` with 1,481 tests. The recent placement/item/TNT,
-  breeding/weather, spawner, tab-list, and container-menu slices are completed
-  locally and should bring the next gate to 1,530.
-- Tests: **1,443 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,530. Parity is **98.75% block-class /
+  CI is green at `1bb0e39` with 1,530 tests. The P1.8 version guard is complete
+  locally and should bring the next gate to 1,535.
+- Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); next gate expected 1,535. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -21,14 +20,15 @@ Last updated: 2026-11-16
   structure templates** (483 village + 528 non-village + 191 trial chamber),
   Nether fortress / End city pieces, Nether carvers, End spikes/gateways/chorus,
   interpolated ore veins.
-- Gameplay: container menus (chest/furnace/brewing), anvil combine/repair,
+- Gameplay: container menus (chest/furnace/brewing/hopper/dispenser/dropper), anvil combine/repair,
   enchanting offers, brewing/potions/food, hunger/air/XP, effect packets +
   shared tracking, crops, leaf decay, chest loot, item/XP entities, hoppers,
   pistons, target blocks, dispenser/dropper automation, block entities,
   portal-driven live dimension switching, region-scoped ticking, and live
   bridge chat/effects.
 - Legacy note: check `git log` for the current CI-green HEAD.
-- Major gaps: Mojang profile-key trust roots and signed-command validation,
+- Major gaps: P0.5 oracle extraction scripts require the Java dump toolchain,
+  Mojang profile-key trust roots and signed-command validation,
   plugin `AsyncChatEvent` dispatch, live AI goals and per-type ranges, real
   multi-region world parallelism, dragon entity fight, and terrain adaptation
   for structures.
@@ -93,6 +93,8 @@ Last updated: 2026-11-16
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
+  of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,
   generic click/persistence paths, and live open tests. 3 tests.
 - 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and
@@ -773,6 +775,8 @@ Last updated: 2026-11-16
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
+  of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,
   generic click/persistence paths, and live open tests. 3 tests.
 - 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and
@@ -1077,6 +1081,8 @@ Last updated: 2026-11-16
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.8 version guard — `VERSION.txt` plus startup/test validation
+  of the manifest and eight versioned JSON catalogs. 5 tests.
 - 2026-11-17: dispenser/dropper menus — GENERIC_3X3 id 6, 9 slots, titles,
   generic click/persistence paths, and live open tests. 3 tests.
 - 2026-11-17: hopper menus — menu id 16, 5-slot layout, generic clicks and

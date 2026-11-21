@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,481 passing** at the 9ecb375 gate (0 failed, 1 ignored benchmark); recent slices are expected to bring the gate to 1,530
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); version guard should bring the gate to 1,535
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -919,12 +919,16 @@ stacks only carry `item + count`.
   budget; running the extractor twice produces byte-identical output and
   `tests/structure_assets.rs` runs `-Check`.
 
-### P1.8 Registry/asset version guard `[ ]` `S`
+### P1.8 Registry/asset version guard `[x]` `S`
 
 - **What:** Record the target Minecraft version and DataVersion (1.21.11 /
   4788) next to every generated asset and fail startup/tests on mismatch.
 - **Why:** Mixing data from two versions produces subtle, hard-to-find bugs.
 - **Done when:** Build/test output identifies the exact data version used.
+- **Done (2026-11-21):** `assets/VERSION.txt` records Minecraft 1.21.11 /
+  DataVersion 4788; `src/asset_version.rs::validate()` checks that manifest and
+  all eight versioned JSON catalogs at startup and in `tests/assets.rs`, and
+  prints `Minecraft 1.21.11 / DataVersion 4788` from the server. 5 tests.
 
 ---
 

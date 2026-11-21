@@ -53,6 +53,16 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 #[test]
+fn asset_version_matches_the_target_data_version() {
+    folia_core::asset_version::validate()
+        .expect("generated assets must match the target Minecraft version / DataVersion");
+    assert_eq!(
+        folia_core::asset_version::describe(),
+        "Minecraft 1.21.11 / DataVersion 4788"
+    );
+}
+
+#[test]
 fn generated_assets_match_the_manifest() {
     let expected: [(&str, usize, u64); 27] = [
         ("block_states.tsv", 2_595_686, 0x3da1_dcdd_58b4_f738),

@@ -12,6 +12,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 fn main() -> Result<()> {
+    if let Err(error) = folia_core::asset_version::validate() {
+        eprintln!("[rust] asset version guard failed: {error}");
+        return Err(error).context(
+            "generated assets do not match the target Minecraft 1.21.11 / DataVersion 4788",
+        );
+    }
+    println!(
+        "[rust] asset data: {}",
+        folia_core::asset_version::describe()
+    );
+
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

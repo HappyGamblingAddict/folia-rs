@@ -11,10 +11,10 @@ Last updated: 2026-11-21
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
   P1.2 typed keys (menu + particle migration), explosion feedback, status,
-  max-player guard, and P7.6 game rules incl. keepInventory are complete
-  locally; expected next gate is 1,570.
+  max-player guard, P7.6 game rules incl. keepInventory, and the P6.8 game-event
+  model are complete locally; expected next gate is 1,575.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,570. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,575. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -96,6 +96,9 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P6.8 game events — 11-event vibration model, listener hearing,
+  nearest-listener selection, and TNT event emission; 5 tests. Sensor blocks
+  and queue draining remain open.
 - 2026-11-21: keepInventory — all player-death paths now preserve inventory,
   armor, cursor, and XP when the rule is true; 2 join tests.
 - 2026-11-21: P7.6 game rules — four-rule store, `/gamerule`, and daylight
@@ -799,6 +802,9 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P6.8 game events — 11-event vibration model, listener hearing,
+  nearest-listener selection, and TNT event emission; 5 tests. Sensor blocks
+  and queue draining remain open.
 - 2026-11-21: keepInventory — all player-death paths now preserve inventory,
   armor, cursor, and XP when the rule is true; 2 join tests.
 - 2026-11-21: P7.6 game rules — four-rule store, `/gamerule`, and daylight
@@ -1126,6 +1132,9 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P6.8 game events — 11-event vibration model, listener hearing,
+  nearest-listener selection, and TNT event emission; 5 tests. Sensor blocks
+  and queue draining remain open.
 - 2026-11-21: keepInventory — all player-death paths now preserve inventory,
   armor, cursor, and XP when the rule is true; 2 join tests.
 - 2026-11-21: P7.6 game rules — four-rule store, `/gamerule`, and daylight

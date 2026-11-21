@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,570
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,575
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2767,12 +2767,17 @@ redstone lamps/target blocks/tripwire hooks, and full P1.5 metadata are open.
   beetroots; join consumes one bone meal in survival and writes the grown state.
   Saplings, grass spread, and particles remain open. 3 tests.
 
-### P6.8 Sculk sensors, vibrations, and game events `[ ]` `M`
+### P6.8 Sculk sensors, vibrations, and game events `[~]` `M`
 
 - **What:** Implement game event emission/listening, vibration frequencies,
   sculk sensor, calibrated sensor, and warden-related events (if mobs exist).
 - **Why:** 1.19+ mechanics and a dependency for deep dark content.
 - **Done when:** Sensor activation fixtures match Java.
+- **Progress (2026-11-21):** `game_event.rs` adds an 11-event model,
+  approximate frequency/range tables (documented, not parity-claimed),
+  vibration hearing/nearest-listener rules, and an append-only emit queue with
+  5 tests; TNT explosions emit an event. Sensor block activation, Java fixtures,
+  warden behavior, and queue draining remain open.
 
 ### P6.9 Automation/block-entity interactions `[~]` `M`
 

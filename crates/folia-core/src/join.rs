@@ -7875,6 +7875,14 @@ fn explode_tnt(
     use crate::tnt::{chain_fuse, explosion_blocks};
     use folia_random::RandomSource;
 
+    // Staged for the future sculk/vibration tick; no listener consumes this yet.
+    crate::game_event::emit(crate::game_event::GameEvent {
+        kind: crate::game_event::GameEventKind::Explosion,
+        x: event.x,
+        y: event.y,
+        z: event.z,
+    });
+
     let positions = explosion_blocks(
         [event.x, event.y, event.z],
         4.0,

@@ -21,6 +21,7 @@ pub mod entity;
 pub mod entity_ai;
 pub mod entity_metadata;
 pub mod fluid;
+pub mod game_event;
 pub mod game_rules;
 pub mod inventory;
 pub mod item_components;

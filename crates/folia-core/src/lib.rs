@@ -42,6 +42,7 @@ pub mod redstone;
 pub mod region;
 pub mod registries;
 pub mod registry;
+pub mod registry_key;
 pub mod snbt;
 pub mod spawn;
 pub mod status;

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); version guard should bring the gate to 1,535
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); version guard + typed keys should bring the gate to 1,539
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -773,7 +773,7 @@ stacks only carry `item + count`.
 - **Done when:** Generated tables cover every registry with count assertions
   and lookups by name and ID.
 
-### P1.2 Introduce typed registry keys and ID maps `[ ]` `M`
+### P1.2 Introduce typed registry keys and ID maps `[~]` `M`
 
 - **What:** Add `RegistryKey<T>`, `IdMap<T>`, and typed wrappers instead of
   passing raw strings or `i32` IDs through gameplay code.
@@ -781,6 +781,9 @@ stacks only carry `item + count`.
   dimensions, and makes invalid data fail at load time.
 - **Done when:** New code uses typed keys; only serialization boundaries use
   raw IDs.
+- **Progress (2026-11-21):** Foundation only — `src/registry_key.rs` adds
+  `RegistryKey<T>` (marker-typed id/name pair), `IdMap<T>`, `RegistryKeyError`,
+  and four tests. No call sites migrated yet; that is the next slice.
 
 ### P1.3 Port tags `[~]` `M`
 

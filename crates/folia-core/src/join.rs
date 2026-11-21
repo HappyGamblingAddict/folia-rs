@@ -2125,7 +2125,16 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 )?;
             }
             game_tick = game_tick.wrapping_add(1);
-            advance_world_time(&mut world_day_time, &mut world_game_time);
+            // With doDaylightCycle=false vanilla freezes the time-of-day clock
+            // but keeps the total game time running (it still drives scheduled
+            // events and `/time add`). Gate only the day-time increment here and
+            // leave `advance_world_time` intact for callers/tests that want the
+            // normal both-clocks behaviour.
+            if crate::game_rules::bool_rule("do_daylight_cycle").unwrap_or(true) {
+                advance_world_time(&mut world_day_time, &mut world_game_time);
+            } else {
+                world_game_time += 1;
+            }
             if game_tick.is_multiple_of(20) {
                 write_packet(
                     &mut stream,
@@ -5185,6 +5194,28 @@ fn time_add_ticks(value: &str) -> Option<i64> {
     (ticks >= 0).then_some(ticks)
 }
 
+/// Parse the arguments of `/gamerule <rule> [true|false]`, returning the
+/// canonical rule name and an optional new value (`None` means a query).
+/// Unknown names, invalid values, and extra arguments are rejected so the
+/// caller can emit a usage message. Alias handling lives in `game_rules`.
+fn parse_gamerule<'a, I>(parts: &mut I) -> Option<(&'static str, Option<bool>)>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let name = parts.next()?;
+    let canonical = crate::game_rules::GameRules::parse_name(name)?;
+    let value = match parts.next() {
+        None => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) => return None,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((canonical, value))
+}
+
 /// Advance a session's local world clock by exactly one game tick. Both the
 /// time-of-day and the total game time advance together, as on vanilla.
 fn advance_world_time(day_time: &mut i64, game_time: &mut i64) {
@@ -5640,6 +5671,34 @@ fn handle_command(
                 (None, _) => String::new(),
             };
             let message = format!("Weather set to {kind}{ignored_note}");
+            println!("[join] {}: {message}", session.name);
+            write_packet(stream, &system_chat_packet(&message)?)?;
+            Ok(())
+        }
+        Some("gamerule") => {
+            if !is_operator(&session.name) {
+                println!(
+                    "[join] {}: you do not have permission to use /gamerule",
+                    session.name
+                );
+                return Ok(());
+            }
+            let usage = "/gamerule <rule> [true|false]";
+            let Some((canonical, value)) = parse_gamerule(&mut parts) else {
+                let message = format!("Usage: {usage}");
+                println!("[join] {}: {message}", session.name);
+                write_packet(stream, &system_chat_packet(&message)?)?;
+                return Ok(());
+            };
+            if let Some(value) = value {
+                crate::game_rules::set_rule(canonical, value);
+                println!(
+                    "[join] {} set game rule {} to {}",
+                    session.name, canonical, value
+                );
+            }
+            let value = crate::game_rules::bool_rule(canonical).unwrap_or(false);
+            let message = format!("{canonical} = {}", if value { "true" } else { "false" });
             println!("[join] {}: {message}", session.name);
             write_packet(stream, &system_chat_packet(&message)?)?;
             Ok(())
@@ -8402,6 +8461,53 @@ mod tests {
         assert_eq!(time_add_ticks("abc"), None);
         assert_eq!(time_add_ticks("1.5"), None);
         assert_eq!(time_add_ticks(" "), None);
+    }
+
+    #[test]
+    fn gamerule_parser_handles_queries_sets_and_aliases() {
+        let mut parts = "doDaylightCycle".split_whitespace();
+        assert_eq!(parse_gamerule(&mut parts), Some(("doDaylightCycle", None)));
+
+        let mut parts = "do_daylight_cycle false".split_whitespace();
+        assert_eq!(
+            parse_gamerule(&mut parts),
+            Some(("doDaylightCycle", Some(false)))
+        );
+
+        let mut parts = "keepInventory true".split_whitespace();
+        assert_eq!(
+            parse_gamerule(&mut parts),
+            Some(("keepInventory", Some(true)))
+        );
+
+        let mut parts = "mob_griefing true".split_whitespace();
+        assert_eq!(
+            parse_gamerule(&mut parts),
+            Some(("mobGriefing", Some(true)))
+        );
+
+        let mut parts = "doTileDrops false".split_whitespace();
+        assert_eq!(
+            parse_gamerule(&mut parts),
+            Some(("doTileDrops", Some(false)))
+        );
+    }
+
+    #[test]
+    fn gamerule_parser_rejects_bad_names_values_and_extra_args() {
+        assert_eq!(parse_gamerule(&mut "".split_whitespace()), None);
+        assert_eq!(
+            parse_gamerule(&mut "fallingBlocks".split_whitespace()),
+            None
+        );
+        assert_eq!(
+            parse_gamerule(&mut "doDaylightCycle maybe".split_whitespace()),
+            None
+        );
+        assert_eq!(
+            parse_gamerule(&mut "doDaylightCycle true extra".split_whitespace()),
+            None
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,561
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,568
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2892,12 +2892,17 @@ storage stay Overworld-only. No time/weather/portals.
   sessions receiving broadcasts; 11 weather tests. Still open: persisting time
   and weather, moon phases, automatic thunder starts, lightning, and snow.
 
-### P7.6 World border, spawn, and game rules `[ ]` `M`
+### P7.6 World border, spawn, and game rules `[~]` `M`
 
 - **What:** World border, spawn chunks, forced chunks, difficulty, game rules,
   spawn protection, and player spawn selection.
 - **Why:** Server administration and vanilla behavior.
 - **Done when:** Commands/config changes take effect and persist.
+- **Progress (2026-11-21):** Game-rule store with four vanilla defaults,
+  `/gamerule` query/set with camelCase/snake_case aliases, and `doDaylightCycle`
+  gating of the session clock; 7 tests. World border, spawn chunks, difficulty,
+  spawn protection, keepInventory/doTileDrops gameplay hooks, and persistence
+  remain open.
 
 ### P7.7 Save, autosave, backup, and migration `[ ]` `M`
 

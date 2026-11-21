@@ -10,10 +10,11 @@ Last updated: 2026-11-21
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
   CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
-  P1.2 typed keys, explosion feedback, status favicon, live status count, and
-  the max-player login guard are complete locally; expected next gate is 1,558.
+  P1.2 typed keys (menu + particle migration), explosion feedback, status
+  favicon, live status count, and the max-player guard are complete locally;
+  expected next gate is 1,561.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,558. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,561. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -95,6 +96,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P1.2 particle migration — 97-entry typed `IdMap`, public typed
+  lookups, and 3 join tests; packet bytes unchanged.
 - 2026-11-21: max-player guard — login rejects new sessions when the live
   count reaches max_players from server.properties; 1 join test.
 - 2026-11-21: live status count — optional online-count provider wired to the
@@ -792,6 +795,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.2 particle migration — 97-entry typed `IdMap`, public typed
+  lookups, and 3 join tests; packet bytes unchanged.
 - 2026-11-21: max-player guard — login rejects new sessions when the live
   count reaches max_players from server.properties; 1 join test.
 - 2026-11-21: live status count — optional online-count provider wired to the
@@ -1113,6 +1118,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P1.2 particle migration — 97-entry typed `IdMap`, public typed
+  lookups, and 3 join tests; packet bytes unchanged.
 - 2026-11-21: max-player guard — login rejects new sessions when the live
   count reaches max_players from server.properties; 1 join test.
 - 2026-11-21: live status count — optional online-count provider wired to the

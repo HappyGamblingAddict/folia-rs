@@ -43,6 +43,7 @@ use crate::protocol::{
     build_player_chat_packet, parse_encryption_response, parse_login_start, parse_serverbound_chat,
     parse_serverbound_chat_session_update,
 };
+use crate::registry_key::IdMap;
 use crate::tnt::{ExplosionEvent, TntStore, TntTick};
 use crate::weather::Weather;
 use crate::world::WorldStorage;
@@ -4758,115 +4759,155 @@ fn sound_packet(
     Ok(writer.into_inner())
 }
 
+/// Registry marker for the built-in `particle_type` registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParticleType;
+
+/// A typed key into the `ParticleType` registry.
+pub type ParticleKey = crate::registry_key::RegistryKey<ParticleType>;
+
+static PARTICLE_MAP: OnceLock<IdMap<ParticleKey>> = OnceLock::new();
+
+/// The simple (no option payload) particles from the 1.21.11 built-in
+/// `particle_type` registration order (`ParticleTypes`), as `(id, namespaced
+/// name)` pairs. Particles that carry option payloads are intentionally
+/// absent: sending only their id would be a malformed packet, so callers get
+/// an explicit unsupported error instead of a guess. Ids are sparse and are
+/// kept exactly as in the former match arms, so packet bytes are unchanged.
+const PARTICLE_ENTRIES: &[(i32, &str)] = &[
+    (0, "minecraft:angry_villager"),
+    (3, "minecraft:bubble"),
+    (4, "minecraft:cloud"),
+    (5, "minecraft:copper_fire_flame"),
+    (6, "minecraft:crit"),
+    (7, "minecraft:damage_indicator"),
+    (9, "minecraft:dripping_lava"),
+    (10, "minecraft:falling_lava"),
+    (11, "minecraft:landing_lava"),
+    (12, "minecraft:dripping_water"),
+    (13, "minecraft:falling_water"),
+    (17, "minecraft:elder_guardian"),
+    (18, "minecraft:enchanted_hit"),
+    (19, "minecraft:enchant"),
+    (20, "minecraft:end_rod"),
+    (22, "minecraft:explosion_emitter"),
+    (23, "minecraft:explosion"),
+    (24, "minecraft:gust"),
+    (25, "minecraft:small_gust"),
+    (26, "minecraft:gust_emitter_large"),
+    (27, "minecraft:gust_emitter_small"),
+    (28, "minecraft:sonic_boom"),
+    (30, "minecraft:firework"),
+    (31, "minecraft:fishing"),
+    (32, "minecraft:flame"),
+    (33, "minecraft:infested"),
+    (34, "minecraft:cherry_leaves"),
+    (35, "minecraft:pale_oak_leaves"),
+    (37, "minecraft:sculk_soul"),
+    (39, "minecraft:sculk_charge_pop"),
+    (40, "minecraft:soul_fire_flame"),
+    (41, "minecraft:soul"),
+    (43, "minecraft:happy_villager"),
+    (44, "minecraft:composter"),
+    (45, "minecraft:heart"),
+    (50, "minecraft:item_slime"),
+    (51, "minecraft:item_cobweb"),
+    (52, "minecraft:item_snowball"),
+    (53, "minecraft:large_smoke"),
+    (54, "minecraft:lava"),
+    (55, "minecraft:mycelium"),
+    (56, "minecraft:note"),
+    (57, "minecraft:poof"),
+    (58, "minecraft:portal"),
+    (59, "minecraft:rain"),
+    (60, "minecraft:smoke"),
+    (61, "minecraft:white_smoke"),
+    (62, "minecraft:sneeze"),
+    (63, "minecraft:spit"),
+    (64, "minecraft:squid_ink"),
+    (65, "minecraft:sweep_attack"),
+    (66, "minecraft:totem_of_undying"),
+    (67, "minecraft:underwater"),
+    (68, "minecraft:splash"),
+    (69, "minecraft:witch"),
+    (70, "minecraft:bubble_pop"),
+    (71, "minecraft:current_down"),
+    (72, "minecraft:bubble_column_up"),
+    (73, "minecraft:nautilus"),
+    (74, "minecraft:dolphin"),
+    (75, "minecraft:campfire_cosy_smoke"),
+    (76, "minecraft:campfire_signal_smoke"),
+    (77, "minecraft:dripping_honey"),
+    (78, "minecraft:falling_honey"),
+    (79, "minecraft:landing_honey"),
+    (80, "minecraft:falling_nectar"),
+    (81, "minecraft:falling_spore_blossom"),
+    (82, "minecraft:ash"),
+    (83, "minecraft:crimson_spore"),
+    (84, "minecraft:warped_spore"),
+    (85, "minecraft:spore_blossom_air"),
+    (86, "minecraft:dripping_obsidian_tear"),
+    (87, "minecraft:falling_obsidian_tear"),
+    (88, "minecraft:landing_obsidian_tear"),
+    (89, "minecraft:reverse_portal"),
+    (90, "minecraft:white_ash"),
+    (91, "minecraft:small_flame"),
+    (92, "minecraft:snowflake"),
+    (93, "minecraft:dripping_dripstone_lava"),
+    (94, "minecraft:falling_dripstone_lava"),
+    (95, "minecraft:dripping_dripstone_water"),
+    (96, "minecraft:falling_dripstone_water"),
+    (97, "minecraft:glow_squid_ink"),
+    (98, "minecraft:glow"),
+    (99, "minecraft:wax_on"),
+    (100, "minecraft:wax_off"),
+    (101, "minecraft:electric_spark"),
+    (102, "minecraft:scrape"),
+    (104, "minecraft:egg_crack"),
+    (105, "minecraft:dust_plume"),
+    (106, "minecraft:trial_spawner_detection"),
+    (107, "minecraft:trial_spawner_detection_ominous"),
+    (108, "minecraft:vault_connection"),
+    (110, "minecraft:ominous_spawning"),
+    (111, "minecraft:raid_omen"),
+    (112, "minecraft:trial_omen"),
+    (114, "minecraft:firefly"),
+];
+
+fn particle_map() -> &'static IdMap<ParticleKey> {
+    PARTICLE_MAP.get_or_init(|| {
+        let mut map = IdMap::new();
+        for &(id, name) in PARTICLE_ENTRIES {
+            map.insert(ParticleKey::new(id, name), id, name)
+                .expect("shipped particle entries must have unique, non-negative ids/names");
+        }
+        map
+    })
+}
+
+/// Resolve a particle type key by its numeric registry id.
+pub fn particle_key_by_id(id: i32) -> Option<ParticleKey> {
+    particle_map().by_id(id).cloned()
+}
+
+/// Resolve a particle type key by its namespaced name
+/// (e.g. `minecraft:end_rod`).
+pub fn particle_key_by_name(name: &str) -> Option<ParticleKey> {
+    particle_map().by_name(name).cloned()
+}
+
 /// Simple particle registry ids from the 1.21.11 built-in `particle_type`
 /// registration order (`ParticleTypes`). Particles that carry option payloads
 /// are intentionally absent: sending only their id would be a malformed packet,
 /// so callers get an explicit unsupported error instead of a guess.
+///
+/// Kept as a thin wrapper over the typed `ParticleType` map. Both bare paths
+/// (`end_rod`) and namespaced names (`minecraft:end_rod`) are accepted, and the
+/// namespace is ignored just as the former match did.
 fn particle_registry_id(name: &str) -> Option<i32> {
-    let path = name
-        .trim()
-        .split_once(':')
-        .map_or(name.trim(), |(_, path)| path);
-    match path {
-        "angry_villager" => Some(0),
-        "bubble" => Some(3),
-        "cloud" => Some(4),
-        "copper_fire_flame" => Some(5),
-        "crit" => Some(6),
-        "damage_indicator" => Some(7),
-        "dripping_lava" => Some(9),
-        "falling_lava" => Some(10),
-        "landing_lava" => Some(11),
-        "dripping_water" => Some(12),
-        "falling_water" => Some(13),
-        "elder_guardian" => Some(17),
-        "enchanted_hit" => Some(18),
-        "enchant" => Some(19),
-        "end_rod" => Some(20),
-        "explosion_emitter" => Some(22),
-        "explosion" => Some(23),
-        "gust" => Some(24),
-        "small_gust" => Some(25),
-        "gust_emitter_large" => Some(26),
-        "gust_emitter_small" => Some(27),
-        "sonic_boom" => Some(28),
-        "firework" => Some(30),
-        "fishing" => Some(31),
-        "flame" => Some(32),
-        "infested" => Some(33),
-        "cherry_leaves" => Some(34),
-        "pale_oak_leaves" => Some(35),
-        "sculk_soul" => Some(37),
-        "sculk_charge_pop" => Some(39),
-        "soul_fire_flame" => Some(40),
-        "soul" => Some(41),
-        "happy_villager" => Some(43),
-        "composter" => Some(44),
-        "heart" => Some(45),
-        "item_slime" => Some(50),
-        "item_cobweb" => Some(51),
-        "item_snowball" => Some(52),
-        "large_smoke" => Some(53),
-        "lava" => Some(54),
-        "mycelium" => Some(55),
-        "note" => Some(56),
-        "poof" => Some(57),
-        "portal" => Some(58),
-        "rain" => Some(59),
-        "smoke" => Some(60),
-        "white_smoke" => Some(61),
-        "sneeze" => Some(62),
-        "spit" => Some(63),
-        "squid_ink" => Some(64),
-        "sweep_attack" => Some(65),
-        "totem_of_undying" => Some(66),
-        "underwater" => Some(67),
-        "splash" => Some(68),
-        "witch" => Some(69),
-        "bubble_pop" => Some(70),
-        "current_down" => Some(71),
-        "bubble_column_up" => Some(72),
-        "nautilus" => Some(73),
-        "dolphin" => Some(74),
-        "campfire_cosy_smoke" => Some(75),
-        "campfire_signal_smoke" => Some(76),
-        "dripping_honey" => Some(77),
-        "falling_honey" => Some(78),
-        "landing_honey" => Some(79),
-        "falling_nectar" => Some(80),
-        "falling_spore_blossom" => Some(81),
-        "ash" => Some(82),
-        "crimson_spore" => Some(83),
-        "warped_spore" => Some(84),
-        "spore_blossom_air" => Some(85),
-        "dripping_obsidian_tear" => Some(86),
-        "falling_obsidian_tear" => Some(87),
-        "landing_obsidian_tear" => Some(88),
-        "reverse_portal" => Some(89),
-        "white_ash" => Some(90),
-        "small_flame" => Some(91),
-        "snowflake" => Some(92),
-        "dripping_dripstone_lava" => Some(93),
-        "falling_dripstone_lava" => Some(94),
-        "dripping_dripstone_water" => Some(95),
-        "falling_dripstone_water" => Some(96),
-        "glow_squid_ink" => Some(97),
-        "glow" => Some(98),
-        "wax_on" => Some(99),
-        "wax_off" => Some(100),
-        "electric_spark" => Some(101),
-        "scrape" => Some(102),
-        "egg_crack" => Some(104),
-        "dust_plume" => Some(105),
-        "trial_spawner_detection" => Some(106),
-        "trial_spawner_detection_ominous" => Some(107),
-        "vault_connection" => Some(108),
-        "ominous_spawning" => Some(110),
-        "raid_omen" => Some(111),
-        "trial_omen" => Some(112),
-        "firefly" => Some(114),
-        _ => None,
-    }
+    let trimmed = name.trim();
+    let path = trimmed.split_once(':').map_or(trimmed, |(_, path)| path);
+    particle_key_by_name(&format!("minecraft:{path}")).map(|key| key.id())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8104,6 +8145,65 @@ mod tests {
         assert!(!can_accept_session(1, 0));
         assert!(!can_accept_session(0, -1));
         assert!(!can_accept_session(1, -5));
+    }
+
+    #[test]
+    fn particle_registry_preserves_known_ids() {
+        assert_eq!(particle_registry_id("end_rod"), Some(20));
+        assert_eq!(particle_registry_id("minecraft:end_rod"), Some(20));
+        assert_eq!(particle_registry_id("explosion_emitter"), Some(22));
+        assert_eq!(
+            particle_registry_id("minecraft:explosion_emitter"),
+            Some(22)
+        );
+        assert_eq!(particle_registry_id("explosion"), Some(23));
+        assert_eq!(particle_registry_id("minecraft:explosion"), Some(23));
+        assert_eq!(particle_registry_id("firework"), Some(30));
+        assert_eq!(particle_registry_id("minecraft:firework"), Some(30));
+        assert_eq!(particle_registry_id("snowflake"), Some(92));
+        assert_eq!(particle_registry_id("minecraft:snowflake"), Some(92));
+
+        assert_eq!(particle_registry_id("  minecraft:end_rod  "), Some(20));
+        assert_eq!(particle_registry_id("custom:end_rod"), Some(20));
+
+        let end_rod = particle_key_by_name("minecraft:end_rod").expect("end rod key");
+        assert_eq!(end_rod.name(), "minecraft:end_rod");
+        assert_eq!(end_rod.id(), 20);
+        let by_id = particle_key_by_id(92).expect("snowflake key");
+        assert_eq!(by_id.name(), "minecraft:snowflake");
+        assert_eq!(by_id.id(), 92);
+    }
+
+    #[test]
+    fn particle_registry_rejects_unknown_names_and_ids() {
+        assert_eq!(particle_registry_id("not_a_particle"), None);
+        assert_eq!(particle_registry_id("minecraft:not_a_particle"), None);
+        assert_eq!(particle_registry_id(""), None);
+        assert_eq!(particle_key_by_name("end_rod"), None);
+        assert_eq!(particle_key_by_name("minecraft:not_a_particle"), None);
+        assert_eq!(particle_key_by_id(-1), None);
+        assert_eq!(particle_key_by_id(1), None);
+        assert_eq!(particle_key_by_id(115), None);
+        assert_eq!(particle_key_by_id(i32::MAX), None);
+    }
+
+    #[test]
+    fn particle_registry_has_all_entries() {
+        // The old `particle_registry_id` match had exactly 97 arms; every one
+        // was migrated mechanically to `PARTICLE_ENTRIES` with the same id and
+        // a `minecraft:` prefix, so the typed map must contain all 97 entries.
+        const EXPECTED_PARTICLE_ENTRIES: usize = 97;
+        assert_eq!(PARTICLE_ENTRIES.len(), EXPECTED_PARTICLE_ENTRIES);
+        assert_eq!(particle_map().len(), EXPECTED_PARTICLE_ENTRIES);
+
+        for &(id, name) in PARTICLE_ENTRIES {
+            let by_id = particle_key_by_id(id).expect("every entry resolves by id");
+            let by_name = particle_key_by_name(name).expect("every entry resolves by name");
+            assert_eq!(by_id.name(), name);
+            assert_eq!(by_name.name(), name);
+            assert_eq!(by_id.id(), id);
+            assert_eq!(by_name.id(), id);
+        }
     }
 
     #[test]

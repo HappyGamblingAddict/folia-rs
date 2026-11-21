@@ -1,0 +1,17 @@
+# Build context: keep out VCS metadata and all runtime/generated data.
+.git/
+target/
+snapshots/
+dist/
+capture/
+
+# Runtime data (also git-ignored). A fresh image must not bake in a world.
+run/
+world/
+logs/
+plugins/
+*.log
+server.properties
+
+# Editor/OS noise
+.DS_Store

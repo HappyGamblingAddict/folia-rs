@@ -3502,13 +3502,16 @@ deployed.
   `CONTRIBUTING.md` added and linked from README/HANDOFF; all local links
   resolve and `git diff --check` is clean.
 
-### P11.7 Packaging and deployment `[ ]` `M`
+### P11.7 Packaging and deployment `[x]` `M`
 
 - **What:** Release binaries for Windows/Linux, Docker image, systemd/service
   scripts, graceful shutdown, backup tooling, and versioned releases.
 - **Why:** Production usability.
 - **Done when:** A user can download, configure, and run a server without a
   Rust toolchain.
+- **Done (2026-11-21):** Added Dockerfile, .dockerignore, systemd unit, and a
+  tested world-backup script, with README/operator-guide links. Native-only
+  image; no published Release assets or shellcheck/docker build here.
 
 ### P11.8 Security review `[ ]` `M`
 

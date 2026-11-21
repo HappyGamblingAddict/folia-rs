@@ -1,0 +1,52 @@
+# deploy/folia-rs.service — systemd unit for a release (no-toolchain) install.
+#
+# Expectations (change the three paths below to match your host):
+#   * /opt/folia-rs/folia-server  - the release binary (cargo build --release -p folia-server)
+#   * /opt/folia-rs               - WorkingDirectory AND writable data root: put
+#                                   server.properties here; world/, run/ and
+#                                   server-icon.png are created/read here too.
+#   * user/group "folia"          - create with: useradd --system --home-dir /opt/folia-rs folia
+#                                   then: chown -R folia:folia /opt/folia-rs
+#
+# The binary's data root is baked from its build-time CARGO_MANIFEST_DIR, so a
+# copied release binary expects its data at the repository root it was built
+# from. Build from /opt/folia-rs (or move the whole tree there) so that path
+# resolves to /opt/folia-rs; otherwise set FOLIA_LEVEL_NAME/run paths cannot
+# fix it and you must rebuild at the intended location.
+#
+# Install: copy to /etc/systemd/system/folia-rs.service, then
+#   systemctl daemon-reload && systemctl enable --now folia-rs
+
+[Unit]
+Description=Folia-RS Minecraft server
+Documentation=file:/opt/folia-rs/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=folia
+Group=folia
+WorkingDirectory=/opt/folia-rs
+Environment=FOLIA_DISABLE_PLUGINS=1
+ExecStart=/opt/folia-rs/folia-server
+
+Restart=on-failure
+RestartSec=5
+
+# Graceful shutdown: the process installs a Ctrl+C (SIGINT) handler that flushes
+# terrain, updates level.dat and stops sessions. It does NOT handle SIGTERM yet,
+# so SIGINT is used for a clean stop; see scripts/backup-world.sh for backups.
+KillSignal=SIGINT
+TimeoutStopSec=15
+StandardInput=null
+
+# Hardening defaults.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/folia-rs
+
+[Install]
+WantedBy=multi-user.target

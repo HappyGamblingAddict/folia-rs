@@ -97,6 +97,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
+  operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF
   links; stale trial-chamber/test-count claims corrected in TODO/AGENTS/README.
 - 2026-11-21: P10.9 concurrency — 5 deterministic stress tests for scheduling,
@@ -815,6 +817,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
+  operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF
   links; stale trial-chamber/test-count claims corrected in TODO/AGENTS/README.
 - 2026-11-21: P10.9 concurrency — 5 deterministic stress tests for scheduling,
@@ -1157,6 +1161,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
+  operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF
   links; stale trial-chamber/test-count claims corrected in TODO/AGENTS/README.
 - 2026-11-21: P10.9 concurrency — 5 deterministic stress tests for scheduling,

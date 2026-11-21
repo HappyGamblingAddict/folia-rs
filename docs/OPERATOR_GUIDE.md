@@ -49,6 +49,54 @@ mode and the documented defaults. The default bind is IPv4 `0.0.0.0:25565`;
 `server-ip=::` selects IPv6-only. A port conflict is a hard error. Allow TCP
 25565 through the OS firewall for LAN clients.
 
+## Deployment without a Rust toolchain
+
+CI already runs `cargo build --workspace --release` on both `windows-latest`
+and `ubuntu-latest` ([ci.yml](../.github/workflows/ci.yml)); those release
+binaries can be copied straight to a host with no Rust installed. The workflow
+does not publish GitHub Release assets yet.
+
+- [Dockerfile](../Dockerfile) and [.dockerignore](../.dockerignore) — build and
+  run the native server in a container:
+
+  ```sh
+  docker build -t folia-rs .
+  docker run -d --name folia -p 25565:25565 -v folia-data:/data folia-rs
+  ```
+
+  The image is non-root, exposes `25565/TCP` and mounts `/data` for
+  `server.properties`, the level (`region/*.mca`, `level.dat`) and
+  `run/playerdata`. Keep `/data` as the mount point: the binary's data root is
+  baked from its build-time crate path, and the image builds the source at
+  `/data` to match. A fresh volume gets the offline-mode
+  `server.properties.example`. Plugins are off by default
+  (`FOLIA_DISABLE_PLUGINS=1`); `-e FOLIA_DISABLE_PLUGINS=0` enables the bridge
+  only if you supply a JVM-enabled image. The `HEALTHCHECK` is a TCP connect to
+  port 25565 (liveness only, not a full status ping); adjust it if you change
+  the port.
+
+- [deploy/folia-rs.service](../deploy/folia-rs.service) — install as
+  `/etc/systemd/system/folia-rs.service`, point `WorkingDirectory` and
+  `ExecStart` at your release binary, create the `folia` user and `chown -R
+  folia:folia` the data directory. It restarts on failure, enables
+  `NoNewPrivileges`/`PrivateTmp` with a read-only system, and uses
+  `KillSignal=SIGINT` because graceful shutdown is wired to Ctrl+C (and the
+  console `stop` command), **not** SIGTERM yet. Give it `TimeoutStopSec` time
+  to flush terrain before exit.
+
+- [scripts/backup-world.sh](../scripts/backup-world.sh) — stop the server, then
+  run with optional `BACKUP_DIR` and `KEEP` overrides (defaults: `<root>/backups`
+  and 5):
+
+  ```sh
+  scripts/backup-world.sh
+  BACKUP_DIR=/var/backups/folia KEEP=10 scripts/backup-world.sh
+  ```
+
+  It refuses to run without `world/region/` and `run/playerdata/`, archives the
+  level `region/`, `level.dat` and `playerdata` with a timestamp, and deletes
+  only old archives inside `BACKUP_DIR`.
+
 ## Console, restart and shutdown
 
 - Console commands: `help`, `list`, `ops`, `op`, `deop`, `gamemode`, `stop`.

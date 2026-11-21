@@ -263,6 +263,40 @@ Requirements:
 it explicitly for other layouts. If no Java is installed, remove the jars from
 `plugins/` (or set `FOLIA_DISABLE_PLUGINS=1`) and the native server still runs.
 
+## Deployment (no Rust toolchain)
+
+CI already compiles `folia-server` release binaries on both `windows-latest`
+and `ubuntu-latest` for every push, PR and manual dispatch — see
+[ci.yml](.github/workflows/ci.yml) (`cargo build --workspace --release`). The
+workflow runs the release build as a check but does not publish GitHub Release
+assets yet, so obtain the binary from a successful run or build it once where
+Rust is available.
+
+- [Dockerfile](Dockerfile) / [.dockerignore](.dockerignore) — multi-stage Rust
+  1.100 build. The runtime image is non-root, keeps world/playerdata/config in
+  the `/data` volume and exposes `25565/TCP`. Plugins are disabled by default
+  via `FOLIA_DISABLE_PLUGINS=1`; override with `-e FOLIA_DISABLE_PLUGINS=0`
+  (loading real plugin jars still requires a JVM-enabled custom image). The
+  healthcheck is a basic TCP connect, not a full Minecraft status handshake.
+
+  ```sh
+  docker build -t folia-rs .
+  docker run -d --name folia -p 25565:25565 -v folia-data:/data folia-rs
+  ```
+
+  The binary resolves its data root from the build-time crate path, so the
+  image builds the source at `/data` — keep that as the volume mount. A fresh
+  volume is seeded with the offline-mode `server.properties.example`.
+- [deploy/folia-rs.service](deploy/folia-rs.service) — systemd unit for a
+  release binary. Set `WorkingDirectory`/`ExecStart` to your install dir, create
+  the `folia` user and make that dir writable. It restarts on failure, applies
+  hardening (`NoNewPrivileges`, `PrivateTmp`, read-only system paths) and stops
+  gracefully via **SIGINT**: the process handles Ctrl+C / console `stop`, but
+  not SIGTERM yet.
+- [scripts/backup-world.sh](scripts/backup-world.sh) — timestamped `tar.gz` of
+  `region/`, `level.dat` and `playerdata`, with configurable `BACKUP_DIR`/`KEEP`
+  and pruning restricted to that directory. Stop the server before backing up.
+
 ## Architecture
 
 ```text

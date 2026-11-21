@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,595
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,600
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3411,21 +3411,19 @@ per-region world state is P10.3.
   `shutdown_sessions`. Watchdog now measures each `tick_one()` with a
   configurable 250 ms budget and reports slow regions into
   `RegionTickReport.slow_regions`; the server logs them. Reporting-only: no
-  interruption or crash isolation yet. 3 region tests. Watchdog now measures each `tick_one()` with a configurable 250 ms
-  budget and reports slow regions into `RegionTickReport.slow_regions`; the
-  server logs them. Reporting-only: no interruption/crash isolation yet.
-  3 region tests. Watchdog now measures each `tick_one()` with a configurable 250 ms
-  budget and reports slow regions into `RegionTickReport.slow_regions`; the
-  server logs them. Reporting-only: no interruption/crash isolation yet.
-  3 region tests.
+  interruption or crash isolation yet. 3 region tests.
 
-### P10.9 Concurrency testing `[ ]` `L`
+### P10.9 Concurrency testing `[x]` `L`
 
 - **What:** Add stress tests for region merge/split, cross-region teleports,
   entity transfer, chunk ownership, and task ordering; run with sanitizers
   where available.
 - **Why:** Data races are the highest-risk part of Folia parity.
 - **Done when:** Stress suite passes repeatedly with no races/deadlocks.
+- **Done (2026-11-21):** `tests/region_concurrency.rs` adds 5 deterministic
+  barrier/atomic/mutex stress tests for concurrent scheduling, cross-region
+  transfer, out-of-region rejection, task ordering, and RegionMap grouping.
+  All pass; no races/deadlocks/panics found. Sanitizers are not wired into CI.
 
 ### P10.10 Folia API parity `[ ]` `M`
 

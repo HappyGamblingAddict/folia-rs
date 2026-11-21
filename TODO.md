@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,587
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,592
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3458,12 +3458,17 @@ deployed.
 - **Why:** Manual fixtures rot silently.
 - **Done when:** CI can validate/reproduce the oracle.
 
-### P11.3 Fuzzing and property tests `[ ]` `M`
+### P11.3 Fuzzing and property tests `[x]` `M`
 
 - **What:** Fuzz NBT, SNBT, VarInt, packet framing, chunk palettes, worldgen
   JSON, and plugin-provided data.
 - **Why:** Untrusted data is everywhere; panics are unacceptable.
 - **Done when:** Fuzz targets run continuously and no known crashes remain.
+- **Done (2026-11-21):** `tests/data_fuzz.rs` adds 5 deterministic seeded
+  property tests for NBT/SNBT, chunk palettes, worldgen/asset JSON mutations,
+  and plugin item data; all pass in CI, no panics found, no source fixes needed.
+  libFuzzer/AFL corpora are not shipped; deterministic seedable targets run in
+  `cargo test`.
 
 ### P11.4 Benchmark suite `[ ]` `M`
 

@@ -245,7 +245,7 @@ add the same TCP 25565 allow rule in AVG's firewall settings.
 Run the core test suite:
 
 ```powershell
-cargo test --workspace    # 1199 tests
+cargo test --workspace    # 1,600+ tests; CI is authoritative
 ```
 
 The baseline is clean: `cargo fmt --check` and
@@ -305,6 +305,22 @@ into `crates/folia-core`.
 | `../decompiled/` | Full decompiled Folia 1.21.11 source (reference) |
 
 See `PORT_MAP.md` for the decompiled-Java → Rust-module mapping.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — crates, ownership model, region
+  scheduler, chunk pipeline, storage, session loop, bridge boundary and known
+  global-state limitations.
+- [Configuration reference](docs/CONFIG_REFERENCE.md) — every read
+  `server.properties` key and environment variable, with defaults and effects.
+- [Operator guide](docs/OPERATOR_GUIDE.md) — build/run, native mode,
+  verification, snapshots, shutdown, world files and the P0.5 oracle blocker.
+- [Plugin compatibility](docs/PLUGIN_COMPATIBILITY.md) — what of the Bukkit /
+  Paper / Folia API works today and what is still missing.
+- [World migration](docs/WORLD_MIGRATION.md) — level/region file layout,
+  version guard, backups and the lack of cross-version migration.
+- [Contributing](docs/CONTRIBUTING.md) — one-slice workflow, test budget,
+  subagent expectations and differential fixtures.
 
 ## Plugin compatibility
 

@@ -39,6 +39,13 @@ Architecture:
 Current size is still far below the 744k-line Folia codebase. Major gameplay
 systems remain missing.
 
+For a guided tour of the current code and operations, see the `docs/` pages:
+[architecture](docs/ARCHITECTURE.md), [configuration](docs/CONFIG_REFERENCE.md),
+[operator guide](docs/OPERATOR_GUIDE.md),
+[plugin compatibility](docs/PLUGIN_COMPATIBILITY.md),
+[world migration](docs/WORLD_MIGRATION.md) and
+[contributing](docs/CONTRIBUTING.md).
+
 ---
 
 ## Working tree state

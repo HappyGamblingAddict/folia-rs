@@ -1389,9 +1389,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   biome filtering, and generator wiring remain).
 - [ ] Desert temples, jungle temples, witch huts, ruined portals.
 - [~] Ancient cities, trial chambers (59 template NBTs shipped across both
-  families; trial chambers remain unshipped because the 191-template family
-  exceeds the 2.5 MB asset budget, and ancient-city/trial-chamber start wiring
-  still needs the jigsaw attachment path).
+  families plus 191 trial-chamber templates in `structure_templates_trial.json`;
+  ancient-city/trial-chamber start wiring still needs the jigsaw attachment
+  path).
 - [~] Nether fortresses, bastions, end cities (placement selection, weighted
   choice, and 187 bastion/End-city template NBTs shipped; fortress and
   End-city procedural `FortressPieces`/`EndCityPieces` ports and jigsaw
@@ -3490,13 +3490,17 @@ deployed.
 - **Why:** The current debug login generation is far too slow for production.
 - **Done when:** Release targets are met (see acceptance gates).
 
-### P11.6 Documentation `[ ]` `M`
+### P11.6 Documentation `[x]` `M`
 
 - **What:** Write architecture docs, config reference, operator guide, plugin
   compatibility matrix, world migration notes, and contributor porting guide.
 - **Why:** The project spans many systems and will outlive any one session.
 - **Done when:** A new contributor can build, test, and add a slice without
   reading the whole tree.
+- **Done (2026-11-21):** `docs/ARCHITECTURE.md`, `CONFIG_REFERENCE.md`,
+  `OPERATOR_GUIDE.md`, `PLUGIN_COMPATIBILITY.md`, `WORLD_MIGRATION.md`, and
+  `CONTRIBUTING.md` added and linked from README/HANDOFF; all local links
+  resolve and `git diff --check` is clean.
 
 ### P11.7 Packaging and deployment `[ ]` `M`
 

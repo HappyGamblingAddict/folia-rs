@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,575
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,578
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2124,7 +2124,7 @@ instantly on start-destroy and places on use-item-on.
   particles via the existing broadcast helpers; 2 join tests. Other gameplay
   sounds, particles, and `ClientboundWorldEvent` remain open.
 
-### P4.15 Multiplayer visibility and tracking `[ ]` `L`
+### P4.15 Multiplayer visibility and tracking `[~]` `L`
 
 - **Progress (2026-11-07):** `entity::EntityTracker` owns id-keyed entity
   records and per-viewer range sets with deterministic enter/leave/update

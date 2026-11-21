@@ -23,7 +23,10 @@ use crate::chunk_packet::ChunkPacketTemplate;
 use crate::combat::AttackCooldown;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
-use crate::entity::{BlockCollider, SessionEntityTracker, WorldCollider};
+use crate::entity::{
+    BlockCollider, Entity, SessionEntityTracker, WorldCollider, add_entity_packet,
+    entity_position_sync_packet, remove_entities_packet,
+};
 use crate::inventory;
 use crate::item_components::{ComponentValue, ItemStack};
 use crate::item_entity::{DropEntityStore, PickupTarget};
@@ -52,7 +55,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -253,6 +256,24 @@ static PENDING_JOINS: LazyLock<Mutex<Vec<PendingPlayerJoin>>> =
 static PLAYERDATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static WORLD_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// Player entities use a dedicated id range so they never collide with the
+/// session-mob ids (`entity.rs`, base 10_000) or dropped-entity ids
+/// (`item_entity.rs`, base 20_000).
+const FIRST_PLAYER_ENTITY_ID: i32 = 100_000;
+static NEXT_PLAYER_ENTITY_ID: AtomicI32 = AtomicI32::new(FIRST_PLAYER_ENTITY_ID);
+
+fn allocate_player_entity_id() -> i32 {
+    NEXT_PLAYER_ENTITY_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Protocol entity-type id for `minecraft:player`, resolved from the generated
+/// registry asset. The literal is the 1.21.11 value and is only used as a
+/// documented fallback if that lookup ever fails.
+pub fn player_entity_type_id() -> i32 {
+    const PLAYER_TYPE_FALLBACK: i32 = 155;
+    crate::registry::entity_type_id("minecraft:player").unwrap_or(PLAYER_TYPE_FALLBACK)
+}
+
 #[derive(Debug)]
 enum SessionCommand {
     SetGameMode {
@@ -322,6 +343,25 @@ enum SessionCommand {
     },
     /// `ClientboundPlayerInfoRemove` dropping one tab-list entry.
     PlayerInfoRemove { uuid: [u8; 16] },
+    /// `ClientboundAddEntity` for a remote player in the world.
+    PlayerEntitySpawn {
+        entity_id: i32,
+        uuid: [u8; 16],
+        x: f64,
+        y: f64,
+        z: f64,
+        yaw: f32,
+    },
+    /// `ClientboundMoveEntity`/`ClientboundTeleportEntity` via the position-sync
+    /// packet for a remote player.
+    PlayerEntityMove {
+        entity_id: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    /// `ClientboundRemoveEntities` for a remote player that left.
+    PlayerEntityRemove { entity_id: i32 },
 }
 
 struct ActiveSession {
@@ -333,6 +373,24 @@ struct ActiveSession {
     properties: Vec<ProfileProperty>,
     game_mode: i32,
     sender: mpsc::Sender<SessionCommand>,
+    /// Id used for this player's entity as seen by other viewers. Never shared
+    /// with the session-mob or dropped-entity id ranges.
+    entity_id: i32,
+    /// Latest (x, y, z, yaw, pitch) published by this session's play loop.
+    /// `None` until the first tick reports a position.
+    position: Option<PlayerPosition>,
+}
+
+/// Latest published player state: x, y, z, yaw, pitch.
+type PlayerPosition = (f64, f64, f64, f32, f32);
+
+struct ExistingPlayerSnapshot {
+    uuid: [u8; 16],
+    name: String,
+    properties: Vec<ProfileProperty>,
+    game_mode: i32,
+    entity_id: i32,
+    position: Option<PlayerPosition>,
 }
 
 static NEXT_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
@@ -346,6 +404,7 @@ static OPS_PATH: OnceLock<PathBuf> = OnceLock::new();
 struct SessionCommandGuard {
     id: u64,
     uuid: [u8; 16],
+    entity_id: i32,
 }
 
 impl SessionCommandGuard {
@@ -354,8 +413,10 @@ impl SessionCommandGuard {
         uuid: [u8; 16],
         properties: Vec<ProfileProperty>,
         game_mode: i32,
+        position: Option<PlayerPosition>,
     ) -> (Self, mpsc::Receiver<SessionCommand>) {
         let id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst) as u64;
+        let entity_id = allocate_player_entity_id();
         let (sender, receiver) = mpsc::channel();
         let mut sessions = SESSIONS
             .lock()
@@ -363,31 +424,46 @@ impl SessionCommandGuard {
 
         // Give the joining client every already-connected player's tab entry
         // before it sees itself. Snapshot first so this happens under one lock
-        // acquisition and without broadcasting through a nested lock.
-        let existing: Vec<([u8; 16], String, Vec<ProfileProperty>, i32)> = sessions
+        // acquisition and without broadcasting through a nested lock. Players
+        // whose position is not known yet are not spawned as world entities.
+        let existing: Vec<ExistingPlayerSnapshot> = sessions
             .values()
             .filter(|session| session.uuid != uuid)
-            .map(|session| {
-                (
-                    session.uuid,
-                    session.name.clone(),
-                    session.properties.clone(),
-                    session.game_mode,
-                )
+            .map(|session| ExistingPlayerSnapshot {
+                uuid: session.uuid,
+                name: session.name.clone(),
+                properties: session.properties.clone(),
+                game_mode: session.game_mode,
+                entity_id: session.entity_id,
+                position: session.position,
             })
             .collect();
-        for (existing_uuid, existing_name, existing_properties, existing_game_mode) in existing {
+        for existing in existing {
             let _ = sender.send(SessionCommand::PlayerInfoAdd {
-                uuid: existing_uuid,
-                name: existing_name,
-                properties: existing_properties,
-                game_mode: existing_game_mode,
+                uuid: existing.uuid,
+                name: existing.name,
+                properties: existing.properties,
+                game_mode: existing.game_mode,
             });
+            if let Some((x, y, z, yaw, _)) = existing.position {
+                let _ = sender.send(SessionCommand::PlayerEntitySpawn {
+                    entity_id: existing.entity_id,
+                    uuid: existing.uuid,
+                    x,
+                    y,
+                    z,
+                    yaw,
+                });
+            }
         }
 
-        // Announce the joining player to everyone, including itself. Vanilla
-        // clients show their own entry in the tab list, so this self-add is
-        // intentional and tolerated by the client.
+        // Announce the joining player to everyone, including itself in the tab
+        // list. Vanilla clients show their own entry in the tab list, so this
+        // self-add is intentional and tolerated by the client. The world entity
+        // is only sent to viewers that already have a position; the joining
+        // session's own first move tick corrects the initial fallback position.
+        let (spawn_x, spawn_y, spawn_z, spawn_yaw, _) =
+            position.unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0));
         for session in sessions.values() {
             let _ = session.sender.send(SessionCommand::PlayerInfoAdd {
                 uuid,
@@ -395,6 +471,16 @@ impl SessionCommandGuard {
                 properties: properties.clone(),
                 game_mode,
             });
+            if session.position.is_some() {
+                let _ = session.sender.send(SessionCommand::PlayerEntitySpawn {
+                    entity_id,
+                    uuid,
+                    x: spawn_x,
+                    y: spawn_y,
+                    z: spawn_z,
+                    yaw: spawn_yaw,
+                });
+            }
         }
         let _ = sender.send(SessionCommand::PlayerInfoAdd {
             uuid,
@@ -412,9 +498,18 @@ impl SessionCommandGuard {
                 properties,
                 game_mode,
                 sender,
+                entity_id,
+                position,
             },
         );
-        (Self { id, uuid }, receiver)
+        (
+            Self {
+                id,
+                uuid,
+                entity_id,
+            },
+            receiver,
+        )
     }
 }
 
@@ -432,6 +527,11 @@ impl Drop for SessionCommandGuard {
                 let _ = session
                     .sender
                     .send(SessionCommand::PlayerInfoRemove { uuid: self.uuid });
+                if session.position.is_some() {
+                    let _ = session.sender.send(SessionCommand::PlayerEntityRemove {
+                        entity_id: self.entity_id,
+                    });
+                }
             }
         }
     }
@@ -733,6 +833,43 @@ fn broadcast_command(mut command: impl FnMut(&ActiveSession) -> Option<SessionCo
     for session in sessions.values() {
         if let Some(command) = command(session)
             && session.sender.send(command).is_ok()
+        {
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// Publish a session's latest world position/orientation to the shared player
+/// registry so other viewers can spawn and move that player's entity.
+pub fn update_player_state(uuid: [u8; 16], x: f64, y: f64, z: f64, yaw: f32, pitch: f32) {
+    let mut sessions = SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(session) = sessions.get_mut(&uuid) {
+        session.position = Some((x, y, z, yaw, pitch));
+    }
+}
+
+/// Broadcast one player's movement to every other viewer that has reported a
+/// position. The sender is skipped because the local client renders its own
+/// player from the Join Game packet.
+///
+/// There is no per-viewer range culling in this slice: every positioned viewer
+/// receives the move regardless of distance. Distance-based enter/leave is a
+/// later P4.15 slice.
+fn broadcast_player_entity_move(sender: [u8; 16], entity_id: i32, x: f64, y: f64, z: f64) -> usize {
+    let sessions = SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut sent = 0;
+    for session in sessions.values() {
+        if session.uuid != sender
+            && session.position.is_some()
+            && session
+                .sender
+                .send(SessionCommand::PlayerEntityMove { entity_id, x, y, z })
+                .is_ok()
         {
             sent += 1;
         }
@@ -1735,12 +1872,14 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
     let mut next_chat_index = 0i32;
     let mut attack_cooldown = AttackCooldown::new(4.0);
-    let (_console_guard, console_commands) = SessionCommandGuard::register(
+    let (_player_guard, console_commands) = SessionCommandGuard::register(
         &session.name,
         session.uuid,
         profile_properties,
         session.game_mode,
+        Some((session.x, session.y, session.z, session.yaw, session.pitch)),
     );
+    let player_entity_id = _player_guard.entity_id;
 
     loop {
         if shutdown_requested() {
@@ -1761,6 +1900,21 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         }
         if last_entity_tick.elapsed() >= SESSION_TICK_INTERVAL {
             attack_cooldown.tick();
+            update_player_state(
+                session.uuid,
+                session.x,
+                session.y,
+                session.z,
+                session.yaw,
+                session.pitch,
+            );
+            broadcast_player_entity_move(
+                session.uuid,
+                player_entity_id,
+                session.x,
+                session.y,
+                session.z,
+            );
             for (event, param) in weather.tick(&mut weather_rng) {
                 write_packet(&mut stream, &game_event_packet(event, param))?;
             }
@@ -2609,6 +2763,32 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 SessionCommand::PlayerInfoRemove { uuid } => {
                     write_packet(&mut stream, &player_info_remove_packet(uuid))?;
+                }
+                SessionCommand::PlayerEntitySpawn {
+                    entity_id,
+                    uuid,
+                    x,
+                    y,
+                    z,
+                    yaw,
+                } => {
+                    let mut entity = Entity::new(entity_id, uuid, player_entity_type_id(), x, y, z);
+                    entity.yaw = yaw;
+                    // `add_entity_packet` already includes an empty entity-data
+                    // list, which is a valid minimal metadata payload. Skins
+                    // arrive through the tab list; equipment and typed metadata
+                    // for remote players are a later slice.
+                    write_packet(&mut stream, &add_entity_packet(&entity))?;
+                }
+                SessionCommand::PlayerEntityMove { entity_id, x, y, z } => {
+                    let entity = Entity::new(entity_id, [0; 16], player_entity_type_id(), x, y, z);
+                    // The move command carries no orientation, so the sync
+                    // packet uses zero yaw/pitch; orientation tracking is a
+                    // later slice.
+                    write_packet(&mut stream, &entity_position_sync_packet(&entity))?;
+                }
+                SessionCommand::PlayerEntityRemove { entity_id } => {
+                    write_packet(&mut stream, &remove_entities_packet(&[entity_id]))?;
                 }
             }
         }
@@ -9177,8 +9357,13 @@ mod tests {
     }
     #[test]
     fn console_gamemode_reaches_a_registered_session() {
-        let (guard, receiver) =
-            SessionCommandGuard::register("ConsoleTarget", [0x9a; 16], Vec::new(), 0);
+        let (guard, receiver) = SessionCommandGuard::register(
+            "ConsoleTarget",
+            [0x9a; 16],
+            Vec::new(),
+            0,
+            Some((0.0, 64.0, 0.0, 0.0, 0.0)),
+        );
         let worker = std::thread::spawn(move || {
             loop {
                 match receiver.recv_timeout(Duration::from_secs(2)) {
@@ -9205,7 +9390,13 @@ mod tests {
     #[test]
     fn bridge_commands_reach_the_registered_live_session() {
         let uuid = [0x9b; 16];
-        let (guard, receiver) = SessionCommandGuard::register("BridgeQueue", uuid, Vec::new(), 0);
+        let (guard, receiver) = SessionCommandGuard::register(
+            "BridgeQueue",
+            uuid,
+            Vec::new(),
+            0,
+            Some((0.0, 64.0, 0.0, 0.0, 0.0)),
+        );
         // Registration queues tab-list adds (one per existing session plus our
         // own); discard that startup noise before checking bridge commands.
         while receiver.try_recv().is_ok() {}
@@ -9498,8 +9689,13 @@ mod tests {
     fn unsigned_player_chat_is_broadcast_as_disguised_chat() {
         let mut session = PlayerSession::new("ChatSender".into(), [0x91; 16], 0.0, 64.0, 0.0);
         session.uuid = [0x91; 16];
-        let (_guard, receiver) =
-            SessionCommandGuard::register(&session.name, session.uuid, Vec::new(), 0);
+        let (_guard, receiver) = SessionCommandGuard::register(
+            &session.name,
+            session.uuid,
+            Vec::new(),
+            0,
+            Some((session.x, session.y, session.z, session.yaw, session.pitch)),
+        );
         let mut remote = None;
         let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
         let update =
@@ -9524,8 +9720,13 @@ mod tests {
     fn signed_player_chat_verifies_the_session_key_and_sequence() {
         let uuid = [0x92; 16];
         let session = PlayerSession::new("SignedSender".into(), uuid, 0.0, 64.0, 0.0);
-        let (_guard, receiver) =
-            SessionCommandGuard::register(&session.name, session.uuid, Vec::new(), 0);
+        let (_guard, receiver) = SessionCommandGuard::register(
+            &session.name,
+            session.uuid,
+            Vec::new(),
+            0,
+            Some((session.x, session.y, session.z, session.yaw, session.pitch)),
+        );
         let now_ms = epoch_millis();
         let mut signing =
             ChatSigningSession::deterministic_for_tests(uuid, [0x24; 16], [0x5A; 32], now_ms)
@@ -9959,8 +10160,13 @@ mod tests {
         }
 
         let uuid = [0xB1; 16];
-        let (_guard, receiver) =
-            SessionCommandGuard::register("ExplosionFeedback", uuid, Vec::new(), 0);
+        let (_guard, receiver) = SessionCommandGuard::register(
+            "ExplosionFeedback",
+            uuid,
+            Vec::new(),
+            0,
+            Some((0.0, 64.0, 0.0, 0.0, 0.0)),
+        );
         while receiver.try_recv().is_ok() {}
 
         let queued = broadcast_explosion_effects(1.0, 2.0, 3.0, 4.0, 99);
@@ -10036,7 +10242,13 @@ mod tests {
     #[test]
     fn tnt_prime_broadcast_is_a_sound_only() {
         let uuid = [0xB2; 16];
-        let (_guard, receiver) = SessionCommandGuard::register("TntPrime", uuid, Vec::new(), 0);
+        let (_guard, receiver) = SessionCommandGuard::register(
+            "TntPrime",
+            uuid,
+            Vec::new(),
+            0,
+            Some((0.0, 64.0, 0.0, 0.0, 0.0)),
+        );
         while receiver.try_recv().is_ok() {}
 
         let queued = broadcast_tnt_prime(4.5, 5.5, 6.5, 1234);
@@ -11429,5 +11641,131 @@ mod tests {
         assert_eq!(bucket_fluid_source("minecraft:bucket"), None);
         assert_eq!(bucket_fluid_source("minecraft:WATER_BUCKET"), None);
         assert_eq!(bucket_fluid_source(""), None);
+    }
+
+    #[test]
+    fn player_entity_ids_are_distinct_from_session_mobs() {
+        let first = allocate_player_entity_id();
+        let second = allocate_player_entity_id();
+        assert!(first >= FIRST_PLAYER_ENTITY_ID);
+        assert!(second >= FIRST_PLAYER_ENTITY_ID);
+        assert_ne!(first, second);
+        assert_eq!(second, first + 1);
+        assert!(
+            FIRST_PLAYER_ENTITY_ID > 20_000,
+            "session mobs/drops use lower ranges"
+        );
+    }
+
+    #[test]
+    fn player_info_spawn_packet_uses_player_type() {
+        assert_eq!(
+            player_entity_type_id(),
+            crate::registry::entity_type_id("minecraft:player").unwrap()
+        );
+        assert_eq!(player_entity_type_id(), 155);
+
+        let entity_id = 123_456;
+        let uuid = [0xC7; 16];
+        let mut entity = Entity::new(entity_id, uuid, player_entity_type_id(), 1.5, 70.0, -2.5);
+        entity.yaw = 90.0;
+        let packet = add_entity_packet(&entity);
+        let mut reader = PacketReader::new(&packet);
+        assert_eq!(
+            reader.read_varint().unwrap(),
+            crate::entity::CLIENTBOUND_ADD_ENTITY
+        );
+        assert_eq!(reader.read_varint().unwrap(), entity_id);
+        assert_eq!(reader.read_bytes(16).unwrap(), uuid);
+        assert_eq!(reader.read_varint().unwrap(), player_entity_type_id());
+        assert_eq!(reader.read_f64().unwrap(), 1.5);
+        assert_eq!(reader.read_f64().unwrap(), 70.0);
+        assert_eq!(reader.read_f64().unwrap(), -2.5);
+    }
+
+    #[test]
+    fn player_entity_spawn_move_and_remove_are_announced_between_viewers() {
+        let viewer_uuid = [0xC1; 16];
+        let newcomer_uuid = [0xC2; 16];
+        let (viewer_guard, viewer_receiver) = SessionCommandGuard::register(
+            "Viewer",
+            viewer_uuid,
+            Vec::new(),
+            0,
+            Some((0.0, 64.0, 0.0, 0.0, 0.0)),
+        );
+        while viewer_receiver.try_recv().is_ok() {}
+
+        let (_newcomer_guard, newcomer_receiver) = SessionCommandGuard::register(
+            "Newcomer",
+            newcomer_uuid,
+            Vec::new(),
+            0,
+            Some((10.0, 65.0, 20.0, 90.0, 0.0)),
+        );
+        let mut saw_viewer_spawn = false;
+        for command in newcomer_receiver.try_iter() {
+            if let SessionCommand::PlayerEntitySpawn { uuid, x, .. } = command
+                && uuid == viewer_uuid
+                && x == 0.0
+            {
+                saw_viewer_spawn = true;
+            }
+        }
+        assert!(
+            saw_viewer_spawn,
+            "newcomer should see the positioned viewer"
+        );
+
+        let mut newcomer_entity_id = None;
+        for command in viewer_receiver.try_iter() {
+            if let SessionCommand::PlayerEntitySpawn {
+                entity_id,
+                uuid,
+                x,
+                y,
+                z,
+                ..
+            } = command
+                && uuid == newcomer_uuid
+            {
+                assert!((x, y, z) == (10.0, 65.0, 20.0));
+                assert!(entity_id >= FIRST_PLAYER_ENTITY_ID);
+                newcomer_entity_id = Some(entity_id);
+            }
+        }
+        let entity_id = newcomer_entity_id.expect("viewer should see the newcomer spawn");
+
+        update_player_state(newcomer_uuid, 11.0, 65.0, 21.0, 90.0, 0.0);
+        assert!(broadcast_player_entity_move(newcomer_uuid, entity_id, 11.0, 65.0, 21.0) >= 1);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_move = false;
+        while Instant::now() < deadline {
+            match viewer_receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(SessionCommand::PlayerEntityMove {
+                    entity_id: id, x, ..
+                }) if id == entity_id && x == 11.0 => {
+                    saw_move = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_move, "viewer should see the newcomer move");
+
+        drop(_newcomer_guard);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_remove = false;
+        while Instant::now() < deadline {
+            match viewer_receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(SessionCommand::PlayerEntityRemove { entity_id: id }) if id == entity_id => {
+                    saw_remove = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_remove, "viewer should see the newcomer removed");
+        drop(viewer_guard);
     }
 }

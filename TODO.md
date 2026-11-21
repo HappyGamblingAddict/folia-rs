@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,542
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,544
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -2113,12 +2113,16 @@ instantly on start-destroy and places on use-item-on.
   updates, display names, player entities/world visibility, scoreboard, teams,
   titles/action bar, and boss bars.
 
-### P4.14 Sounds, particles, and world events `[ ]` `M`
+### P4.14 Sounds, particles, and world events `[~]` `M`
 
 - **What:** Add sound/particle/world-event packet helpers and trigger them from
   block/item/entity behavior.
 - **Why:** Feedback is part of parity and plugin APIs.
 - **Done when:** Representative actions emit Java-matching packets.
+- **Progress (2026-11-21):** TNT priming and explosions now emit the vanilla
+  sounds (`entity.tnt.primed`, `entity.generic.explode`) and explosion
+  particles via the existing broadcast helpers; 2 join tests. Other gameplay
+  sounds, particles, and `ClientboundWorldEvent` remain open.
 
 ### P4.15 Multiplayer visibility and tracking `[ ]` `L`
 

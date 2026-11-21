@@ -664,6 +664,29 @@ pub fn broadcast_particle(
     })
 }
 
+/// Broadcast the vanilla flint-and-steel TNT prime feedback sound (block
+/// category, unit volume/pitch). Returns the number of commands queued.
+pub fn broadcast_tnt_prime(x: f64, y: f64, z: f64, seed: i64) -> usize {
+    broadcast_sound("minecraft:entity.tnt.primed", 1, x, y, z, 1.0, 1.0, seed)
+}
+
+/// Broadcast the sound and particles for one explosion: a `generic.explode`
+/// sound (block category, volume clamped to at least 1.0), one `explosion_emitter`
+/// and eight `explosion` particles. Returns the total number of queued commands.
+pub fn broadcast_explosion_effects(x: f64, y: f64, z: f64, radius: f32, seed: i64) -> usize {
+    broadcast_sound(
+        "minecraft:entity.generic.explode",
+        1,
+        x,
+        y,
+        z,
+        radius.max(1.0),
+        1.0,
+        seed,
+    ) + broadcast_particle("explosion_emitter", x, y, z, 0.0, 0.0, 0.0, 0.0, 1, false)
+        + broadcast_particle("explosion", x, y, z, 0.0, 0.0, 0.0, 0.0, 8, false)
+}
+
 fn broadcast_command(mut command: impl FnMut(&ActiveSession) -> Option<SessionCommand>) -> usize {
     let sessions = SESSIONS
         .lock()
@@ -1923,6 +1946,9 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     return Err(error);
                 }
             }
+            for event in &tnt_tick.explosions {
+                broadcast_explosion_effects(event.x, event.y, event.z, 4.0, game_tick as i64);
+            }
             for change in &tnt_changes {
                 crate::block_update::broadcast_change(change);
             }
@@ -2977,6 +3003,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                     ) {
                                         write_packet(&mut stream, &packet)?;
                                     }
+                                    broadcast_tnt_prime(
+                                        f64::from(clicked.x()) + 0.5,
+                                        f64::from(clicked.y()) + 0.5,
+                                        f64::from(clicked.z()) + 0.5,
+                                        game_tick as i64,
+                                    );
                                     wear_flint_and_steel(&mut stream, &mut session, &mut drop_rng)?;
                                     continue;
                                 }
@@ -9594,6 +9626,148 @@ mod tests {
             .is_none(),
             "option-carrying particles fail loudly"
         );
+    }
+
+    #[test]
+    fn explosion_feedback_queues_sound_and_particles() {
+        use std::net::TcpListener;
+
+        fn command_packet(command: SessionCommand) -> Option<Vec<u8>> {
+            match command {
+                SessionCommand::Sound {
+                    sound,
+                    category,
+                    x,
+                    y,
+                    z,
+                    volume,
+                    pitch,
+                    seed,
+                } => sound_packet(&sound, category, x, y, z, volume, pitch, seed).ok(),
+                SessionCommand::Particle {
+                    particle,
+                    x,
+                    y,
+                    z,
+                    offset_x,
+                    offset_y,
+                    offset_z,
+                    speed,
+                    count,
+                    force,
+                } => particle_packet(
+                    &particle, x, y, z, offset_x, offset_y, offset_z, speed, count, force,
+                ),
+                _ => None,
+            }
+        }
+
+        let uuid = [0xB1; 16];
+        let (_guard, receiver) =
+            SessionCommandGuard::register("ExplosionFeedback", uuid, Vec::new(), 0);
+        while receiver.try_recv().is_ok() {}
+
+        let queued = broadcast_explosion_effects(1.0, 2.0, 3.0, 4.0, 99);
+        assert!(queued >= 3, "one sound and two particles per session");
+
+        let mut packets = Vec::new();
+        for _ in 0..3 {
+            let command = receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("explosion feedback command");
+            packets.push(command_packet(command).expect("sound/particle has a wire packet"));
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client_stream = TcpStream::connect(address).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let mut server = Connection::new(server_stream);
+        let mut client = Connection::new(client_stream);
+        for packet in &packets {
+            server.write_packet(packet).unwrap();
+        }
+
+        let sound = client.read_packet().unwrap();
+        let mut reader = PacketReader::new(&sound);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_SOUND);
+        assert_eq!(reader.read_varint().unwrap(), 0, "direct sound holder");
+        assert_eq!(
+            reader.read_string().unwrap(),
+            "minecraft:entity.generic.explode"
+        );
+        assert!(!reader.read_bool().unwrap(), "no fixed range");
+        assert_eq!(reader.read_varint().unwrap(), 1, "block category");
+        assert_eq!(reader.read_i32().unwrap(), 8);
+        assert_eq!(reader.read_i32().unwrap(), 16);
+        assert_eq!(reader.read_i32().unwrap(), 24);
+        assert_eq!(reader.read_f32().unwrap(), 4.0, "volume uses the radius");
+        assert_eq!(reader.read_f32().unwrap(), 1.0);
+        assert_eq!(reader.read_i64().unwrap(), 99);
+        assert!(reader.is_empty());
+
+        let emitter = client.read_packet().unwrap();
+        let mut reader = PacketReader::new(&emitter);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_LEVEL_PARTICLES);
+        assert!(!reader.read_bool().unwrap());
+        assert!(!reader.read_bool().unwrap());
+        assert_eq!(reader.read_f64().unwrap(), 1.0);
+        assert_eq!(reader.read_f64().unwrap(), 2.0);
+        assert_eq!(reader.read_f64().unwrap(), 3.0);
+        for _ in 0..4 {
+            assert_eq!(reader.read_f32().unwrap(), 0.0);
+        }
+        assert_eq!(reader.read_i32().unwrap(), 1, "explosion_emitter count");
+        assert_eq!(reader.read_varint().unwrap(), 22, "explosion_emitter id");
+        assert!(reader.is_empty());
+
+        let blast = client.read_packet().unwrap();
+        let mut reader = PacketReader::new(&blast);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_LEVEL_PARTICLES);
+        assert!(!reader.read_bool().unwrap());
+        assert!(!reader.read_bool().unwrap());
+        assert_eq!(reader.read_f64().unwrap(), 1.0);
+        assert_eq!(reader.read_f64().unwrap(), 2.0);
+        assert_eq!(reader.read_f64().unwrap(), 3.0);
+        for _ in 0..4 {
+            assert_eq!(reader.read_f32().unwrap(), 0.0);
+        }
+        assert_eq!(reader.read_i32().unwrap(), 8, "explosion count");
+        assert_eq!(reader.read_varint().unwrap(), 23, "explosion id");
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn tnt_prime_broadcast_is_a_sound_only() {
+        let uuid = [0xB2; 16];
+        let (_guard, receiver) = SessionCommandGuard::register("TntPrime", uuid, Vec::new(), 0);
+        while receiver.try_recv().is_ok() {}
+
+        let queued = broadcast_tnt_prime(4.5, 5.5, 6.5, 1234);
+        assert!(queued >= 1, "a prime is one sound per session");
+
+        let command = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("prime sound command");
+        match command {
+            SessionCommand::Sound {
+                sound,
+                category,
+                x,
+                y,
+                z,
+                volume,
+                pitch,
+                seed,
+            } => {
+                assert_eq!(sound, "minecraft:entity.tnt.primed");
+                assert_eq!(category, 1, "block category");
+                assert_eq!((x, y, z), (4.5, 5.5, 6.5));
+                assert_eq!((volume, pitch), (1.0, 1.0));
+                assert_eq!(seed, 1234);
+            }
+            other => panic!("a TNT prime must be sound only, got {other:?}"),
+        }
     }
 
     #[test]

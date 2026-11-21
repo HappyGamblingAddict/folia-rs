@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,578
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,587
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3080,12 +3080,16 @@ chat signing.
 - **Why:** Common production deployment.
 - **Done when:** A proxy can pass players with UUID/skin data.
 
-### P8.9 Protocol robustness and fuzzing `[ ]` `M`
+### P8.9 Protocol robustness and fuzzing `[x]` `M`
 
 - **What:** Fuzz VarInts, NBT depth, strings, compression, packet lengths, and
   malformed handshakes; add limits and tests.
 - **Why:** Network input is untrusted.
 - **Done when:** Fuzz targets run in CI with no panics/hangs.
+- **Done (2026-11-21):** `tests/protocol_fuzz.rs` adds 9 deterministic seeded
+  property tests over VarInts, malformed packets, strings, compression, and NBT
+  depth/truncation. All pass in CI; no parser panics found, so no source fixes
+  were needed. Deep-stack fuzzing and libFuzzer corpora remain out of scope.
 
 ---
 

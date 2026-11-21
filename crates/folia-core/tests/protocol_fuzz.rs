@@ -304,3 +304,25 @@ fn truncated_and_random_nbt_never_panics() {
         });
     }
 }
+
+// 7. A small network payload of deeply nested lists must be rejected by the
+// binary NBT depth guard instead of overflowing the parser's stack (P11.8).
+#[test]
+fn nbt_network_deep_nesting_is_rejected() {
+    let depth = 2048;
+    let mut bytes = Vec::with_capacity(depth * 5 + 7);
+    bytes.push(9); // network root tag id: List
+    for _ in 0..depth {
+        bytes.extend_from_slice(&[9, 0, 0, 0, 1]); // element type List, length 1
+    }
+    bytes.extend_from_slice(&[1, 0, 0, 0, 1, 0]); // final List of one Byte
+
+    let error = assert_no_panic("PacketReader::read_nbt_any (deep)", || {
+        PacketReader::new(&bytes).read_nbt_any()
+    })
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("nesting depth"),
+        "unexpected error: {error}"
+    );
+}

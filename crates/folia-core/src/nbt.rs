@@ -5,6 +5,12 @@ use std::io::{self, Read, Write};
 
 const MAX_COLLECTION_LEN: usize = 16 * 1024 * 1024;
 
+/// Maximum nesting depth accepted by the binary NBT reader. This mirrors the
+/// SNBT parser's limit (`snbt::MAX_DEPTH`) and vanilla's modern `TagParser`;
+/// without it a small network payload of nested lists/compounds can overflow
+/// the stack and crash the process before any collection-length guard applies.
+pub const MAX_DEPTH: usize = 512;
+
 /// Minecraft NBT tag types (big-endian, Java DataOutput format).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tag {
@@ -139,7 +145,7 @@ pub fn read_any_tag<R: Read>(reader: &mut R) -> io::Result<Tag> {
     if id == 0 {
         return Ok(Tag::End);
     }
-    read_payload(reader, id)
+    read_payload(reader, id, 0)
 }
 
 pub fn write_any_tag<W: Write>(writer: &mut W, tag: &Tag) -> io::Result<()> {
@@ -156,11 +162,14 @@ pub fn read_named_root<R: Read>(reader: &mut R) -> io::Result<(String, Tag)> {
         return Ok((String::new(), Tag::End));
     }
     let name = read_string(reader)?;
-    let tag = read_payload(reader, id)?;
+    let tag = read_payload(reader, id, 0)?;
     Ok((name, tag))
 }
 
-fn read_payload<R: Read>(reader: &mut R, id: u8) -> io::Result<Tag> {
+fn read_payload<R: Read>(reader: &mut R, id: u8, depth: usize) -> io::Result<Tag> {
+    if depth >= MAX_DEPTH {
+        return Err(invalid(format!("NBT nesting depth exceeds {MAX_DEPTH}")));
+    }
     match id {
         1 => Ok(Tag::Byte(read_u8(reader)? as i8)),
         2 => Ok(Tag::Short(read_i16(reader)?)),
@@ -186,7 +195,7 @@ fn read_payload<R: Read>(reader: &mut R, id: u8) -> io::Result<Tag> {
             }
             let mut items = Vec::with_capacity(length.min(1024 * 1024));
             for _ in 0..length {
-                items.push(read_payload(reader, element_id)?);
+                items.push(read_payload(reader, element_id, depth + 1)?);
             }
             Ok(Tag::List(items))
         }
@@ -198,7 +207,7 @@ fn read_payload<R: Read>(reader: &mut R, id: u8) -> io::Result<Tag> {
                     return Ok(Tag::Compound(entries));
                 }
                 let name = read_string(reader)?;
-                let value = read_payload(reader, child_id)?;
+                let value = read_payload(reader, child_id, depth + 1)?;
                 entries.push((name, value));
             }
         }
@@ -476,5 +485,46 @@ mod tests {
         )]);
         let bytes = write_root_to_vec(&tag).unwrap();
         assert_eq!(read_root(&mut bytes.as_slice()).unwrap(), tag);
+    }
+
+    /// A chain of nested lists encoded by hand, without recursion, so the test
+    /// itself cannot overflow the stack before the parser does.
+    fn deeply_nested_lists(depth: usize, named: bool) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(depth * 5 + 10);
+        if named {
+            bytes.extend_from_slice(&[9, 0, 0]); // root List tag, empty name
+        } else {
+            bytes.push(9); // network root tag id
+        }
+        for _ in 0..depth {
+            bytes.extend_from_slice(&[9, 0, 0, 0, 1]); // element type List, length 1
+        }
+        bytes.extend_from_slice(&[1, 0, 0, 0, 1, 0]); // final List of one Byte
+        bytes
+    }
+
+    #[test]
+    fn rejects_excessive_nesting_depth() {
+        let depth = MAX_DEPTH * 4;
+
+        let named = deeply_nested_lists(depth, true);
+        let error = read_root(&mut named.as_slice()).unwrap_err();
+        assert!(
+            error.to_string().contains("nesting depth"),
+            "unexpected error: {error}"
+        );
+
+        let any = deeply_nested_lists(depth, false);
+        let error = read_any_tag(&mut any.as_slice()).unwrap_err();
+        assert!(
+            error.to_string().contains("nesting depth"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn accepts_nesting_below_the_limit() {
+        let bytes = deeply_nested_lists(64, true);
+        assert!(read_root(&mut bytes.as_slice()).is_ok());
     }
 }

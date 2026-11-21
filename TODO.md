@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,600
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,603
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3513,12 +3513,17 @@ deployed.
   tested world-backup script, with README/operator-guide links. Native-only
   image; no published Release assets or shellcheck/docker build here.
 
-### P11.8 Security review `[ ]` `M`
+### P11.8 Security review `[x]` `M`
 
 - **What:** Review authentication, packet handling, path traversal, plugin
   classloading, permission checks, and denial-of-service limits.
 - **Why:** A public server is an exposed service.
 - **Done when:** Known issues are fixed and a checklist is part of release.
+- **Done (2026-11-21):** `docs/SECURITY_REVIEW.md` documents the release
+  checklist and remaining risks. Fixed a remote stack-overflow DoS by capping
+  binary NBT recursion at 512 (matching SNBT) with 3 regression tests.
+  Remaining risks (curl-based online-mode, rate limits, signed plugins,
+  permission breadth) are documented, not hidden.
 
 ### P11.9 Acceptance gates for “1.0” `[ ]`
 

@@ -13,9 +13,10 @@ Last updated: 2026-11-21
   P1.2 typed keys (menu + particle migration), explosion feedback, status,
   max-player guard, P7.6 game rules, game-event model, P4.15 player entities,
   P8.9/P11.3 fuzz tests, P10.8 watchdog, and P10.9 concurrency stress tests
-  are complete locally; P11.6 documentation is done; expected next gate is 1,600.
+  are complete locally; P11.6/P11.7/P11.8 docs, packaging, and security review
+  are done; expected next gate is 1,603.
 - Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,600. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,603. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -97,6 +98,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
+  cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
   operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF
@@ -817,6 +820,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
+  cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
   operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF
@@ -1161,6 +1166,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
+  cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
   operator docs. Docker/shellcheck unavailable locally.
 - 2026-11-21: P11.6 documentation — six docs under `docs/` plus README/HANDOFF

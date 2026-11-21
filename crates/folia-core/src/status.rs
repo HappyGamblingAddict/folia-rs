@@ -19,6 +19,8 @@ pub struct StatusConfig {
     pub accept_logins: bool,
     /// Advertised as `enforcesSecureChat` in the status JSON.
     pub enforces_secure_chat: bool,
+    /// Server-list favicon as a `data:image/png;base64,...` URI, when present.
+    pub favicon: Option<String>,
 }
 
 impl Default for StatusConfig {
@@ -31,12 +33,13 @@ impl Default for StatusConfig {
             online_players: 0,
             accept_logins: false,
             enforces_secure_chat: false,
+            favicon: None,
         }
     }
 }
 
 pub fn status_json(config: &StatusConfig) -> String {
-    json!({
+    let mut value = json!({
         "version": {
             "name": config.version_name,
             "protocol": config.protocol_version,
@@ -51,8 +54,69 @@ pub fn status_json(config: &StatusConfig) -> String {
         },
         "enforcesSecureChat": config.enforces_secure_chat,
         "previewsChat": false,
-    })
-    .to_string()
+    });
+    if let Some(favicon) = &config.favicon {
+        value["favicon"] = json!(favicon);
+    }
+    value.to_string()
+}
+
+/// The first eight bytes of every PNG file, per the PNG specification.
+const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Encode raw bytes as standard padded base64. This is a small private helper
+/// so the crate does not need a new dependency for one fixed-size use case.
+fn base64_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let mut full = input.chunks_exact(3);
+    for chunk in &mut full {
+        let (a, b, c) = (chunk[0], chunk[1], chunk[2]);
+        out.push(BASE64_ALPHABET[(a >> 2) as usize] as char);
+        out.push(BASE64_ALPHABET[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
+        out.push(BASE64_ALPHABET[(((b & 0x0f) << 2) | (c >> 6)) as usize] as char);
+        out.push(BASE64_ALPHABET[(c & 0x3f) as usize] as char);
+    }
+    match full.remainder() {
+        [a] => {
+            out.push(BASE64_ALPHABET[(a >> 2) as usize] as char);
+            out.push(BASE64_ALPHABET[((a & 0x03) << 4) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        [a, b] => {
+            out.push(BASE64_ALPHABET[(a >> 2) as usize] as char);
+            out.push(BASE64_ALPHABET[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
+            out.push(BASE64_ALPHABET[((b & 0x0f) << 2) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Load an optional server-list favicon from `path`, which is conventionally
+/// `server-icon.png` in the server root. A missing file is not an error; an
+/// existing file that is not a PNG is, so a misconfigured icon never silently
+/// advertises garbage.
+pub fn load_favicon(path: impl AsRef<std::path::Path>) -> io::Result<Option<String>> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("favicon {} is not a PNG (bad signature)", path.display()),
+        ));
+    }
+    Ok(Some(format!(
+        "data:image/png;base64,{}",
+        base64_encode(&bytes)
+    )))
 }
 
 /// Serve Minecraft status pings from the given listener. This function blocks;
@@ -169,6 +233,13 @@ fn handle_status(stream: &mut TcpStream, config: &StatusConfig) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temp_path(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("folia-status-{label}-{}-{n}", std::process::id()))
+    }
 
     #[test]
     fn status_json_contains_protocol_and_motd() {
@@ -178,6 +249,65 @@ mod tests {
         assert_eq!(value["version"]["name"], "1.21.11");
         assert_eq!(value["description"]["text"], "Folia-RS");
         assert_eq!(value["players"]["max"], 20);
+    }
+
+    #[test]
+    fn status_json_omits_favicon_when_none() {
+        let config = StatusConfig::default();
+        assert!(config.favicon.is_none());
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert!(value.get("favicon").is_none());
+    }
+
+    #[test]
+    fn status_json_includes_exact_favicon_when_present() {
+        let uri = "data:image/png;base64,iVBORw0KGgo=".to_owned();
+        let config = StatusConfig {
+            favicon: Some(uri.clone()),
+            ..StatusConfig::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&status_json(&config)).unwrap();
+        assert_eq!(value["favicon"], uri);
+        assert_eq!(value["version"]["name"], "1.21.11");
+        assert_eq!(value["version"]["protocol"], 774);
+    }
+
+    #[test]
+    fn base64_encode_known_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_encode(&PNG_SIGNATURE), "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn load_favicon_missing_path_returns_none() {
+        let path = temp_path("missing");
+        let _ = std::fs::remove_file(&path);
+        assert!(load_favicon(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn load_favicon_rejects_non_png() {
+        let path = temp_path("not-png");
+        std::fs::write(&path, b"this is definitely not a PNG").unwrap();
+        let error = load_favicon(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("not a PNG"), "{error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_favicon_encodes_minimal_png_header() {
+        let path = temp_path("png");
+        std::fs::write(&path, PNG_SIGNATURE).unwrap();
+        assert_eq!(
+            load_favicon(&path).unwrap(),
+            Some("data:image/png;base64,iVBORw0KGgo=".to_owned())
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         let storage = folia_core::world::shared_overworld(root.join(&level_name));
         folia_core::world::lock(storage).set_tick_seed(seed.unwrap_or(0));
     }
-    start_status_server(&properties)?;
+    start_status_server(&properties, &root)?;
     run_server(&root, &root.join(&level_name))
 }
 
@@ -217,7 +217,7 @@ fn log_level_data(root: &std::path::Path, level_name: &str) -> Option<i64> {
     }
 }
 
-fn start_status_server(properties: &ServerProperties) -> Result<()> {
+fn start_status_server(properties: &ServerProperties, root: &std::path::Path) -> Result<()> {
     let port = properties.server_port;
     let mut listeners: Vec<(TcpListener, &'static str)> = Vec::new();
 
@@ -254,12 +254,26 @@ fn start_status_server(properties: &ServerProperties) -> Result<()> {
         }
     }
 
+    let favicon = match folia_core::status::load_favicon(root.join("server-icon.png")) {
+        Ok(favicon) => favicon,
+        Err(error) => {
+            eprintln!("[rust] could not load server-icon.png: {error}");
+            None
+        }
+    };
+    if favicon.is_some() {
+        println!("[rust] server-list favicon loaded from server-icon.png");
+    } else {
+        println!("[rust] no server-icon.png; server list will have no favicon");
+    }
+
     let config = Arc::new(StatusConfig {
         motd: properties.motd.clone(),
         max_players: properties.max_players,
         online_players: 0,
         accept_logins: true,
         enforces_secure_chat: folia_core::config::enforces_secure_chat(),
+        favicon,
         ..StatusConfig::default()
     });
 

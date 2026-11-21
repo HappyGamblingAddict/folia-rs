@@ -43,6 +43,7 @@ fn main() -> Result<()> {
     folia_core::join::configure_world_dir(root.join(&level_name));
     folia_core::join::configure_view_distance(properties.view_distance);
     folia_core::join::configure_online_mode(properties.online_mode);
+    folia_core::join::configure_max_players(properties.max_players);
     let _ = folia_core::config::secure_chat_startup_audit();
     folia_core::join::configure_game_mode(
         match properties.gamemode.to_ascii_lowercase().as_str() {

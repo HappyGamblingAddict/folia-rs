@@ -186,6 +186,33 @@ fn default_game_mode() -> i32 {
     DEFAULT_GAME_MODE.get().copied().unwrap_or(0)
 }
 
+/// Vanilla's default `max-players` when `server.properties` has no value.
+const DEFAULT_MAX_PLAYERS: i32 = 20;
+
+static MAX_PLAYERS: OnceLock<i32> = OnceLock::new();
+
+/// Set the server's `max-players` (from `server.properties`). Non-positive
+/// values are clamped to zero, which rejects every login.
+pub fn configure_max_players(limit: i32) {
+    let limit = if limit <= 0 {
+        eprintln!("[join] max-players={limit} is not positive; clamping to 0");
+        0
+    } else {
+        limit
+    };
+    let _ = MAX_PLAYERS.set(limit);
+}
+
+fn max_players() -> i32 {
+    MAX_PLAYERS.get().copied().unwrap_or(DEFAULT_MAX_PLAYERS)
+}
+
+/// A new session may join while the active count is below the limit. Negative
+/// limits are treated as zero, so no session is ever accepted.
+fn can_accept_session(active: usize, limit: i32) -> bool {
+    active < limit.max(0) as usize
+}
+
 /// The client's requested view distance from a `ClientInformation` packet.
 fn parse_client_view_distance(packet: &[u8]) -> Option<i32> {
     let mut reader = PacketReader::new(packet);
@@ -1330,6 +1357,17 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         "[join] login start name={} uuid={:?} protocol={}",
         start.name, start.uuid, handshake.protocol_version
     );
+
+    let active = active_session_count();
+    let limit = max_players();
+    if !can_accept_session(active, limit) {
+        send_login_disconnect(&mut stream, "Server is full")?;
+        println!(
+            "[join] rejected {} (server full: {active} sessions, limit {limit})",
+            start.name
+        );
+        return Ok(());
+    }
 
     let mut profile_properties: Vec<ProfileProperty> = Vec::new();
     if online_mode() {
@@ -8054,6 +8092,18 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn can_accept_session_enforces_limit() {
+        assert!(can_accept_session(0, 20));
+        assert!(can_accept_session(19, 20));
+        assert!(!can_accept_session(20, 20));
+        assert!(!can_accept_session(21, 20));
+        assert!(!can_accept_session(0, 0));
+        assert!(!can_accept_session(1, 0));
+        assert!(!can_accept_session(0, -1));
+        assert!(!can_accept_session(1, -5));
     }
 
     #[test]

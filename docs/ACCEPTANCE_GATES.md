@@ -174,10 +174,18 @@ Target: **99.9% block-class / 99% exact-name** on multi-seed fixtures.
 
 ## 3. Performance gates
 
-No benchmark suite exists: there are no `benches/` directories, no Criterion
-dependency, and no performance job in CI (checked across `crates/*/Cargo.toml`
-and `.github/workflows/`). The only timing code is an `#[ignore]`d diagnostic
-that prints the cost of 2048-bit RSA profile-key generation
+There is no Criterion-style benchmark suite: no `benches/` directories, no
+Criterion dependency, and no dedicated performance job in CI (checked across
+`crates/*/Cargo.toml` and `.github/workflows/`). A dependency-free timing smoke
+suite does run as part of the ordinary test job:
+[tests/perf_smoke.rs](../crates/folia-core/tests/perf_smoke.rs) times chunk
+generation, lighting, the world tick loop, entity AI, pathfinding, and packet
+encoding, printing elapsed time and throughput under `--nocapture`. Its only
+time assertion is a deliberately loose 120 s per-phase hang guard; there are no
+regression budgets, no statistical sampling, and no per-player/chunk memory
+numbers, so it cannot flag a small slowdown and does not answer the gates below.
+The remaining timing code is an `#[ignore]`d diagnostic that prints the cost of
+2048-bit RSA profile-key generation
 (`tests/chat_signing.rs::benchmark_secure_profile_key_generation`,
 [chat_signing.rs:444-459](../crates/folia-core/tests/chat_signing.rs));
 [BLOCKERS.md](../BLOCKERS.md) records ~1.4 s release / ~49 s debug for that

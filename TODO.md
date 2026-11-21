@@ -3476,12 +3476,16 @@ deployed.
   libFuzzer/AFL corpora are not shipped; deterministic seedable targets run in
   `cargo test`.
 
-### P11.4 Benchmark suite `[ ]` `M`
+### P11.4 Benchmark suite `[~]` `M`
 
 - **What:** Add benchmarks for chunk generation, lighting, ticking, entity AI,
   pathfinding, network throughput, and memory per player/chunk.
 - **Why:** Performance regressions are otherwise invisible.
 - **Done when:** CI tracks budgets and flags regressions.
+- **Progress (2026-11-21):** `tests/perf_smoke.rs` adds 6 dependency-free
+  timing tests (chunk gen, lighting, tick loop, AI, A*, packet encoding) with
+  printed timings and a loose hang guard. No Criterion baselines or regression
+  budgets yet; 20 TPS/performance gates remain UNKNOWN in ACCEPTANCE_GATES.
 
 ### P11.5 Performance optimization `[ ]` `L`
 

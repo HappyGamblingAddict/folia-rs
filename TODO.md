@@ -3525,9 +3525,13 @@ deployed.
   Remaining risks (curl-based online-mode, rate limits, signed plugins,
   permission breadth) are documented, not hidden.
 
-### P11.9 Acceptance gates for “1.0” `[ ]`
+### P11.9 Acceptance gates for “1.0” `[~]`
 
 Define and verify:
+
+- **Progress (2026-11-21):** `docs/ACCEPTANCE_GATES.md` records 20 gates with
+  evidence (3 PASS, 8 PARTIAL, 3 FAIL, 5 UNKNOWN, 1 mixed) and states plainly
+  that 1.0 is NOT met. Minimum remaining work is listed there.
 
 - [ ] A vanilla client can complete a survival loop: join, mine, craft, smelt,
   eat, fight, die, respawn, use a bed, travel to the Nether/End, and save.

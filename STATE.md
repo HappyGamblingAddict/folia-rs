@@ -98,6 +98,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;
+  1.0 explicitly NOT met; README encryption claim corrected.
 - 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
   cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
@@ -820,6 +822,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;
+  1.0 explicitly NOT met; README encryption claim corrected.
 - 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
   cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and
@@ -1166,6 +1170,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;
+  1.0 explicitly NOT met; README encryption claim corrected.
 - 2026-11-21: P11.8 security — security checklist doc and binary-NBT depth
   cap (512) with 3 regression tests; remaining risks documented.
 - 2026-11-21: P11.7 packaging — Dockerfile, systemd unit, backup script, and

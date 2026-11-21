@@ -201,7 +201,7 @@ Game and receives generated chunk data.
 
 This is an initial join path, not full gameplay yet:
 
-- Online-mode encryption is not implemented; keep `online-mode=false`.
+- Online-mode encryption and Mojang session checks are implemented; see [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md). Offline mode remains intentionally insecure.
 - Chunks are generated from `WorldStorage` with dynamic heightmaps and
   sky/block light; when no region directory exists, chunks come from the Rust
   overworld noise generator with aquifers, surface rules, caves/canyons and
@@ -355,6 +355,8 @@ See `PORT_MAP.md` for the decompiled-Java → Rust-module mapping.
   version guard, backups and the lack of cross-version migration.
 - [Contributing](docs/CONTRIBUTING.md) — one-slice workflow, test budget,
   subagent expectations and differential fixtures.
+- [Acceptance gates](docs/ACCEPTANCE_GATES.md) — audited P11.9 pass/fail/unknown
+  status for each "1.0" gate and the minimum remaining work.
 
 ## Plugin compatibility
 

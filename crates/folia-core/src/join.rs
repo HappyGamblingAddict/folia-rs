@@ -11651,10 +11651,12 @@ mod tests {
         assert!(second >= FIRST_PLAYER_ENTITY_ID);
         assert_ne!(first, second);
         assert_eq!(second, first + 1);
-        assert!(
-            FIRST_PLAYER_ENTITY_ID > 20_000,
-            "session mobs/drops use lower ranges"
-        );
+        const {
+            assert!(
+                FIRST_PLAYER_ENTITY_ID > 20_000,
+                "session mobs/drops use lower ranges"
+            );
+        }
     }
 
     #[test]

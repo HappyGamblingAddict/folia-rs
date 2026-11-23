@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,603
+> Test status: **1,530 passing** at the 1bb0e39 gate (0 failed, 1 ignored benchmark); recent slices should bring the gate to 1,607
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -3449,13 +3449,17 @@ per-region world state is P10.3.
 tested against Java, performs at 20 TPS, survives hostile input, and can be
 deployed.
 
-### P11.1 Expand the differential harness `[ ]` `L`
+### P11.1 Expand the differential harness `[~]` `L`
 
 - **What:** Cover protocol, worldgen, lighting, physics, redstone, entities,
   inventory, chat, and plugin events. Capture Java packets/ticks and replay
   them against Rust.
 - **Why:** Parity claims need evidence, not “looks right.”
 - **Done when:** Every major subsystem has at least one differential suite.
+- **Progress (2026-11-23):** Protocol capture differential exists: 4 tests
+  replay `join_play.bin` (88 frames / 31 ids), verify core join packets and
+  framing, and classify all observed ids. Other subsystems still need
+  Java-capture suites.
 
 ### P11.2 Automate oracle capture and version pinning `[ ]` `M`
 

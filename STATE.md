@@ -98,6 +98,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
+  `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored
   baselines or regression budgets yet.
 - 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;
@@ -824,6 +826,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
+  `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored
   baselines or regression budgets yet.
 - 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;
@@ -1174,6 +1178,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
+  `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored
   baselines or regression budgets yet.
 - 2026-11-21: P11.9 acceptance gates — audited 20-gate release checklist;

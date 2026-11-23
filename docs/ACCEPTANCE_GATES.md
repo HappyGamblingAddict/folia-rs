@@ -124,7 +124,9 @@ Target: **99.9% block-class / 99% exact-name** on multi-seed fixtures.
 
 - Available: `tests/worldgen_parity.rs`, `tests/density_parity.rs` (pinned parity
   floors), `tests/worldgen_join.rs`, `tests/join.rs` captured join sequence, and
-  the armor-stand physics trace.
+  the armor-stand physics trace. `tests/protocol_differential.rs` replays the
+  `join_play.bin` Java capture (u32 framing, `PacketReader` id decode, core join
+  packet presence, id->count coverage with opaque capture-only ids documented).
 - Missing Java differential fixtures are catalogued in
   [BLOCKERS.md](../BLOCKERS.md) for lighting, redstone, fluids, structures,
   item components, tree features, recipes/furnace, break times/drops, entity

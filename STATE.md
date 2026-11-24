@@ -14,10 +14,10 @@ Last updated: 2026-11-24
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
   P11.4 perf smoke, and P11.6-P11.8 docs/packaging/security are done. Desert
-  pyramid, buried-treasure, and witch-hut generator wiring/fixtures are
-  complete locally; expected next gate is 1,616.
+  pyramid, buried-treasure, witch-hut, and jungle-temple generator
+  wiring/fixtures are complete locally; expected next gate is 1,618.
 - Tests: **1,611 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,616. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,618. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -99,6 +99,9 @@ Last updated: 2026-11-24
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-24: P2.10 jungle temple — 12×10×15 geometry, corridors/traps,
+  dispensers/chests, fixed-seed fixture, and real generated-jungle-chunk test;
+  cross-chunk RNG and Java differential remain open.
 - 2026-11-24: P2.10 witch hut — procedural 5×5 spruce hut, stilts, cauldron
   marker, fixed-seed fixture, and real generated-swamp-chunk coverage; Java
   differential fixture and jitter/rotation remain open.
@@ -835,6 +838,9 @@ Last updated: 2026-11-24
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 jungle temple — 12×10×15 geometry, corridors/traps,
+  dispensers/chests, fixed-seed fixture, and real generated-jungle-chunk test;
+  cross-chunk RNG and Java differential remain open.
 - 2026-11-24: P2.10 witch hut — procedural 5×5 spruce hut, stilts, cauldron
   marker, fixed-seed fixture, and real generated-swamp-chunk coverage; Java
   differential fixture and jitter/rotation remain open.
@@ -1195,6 +1201,9 @@ Last updated: 2026-11-24
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 jungle temple — 12×10×15 geometry, corridors/traps,
+  dispensers/chests, fixed-seed fixture, and real generated-jungle-chunk test;
+  cross-chunk RNG and Java differential remain open.
 - 2026-11-24: P2.10 witch hut — procedural 5×5 spruce hut, stilts, cauldron
   marker, fixed-seed fixture, and real generated-swamp-chunk coverage; Java
   differential fixture and jitter/rotation remain open.

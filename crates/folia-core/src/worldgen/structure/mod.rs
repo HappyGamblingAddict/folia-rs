@@ -38,6 +38,7 @@ pub mod buried_treasure;
 pub mod end_city;
 pub mod fortress;
 pub mod jigsaw;
+pub mod jungle_pyramid;
 pub mod piece;
 pub mod pool;
 pub mod processor;
@@ -205,6 +206,7 @@ pub use jigsaw::{
     JigsawPlacement, JigsawStart, JointType, SequencedPriorityQueue, element_bounds, front_facing,
     shuffle, top_facing,
 };
+pub use jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 pub use piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
     StructurePieceKind, TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,

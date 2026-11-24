@@ -15,6 +15,7 @@ use crate::worldgen::structure::buried_treasure::{BuriedTreasurePiece, BuriedTre
 use crate::worldgen::structure::end_city::EndCityStart;
 use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
+use crate::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
     TemplatePostProcess, TemplateStructurePiece,
@@ -88,6 +89,7 @@ pub enum StructureKind {
     Igloo,
     BuriedTreasure,
     DesertPyramid,
+    JunglePyramid,
     WitchHut,
     Fortress,
     EndCity,
@@ -151,6 +153,7 @@ impl StructureDefinition {
             "minecraft:igloo" => StructureKind::Igloo,
             "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
+            "minecraft:jungle_pyramid" => StructureKind::JunglePyramid,
             "minecraft:swamp_hut" => StructureKind::WitchHut,
             "minecraft:fortress" => StructureKind::Fortress,
             "minecraft:end_city" => StructureKind::EndCity,
@@ -310,6 +313,9 @@ impl StructureDefinition {
             StructureKind::DesertPyramid => {
                 DesertPyramidStart::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::JunglePyramid => {
+                JunglePyramidStart::generate(&self.name, context, self.terrain_adaptation)
+            }
             StructureKind::WitchHut => {
                 WitchHutStart::generate(&self.name, context, self.terrain_adaptation)
             }
@@ -400,6 +406,7 @@ pub struct StructureStart {
     jigsaw: Option<JigsawStart>,
     buried_treasure: Option<BuriedTreasurePiece>,
     desert_pyramid: Option<DesertPyramidPiece>,
+    jungle_pyramid: Option<JunglePyramidPiece>,
     witch_hut: Option<WitchHutPiece>,
     fortress: Option<FortressStart>,
     end_city: Option<EndCityStart>,
@@ -422,6 +429,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -444,6 +452,7 @@ impl StructureStart {
             jigsaw: Some(jigsaw),
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -466,6 +475,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: Some(piece),
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -488,6 +498,30 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: Some(piece),
+            jungle_pyramid: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_jungle_pyramid(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: JunglePyramidPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: Some(piece),
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -510,6 +544,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: Some(piece),
             fortress: None,
             end_city: None,
@@ -532,6 +567,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: Some(fortress),
             end_city: None,
@@ -554,6 +590,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: None,
             end_city: Some(end_city),
@@ -571,6 +608,7 @@ impl StructureStart {
             jigsaw: None,
             buried_treasure: None,
             desert_pyramid: None,
+            jungle_pyramid: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -601,6 +639,10 @@ impl StructureStart {
 
     pub fn desert_pyramid(&self) -> Option<&DesertPyramidPiece> {
         self.desert_pyramid.as_ref()
+    }
+
+    pub fn jungle_pyramid(&self) -> Option<&JunglePyramidPiece> {
+        self.jungle_pyramid.as_ref()
     }
 
     pub fn witch_hut(&self) -> Option<&WitchHutPiece> {
@@ -648,6 +690,7 @@ impl StructureStart {
             || self.jigsaw.as_ref().is_some_and(JigsawStart::is_valid)
             || self.buried_treasure.is_some()
             || self.desert_pyramid.is_some()
+            || self.jungle_pyramid.is_some()
             || self.witch_hut.is_some()
             || self
                 .fortress
@@ -676,6 +719,9 @@ impl StructureStart {
         }
         if let Some(pyramid) = &self.desert_pyramid {
             boxes.push(pyramid.bounding_box());
+        }
+        if let Some(temple) = &self.jungle_pyramid {
+            boxes.push(temple.bounding_box());
         }
         if let Some(hut) = &self.witch_hut {
             boxes.push(hut.bounding_box());
@@ -837,6 +883,17 @@ impl StructureStart {
             let placement = match height_source {
                 Some(source) => pyramid.place_with_height_source(level, source, chunk_box)?,
                 None => pyramid.place(level, chunk_box)?,
+            };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(temple) = &self.jungle_pyramid {
+            let placement = match height_source {
+                Some(source) => temple.place_with_height_source(level, source, chunk_box)?,
+                None => temple.place(level, chunk_box)?,
             };
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
@@ -2072,6 +2129,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:desert_pyramid",
         r##"{ "type": "minecraft:desert_pyramid", "biomes": "#minecraft:has_structure/desert_pyramid", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:jungle_pyramid",
+        r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
     (
         "minecraft:swamp_hut",

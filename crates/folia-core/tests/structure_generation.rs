@@ -258,6 +258,73 @@ fn generated_chunk_contains_witch_hut_planks_stilts_and_cauldron() {
 }
 
 #[test]
+fn generated_jungle_chunk_contains_temple_chests_dispensers_and_stairs() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure manager")
+        .with_enabled_structures(["minecraft:jungle_pyramid"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let (x, z) = (-96, 37);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let selection = generator
+        .structures()
+        .expect("structures")
+        .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+        .expect("selection")
+        .expect("jungle pyramid placement chunk");
+    assert_eq!(selection.structure, "minecraft:jungle_pyramid");
+    assert_eq!(selection.set, "minecraft:jungle_temples");
+    assert_eq!(
+        generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+        "minecraft:jungle"
+    );
+
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk_with_steps(x, z, &[])
+        .expect("terrain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut chests = Vec::new();
+    let mut dispensers = Vec::new();
+    let mut mossy = 0;
+    let mut stairs = 0;
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:chest" => chests.push((local_x, y, local_z)),
+                    "minecraft:dispenser" => dispensers.push((local_x, y, local_z)),
+                    "minecraft:mossy_cobblestone" => mossy += 1,
+                    "minecraft:cobblestone_stairs" => stairs += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert_eq!(chests.len(), 2, "jungle pyramid at chunk {x},{z}");
+    assert_eq!(dispensers.len(), 2, "jungle pyramid at chunk {x},{z}");
+    assert!(mossy > 0);
+    assert!(stairs >= 8);
+    assert!(chests.iter().all(|(_, y, _)| *y > 0));
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        plain
+            .block_state(local_x, chests[0].1, local_z)
+            .expect("plain block")
+            .name
+            != "minecraft:chest"
+    })));
+}
+
+#[test]
 fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
     let seed = 12_345;
     let generator = structured_generator(seed);

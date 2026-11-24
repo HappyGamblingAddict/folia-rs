@@ -4,6 +4,7 @@ use folia_core::nbt::Tag;
 use folia_core::region::ChunkPos;
 use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureError;
+use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
 use folia_core::worldgen::structure::set::{
     PlacementError, RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
@@ -17,6 +18,7 @@ use folia_core::worldgen::structure::template::{
     Mirror, Rotation, StructurePlaceSettings, StructureTemplate,
 };
 use folia_core::worldgen::structure::witch_hut::WitchHutStart;
+use folia_math::Direction;
 use std::collections::HashMap;
 
 // Byte-for-byte gzip copies of shipped 1.21.11 templates. They are embedded so
@@ -63,6 +65,8 @@ fn igloo_templates() -> HashMap<String, StructureTemplate> {
 
 const IGLOO_JSON: &str = r##"{ "type": "minecraft:igloo", "biomes": "#minecraft:has_structure/igloo", "spawn_overrides": {}, "step": "surface_structures" }"##;
 
+const JUNGLE_PYRAMID_JSON: &str = r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##;
+
 const VILLAGE_PLAINS_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/village_plains", "max_distance_from_center": 80, "project_start_to_heightmap": "WORLD_SURFACE_WG", "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 0 }, "start_pool": "minecraft:village/plains/town_centers", "step": "surface_structures", "terrain_adaptation": "beard_thin", "use_expansion_hack": true }"##;
 
 #[derive(Default)]
@@ -70,6 +74,7 @@ struct MockLevel {
     min_y: i32,
     height: i32,
     fixed_height: Option<i32>,
+    heights: HashMap<(i32, i32), i32>,
     blocks: HashMap<BlockPos, BlockState>,
 }
 
@@ -79,6 +84,7 @@ impl MockLevel {
             min_y,
             height,
             fixed_height: None,
+            heights: HashMap::new(),
             blocks: HashMap::new(),
         }
     }
@@ -105,8 +111,8 @@ impl FeatureLevel for MockLevel {
         true
     }
 
-    fn heightmap(&self, _kind: Heightmap, _x: i32, _z: i32) -> Option<i32> {
-        self.fixed_height
+    fn heightmap(&self, _kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        self.heights.get(&(x, z)).copied().or(self.fixed_height)
     }
 }
 
@@ -583,6 +589,254 @@ fn desert_pyramid_set_pipeline_places_surface_body_and_four_chests() {
             .name,
         "minecraft:blue_terracotta"
     );
+}
+
+#[test]
+fn jungle_pyramid_set_pipeline_places_temple_traps_and_two_loot_chests() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure generator")
+        .with_enabled_structures(["minecraft:jungle_pyramid"]);
+    let jungle = StaticBiomes("minecraft:jungle");
+    let desert = StaticBiomes("minecraft:desert");
+    let set = structures
+        .sets()
+        .get("jungle_temples")
+        .expect("jungle temple set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("jungle temples must use random spread");
+    };
+    let chunk = spread.get_potential_structure_chunk(seed, 0, 0);
+    assert_eq!(chunk, ChunkPos::new(2, 13));
+    assert_eq!(spread.spacing, 32);
+    assert_eq!(spread.separation, 8);
+    assert_eq!(spread.salt, 14_357_619);
+
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &jungle,
+        )
+        .expect("jungle selection")
+        .expect("jungle pyramid placement chunk");
+    assert_eq!(selection.structure, "minecraft:jungle_pyramid");
+    assert_eq!(selection.set, "minecraft:jungle_temples");
+    assert_eq!(selection.chunk, chunk);
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &desert,
+            )
+            .expect("desert selection")
+            .is_none()
+    );
+
+    let definition = structures
+        .definitions()
+        .get("minecraft:jungle_pyramid")
+        .expect("jungle pyramid definition");
+    assert_eq!(definition.kind, StructureKind::JunglePyramid);
+    assert_eq!(definition.step(), Decoration::SurfaceStructures);
+    assert_eq!(
+        StructureDefinition::from_json("minecraft:jungle_pyramid", JUNGLE_PYRAMID_JSON)
+            .expect("jungle pyramid JSON")
+            .kind,
+        StructureKind::JunglePyramid
+    );
+
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(68);
+    let templates = HashMap::new();
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("jungle pyramid start");
+    assert!(start.is_valid());
+    let pyramid = start.jungle_pyramid().expect("jungle pyramid piece");
+    let min_x = chunk.x << 4;
+    let min_z = chunk.z << 4;
+    let bounds = start.bounding_box().expect("jungle pyramid bounds");
+    let (width, depth) = match pyramid.direction() {
+        Direction::North | Direction::South => {
+            (JunglePyramidStart::WIDTH, JunglePyramidStart::DEPTH)
+        }
+        Direction::East | Direction::West => (JunglePyramidStart::DEPTH, JunglePyramidStart::WIDTH),
+        _ => panic!("jungle pyramid must face horizontally"),
+    };
+    assert_eq!(
+        bounds,
+        BoundingBox::new(
+            min_x,
+            JunglePyramidStart::GENERATION_HEIGHT,
+            min_z,
+            min_x + width - 1,
+            JunglePyramidStart::GENERATION_HEIGHT + JunglePyramidStart::HEIGHT - 1,
+            min_z + depth - 1,
+        )
+    );
+    assert_eq!(pyramid.bounding_box(), bounds);
+
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(64);
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &jungle,
+            0,
+            Decoration::SurfaceStructures,
+        )
+        .expect("jungle pyramid structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert!(placement.written > 0);
+
+    let base_y = 68;
+    for (local, expected) in [
+        ((0, -4, 0), "minecraft:mossy_cobblestone"),
+        ((4, 9, 4), "minecraft:mossy_cobblestone"),
+        ((5, 9, 6), "minecraft:cobblestone_stairs"),
+        ((5, 1, 5), "minecraft:air"),
+        ((5, -2, 13), "minecraft:air"),
+    ] {
+        let pos = jungle_world_pos(min_x, base_y, min_z, pyramid.direction(), local);
+        assert!(
+            matches!(
+                level.get_block(pos).expect("sampled jungle temple block").name.as_str(),
+                name if name == expected
+                    || (matches!(local, (0, -4, 0) | (4, 9, 4))
+                        && name == "minecraft:cobblestone")
+            ),
+            "unexpected block at local {local:?}: {:?}",
+            level.get_block(pos)
+        );
+    }
+    assert!(placement.written_blocks.iter().any(|pos| {
+        level
+            .get_block(*pos)
+            .is_some_and(|block| block.name == "minecraft:mossy_cobblestone")
+    }));
+
+    let chests: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:chest")
+        .collect();
+    assert_eq!(chests.len(), 2);
+    let mut chest_positions: Vec<_> = chests
+        .iter()
+        .map(|chest| (chest.pos.x(), chest.pos.y(), chest.pos.z()))
+        .collect();
+    chest_positions.sort_unstable();
+    let expected_chests = [
+        jungle_world_pos(min_x, base_y, min_z, pyramid.direction(), (8, -3, 3)),
+        jungle_world_pos(min_x, base_y, min_z, pyramid.direction(), (9, -3, 10)),
+    ];
+    let mut expected_chests: Vec<_> = expected_chests
+        .into_iter()
+        .map(|pos| (pos.x(), pos.y(), pos.z()))
+        .collect();
+    expected_chests.sort_unstable();
+    assert_eq!(chest_positions, expected_chests);
+    for chest in chests {
+        assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+            nbt.get("id").and_then(Tag::as_str) == Some("minecraft:chest")
+                && nbt.get("LootTable").and_then(Tag::as_str)
+                    == Some("minecraft:chests/jungle_temple")
+                && nbt.get("LootTableSeed").and_then(Tag::as_long).is_some()
+        }));
+    }
+
+    let dispensers: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:dispenser")
+        .collect();
+    assert_eq!(dispensers.len(), 2);
+    for dispenser in dispensers {
+        assert!(dispenser.nbt.as_ref().is_some_and(|nbt| {
+            nbt.get("id").and_then(Tag::as_str) == Some("minecraft:dispenser")
+                && nbt.get("LootTable").and_then(Tag::as_str)
+                    == Some("minecraft:chests/jungle_temple_dispenser")
+                && nbt.get("LootTableSeed").and_then(Tag::as_long).is_some()
+        }));
+    }
+}
+
+fn jungle_world_pos(
+    min_x: i32,
+    base_y: i32,
+    min_z: i32,
+    direction: Direction,
+    (x, y, z): (i32, i32, i32),
+) -> BlockPos {
+    let (world_x, world_z) = match direction {
+        Direction::North => (min_x + x, min_z + JunglePyramidStart::DEPTH - 1 - z),
+        Direction::South => (min_x + x, min_z + z),
+        Direction::West => (min_x + JunglePyramidStart::WIDTH - 1 - z, min_z + x),
+        Direction::East => (min_x + z, min_z + JunglePyramidStart::DEPTH - 1 - x),
+        _ => (min_x + x, min_z + z),
+    };
+    BlockPos::new(world_x, base_y + y, world_z)
+}
+
+#[test]
+fn jungle_pyramid_averages_the_height_source_and_skips_missing_heights() {
+    let piece = JunglePyramidPiece::new(12_345, 8, 0, Direction::North);
+    let mut source = MockLevel::new(-64, 384);
+    for x in 8..16 {
+        for z in 0..JunglePyramidStart::DEPTH {
+            source.heights.insert((x, z), 60 + x - 8);
+        }
+    }
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let chunk_box = BoundingBox::new(0, -64, 0, 15, 319, 15);
+    let placement = piece
+        .place_with_height_source(&mut level, &source, chunk_box)
+        .expect("jungle pyramid places from averaged heights");
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.rejected, 0);
+    let floor = level
+        .get_block(BlockPos::new(8, 59, 14))
+        .expect("temple floor at average height minus four");
+    assert!(matches!(
+        floor.name.as_str(),
+        "minecraft:mossy_cobblestone" | "minecraft:cobblestone"
+    ));
+    assert!(placement.written_blocks.contains(&BlockPos::new(8, 59, 14)));
+
+    let missing = MockLevel::new(-64, 384);
+    let skipped = piece
+        .place_with_height_source(&mut level, &missing, chunk_box)
+        .expect("missing height source skips the piece");
+    assert_eq!(skipped.placed_pieces, 0);
+    assert_eq!(skipped.written, 0);
+
+    let outside = piece
+        .place_with_height_source(
+            &mut level,
+            &source,
+            BoundingBox::new(32, -64, 32, 47, 319, 47),
+        )
+        .expect("non-intersecting chunk skips the piece");
+    assert_eq!(outside.placed_pieces, 0);
 }
 
 #[test]

@@ -27,7 +27,7 @@ use crate::worldgen::surface::{self, RuleSource, system::SurfaceSystem};
 use folia_math::BlockPos;
 use folia_random::{WorldgenRandom, XoroshiroPositionalRandomFactory};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -299,7 +299,9 @@ impl WorldGenerator {
     /// Decoration steps run by `generate_chunk`. Keeping this explicit lets the
     /// ore tests generate the same terrain with and without a step so the exact
     /// fixture delta can be attributed.
-    pub const DEFAULT_DECORATION_STEPS: [Decoration; 4] = [
+    pub const DEFAULT_DECORATION_STEPS: [Decoration; 6] = [
+        Decoration::UndergroundStructures,
+        Decoration::SurfaceStructures,
         Decoration::UndergroundOres,
         Decoration::UndergroundDecoration,
         Decoration::VegetalDecoration,
@@ -520,19 +522,17 @@ impl WorldGenerator {
             self.min_y,
             chunk.z.wrapping_mul(16),
         );
-        let mut structures_placed = false;
+        let mut placed_structure_steps = BTreeSet::new();
         for step in steps {
             let step = *step;
-            // Vanilla places structure pieces for a step before the features
-            // of that step. Surface structures are the only step this slice
-            // generates; run them before the first feature step at or after
-            // `surface_structures`.
-            if !structures_placed
-                && self.structures.is_some()
-                && step.index() >= Decoration::SurfaceStructures.index()
+            if self.structures.is_some()
+                && matches!(
+                    step,
+                    Decoration::UndergroundStructures | Decoration::SurfaceStructures
+                )
+                && placed_structure_steps.insert(step)
             {
-                self.apply_structures(chunk, Decoration::SurfaceStructures)?;
-                structures_placed = true;
+                self.apply_structures(chunk, step)?;
             }
             let active = biome_region.active_feature_indices(data, step, &step_order[step.index()]);
             if active.is_empty() {

@@ -100,6 +100,78 @@ fn find_igloo_chunk(generator: &WorldGenerator, seed: i64) -> (i32, i32, String)
     panic!("no snow-biome igloo chunk near origin");
 }
 
+fn find_buried_treasure_chunk(generator: &WorldGenerator, seed: i64) -> (i32, i32, String) {
+    let biomes = GenBiomes { generator };
+    let structures = generator.structures().expect("structures");
+    for x in -64..=64 {
+        for z in -64..=64 {
+            if let Some(selection) = structures
+                .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+                .expect("selection")
+                && selection.structure == "minecraft:buried_treasure"
+            {
+                let biome = generator.biome_at((x << 4) + 8, 63, (z << 4) + 8);
+                return (x, z, biome.to_owned());
+            }
+        }
+    }
+    panic!("no beach buried-treasure chunk near origin");
+}
+
+#[test]
+fn generated_chunk_contains_buried_treasure_from_underground_structure_step() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure manager")
+        .with_enabled_structures(["minecraft:buried_treasure"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let (x, z, biome) = find_buried_treasure_chunk(&generator, seed);
+    assert!(matches!(
+        biome.as_str(),
+        "minecraft:beach" | "minecraft:snowy_beach"
+    ));
+
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk_with_steps(x, z, &[])
+        .expect("terrain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut chests = Vec::new();
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                if structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    == "minecraft:chest"
+                {
+                    chests.push((local_x, y, local_z));
+                }
+            }
+        }
+    }
+    assert_eq!(chests.len(), 1, "buried treasure at chunk {x},{z}");
+    assert_eq!((chests[0].0, chests[0].2), (9, 9));
+    assert!(chests[0].1 < 90);
+    assert!(
+        structured
+            .block_state(9, chests[0].1 + 1, 9)
+            .expect("block above chest")
+            .name
+            != "minecraft:air"
+    );
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        plain
+            .block_state(local_x, chests[0].1, local_z)
+            .expect("plain block")
+            .name
+            != "minecraft:chest"
+    })));
+}
+
 #[test]
 fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
     let seed = 12_345;

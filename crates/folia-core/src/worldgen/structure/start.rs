@@ -11,6 +11,7 @@ use crate::region::ChunkPos;
 use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use crate::worldgen::structure::StructureError;
 use crate::worldgen::structure::assets::StructureTemplateCatalog;
+use crate::worldgen::structure::buried_treasure::{BuriedTreasurePiece, BuriedTreasureStart};
 use crate::worldgen::structure::end_city::EndCityStart;
 use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
@@ -84,6 +85,7 @@ pub enum BiomeSet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructureKind {
     Igloo,
+    BuriedTreasure,
     DesertPyramid,
     Fortress,
     EndCity,
@@ -145,6 +147,7 @@ impl StructureDefinition {
 
         let kind = match type_name {
             "minecraft:igloo" => StructureKind::Igloo,
+            "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
             "minecraft:fortress" => StructureKind::Fortress,
             "minecraft:end_city" => StructureKind::EndCity,
@@ -237,6 +240,9 @@ impl StructureDefinition {
         match &self.kind {
             StructureKind::Igloo => {
                 IglooStructure::generate(&self.name, context, self.terrain_adaptation)
+            }
+            StructureKind::BuriedTreasure => {
+                BuriedTreasureStart::generate(&self.name, context, self.terrain_adaptation)
             }
             StructureKind::Fortress => {
                 let fortress =
@@ -386,6 +392,7 @@ pub struct StructureStart {
     references: i32,
     pieces: Vec<StructurePiece>,
     jigsaw: Option<JigsawStart>,
+    buried_treasure: Option<BuriedTreasurePiece>,
     desert_pyramid: Option<DesertPyramidPiece>,
     fortress: Option<FortressStart>,
     end_city: Option<EndCityStart>,
@@ -406,6 +413,7 @@ impl StructureStart {
             references,
             pieces,
             jigsaw: None,
+            buried_treasure: None,
             desert_pyramid: None,
             fortress: None,
             end_city: None,
@@ -426,6 +434,28 @@ impl StructureStart {
             references,
             pieces: Vec::new(),
             jigsaw: Some(jigsaw),
+            buried_treasure: None,
+            desert_pyramid: None,
+            fortress: None,
+            end_city: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_buried_treasure(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: BuriedTreasurePiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: Some(piece),
             desert_pyramid: None,
             fortress: None,
             end_city: None,
@@ -446,6 +476,7 @@ impl StructureStart {
             references,
             pieces: Vec::new(),
             jigsaw: None,
+            buried_treasure: None,
             desert_pyramid: Some(piece),
             fortress: None,
             end_city: None,
@@ -466,6 +497,7 @@ impl StructureStart {
             references,
             pieces: Vec::new(),
             jigsaw: None,
+            buried_treasure: None,
             desert_pyramid: None,
             fortress: Some(fortress),
             end_city: None,
@@ -486,6 +518,7 @@ impl StructureStart {
             references,
             pieces: Vec::new(),
             jigsaw: None,
+            buried_treasure: None,
             desert_pyramid: None,
             fortress: None,
             end_city: Some(end_city),
@@ -501,6 +534,7 @@ impl StructureStart {
             references: 0,
             pieces: Vec::new(),
             jigsaw: None,
+            buried_treasure: None,
             desert_pyramid: None,
             fortress: None,
             end_city: None,
@@ -523,6 +557,10 @@ impl StructureStart {
     /// Jigsaw payload, if this is a jigsaw start.
     pub fn jigsaw(&self) -> Option<&JigsawStart> {
         self.jigsaw.as_ref()
+    }
+
+    pub fn buried_treasure(&self) -> Option<&BuriedTreasurePiece> {
+        self.buried_treasure.as_ref()
     }
 
     pub fn desert_pyramid(&self) -> Option<&DesertPyramidPiece> {
@@ -568,6 +606,7 @@ impl StructureStart {
     pub fn is_valid(&self) -> bool {
         !self.pieces.is_empty()
             || self.jigsaw.as_ref().is_some_and(JigsawStart::is_valid)
+            || self.buried_treasure.is_some()
             || self.desert_pyramid.is_some()
             || self
                 .fortress
@@ -590,6 +629,9 @@ impl StructureStart {
             && let Some(bounding_box) = jigsaw.pieces_bounding_box()
         {
             boxes.push(bounding_box);
+        }
+        if let Some(treasure) = &self.buried_treasure {
+            boxes.push(treasure.bounding_box());
         }
         if let Some(pyramid) = &self.desert_pyramid {
             boxes.push(pyramid.bounding_box());
@@ -735,6 +777,17 @@ impl StructureStart {
         }
         if let Some(end_city) = &self.end_city {
             merge_placement(&mut result, end_city.place(level, chunk_box, random)?);
+        }
+        if let Some(treasure) = &self.buried_treasure {
+            let placement = match height_source {
+                Some(source) => treasure.place_with_height_source(level, source, chunk_box)?,
+                None => treasure.place(level, chunk_box)?,
+            };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
         }
         if let Some(pyramid) = &self.desert_pyramid {
             let placement = match height_source {
@@ -1956,6 +2009,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:igloo",
         r##"{ "type": "minecraft:igloo", "biomes": "#minecraft:has_structure/igloo", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:buried_treasure",
+        r##"{ "type": "minecraft:buried_treasure", "biomes": "#minecraft:has_structure/buried_treasure", "spawn_overrides": {}, "step": "underground_structures" }"##,
     ),
     (
         "minecraft:desert_pyramid",

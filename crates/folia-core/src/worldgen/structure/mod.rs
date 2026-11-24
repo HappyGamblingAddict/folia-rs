@@ -34,6 +34,7 @@
 //! remain explicit later slices.
 
 pub mod assets;
+pub mod buried_treasure;
 pub mod end_city;
 pub mod fortress;
 pub mod jigsaw;
@@ -197,6 +198,7 @@ impl std::error::Error for StructureError {}
 pub use assets::{
     CatalogError, EMBEDDED_STRUCTURE_TEMPLATES, StructureTemplateCatalog, normalize_structure_id,
 };
+pub use buried_treasure::{BuriedTreasurePiece, BuriedTreasureStart};
 pub use jigsaw::{
     JigsawBlockInfo, JigsawConfig, JigsawJunction, JigsawPiece, JigsawPiecePlacement,
     JigsawPlacement, JigsawStart, JointType, SequencedPriorityQueue, element_bounds, front_facing,

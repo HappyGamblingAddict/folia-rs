@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert-pyramid fixture should bring the gate to 1,612
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert-pyramid + buried-treasure slices should bring the gate to 1,614
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1383,7 +1383,10 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   processors, deterministic placement, and feature-pool trees/decor; loot/chest
   block entities, entity spawning, terrain adaptation, and Java
   block-for-block fixture remain).
-- [ ] Ocean ruins, shipwrecks, buried treasure, ocean monuments.
+- [~] Ocean ruins, shipwrecks, ocean monuments; **buried treasure done**
+  (procedural piece, underground-step generator wiring, fixed-seed fixture, and
+  real generated-beach-chunk chest test). Java differential fixture still
+  pending.
 - [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
   branch, rotation, bounds, and surface snap done; loot-table block entities,
   biome filtering, and generator wiring remain).

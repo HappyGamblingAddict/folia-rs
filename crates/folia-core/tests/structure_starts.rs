@@ -585,6 +585,179 @@ fn desert_pyramid_set_pipeline_places_surface_body_and_four_chests() {
 }
 
 #[test]
+fn buried_treasure_set_pipeline_places_chest_and_surroundings_at_height_source() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure generator")
+        .with_enabled_structures(["minecraft:buried_treasure"]);
+    let beach = StaticBiomes("minecraft:beach");
+    let desert = StaticBiomes("minecraft:desert");
+    let set = structures
+        .sets()
+        .get("buried_treasures")
+        .expect("buried treasure set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("buried treasures must use random spread");
+    };
+    let chunk = ChunkPos::new(0, 24);
+    let center_x = (chunk.x << 4) + 9;
+    let center_z = (chunk.z << 4) + 9;
+    assert!(spread.is_structure_chunk(seed, chunk.x, chunk.z, None));
+
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &beach,
+        )
+        .expect("buried treasure selection")
+        .expect("buried treasure placement chunk");
+    assert_eq!(selection.structure, "minecraft:buried_treasure");
+    assert_eq!(selection.set, "minecraft:buried_treasures");
+    assert_eq!(selection.chunk, chunk);
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &desert,
+            )
+            .expect("desert selection")
+            .is_none()
+    );
+
+    let mut height_source = MockLevel::new(0, 384);
+    height_source.fixed_height = Some(64);
+    let templates = HashMap::new();
+    let definition = structures
+        .definitions()
+        .get("minecraft:buried_treasure")
+        .expect("buried treasure definition");
+    assert_eq!(
+        definition.kind,
+        folia_core::worldgen::structure::StructureKind::BuriedTreasure
+    );
+    assert_eq!(definition.step(), Decoration::UndergroundStructures);
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("buried treasure start");
+    assert!(start.is_valid());
+    let treasure = start.buried_treasure().expect("buried treasure piece");
+    let bounds = start.bounding_box().expect("buried treasure bounds");
+    assert_eq!(
+        bounds,
+        BoundingBox::new(center_x, 90, center_z, center_x, 90, center_z),
+        "the saved start box remains the generation hint"
+    );
+    assert_eq!(treasure.bounding_box(), bounds);
+
+    let mut level = MockLevel::new(0, 384);
+    level.fixed_height = Some(100);
+    for (x, z, block) in [
+        (center_x, center_z, "minecraft:sandstone"),
+        (center_x, center_z - 1, "minecraft:stone"),
+        (center_x + 1, center_z, "minecraft:sandstone"),
+        (center_x - 1, center_z, "minecraft:stone"),
+    ] {
+        level.set_block(
+            BlockPos::new(x, 63, z),
+            BlockState {
+                name: block.to_owned(),
+                properties: Vec::new(),
+            },
+        );
+    }
+    level.set_block(
+        BlockPos::new(center_x - 1, 64, center_z),
+        BlockState {
+            name: "minecraft:chiseled_sandstone".to_owned(),
+            properties: Vec::new(),
+        },
+    );
+    level.set_block(
+        BlockPos::new(center_x, 64, center_z - 1),
+        BlockState {
+            name: "minecraft:water".to_owned(),
+            properties: Vec::new(),
+        },
+    );
+    assert_eq!(
+        treasure.find_chest_position(&height_source, &level),
+        Some(BlockPos::new(center_x, 64, center_z))
+    );
+
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &beach,
+            0,
+            Decoration::UndergroundStructures,
+        )
+        .expect("buried treasure structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert_eq!(placement.written, 5);
+    assert_eq!(placement.written_blocks.len(), 5);
+
+    let chests: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:chest")
+        .collect();
+    assert_eq!(chests.len(), 1);
+    let chest = chests[0];
+    assert_eq!(chest.pos, BlockPos::new(center_x, 64, center_z));
+    assert!(
+        chest
+            .state
+            .properties
+            .contains(&("facing".to_owned(), "east".to_owned()))
+    );
+    assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+        nbt.get("id").and_then(Tag::as_str) == Some("minecraft:chest")
+            && nbt.get("LootTable").and_then(Tag::as_str)
+                == Some("minecraft:chests/buried_treasure")
+    }));
+
+    for (pos, expected) in [
+        (BlockPos::new(center_x, 63, center_z), "minecraft:sandstone"),
+        (BlockPos::new(center_x - 1, 63, center_z), "minecraft:stone"),
+        (
+            BlockPos::new(center_x - 1, 64, center_z),
+            "minecraft:chiseled_sandstone",
+        ),
+        (BlockPos::new(center_x, 64, center_z - 1), "minecraft:sand"),
+        (
+            BlockPos::new(center_x, 64, center_z + 1),
+            "minecraft:sandstone",
+        ),
+        (BlockPos::new(center_x, 65, center_z), "minecraft:sand"),
+        (BlockPos::new(center_x + 1, 64, center_z), "minecraft:sand"),
+    ] {
+        assert_eq!(
+            level.get_block(pos).expect("sampled treasure block").name,
+            expected,
+            "block at {pos:?}"
+        );
+    }
+}
+
+#[test]
 fn exclusion_zones_forbid_overlapping_sets() {
     let registry = StructureSetRegistry::from_json_documents([
         (

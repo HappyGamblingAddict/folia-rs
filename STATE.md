@@ -14,10 +14,10 @@ Last updated: 2026-11-24
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
   P11.4 perf smoke, and P11.6-P11.8 docs/packaging/security are done. Desert
-  pyramid generator wiring/fixture is complete locally; expected next gate is
-  1,612.
+  pyramid and buried-treasure generator wiring/fixtures are complete locally;
+  expected next gate is 1,614.
 - Tests: **1,611 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,612. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,614. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -99,6 +99,9 @@ Last updated: 2026-11-24
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-24: P2.10 buried treasure — procedural piece, underground structure
+  step, fixed-seed fixture, and real generated-beach-chunk chest test; Java
+  differential fixture still pending.
 - 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
   normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
@@ -829,6 +832,9 @@ Last updated: 2026-11-24
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 buried treasure — procedural piece, underground structure
+  step, fixed-seed fixture, and real generated-beach-chunk chest test; Java
+  differential fixture still pending.
 - 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
   normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
@@ -1183,6 +1189,9 @@ Last updated: 2026-11-24
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 buried treasure — procedural piece, underground structure
+  step, fixed-seed fixture, and real generated-beach-chunk chest test; Java
+  differential fixture still pending.
 - 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
   normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame

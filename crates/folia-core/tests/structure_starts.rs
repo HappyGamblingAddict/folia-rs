@@ -1,14 +1,17 @@
 use folia_core::chunk::BlockState;
 use folia_core::math::BlockPos;
+use folia_core::nbt::Tag;
 use folia_core::region::ChunkPos;
-use folia_core::worldgen::feature::{FeatureLevel, Heightmap};
+use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureError;
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
 use folia_core::worldgen::structure::set::{
-    PlacementError, RandomSpreadType, StructurePlacement, StructureSetError, StructureSetRegistry,
+    PlacementError, RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
+    StructureSetError, StructureSetRegistry,
 };
 use folia_core::worldgen::structure::start::{
-    IglooStructure, StructureDefinition, StructureGenerationContext, TemplateProvider,
+    IglooStructure, StructureDefinition, StructureGenerationContext, StructureGenerator,
+    TemplateProvider,
 };
 use folia_core::worldgen::structure::template::{
     Mirror, Rotation, StructurePlaceSettings, StructureTemplate,
@@ -443,6 +446,142 @@ fn structure_at_chunk_selects_only_placement_chunks() {
             ..
         }
     ));
+}
+
+struct StaticBiomes(&'static str);
+
+impl StructureBiomeLookup for StaticBiomes {
+    fn biome_at(&self, _x: i32, _y: i32, _z: i32) -> &str {
+        self.0
+    }
+}
+
+#[test]
+fn desert_pyramid_set_pipeline_places_surface_body_and_four_chests() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure generator")
+        .with_enabled_structures(["minecraft:desert_pyramid"]);
+    let desert = StaticBiomes("minecraft:desert");
+    let snowy = StaticBiomes("minecraft:snowy_taiga");
+    let set = structures
+        .sets()
+        .get("desert_pyramids")
+        .expect("desert set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("desert pyramids must use random spread");
+    };
+    let chunk = spread.get_potential_structure_chunk(seed, 0, 0);
+
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &desert,
+        )
+        .expect("desert selection")
+        .expect("desert pyramid placement chunk");
+    assert_eq!(selection.structure, "minecraft:desert_pyramid");
+    assert_eq!(selection.set, "minecraft:desert_pyramids");
+    assert_eq!(selection.chunk, chunk);
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &snowy,
+            )
+            .expect("snowy selection")
+            .is_none()
+    );
+
+    let mut height_source = MockLevel::new(0, 384);
+    height_source.fixed_height = Some(64);
+    let templates = HashMap::new();
+    let definition = structures
+        .definitions()
+        .get("minecraft:desert_pyramid")
+        .expect("desert definition");
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("desert pyramid start");
+    assert!(start.is_valid());
+    let pyramid = start.desert_pyramid().expect("desert pyramid piece");
+    let min_x = chunk.x << 4;
+    let min_z = chunk.z << 4;
+    let bounds = start.bounding_box().expect("pyramid bounds");
+    assert_eq!(
+        bounds,
+        BoundingBox::new(min_x, 64, min_z, min_x + 20, 78, min_z + 20)
+    );
+    assert_eq!(pyramid.bounding_box(), bounds);
+
+    let mut level = MockLevel::new(0, 384);
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &desert,
+            8,
+            Decoration::SurfaceStructures,
+        )
+        .expect("desert pyramid structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert!(placement.written > 0);
+
+    let chests: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:chest")
+        .collect();
+    assert_eq!(chests.len(), 4);
+    let base_y = chests[0].pos.y() + 11;
+    assert!((62..=64).contains(&base_y));
+    let mut chest_positions: Vec<_> = chests
+        .iter()
+        .map(|chest| (chest.pos.x(), chest.pos.y(), chest.pos.z()))
+        .collect();
+    chest_positions.sort_unstable();
+    let mut expected_positions = vec![
+        (min_x + 8, base_y - 11, min_z + 10),
+        (min_x + 10, base_y - 11, min_z + 8),
+        (min_x + 10, base_y - 11, min_z + 12),
+        (min_x + 12, base_y - 11, min_z + 10),
+    ];
+    expected_positions.sort_unstable();
+    assert_eq!(chest_positions, expected_positions);
+    for chest in chests {
+        assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+            nbt.get("LootTable").and_then(Tag::as_str) == Some("minecraft:chests/desert_pyramid")
+        }));
+    }
+    assert_eq!(
+        level
+            .get_block(BlockPos::new(min_x, base_y, min_z))
+            .expect("pyramid floor")
+            .name,
+        "minecraft:sandstone"
+    );
+    assert_eq!(
+        level
+            .get_block(BlockPos::new(min_x + 10, base_y, min_z + 10))
+            .expect("pyramid floor center")
+            .name,
+        "minecraft:blue_terracotta"
+    );
 }
 
 #[test]

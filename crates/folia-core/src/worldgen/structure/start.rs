@@ -525,6 +525,10 @@ impl StructureStart {
         self.jigsaw.as_ref()
     }
 
+    pub fn desert_pyramid(&self) -> Option<&DesertPyramidPiece> {
+        self.desert_pyramid.as_ref()
+    }
+
     /// Nether-fortress payload, if this is a fortress start.
     pub fn fortress(&self) -> Option<&FortressStart> {
         self.fortress.as_ref()
@@ -634,6 +638,32 @@ impl StructureStart {
         self.place_in_box_with_random(level, chunk_box, &mut random)
     }
 
+    pub fn place_in_chunk_with_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: &dyn FeatureLevel,
+        chunk_pos: ChunkPos,
+    ) -> Result<StartPlacement, StructureError> {
+        if self.jigsaw.is_some() {
+            return Err(StructureError::JigsawRequiresTemplates {
+                structure: self.structure_id.clone(),
+            });
+        }
+        let min_x = chunk_pos.x << 4;
+        let min_z = chunk_pos.z << 4;
+        let max_y = level.min_y() + level.height() - 1;
+        let chunk_box =
+            BoundingBox::new(min_x, level.min_y(), min_z, min_x + 15, max_y, min_z + 15);
+        let mut random =
+            LegacyRandomSource::new((i64::from(chunk_pos.x) << 32) ^ i64::from(chunk_pos.z));
+        self.place_in_box_with_random_and_height_source(
+            level,
+            Some(height_source),
+            chunk_box,
+            &mut random,
+        )
+    }
+
     /// Placement with an explicit structure random, matching Java's
     /// `StructureStart.placeInChunk(... RandomSource)` call. Fortress chest
     /// seeds and End-city chest seeds consume this stream.
@@ -676,6 +706,16 @@ impl StructureStart {
         chunk_box: BoundingBox,
         random: &mut dyn RandomSource,
     ) -> Result<StartPlacement, StructureError> {
+        self.place_in_box_with_random_and_height_source(level, None, chunk_box, random)
+    }
+
+    fn place_in_box_with_random_and_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: Option<&dyn FeatureLevel>,
+        chunk_box: BoundingBox,
+        random: &mut dyn RandomSource,
+    ) -> Result<StartPlacement, StructureError> {
         let mut result = StartPlacement::default();
         for piece in &self.pieces {
             match piece.place(level, chunk_box)? {
@@ -697,13 +737,12 @@ impl StructureStart {
             merge_placement(&mut result, end_city.place(level, chunk_box, random)?);
         }
         if let Some(pyramid) = &self.desert_pyramid {
-            let placement = pyramid.place(level, chunk_box)?;
+            let placement = match height_source {
+                Some(source) => pyramid.place_with_height_source(level, source, chunk_box)?,
+                None => pyramid.place(level, chunk_box)?,
+            };
             if placement.placed_pieces > 0 {
-                result.placed_pieces += placement.placed_pieces;
-                result.written += placement.written;
-                result.rejected += placement.rejected;
-                result.block_entities.extend(placement.block_entities);
-                result.data_markers.extend(placement.data_markers);
+                merge_placement(&mut result, placement);
             } else {
                 result.skipped_pieces += 1;
             }
@@ -875,6 +914,24 @@ impl DesertPyramidPiece {
         level: &mut dyn FeatureLevel,
         chunk_box: BoundingBox,
     ) -> Result<StartPlacement, StructureError> {
+        self.place_with_optional_height_source(level, None, chunk_box)
+    }
+
+    pub fn place_with_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: &dyn FeatureLevel,
+        chunk_box: BoundingBox,
+    ) -> Result<StartPlacement, StructureError> {
+        self.place_with_optional_height_source(level, Some(height_source), chunk_box)
+    }
+
+    fn place_with_optional_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: Option<&dyn FeatureLevel>,
+        chunk_box: BoundingBox,
+    ) -> Result<StartPlacement, StructureError> {
         if !self.bounding_box.intersects(chunk_box) {
             return Ok(StartPlacement::default());
         }
@@ -883,7 +940,8 @@ impl DesertPyramidPiece {
             self.seed ^ ((chunk_box.min_x() as i64) << 32) ^ (chunk_box.min_z() as i64),
         );
         let height = -random.next_int_bound(3);
-        if !pyramid.update_height_position_to_lowest_ground(level, height) {
+        let source = height_source.unwrap_or(&*level);
+        if !pyramid.update_height_position_to_lowest_ground(source, height) {
             return Ok(StartPlacement::default());
         }
 
@@ -2235,6 +2293,8 @@ impl StructureGenerator {
                         seed,
                         &mut random,
                     )?
+                } else if let Some(source) = height_source {
+                    start.place_in_chunk_with_height_source(level, source, chunk_pos)?
                 } else {
                     start.place_in_chunk(level, chunk_pos)?
                 };

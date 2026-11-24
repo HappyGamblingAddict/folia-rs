@@ -4,19 +4,20 @@
 > Update it after every completed task. Keep it short and factual.
 > `TODO.md` is the full roadmap. `AGENTS.md` is the operating manual.
 
-Last updated: 2026-11-21
+Last updated: 2026-11-24
 
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `1bb0e39` with 1,530 tests. P1.8, P0.5 orchestration, and the
-  P1.2 typed keys (menu + particle migration), explosion feedback, status,
-  max-player guard, P7.6 game rules, game-event model, P4.15 player entities,
-  P8.9/P11.3 fuzz tests, P10.8 watchdog, and P10.9 concurrency stress tests
-  are complete locally; P11.6/P11.7/P11.8 docs, packaging, and security review
-  are done; expected next gate is 1,603.
-- Tests: **1,530 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,603. Parity is **98.75% block-class /
+  CI is green at `35b7cbe` with 1,611 tests. P1.8, P0.5 orchestration, P1.2
+  typed keys (menu + particle), explosion feedback, status, max-player guard,
+  P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
+  P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
+  P11.4 perf smoke, and P11.6-P11.8 docs/packaging/security are done. Desert
+  pyramid generator wiring/fixture is complete locally; expected next gate is
+  1,612.
+- Tests: **1,611 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); next gate expected 1,612. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -98,6 +99,8 @@ Last updated: 2026-11-21
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
+  normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
   `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored
@@ -826,6 +829,8 @@ Last updated: 2026-11-21
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
+  normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
   `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored
@@ -1178,6 +1183,8 @@ Last updated: 2026-11-21
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 desert pyramid — height-source-aware placement through the
+  normal set pipeline, plus fixed-seed selection/rejection/chest fixture.
 - 2026-11-23: P11.1 protocol differential — 4 tests replay the 88-frame
   `join_play.bin` capture and classify all 31 packet ids.
 - 2026-11-21: P11.4 perf smoke — 6 dependency-free timing tests; no stored

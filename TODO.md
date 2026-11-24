@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, and jungle temple should bring the gate to 1,618
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,622
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1383,10 +1383,12 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   processors, deterministic placement, and feature-pool trees/decor; loot/chest
   block entities, entity spawning, terrain adaptation, and Java
   block-for-block fixture remain).
-- [~] Ocean ruins, shipwrecks, ocean monuments; **buried treasure done**
-  (procedural piece, underground-step generator wiring, fixed-seed fixture, and
-  real generated-beach-chunk chest test). Java differential fixture still
-  pending.
+- [~] **Buried treasure and shipwrecks done**; ocean ruins and ocean
+  monuments remain. Shipwreck uses the shipped `rightsideup_full` template with
+  rotation, palette selection, ocean-floor/beached height sampling, chest loot
+  markers, fixed-seed fixtures, and a real generated-ocean-chunk test. Java
+  differential fixtures, weighted/degraded variants, exact ChunkRandom, live
+  chest block entities, and waterlogging remain open.
 - [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
   branch, rotation, bounds, and surface snap done; loot-table block entities,
   biome filtering, and generator wiring remain).
@@ -1415,6 +1417,8 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   and real generated-swamp-chunk coverage (procedural approximation). Jungle
   Pyramid adds 12×10×15 bytecode-derived geometry, corridors, redstone traps,
   two dispensers/two loot chests, and a real generated-jungle-chunk fixture.
+  Shipwreck adds template-backed placement plus ocean-floor heightmap routing;
+  template placements now report sorted/deduplicated written positions.
 
 ### P2.11 Feature/structure parity harness `[ ]` `M`
 

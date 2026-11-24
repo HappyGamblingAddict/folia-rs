@@ -296,6 +296,17 @@ impl WorldGenerator {
         self.min_y
     }
 
+    fn ocean_floor_height(&self, x: i32, z: i32) -> i32 {
+        let density = self.router.final_density();
+        let max_y = self.min_y + self.height - 1;
+        for y in (self.min_y..=max_y).rev() {
+            if density.compute(x, y, z) > 0.0 {
+                return y + 1;
+            }
+        }
+        self.min_y
+    }
+
     /// Decoration steps run by `generate_chunk`. Keeping this explicit lets the
     /// ore tests generate the same terrain with and without a step so the exact
     /// fixture delta can be attributed.
@@ -737,7 +748,7 @@ impl WorldGenerator {
 /// writable [`WorldGenRegion`].
 struct GeneratorHeightLevel<'a> {
     generator: &'a WorldGenerator,
-    cache: RefCell<HashMap<(i32, i32), i32>>,
+    cache: RefCell<HashMap<(u8, i32, i32), i32>>,
 }
 
 impl FeatureLevel for GeneratorHeightLevel<'_> {
@@ -757,12 +768,18 @@ impl FeatureLevel for GeneratorHeightLevel<'_> {
         false
     }
 
-    fn heightmap(&self, _kind: Heightmap, x: i32, z: i32) -> Option<i32> {
-        if let Some(height) = self.cache.borrow().get(&(x, z)) {
+    fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        let key = (kind as u8, x, z);
+        if let Some(height) = self.cache.borrow().get(&key) {
             return Some(*height);
         }
-        let height = self.generator.base_height(x, z);
-        self.cache.borrow_mut().insert((x, z), height);
+        let height = match kind {
+            Heightmap::OceanFloor | Heightmap::OceanFloorWg => {
+                self.generator.ocean_floor_height(x, z)
+            }
+            _ => self.generator.base_height(x, z),
+        };
+        self.cache.borrow_mut().insert(key, height);
         Some(height)
     }
 }

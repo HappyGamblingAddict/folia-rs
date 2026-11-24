@@ -392,6 +392,7 @@ impl TemplateStructurePiece {
 
             if level.set_block(pos, block.state.clone()) {
                 placement.written += 1;
+                placement.written_blocks.push(pos);
                 if block.nbt.is_some() && marker.is_none() {
                     placement.block_entities.push(PlacedBlock { pos, ..block });
                 }
@@ -450,9 +451,14 @@ impl TemplateStructurePiece {
                 )
             {
                 placement.written += 1;
+                placement.written_blocks.push(marker);
             }
         }
 
+        placement
+            .written_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        placement.written_blocks.dedup();
         placement
     }
 }
@@ -480,6 +486,7 @@ fn data_marker_name(nbt: Option<&Tag>) -> Option<String> {
 pub struct PiecePlacement {
     pub written: usize,
     pub rejected: usize,
+    pub written_blocks: Vec<BlockPos>,
     pub block_entities: Vec<PlacedBlock>,
     pub entities: Vec<PlacedEntity>,
     /// Structure-block `mode: data` markers. The caller decides whether a

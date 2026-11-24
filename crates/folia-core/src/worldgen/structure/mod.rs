@@ -43,6 +43,7 @@ pub mod piece;
 pub mod pool;
 pub mod processor;
 pub mod set;
+pub mod shipwreck;
 pub mod start;
 pub mod template;
 pub mod witch_hut;
@@ -229,6 +230,7 @@ pub use set::{
     StructurePlacement, StructureSelectionEntry, StructureSet, StructureSetConfig,
     StructureSetError, StructureSetRegistry, set_dimension, structure_biome_rule,
 };
+pub use shipwreck::{ShipwreckPiece, ShipwreckStart};
 pub use start::{
     BiomeSet, DesertPyramidPiece, DesertPyramidStart, IglooStructure, SHIPPED_STRUCTURE_JSON,
     StartPlacement, StructureChunkPlacement, StructureDefinition, StructureGenerationContext,

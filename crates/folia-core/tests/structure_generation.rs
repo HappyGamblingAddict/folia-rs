@@ -9,11 +9,12 @@ use folia_core::region::ChunkPos;
 use folia_core::worldgen::feature::{Decoration, WorldGenRegion};
 use folia_core::worldgen::generator::WorldGenerator;
 use folia_core::worldgen::structure::StructureGenerator;
+use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::set::{
     StructureBiomeLookup, StructureDimension, StructureSetRegistry,
 };
-use folia_core::worldgen::structure::start::IglooStructure;
-use folia_core::worldgen::structure::template::StructureTemplate;
+use folia_core::worldgen::structure::start::{IglooStructure, StructureGenerationContext};
+use folia_core::worldgen::structure::template::{Rotation, StructureTemplate};
 use std::collections::HashMap;
 
 const STARTS_SOURCE: &str = include_str!("structure_starts.rs");
@@ -457,6 +458,131 @@ fn structure_biome_filter_rejects_a_mismatched_set() {
         .expect("snowy igloo chunk");
     assert_eq!(accepted.structure, "minecraft:igloo");
     assert_eq!(accepted.set, "minecraft:igloos");
+}
+
+#[test]
+fn generated_ocean_chunk_contains_shipwreck_wood_and_chest() {
+    let seed = 12_345;
+    let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+        .expect("shipwreck generator")
+        .with_enabled_structures(["minecraft:shipwreck"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let structures = generator.structures().expect("structures");
+    let mut found = None;
+    for x in -96..=96 {
+        for z in -96..=96 {
+            let Some(selection) = structures
+                .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+                .expect("selection")
+            else {
+                continue;
+            };
+            if selection.structure != "minecraft:shipwreck"
+                || !matches!(
+                    generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+                    "minecraft:cold_ocean"
+                        | "minecraft:deep_cold_ocean"
+                        | "minecraft:deep_frozen_ocean"
+                        | "minecraft:deep_lukewarm_ocean"
+                        | "minecraft:deep_ocean"
+                        | "minecraft:frozen_ocean"
+                        | "minecraft:lukewarm_ocean"
+                        | "minecraft:ocean"
+                        | "minecraft:warm_ocean"
+                )
+            {
+                continue;
+            }
+            let definition = structures
+                .definitions()
+                .get("minecraft:shipwreck")
+                .expect("shipwreck definition");
+            let context = StructureGenerationContext::new(
+                seed,
+                ChunkPos::new(x, z),
+                0,
+                structures.template_catalog().expect("template catalog"),
+            );
+            let start = definition
+                .generate_start(&context)
+                .expect("shipwreck start");
+            if start
+                .shipwreck()
+                .expect("shipwreck piece")
+                .template()
+                .place_settings
+                .rotation()
+                == Rotation::None
+            {
+                found = Some((x, z));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+    let (x, z) = found.expect("unrotated shipwreck in a generated ocean biome");
+    let selection = structures
+        .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+        .expect("selection")
+        .expect("shipwreck placement chunk");
+    assert_eq!(selection.structure, "minecraft:shipwreck");
+    assert_eq!(selection.set, "minecraft:shipwrecks");
+    assert!(matches!(
+        generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+        "minecraft:cold_ocean"
+            | "minecraft:deep_cold_ocean"
+            | "minecraft:deep_frozen_ocean"
+            | "minecraft:deep_lukewarm_ocean"
+            | "minecraft:deep_ocean"
+            | "minecraft:frozen_ocean"
+            | "minecraft:lukewarm_ocean"
+            | "minecraft:ocean"
+            | "minecraft:warm_ocean"
+    ));
+
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk_with_steps(x, z, &[])
+        .expect("terrain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut planks = 0;
+    let mut stairs = 0;
+    let mut chests = Vec::new();
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:oak_planks" => planks += 1,
+                    "minecraft:spruce_stairs" => stairs += 1,
+                    "minecraft:chest" => chests.push((local_x, y, local_z)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(planks > 20, "shipwreck planks in chunk {x},{z}");
+    assert!(stairs > 5, "shipwreck stairs in chunk {x},{z}");
+    assert_eq!(chests.len(), 1, "shipwreck chest in chunk {x},{z}");
+    assert!(chests[0].1 < 63, "shipwreck must sit on the ocean floor");
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        plain
+            .block_state(local_x, chests[0].1, local_z)
+            .expect("plain block")
+            .name
+            != "minecraft:chest"
+    })));
 }
 
 #[test]

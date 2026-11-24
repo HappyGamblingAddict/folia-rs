@@ -4,14 +4,16 @@ use folia_core::nbt::Tag;
 use folia_core::region::ChunkPos;
 use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureError;
+use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
 use folia_core::worldgen::structure::set::{
     PlacementError, RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
     StructureSetError, StructureSetRegistry,
 };
+use folia_core::worldgen::structure::shipwreck::ShipwreckStart;
 use folia_core::worldgen::structure::start::{
-    IglooStructure, StructureDefinition, StructureGenerationContext, StructureGenerator,
+    BiomeSet, IglooStructure, StructureDefinition, StructureGenerationContext, StructureGenerator,
     StructureKind, TemplateProvider,
 };
 use folia_core::worldgen::structure::template::{
@@ -66,6 +68,10 @@ fn igloo_templates() -> HashMap<String, StructureTemplate> {
 const IGLOO_JSON: &str = r##"{ "type": "minecraft:igloo", "biomes": "#minecraft:has_structure/igloo", "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const JUNGLE_PYRAMID_JSON: &str = r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##;
+
+const SHIPWRECK_JSON: &str = r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck", "is_beached": false, "spawn_overrides": {}, "step": "surface_structures" }"##;
+
+const SHIPWRECK_BEACHED_JSON: &str = r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck_beached", "is_beached": true, "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const VILLAGE_PLAINS_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/village_plains", "max_distance_from_center": 80, "project_start_to_heightmap": "WORLD_SURFACE_WG", "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 0 }, "start_pool": "minecraft:village/plains/town_centers", "step": "surface_structures", "terrain_adaptation": "beard_thin", "use_expansion_hack": true }"##;
 
@@ -1482,7 +1488,270 @@ fn igloo_generation_fails_on_missing_templates() {
     ));
 }
 
+#[test]
+fn shipwreck_definitions_parse_both_biome_variants() {
+    for (name, json, beached, biomes) in [
+        (
+            "minecraft:shipwreck",
+            SHIPWRECK_JSON,
+            false,
+            "#minecraft:has_structure/shipwreck",
+        ),
+        (
+            "minecraft:shipwreck_beached",
+            SHIPWRECK_BEACHED_JSON,
+            true,
+            "#minecraft:has_structure/shipwreck_beached",
+        ),
+    ] {
+        let definition = StructureDefinition::from_json(name, json).expect("shipwreck JSON parses");
+        assert_eq!(definition.kind, StructureKind::Shipwreck { beached });
+        assert_eq!(definition.step(), Decoration::SurfaceStructures);
+        assert_eq!(definition.biomes, BiomeSet::Tag(biomes.to_owned()));
+    }
+
+    let catalog = StructureTemplateCatalog::shipped();
+    let definition =
+        StructureDefinition::from_json("minecraft:shipwreck_beached", SHIPWRECK_BEACHED_JSON)
+            .expect("beached definition parses");
+    let context = StructureGenerationContext::new(12_345, ChunkPos::new(0, 0), 0, catalog);
+    let start = definition
+        .generate_start(&context)
+        .expect("beached shipwreck start");
+    assert!(start.is_valid());
+    assert!(start.shipwreck().expect("shipwreck piece").is_beached());
+}
+
+#[test]
+fn shipwreck_fixed_seed_selects_bounds_samples_and_chest_markers() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(75, -44);
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures = StructureGenerator::from_catalog(catalog.clone())
+        .expect("shipwreck generator")
+        .with_enabled_structures(["minecraft:shipwreck"]);
+    let ocean = StaticBiomes("minecraft:ocean");
+    let desert = StaticBiomes("minecraft:desert");
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &ocean,
+        )
+        .expect("shipwreck selection")
+        .expect("ocean shipwreck placement chunk");
+    assert_eq!(selection.structure, "minecraft:shipwreck");
+    assert_eq!(selection.set, "minecraft:shipwrecks");
+    assert_eq!(selection.chunk, chunk);
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &desert,
+            )
+            .expect("desert selection")
+            .is_none()
+    );
+
+    let definition = structures
+        .definitions()
+        .get("minecraft:shipwreck")
+        .expect("shipwreck definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(40);
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, catalog).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("shipwreck start");
+    assert!(start.is_valid());
+    assert_eq!(start.pieces().len(), 0);
+    let shipwreck = start.shipwreck().expect("shipwreck payload");
+    assert!(!shipwreck.is_beached());
+    let template = shipwreck.template();
+    assert_eq!(template.template_name, ShipwreckStart::TEMPLATE);
+    assert_eq!(template.place_settings.rotation(), Rotation::None);
+    assert_eq!(
+        template.place_settings.rotation_pivot(),
+        BlockPos::new(4, 0, 15)
+    );
+    assert_eq!(
+        start.bounding_box(),
+        Some(BoundingBox::new(1200, 90, -704, 1208, 98, -677))
+    );
+    assert_eq!(shipwreck.bounding_box(), start.bounding_box().unwrap());
+    assert_eq!(
+        definition
+            .generate_start(&context)
+            .expect("second shipwreck start"),
+        start
+    );
+
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let first = start
+        .place_in_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            ChunkPos::new(chunk.x, chunk.z),
+        )
+        .expect("first shipwreck chunk");
+    assert_eq!(first.placed_pieces, 1);
+    assert_eq!(first.skipped_pieces, 0);
+    assert_eq!(first.rejected, 0);
+    assert_eq!(first.written, first.written_blocks.len());
+    assert!(first.written > 0);
+    assert!(first.written_blocks.iter().all(|pos| {
+        (1200..=1215).contains(&pos.x())
+            && (-704..=-689).contains(&pos.z())
+            && (-64..=319).contains(&pos.y())
+    }));
+    assert_eq!(
+        first
+            .data_markers
+            .iter()
+            .map(|marker| marker.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["supply_chest"]
+    );
+    assert_eq!(
+        level
+            .get_block(BlockPos::new(1203, 41, -695))
+            .expect("sampled oak planks")
+            .name,
+        "minecraft:oak_planks"
+    );
+    assert!(
+        level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:spruce_stairs")
+    );
+    assert!(
+        !level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:structure_block")
+    );
+    let chest = first
+        .block_entities
+        .iter()
+        .find(|block| block.state.name == "minecraft:chest")
+        .expect("supply chest");
+    assert_eq!(chest.pos, BlockPos::new(1204, 42, -696));
+    assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+        nbt.get("id").and_then(Tag::as_str) == Some("minecraft:chest")
+            && nbt.get("LootTable").and_then(Tag::as_str)
+                == Some("minecraft:chests/shipwreck_supply")
+            && nbt.get("LootTableSeed").and_then(Tag::as_long).is_some()
+    }));
+
+    let second = start
+        .place_in_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            ChunkPos::new(chunk.x, chunk.z + 1),
+        )
+        .expect("second shipwreck chunk");
+    assert_eq!(second.placed_pieces, 1);
+    assert!(second.written > 0);
+    let mut marker_names: Vec<_> = second
+        .data_markers
+        .iter()
+        .map(|marker| marker.name.as_str())
+        .collect();
+    marker_names.sort_unstable();
+    assert_eq!(marker_names, vec!["map_chest", "treasure_chest"]);
+    let mut chests: Vec<_> = second
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:chest")
+        .map(|block| block.pos)
+        .collect();
+    chests.sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+    assert_eq!(
+        chests,
+        vec![BlockPos::new(1205, 42, -686), BlockPos::new(1206, 44, -680),]
+    );
+    assert!(second.written_blocks.iter().all(|pos| {
+        (1200..=1215).contains(&pos.x())
+            && (-688..=-673).contains(&pos.z())
+            && (-64..=319).contains(&pos.y())
+    }));
+}
+
+#[test]
+fn shipwreck_structure_pass_uses_ocean_floor_height_source() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(75, -44);
+    let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+        .expect("shipwreck generator")
+        .with_enabled_structures(["minecraft:shipwreck"]);
+    let ocean = StaticBiomes("minecraft:ocean");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(40);
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &ocean,
+            0,
+            Decoration::SurfaceStructures,
+        )
+        .expect("shipwreck structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert_eq!(placement.written, placement.written_blocks.len());
+    assert_eq!(placement.data_markers.len(), 1);
+    assert_eq!(placement.data_markers[0].name, "supply_chest");
+    assert_eq!(
+        level
+            .get_block(BlockPos::new(1204, 42, -696))
+            .expect("chest at ocean-floor height")
+            .name,
+        "minecraft:chest"
+    );
+    assert!(!level.blocks.contains_key(&BlockPos::new(1204, 102, -696)));
+
+    let missing = MockLevel::new(-64, 384);
+    let mut skipped_level = MockLevel::new(-64, 384);
+    let skipped = start_for_shipwreck(seed, chunk, &missing)
+        .place_in_chunk_with_height_source(&mut skipped_level, &missing, chunk)
+        .expect("missing height source skips placement");
+    assert_eq!(skipped.placed_pieces, 0);
+    assert_eq!(skipped.written, 0);
+}
+
+fn start_for_shipwreck(
+    seed: i64,
+    chunk: ChunkPos,
+    level: &dyn FeatureLevel,
+) -> folia_core::worldgen::structure::StructureStart {
+    let definition = StructureDefinition::from_json("minecraft:shipwreck", SHIPWRECK_JSON)
+        .expect("shipwreck definition");
+    let catalog = StructureTemplateCatalog::shipped();
+    let context = StructureGenerationContext::new(seed, chunk, 0, catalog).with_level(level);
+    definition
+        .generate_start(&context)
+        .expect("shipwreck start")
+}
+
 // Keep the TemplateProvider trait in scope for the HashMap implementation even
-// though tests only pass it as `&dyn TemplateProvider`.
+// though tests only pass it as &dyn TemplateProvider.
 #[allow(dead_code)]
 fn assert_template_provider<T: TemplateProvider>() {}

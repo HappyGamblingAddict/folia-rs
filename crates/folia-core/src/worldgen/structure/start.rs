@@ -26,6 +26,7 @@ use crate::worldgen::structure::set::{
     SelectedStructure, StructureBiomeLookup, StructureDimension, StructureSetError,
     StructureSetRegistry, set_large_feature_seed,
 };
+use crate::worldgen::structure::shipwreck::{ShipwreckPiece, ShipwreckStart};
 use crate::worldgen::structure::template::{
     PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,
 };
@@ -91,6 +92,9 @@ pub enum StructureKind {
     DesertPyramid,
     JunglePyramid,
     WitchHut,
+    Shipwreck {
+        beached: bool,
+    },
     Fortress,
     EndCity,
     Jigsaw {
@@ -155,6 +159,9 @@ impl StructureDefinition {
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
             "minecraft:jungle_pyramid" => StructureKind::JunglePyramid,
             "minecraft:swamp_hut" => StructureKind::WitchHut,
+            "minecraft:shipwreck" => StructureKind::Shipwreck {
+                beached: required_bool(root, "is_beached", name)?,
+            },
             "minecraft:fortress" => StructureKind::Fortress,
             "minecraft:end_city" => StructureKind::EndCity,
             "minecraft:jigsaw" => {
@@ -319,6 +326,9 @@ impl StructureDefinition {
             StructureKind::WitchHut => {
                 WitchHutStart::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::Shipwreck { beached } => {
+                ShipwreckStart::generate(&self.name, context, self.terrain_adaptation, *beached)
+            }
             StructureKind::Unsupported { type_name } => {
                 Err(StructureError::UnsupportedStructureType {
                     structure: self.name.clone(),
@@ -410,6 +420,7 @@ pub struct StructureStart {
     witch_hut: Option<WitchHutPiece>,
     fortress: Option<FortressStart>,
     end_city: Option<EndCityStart>,
+    shipwreck: Option<ShipwreckPiece>,
     terrain_adaptation: TerrainAdjustment,
 }
 
@@ -433,6 +444,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -456,6 +468,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -479,6 +492,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -502,6 +516,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -525,6 +540,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -548,6 +564,31 @@ impl StructureStart {
             witch_hut: Some(piece),
             fortress: None,
             end_city: None,
+            shipwreck: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_shipwreck(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: ShipwreckPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: Some(piece),
             terrain_adaptation,
         }
     }
@@ -571,6 +612,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: Some(fortress),
             end_city: None,
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -594,6 +636,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: Some(end_city),
+            shipwreck: None,
             terrain_adaptation,
         }
     }
@@ -612,6 +655,7 @@ impl StructureStart {
             witch_hut: None,
             fortress: None,
             end_city: None,
+            shipwreck: None,
             terrain_adaptation: TerrainAdjustment::None,
         }
     }
@@ -647,6 +691,10 @@ impl StructureStart {
 
     pub fn witch_hut(&self) -> Option<&WitchHutPiece> {
         self.witch_hut.as_ref()
+    }
+
+    pub fn shipwreck(&self) -> Option<&ShipwreckPiece> {
+        self.shipwreck.as_ref()
     }
 
     /// Nether-fortress payload, if this is a fortress start.
@@ -692,6 +740,7 @@ impl StructureStart {
             || self.desert_pyramid.is_some()
             || self.jungle_pyramid.is_some()
             || self.witch_hut.is_some()
+            || self.shipwreck.is_some()
             || self
                 .fortress
                 .as_ref()
@@ -725,6 +774,9 @@ impl StructureStart {
         }
         if let Some(hut) = &self.witch_hut {
             boxes.push(hut.bounding_box());
+        }
+        if let Some(shipwreck) = &self.shipwreck {
+            boxes.push(shipwreck.bounding_box());
         }
         if let Some(fortress) = &self.fortress
             && let Some(bounding_box) = fortress.bounding_box()
@@ -855,6 +907,7 @@ impl StructureStart {
                     result.placed_pieces += 1;
                     result.written += placement.written;
                     result.rejected += placement.rejected;
+                    result.written_blocks.extend(placement.written_blocks);
                     result.block_entities.extend(placement.block_entities);
                     result.entities.extend(placement.entities);
                     result.data_markers.extend(placement.data_markers);
@@ -912,6 +965,26 @@ impl StructureStart {
                 result.skipped_pieces += 1;
             }
         }
+        if let Some(shipwreck) = &self.shipwreck {
+            let placement = match height_source {
+                Some(source) => shipwreck
+                    .place_with_height_source_and_random(level, source, chunk_box, random)?,
+                None => shipwreck.place_with_random(level, chunk_box, random)?,
+            };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        result
+            .written_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.written_blocks.dedup();
+        result
+            .feature_blocks
+            .sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+        result.feature_blocks.dedup();
         Ok(result)
     }
 
@@ -2066,6 +2139,16 @@ fn parse_heightmap(name: &str) -> Option<Heightmap> {
     }
 }
 
+fn required_bool(
+    object: &Map<String, Value>,
+    key: &str,
+    name: &str,
+) -> Result<bool, StructureError> {
+    object.get(key).and_then(Value::as_bool).ok_or_else(|| {
+        StructureError::InvalidDefinition(format!("{name}: missing boolean `{key}`"))
+    })
+}
+
 fn required_i32(object: &Map<String, Value>, key: &str, name: &str) -> Result<i32, StructureError> {
     let value = object.get(key).and_then(Value::as_i64).ok_or_else(|| {
         StructureError::InvalidDefinition(format!("{name}: missing integer `{key}`"))
@@ -2137,6 +2220,14 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:swamp_hut",
         r##"{ "type": "minecraft:swamp_hut", "biomes": "#minecraft:has_structure/swamp_hut", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:shipwreck",
+        r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck", "is_beached": false, "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:shipwreck_beached",
+        r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck_beached", "is_beached": true, "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
     (
         "minecraft:village_plains",

@@ -613,6 +613,104 @@ fn generated_ocean_chunk_contains_shipwreck_wood_and_chest() {
 }
 
 #[test]
+fn generated_ocean_chunk_contains_cold_ruin_materials_and_loot_chest() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("ocean ruin generator")
+        .with_enabled_structures(["minecraft:ocean_ruin_cold"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let structures = generator.structures().expect("structures");
+    let mut found = None;
+    for x in -96..=96 {
+        for z in -96..=96 {
+            let Some(selection) = structures
+                .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+                .expect("selection")
+            else {
+                continue;
+            };
+            if selection.structure == "minecraft:ocean_ruin_cold"
+                && matches!(
+                    generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+                    "minecraft:cold_ocean"
+                        | "minecraft:deep_cold_ocean"
+                        | "minecraft:deep_frozen_ocean"
+                        | "minecraft:deep_ocean"
+                        | "minecraft:frozen_ocean"
+                        | "minecraft:ocean"
+                )
+            {
+                found = Some((x, z));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+    let (x, z) = found.expect("cold ocean ruin in a generated ocean biome");
+    let selection = structures
+        .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+        .expect("selection")
+        .expect("ocean ruin placement chunk");
+    assert_eq!(selection.structure, "minecraft:ocean_ruin_cold");
+    assert_eq!(selection.set, "minecraft:ocean_ruins");
+
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk_with_steps(x, z, &[])
+        .expect("terrain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut stone_bricks = 0;
+    let mut cobblestone = 0;
+    let mut andesite = 0;
+    let mut prismarine = 0;
+    let mut chests = Vec::new();
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:stone_bricks" => stone_bricks += 1,
+                    "minecraft:cobblestone" => cobblestone += 1,
+                    "minecraft:andesite" => andesite += 1,
+                    "minecraft:prismarine" => prismarine += 1,
+                    "minecraft:chest" => chests.push((local_x, y, local_z)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(stone_bricks > 0, "stone bricks in ruin chunk {x},{z}");
+    assert!(cobblestone > 0, "cobblestone in ruin chunk {x},{z}");
+    assert!(andesite > 0, "andesite in ruin chunk {x},{z}");
+    assert!(prismarine > 0, "prismarine in ruin chunk {x},{z}");
+    assert!(
+        (1..=2).contains(&chests.len()),
+        "ruin chests in chunk {x},{z}"
+    );
+    assert!(chests.iter().all(|(_, y, _)| *y < 63));
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        (generator.min_y()..generator.min_y() + generator.height()).all(|y| {
+            plain
+                .block_state(local_x, y, local_z)
+                .expect("plain block")
+                .name
+                != "minecraft:chest"
+        })
+    })));
+}
+
+#[test]
 fn generated_chunk_contains_standard_ruined_portal_obsidian_and_lava() {
     let seed = 12_345;
     let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())

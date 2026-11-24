@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,629
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,636
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1383,8 +1383,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   processors, deterministic placement, and feature-pool trees/decor; loot/chest
   block entities, entity spawning, terrain adaptation, and Java
   block-for-block fixture remain).
-- [~] **Buried treasure and shipwrecks done**; ocean ruins and ocean
-  monuments remain. Shipwreck uses the shipped `rightsideup_full` template with
+- [~] **Buried treasure, shipwrecks, and cold/warm ocean ruins done**; ocean
+  monuments remain. Ocean ruins add a 21×17 rotated procedural footprint,
+  walls/towers/arches/rubble, floor skirts, and loot chests. Shipwreck uses the shipped `rightsideup_full` template with
   rotation, palette selection, ocean-floor/beached height sampling, chest loot
   markers, fixed-seed fixtures, and a real generated-ocean-chunk test. Java
   differential fixtures, weighted/degraded variants, exact ChunkRandom, live

@@ -3382,6 +3382,25 @@ Format:
   period can move far once; acceptable for this pre-1.0 server. Progressive
   initial streaming remains the proper long-term fix (P8.4a).
 
+## 2026-11-24 — Ocean ruins use a deterministic procedural approximation
+- Context: P2.10 needs cold/warm ocean-ruin starts in the normal Overworld
+  structure pipeline, but this slice is explicitly procedural rather than a
+  Java template-parity claim.
+- Decision: add `StructureKind::OceanRuin { warm }`, both shipped biome-tag
+  definitions, and a fixed 21x17 piece with broken perimeter walls, two towers,
+  a stepped arch, interior stubs, rubble, and one or two loot chests. Rotation,
+  chest count, and chest loot seeds use the existing large-feature seed stream.
+  A seeded coordinate hash chooses cold/warm materials independently of chunk
+  clipping. Placement averages `OCEAN_FLOOR_WG` over the footprint and extends
+  a four-block foundation skirt through replaceable blocks.
+- Why: coordinate-stable materials and stored chest seeds make split-chunk
+  placement identical to whole-piece placement while keeping the slice small
+  and testable.
+- Consequences: this does not yet match Java's 48 shipped underwater-ruin
+  templates, weighted size/brick/cracked/mossy choices, vertical jitter,
+  processors, or exact chest RNG. Fixed-seed selection/bounds/rotation/clipping/
+  chest tests and a generated-ocean-chunk test cover the implemented behavior.
+
 ## 2026-11-12 Progressive join streaming
 - Context: the initial view-distance batch was generated and sent synchronously
   before the play loop. At `view-distance=10` that is 441 columns; a debug

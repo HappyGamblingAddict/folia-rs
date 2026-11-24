@@ -6,6 +6,7 @@ use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureError;
 use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+use folia_core::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
 use folia_core::worldgen::structure::ruined_portal::{
     RuinedPortalPlacement, RuinedPortalStart, RuinedPortalVariant,
@@ -75,6 +76,10 @@ const JUNGLE_PYRAMID_JSON: &str = r##"{ "type": "minecraft:jungle_pyramid", "bio
 const SHIPWRECK_JSON: &str = r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck", "is_beached": false, "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const SHIPWRECK_BEACHED_JSON: &str = r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck_beached", "is_beached": true, "spawn_overrides": {}, "step": "surface_structures" }"##;
+
+const OCEAN_RUIN_COLD_JSON: &str = r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_cold", "spawn_overrides": {}, "step": "surface_structures" }"##;
+
+const OCEAN_RUIN_WARM_JSON: &str = r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_warm", "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const VILLAGE_PLAINS_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/village_plains", "max_distance_from_center": 80, "project_start_to_heightmap": "WORLD_SURFACE_WG", "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 0 }, "start_pool": "minecraft:village/plains/town_centers", "step": "surface_structures", "terrain_adaptation": "beard_thin", "use_expansion_hack": true }"##;
 
@@ -1497,6 +1502,353 @@ fn igloo_generation_fails_on_missing_templates() {
             template
         } if structure == "minecraft:igloo" && template == IglooStructure::TOP_TEMPLATE
     ));
+}
+
+#[test]
+fn ocean_ruin_definitions_and_selection_cover_cold_and_warm_biomes() {
+    for (name, json, warm, biomes) in [
+        (
+            "minecraft:ocean_ruin_cold",
+            OCEAN_RUIN_COLD_JSON,
+            false,
+            "#minecraft:has_structure/ocean_ruin_cold",
+        ),
+        (
+            "minecraft:ocean_ruin_warm",
+            OCEAN_RUIN_WARM_JSON,
+            true,
+            "#minecraft:has_structure/ocean_ruin_warm",
+        ),
+    ] {
+        let definition =
+            StructureDefinition::from_json(name, json).expect("ocean ruin JSON parses");
+        assert_eq!(definition.kind, StructureKind::OceanRuin { warm });
+        assert_eq!(definition.step(), Decoration::SurfaceStructures);
+        assert_eq!(definition.biomes, BiomeSet::Tag(biomes.to_owned()));
+    }
+
+    let structures = StructureGenerator::shipped(HashMap::new()).expect("ocean ruin generator");
+    let set = structures
+        .sets()
+        .get("ocean_ruins")
+        .expect("ocean ruin set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("ocean ruins must use random spread");
+    };
+    assert_eq!(spread.spacing, 20);
+    assert_eq!(spread.separation, 8);
+    assert_eq!(spread.salt, 14_357_621);
+
+    let cold_chunk = ChunkPos::new(-120, -9);
+    let warm_chunk = ChunkPos::new(-120, -39);
+
+    for (chunk, biome, wrong_biome, expected) in [
+        (
+            cold_chunk,
+            "minecraft:ocean",
+            "minecraft:warm_ocean",
+            "minecraft:ocean_ruin_cold",
+        ),
+        (
+            warm_chunk,
+            "minecraft:warm_ocean",
+            "minecraft:ocean",
+            "minecraft:ocean_ruin_warm",
+        ),
+    ] {
+        let selection = structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                12_345,
+                StructureDimension::Overworld,
+                63,
+                &StaticBiomes(biome),
+            )
+            .expect("ocean ruin selection")
+            .expect("matching ocean ruin biome");
+        assert_eq!(selection.structure, expected);
+        assert_eq!(selection.set, "minecraft:ocean_ruins");
+        assert_eq!(selection.chunk, chunk);
+        assert!(
+            structures
+                .structure_at_chunk(
+                    chunk.x,
+                    chunk.z,
+                    12_345,
+                    StructureDimension::Overworld,
+                    63,
+                    &StaticBiomes(wrong_biome),
+                )
+                .expect("mismatched ocean ruin biome")
+                .is_none()
+        );
+        assert!(
+            structures
+                .structure_at_chunk(
+                    chunk.x,
+                    chunk.z,
+                    12_345,
+                    StructureDimension::Nether,
+                    63,
+                    &StaticBiomes(biome),
+                )
+                .expect("Nether ocean ruin selection")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn ocean_ruin_fixed_seed_pins_bounds_ocean_floor_height_and_two_chest_markers() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("ocean ruin generator")
+        .with_enabled_structures(["minecraft:ocean_ruin_cold"]);
+    let ocean = StaticBiomes("minecraft:ocean");
+    let definition = structures
+        .definitions()
+        .get("minecraft:ocean_ruin_cold")
+        .expect("cold ocean ruin definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(40);
+    let templates = HashMap::new();
+    let chunk = ChunkPos::new(-120, -9);
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &ocean,
+        )
+        .expect("ocean ruin selection")
+        .expect("cold ocean ruin placement chunk");
+    assert_eq!(selection.structure, "minecraft:ocean_ruin_cold");
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("cold ocean ruin start");
+    assert!(start.is_valid());
+    assert_eq!(start.pieces().len(), 0);
+    let ruin = start.ocean_ruin().expect("ocean ruin piece");
+    assert!(!ruin.warm());
+    assert_eq!(ruin.rotation(), Rotation::None);
+    assert_eq!(ruin.chest_count(), 2);
+    let min_x = chunk.x << 4;
+    let min_z = chunk.z << 4;
+    assert_eq!(
+        start.bounding_box(),
+        Some(BoundingBox::new(
+            min_x,
+            OceanRuinStart::GENERATION_HEIGHT - OceanRuinStart::FOUNDATION_DEPTH,
+            min_z,
+            min_x + OceanRuinStart::WIDTH - 1,
+            OceanRuinStart::GENERATION_HEIGHT + OceanRuinStart::HEIGHT - 1,
+            min_z + OceanRuinStart::DEPTH - 1,
+        ))
+    );
+    assert_eq!(ruin.bounding_box(), start.bounding_box().unwrap());
+    assert_eq!(
+        definition
+            .generate_start(&context)
+            .expect("second ocean ruin start"),
+        start
+    );
+
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &ocean,
+            0,
+            Decoration::SurfaceStructures,
+        )
+        .expect("ocean ruin structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert!(placement.written > 0);
+    assert!(placement.written_blocks.iter().all(|pos| {
+        (min_x..=min_x + 15).contains(&pos.x())
+            && (min_z..=min_z + 15).contains(&pos.z())
+            && (-64..=319).contains(&pos.y())
+    }));
+    assert!(
+        level
+            .get_block(BlockPos::new(min_x + 5, 39, min_z + 5))
+            .expect("ocean ruin floor")
+            .name
+            != "minecraft:air"
+    );
+    assert!(
+        !level
+            .blocks
+            .contains_key(&BlockPos::new(min_x + 5, 100, min_z + 5))
+    );
+
+    let mut chests: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:chest")
+        .cloned()
+        .collect();
+    chests.sort_by_key(|chest| (chest.pos.x(), chest.pos.y(), chest.pos.z()));
+    assert_eq!(
+        chests.iter().map(|chest| chest.pos).collect::<Vec<_>>(),
+        vec![
+            BlockPos::new(min_x + 5, 40, min_z + 5),
+            BlockPos::new(min_x + 10, 40, min_z + 10),
+        ]
+    );
+    for (chest, expected_seed) in chests
+        .into_iter()
+        .zip([6_050_390_359_932_273_478_i64, 1_792_119_960_895_996_393])
+    {
+        assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+            nbt.get("id").and_then(Tag::as_str) == Some("minecraft:chest")
+                && nbt.get("LootTable").and_then(Tag::as_str) == Some("minecraft:chests/ocean_ruin")
+                && nbt.get("LootTableSeed").and_then(Tag::as_long) == Some(expected_seed)
+        }));
+    }
+
+    let missing = MockLevel::new(-64, 384);
+    let mut skipped_level = MockLevel::new(-64, 384);
+    let skipped = start
+        .place_in_chunk_with_height_source(&mut skipped_level, &missing, chunk)
+        .expect("missing ocean-floor heights skip placement");
+    assert_eq!(skipped.placed_pieces, 0);
+    assert_eq!(skipped.written, 0);
+}
+
+#[test]
+fn ocean_ruin_rotation_clipping_and_material_palettes_are_deterministic() {
+    let source = MockLevel {
+        fixed_height: Some(40),
+        ..MockLevel::new(-64, 384)
+    };
+    for rotation in Rotation::ALL {
+        let piece = OceanRuinPiece::new(12_346, 8, 8, rotation, true);
+        let bounds = piece.bounding_box();
+        let (width, depth) = if rotation.swaps_horizontal_axes() {
+            (OceanRuinStart::DEPTH, OceanRuinStart::WIDTH)
+        } else {
+            (OceanRuinStart::WIDTH, OceanRuinStart::DEPTH)
+        };
+        assert_eq!(bounds.x_span(), width);
+        assert_eq!(bounds.z_span(), depth);
+        assert_eq!(
+            bounds.y_span(),
+            OceanRuinStart::HEIGHT + OceanRuinStart::FOUNDATION_DEPTH
+        );
+        let full_box = BoundingBox::new(
+            bounds.min_x(),
+            -64,
+            bounds.min_z(),
+            bounds.max_x(),
+            319,
+            bounds.max_z(),
+        );
+        let mut full_level = MockLevel::new(-64, 384);
+        let full = piece
+            .place_with_height_source(&mut full_level, &source, full_box)
+            .expect("full ocean ruin placement");
+        assert_eq!(full.placed_pieces, 1);
+        assert!(full.written > 0);
+
+        let mut split_level = MockLevel::new(-64, 384);
+        let mut split_chests = Vec::new();
+        for chunk_box in [
+            BoundingBox::new(0, -64, 0, 15, 319, 15),
+            BoundingBox::new(16, -64, 0, 31, 319, 15),
+            BoundingBox::new(0, -64, 16, 15, 319, 31),
+            BoundingBox::new(16, -64, 16, 31, 319, 31),
+        ] {
+            let split = piece
+                .place_with_height_source(&mut split_level, &source, chunk_box)
+                .expect("chunk-clipped ocean ruin placement");
+            assert_eq!(split.placed_pieces, 1);
+            assert!(
+                split
+                    .written_blocks
+                    .iter()
+                    .all(|pos| chunk_box.is_inside(*pos))
+            );
+            assert!(split.written_blocks.windows(2).all(|pair| {
+                (pair[0].x(), pair[0].y(), pair[0].z()) < (pair[1].x(), pair[1].y(), pair[1].z())
+            }));
+            split_chests.extend(
+                split
+                    .block_entities
+                    .iter()
+                    .filter(|block| block.state.name == "minecraft:chest")
+                    .cloned(),
+            );
+        }
+        assert_eq!(split_level.blocks, full_level.blocks);
+        split_chests.sort_by_key(|chest| (chest.pos.x(), chest.pos.y(), chest.pos.z()));
+        let mut full_chests: Vec<_> = full
+            .block_entities
+            .iter()
+            .filter(|block| block.state.name == "minecraft:chest")
+            .cloned()
+            .collect();
+        full_chests.sort_by_key(|chest| (chest.pos.x(), chest.pos.y(), chest.pos.z()));
+        assert_eq!(split_chests, full_chests);
+        assert!((1..=2).contains(&full_chests.len()));
+    }
+
+    let cold = OceanRuinPiece::new(12_346, 0, 0, Rotation::None, false);
+    let warm = OceanRuinPiece::new(12_346, 0, 0, Rotation::None, true);
+    let cold_box = BoundingBox::new(0, -64, 0, 20, 319, 16);
+    let mut cold_level = MockLevel::new(-64, 384);
+    let mut warm_level = MockLevel::new(-64, 384);
+    cold.place_with_height_source(&mut cold_level, &source, cold_box)
+        .expect("cold ocean ruin materials");
+    warm.place_with_height_source(&mut warm_level, &source, cold_box)
+        .expect("warm ocean ruin materials");
+    let cold_names: std::collections::HashSet<_> = cold_level
+        .blocks
+        .values()
+        .map(|block| block.name.as_str())
+        .collect();
+    let warm_names: std::collections::HashSet<_> = warm_level
+        .blocks
+        .values()
+        .map(|block| block.name.as_str())
+        .collect();
+    for name in [
+        "minecraft:stone_bricks",
+        "minecraft:cobblestone",
+        "minecraft:andesite",
+        "minecraft:prismarine",
+    ] {
+        assert!(cold_names.contains(name), "cold ruin missing {name}");
+    }
+    for name in [
+        "minecraft:prismarine_bricks",
+        "minecraft:dark_prismarine",
+        "minecraft:andesite",
+        "minecraft:prismarine",
+    ] {
+        assert!(warm_names.contains(name), "warm ruin missing {name}");
+    }
+    assert!(!cold_names.contains("minecraft:dark_prismarine"));
+    assert!(!warm_names.contains("minecraft:mossy_stone_bricks"));
+
+    let mut repeated_level = MockLevel::new(-64, 384);
+    cold.place_with_height_source(&mut repeated_level, &source, cold_box)
+        .expect("repeated cold ocean ruin materials");
+    assert_eq!(repeated_level.blocks, cold_level.blocks);
 }
 
 #[test]

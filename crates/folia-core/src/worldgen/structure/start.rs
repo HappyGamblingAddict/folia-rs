@@ -16,6 +16,7 @@ use crate::worldgen::structure::end_city::EndCityStart;
 use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
 use crate::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+use crate::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
     TemplatePostProcess, TemplateStructurePiece,
@@ -94,6 +95,9 @@ pub enum StructureKind {
     BuriedTreasure,
     DesertPyramid,
     JunglePyramid,
+    OceanRuin {
+        warm: bool,
+    },
     WitchHut,
     Shipwreck {
         beached: bool,
@@ -164,6 +168,9 @@ impl StructureDefinition {
             "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
             "minecraft:jungle_pyramid" => StructureKind::JunglePyramid,
+            "minecraft:ocean_ruin" => StructureKind::OceanRuin {
+                warm: name == "minecraft:ocean_ruin_warm",
+            },
             "minecraft:swamp_hut" => StructureKind::WitchHut,
             "minecraft:shipwreck" => StructureKind::Shipwreck {
                 beached: required_bool(root, "is_beached", name)?,
@@ -336,6 +343,9 @@ impl StructureDefinition {
             StructureKind::JunglePyramid => {
                 JunglePyramidStart::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::OceanRuin { warm } => {
+                OceanRuinStart::generate(&self.name, context, self.terrain_adaptation, *warm)
+            }
             StructureKind::WitchHut => {
                 WitchHutStart::generate(&self.name, context, self.terrain_adaptation)
             }
@@ -433,6 +443,7 @@ pub struct StructureStart {
     buried_treasure: Option<BuriedTreasurePiece>,
     desert_pyramid: Option<DesertPyramidPiece>,
     jungle_pyramid: Option<JunglePyramidPiece>,
+    ocean_ruin: Option<OceanRuinPiece>,
     witch_hut: Option<WitchHutPiece>,
     fortress: Option<FortressStart>,
     end_city: Option<EndCityStart>,
@@ -458,6 +469,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -483,6 +495,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -508,6 +521,7 @@ impl StructureStart {
             buried_treasure: Some(piece),
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -533,6 +547,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: Some(piece),
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -558,6 +573,33 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: Some(piece),
+            ocean_ruin: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: None,
+            ruined_portal: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_ocean_ruin(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: OceanRuinPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            ocean_ruin: Some(piece),
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -583,6 +625,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: Some(piece),
             fortress: None,
             end_city: None,
@@ -608,6 +651,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -633,6 +677,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -658,6 +703,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: Some(fortress),
             end_city: None,
@@ -683,6 +729,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: Some(end_city),
@@ -703,6 +750,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_ruin: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -739,6 +787,10 @@ impl StructureStart {
 
     pub fn jungle_pyramid(&self) -> Option<&JunglePyramidPiece> {
         self.jungle_pyramid.as_ref()
+    }
+
+    pub fn ocean_ruin(&self) -> Option<&OceanRuinPiece> {
+        self.ocean_ruin.as_ref()
     }
 
     pub fn witch_hut(&self) -> Option<&WitchHutPiece> {
@@ -795,6 +847,7 @@ impl StructureStart {
             || self.buried_treasure.is_some()
             || self.desert_pyramid.is_some()
             || self.jungle_pyramid.is_some()
+            || self.ocean_ruin.is_some()
             || self.witch_hut.is_some()
             || self.shipwreck.is_some()
             || self.ruined_portal.is_some()
@@ -828,6 +881,9 @@ impl StructureStart {
         }
         if let Some(temple) = &self.jungle_pyramid {
             boxes.push(temple.bounding_box());
+        }
+        if let Some(ruin) = &self.ocean_ruin {
+            boxes.push(ruin.bounding_box());
         }
         if let Some(hut) = &self.witch_hut {
             boxes.push(hut.bounding_box());
@@ -1007,6 +1063,17 @@ impl StructureStart {
             let placement = match height_source {
                 Some(source) => temple.place_with_height_source(level, source, chunk_box)?,
                 None => temple.place(level, chunk_box)?,
+            };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(ruin) = &self.ocean_ruin {
+            let placement = match height_source {
+                Some(source) => ruin.place_with_height_source(level, source, chunk_box)?,
+                None => ruin.place(level, chunk_box)?,
             };
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
@@ -2284,6 +2351,14 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:jungle_pyramid",
         r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ocean_ruin_cold",
+        r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_cold", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ocean_ruin_warm",
+        r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_warm", "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
     (
         "minecraft:swamp_hut",

@@ -39,6 +39,7 @@ pub mod end_city;
 pub mod fortress;
 pub mod jigsaw;
 pub mod jungle_pyramid;
+pub mod ocean_ruin;
 pub mod piece;
 pub mod pool;
 pub mod processor;
@@ -209,6 +210,7 @@ pub use jigsaw::{
     shuffle, top_facing,
 };
 pub use jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+pub use ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 pub use piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
     StructurePieceKind, TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,

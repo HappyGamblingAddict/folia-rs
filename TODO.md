@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert-pyramid + buried-treasure slices should bring the gate to 1,614
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, and witch hut should bring the gate to 1,616
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1390,9 +1390,10 @@ Implement in dependency order, each with loot/tags and a parity fixture:
 - [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
   branch, rotation, bounds, and surface snap done; loot-table block entities,
   biome filtering, and generator wiring remain).
-- [~] Desert temples (generator wiring, height-source-aware placement,
-  fixed-seed selection/rejection/sample/chest-marker fixture done); jungle
-  temples, witch huts, and ruined portals remain.
+- [~] Desert temples and witch huts done (procedural pieces, height-source
+  placement, fixed-seed and real generated-chunk fixtures); jungle temples and
+  ruined portals remain. Vanilla vertical jitter/rotation, witch/cat spawning,
+  potion contents, and Java differential fixtures are still open.
 - [~] Ancient cities, trial chambers (59 template NBTs shipped across both
   families plus 191 trial-chamber templates in `structure_templates_trial.json`;
   ancient-city/trial-chamber start wiring still needs the jigsaw attachment
@@ -1408,7 +1409,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
 - **Progress (2026-11-24):** Desert pyramid now places through the normal
   structure-set pipeline using the generator height source (writes remain
   chunk-clipped). A fixed-seed fixture pins selection, snowy rejection, bounds,
-  sampled sandstone/terracotta, and four loot-table chest markers.
+  sampled sandstone/terracotta, and four loot-table chest markers. Witch Hut
+  adds a fixed 5×5 spruce hut with stilts, roof, windows/door, cauldron marker,
+  and real generated-swamp-chunk coverage (procedural approximation).
 
 ### P2.11 Feature/structure parity harness `[ ]` `M`
 

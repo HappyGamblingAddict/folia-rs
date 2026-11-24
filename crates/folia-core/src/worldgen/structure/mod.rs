@@ -44,6 +44,7 @@ pub mod processor;
 pub mod set;
 pub mod start;
 pub mod template;
+pub mod witch_hut;
 
 use std::fmt;
 
@@ -235,3 +236,4 @@ pub use template::{
     Mirror, PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,
     TemplateBlock, TemplateEntity, transform, transform_state, transform_vec3,
 };
+pub use witch_hut::{WitchHutPiece, WitchHutStart};

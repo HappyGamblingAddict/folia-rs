@@ -11,11 +11,12 @@ use folia_core::worldgen::structure::set::{
 };
 use folia_core::worldgen::structure::start::{
     IglooStructure, StructureDefinition, StructureGenerationContext, StructureGenerator,
-    TemplateProvider,
+    StructureKind, TemplateProvider,
 };
 use folia_core::worldgen::structure::template::{
     Mirror, Rotation, StructurePlaceSettings, StructureTemplate,
 };
+use folia_core::worldgen::structure::witch_hut::WitchHutStart;
 use std::collections::HashMap;
 
 // Byte-for-byte gzip copies of shipped 1.21.11 templates. They are embedded so
@@ -582,6 +583,176 @@ fn desert_pyramid_set_pipeline_places_surface_body_and_four_chests() {
             .name,
         "minecraft:blue_terracotta"
     );
+}
+
+#[test]
+fn witch_hut_set_pipeline_places_supported_spruce_hut_and_cauldron() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure generator")
+        .with_enabled_structures(["minecraft:swamp_hut"]);
+    let swamp = StaticBiomes("minecraft:swamp");
+    let desert = StaticBiomes("minecraft:desert");
+    let set = structures.sets().get("swamp_huts").expect("swamp hut set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("swamp huts must use random spread");
+    };
+    let chunk = spread.get_potential_structure_chunk(seed, 0, 0);
+    assert_eq!(chunk, ChunkPos::new(12, 21));
+    assert_eq!(spread.spacing, 32);
+    assert_eq!(spread.separation, 8);
+    assert_eq!(spread.salt, 14_357_620);
+
+    let selection = structures
+        .structure_at_chunk(
+            chunk.x,
+            chunk.z,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &swamp,
+        )
+        .expect("swamp hut selection")
+        .expect("swamp hut placement chunk");
+    assert_eq!(selection.structure, "minecraft:swamp_hut");
+    assert_eq!(selection.set, "minecraft:swamp_huts");
+    assert_eq!(selection.chunk, chunk);
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &desert,
+            )
+            .expect("desert selection")
+            .is_none()
+    );
+
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(64);
+    let templates = HashMap::new();
+    let definition = structures
+        .definitions()
+        .get("minecraft:swamp_hut")
+        .expect("swamp hut definition");
+    assert_eq!(definition.kind, StructureKind::WitchHut);
+    assert_eq!(definition.step(), Decoration::SurfaceStructures);
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("swamp hut start");
+    assert!(start.is_valid());
+    let hut = start.witch_hut().expect("witch hut piece");
+    let min_x = chunk.x << 4;
+    let min_z = chunk.z << 4;
+    let bounds = start.bounding_box().expect("witch hut bounds");
+    assert_eq!(
+        bounds,
+        BoundingBox::new(
+            min_x,
+            WitchHutStart::GENERATION_HEIGHT - WitchHutStart::FLOOR_OFFSET,
+            min_z,
+            min_x + 4,
+            WitchHutStart::GENERATION_HEIGHT + 6,
+            min_z + 4,
+        )
+    );
+    assert_eq!(hut.bounding_box(), bounds);
+
+    let mut level = MockLevel::new(-64, 384);
+    for x in min_x..=min_x + 4 {
+        for z in min_z..=min_z + 4 {
+            level.set_block(
+                BlockPos::new(x, 63, z),
+                BlockState {
+                    name: "minecraft:grass_block".to_owned(),
+                    properties: Vec::new(),
+                },
+            );
+        }
+    }
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &swamp,
+            0,
+            Decoration::SurfaceStructures,
+        )
+        .expect("witch hut structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert!(placement.written > 0);
+
+    let floor_y = 67;
+    for (pos, expected) in [
+        (
+            BlockPos::new(min_x + 2, floor_y, min_z + 2),
+            "minecraft:spruce_planks",
+        ),
+        (
+            BlockPos::new(min_x, floor_y + 3, min_z),
+            "minecraft:spruce_log",
+        ),
+        (
+            BlockPos::new(min_x + 2, floor_y + 1, min_z + 4),
+            "minecraft:air",
+        ),
+        (
+            BlockPos::new(min_x + 2, floor_y + 2, min_z + 4),
+            "minecraft:air",
+        ),
+        (
+            BlockPos::new(min_x, floor_y + 2, min_z + 2),
+            "minecraft:glass_pane",
+        ),
+        (
+            BlockPos::new(min_x + 2, floor_y + 6, min_z + 2),
+            "minecraft:spruce_stairs",
+        ),
+        (
+            BlockPos::new(min_x, floor_y - 3, min_z),
+            "minecraft:spruce_log",
+        ),
+        (
+            BlockPos::new(min_x, floor_y - 1, min_z),
+            "minecraft:spruce_log",
+        ),
+    ] {
+        assert_eq!(
+            level.get_block(pos).expect("sampled witch hut block").name,
+            expected,
+            "block at {pos:?}"
+        );
+    }
+
+    let cauldrons: Vec<_> = placement
+        .block_entities
+        .iter()
+        .filter(|block| block.state.name == "minecraft:cauldron")
+        .collect();
+    assert_eq!(cauldrons.len(), 1);
+    let cauldron = cauldrons[0];
+    assert_eq!(
+        cauldron.pos,
+        BlockPos::new(min_x + 2, floor_y + 1, min_z + 2)
+    );
+    assert!(
+        cauldron.nbt.as_ref().is_some_and(|nbt| {
+            nbt.get("id").and_then(Tag::as_str) == Some("minecraft:cauldron")
+        })
+    );
+    assert!(placement.written_blocks.contains(&cauldron.pos));
 }
 
 #[test]

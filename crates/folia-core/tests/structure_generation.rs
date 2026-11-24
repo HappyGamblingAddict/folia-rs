@@ -173,6 +173,91 @@ fn generated_chunk_contains_buried_treasure_from_underground_structure_step() {
 }
 
 #[test]
+fn generated_chunk_contains_witch_hut_planks_stilts_and_cauldron() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("structure manager")
+        .with_enabled_structures(["minecraft:swamp_hut"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let (x, z) = (-149, -87);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let selection = generator
+        .structures()
+        .expect("structures")
+        .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+        .expect("selection")
+        .expect("witch hut placement chunk");
+    assert_eq!(selection.structure, "minecraft:swamp_hut");
+    assert_eq!(selection.set, "minecraft:swamp_huts");
+    assert_eq!(
+        generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+        "minecraft:swamp"
+    );
+
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk_with_steps(x, z, &[])
+        .expect("terrain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut cauldrons = Vec::new();
+    let mut planks = 0;
+    let mut logs = 0;
+    let mut stairs = 0;
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:cauldron" => cauldrons.push((local_x, y, local_z)),
+                    "minecraft:spruce_planks" => planks += 1,
+                    "minecraft:spruce_log" => logs += 1,
+                    "minecraft:spruce_stairs" => stairs += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert_eq!(cauldrons.len(), 1, "witch hut at chunk {x},{z}");
+    assert_eq!((cauldrons[0].0, cauldrons[0].2), (2, 2));
+    assert!(planks >= 25);
+    assert!(logs >= 12);
+    assert!(stairs >= 15);
+    let floor_y = cauldrons[0].1 - 1;
+    let support_logs = (generator.min_y()..floor_y)
+        .filter(|&y| {
+            structured
+                .block_state(0, y, 0)
+                .expect("support column")
+                .name
+                == "minecraft:spruce_log"
+        })
+        .count();
+    assert!(support_logs >= 1, "the hut floor must sit on spruce stilts");
+    assert_eq!(
+        structured
+            .block_state(2, floor_y, 2)
+            .expect("hut floor")
+            .name,
+        "minecraft:spruce_planks"
+    );
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        plain
+            .block_state(local_x, floor_y, local_z)
+            .expect("plain block")
+            .name
+            != "minecraft:cauldron"
+    })));
+}
+
+#[test]
 fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
     let seed = 12_345;
     let generator = structured_generator(seed);

@@ -22,6 +22,9 @@ use crate::worldgen::structure::piece::{
 };
 use crate::worldgen::structure::pool::{LiquidSettings, PoolCatalog};
 use crate::worldgen::structure::processor::StructureProcessorCatalog;
+use crate::worldgen::structure::ruined_portal::{
+    RuinedPortalPiece, RuinedPortalStart, RuinedPortalVariant,
+};
 use crate::worldgen::structure::set::{
     SelectedStructure, StructureBiomeLookup, StructureDimension, StructureSetError,
     StructureSetRegistry, set_large_feature_seed,
@@ -95,6 +98,9 @@ pub enum StructureKind {
     Shipwreck {
         beached: bool,
     },
+    RuinedPortal {
+        variant: RuinedPortalVariant,
+    },
     Fortress,
     EndCity,
     Jigsaw {
@@ -161,6 +167,13 @@ impl StructureDefinition {
             "minecraft:swamp_hut" => StructureKind::WitchHut,
             "minecraft:shipwreck" => StructureKind::Shipwreck {
                 beached: required_bool(root, "is_beached", name)?,
+            },
+            "minecraft:ruined_portal" => StructureKind::RuinedPortal {
+                variant: RuinedPortalVariant::from_structure_id(name).ok_or_else(|| {
+                    StructureError::InvalidDefinition(format!(
+                        "{name}: unknown shipped ruined portal variant"
+                    ))
+                })?,
             },
             "minecraft:fortress" => StructureKind::Fortress,
             "minecraft:end_city" => StructureKind::EndCity,
@@ -329,6 +342,9 @@ impl StructureDefinition {
             StructureKind::Shipwreck { beached } => {
                 ShipwreckStart::generate(&self.name, context, self.terrain_adaptation, *beached)
             }
+            StructureKind::RuinedPortal { variant } => {
+                RuinedPortalStart::generate(&self.name, context, self.terrain_adaptation, *variant)
+            }
             StructureKind::Unsupported { type_name } => {
                 Err(StructureError::UnsupportedStructureType {
                     structure: self.name.clone(),
@@ -421,6 +437,7 @@ pub struct StructureStart {
     fortress: Option<FortressStart>,
     end_city: Option<EndCityStart>,
     shipwreck: Option<ShipwreckPiece>,
+    ruined_portal: Option<RuinedPortalPiece>,
     terrain_adaptation: TerrainAdjustment,
 }
 
@@ -445,6 +462,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -469,6 +487,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -493,6 +512,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -517,6 +537,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -541,6 +562,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -565,6 +587,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -589,6 +612,32 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: Some(piece),
+            ruined_portal: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_ruined_portal(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: RuinedPortalPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: None,
+            ruined_portal: Some(piece),
             terrain_adaptation,
         }
     }
@@ -613,6 +662,7 @@ impl StructureStart {
             fortress: Some(fortress),
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -637,6 +687,7 @@ impl StructureStart {
             fortress: None,
             end_city: Some(end_city),
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation,
         }
     }
@@ -656,6 +707,7 @@ impl StructureStart {
             fortress: None,
             end_city: None,
             shipwreck: None,
+            ruined_portal: None,
             terrain_adaptation: TerrainAdjustment::None,
         }
     }
@@ -695,6 +747,10 @@ impl StructureStart {
 
     pub fn shipwreck(&self) -> Option<&ShipwreckPiece> {
         self.shipwreck.as_ref()
+    }
+
+    pub fn ruined_portal(&self) -> Option<&RuinedPortalPiece> {
+        self.ruined_portal.as_ref()
     }
 
     /// Nether-fortress payload, if this is a fortress start.
@@ -741,6 +797,7 @@ impl StructureStart {
             || self.jungle_pyramid.is_some()
             || self.witch_hut.is_some()
             || self.shipwreck.is_some()
+            || self.ruined_portal.is_some()
             || self
                 .fortress
                 .as_ref()
@@ -777,6 +834,9 @@ impl StructureStart {
         }
         if let Some(shipwreck) = &self.shipwreck {
             boxes.push(shipwreck.bounding_box());
+        }
+        if let Some(portal) = &self.ruined_portal {
+            boxes.push(portal.bounding_box());
         }
         if let Some(fortress) = &self.fortress
             && let Some(bounding_box) = fortress.bounding_box()
@@ -971,6 +1031,14 @@ impl StructureStart {
                     .place_with_height_source_and_random(level, source, chunk_box, random)?,
                 None => shipwreck.place_with_random(level, chunk_box, random)?,
             };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(portal) = &self.ruined_portal {
+            let placement = portal.place(level, chunk_box)?;
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
             } else {
@@ -2228,6 +2296,34 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:shipwreck_beached",
         r##"{ "type": "minecraft:shipwreck", "biomes": "#minecraft:has_structure/shipwreck_beached", "is_beached": true, "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_standard", "setups": [ { "air_pocket_probability": 1.0, "can_be_cold": true, "mossiness": 0.2, "overgrown": false, "placement": "underground", "replace_with_blackstone": false, "vines": false, "weight": 0.5 }, { "air_pocket_probability": 0.0, "can_be_cold": true, "mossiness": 0.2, "overgrown": false, "placement": "on_land_surface", "replace_with_blackstone": false, "vines": false, "weight": 0.5 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_desert",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_desert", "setups": [ { "air_pocket_probability": 0.0, "can_be_cold": false, "mossiness": 0.0, "overgrown": false, "placement": "partly_buried", "replace_with_blackstone": false, "vines": false, "weight": 1.0 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_jungle",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_jungle", "setups": [ { "air_pocket_probability": 0.0, "can_be_cold": false, "mossiness": 0.8, "overgrown": true, "placement": "on_land_surface", "replace_with_blackstone": false, "vines": true, "weight": 1.0 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_swamp",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_swamp", "setups": [ { "air_pocket_probability": 0.0, "can_be_cold": false, "mossiness": 0.5, "overgrown": false, "placement": "on_ocean_floor", "replace_with_blackstone": false, "vines": true, "weight": 1.0 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_mountain",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_mountain", "setups": [ { "air_pocket_probability": 1.0, "can_be_cold": true, "mossiness": 0.2, "overgrown": false, "placement": "in_mountain", "replace_with_blackstone": false, "vines": false, "weight": 0.5 }, { "air_pocket_probability": 0.0, "can_be_cold": true, "mossiness": 0.2, "overgrown": false, "placement": "on_land_surface", "replace_with_blackstone": false, "vines": false, "weight": 0.5 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_ocean",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_ocean", "setups": [ { "air_pocket_probability": 0.0, "can_be_cold": true, "mossiness": 0.8, "overgrown": false, "placement": "on_ocean_floor", "replace_with_blackstone": false, "vines": false, "weight": 1.0 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:ruined_portal_nether",
+        r##"{ "type": "minecraft:ruined_portal", "biomes": "#minecraft:has_structure/ruined_portal_nether", "setups": [ { "air_pocket_probability": 0.0, "can_be_cold": false, "mossiness": 0.0, "overgrown": false, "placement": "in_nether", "replace_with_blackstone": true, "vines": false, "weight": 1.0 } ], "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
     (
         "minecraft:village_plains",

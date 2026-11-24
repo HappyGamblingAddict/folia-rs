@@ -42,6 +42,7 @@ pub mod jungle_pyramid;
 pub mod piece;
 pub mod pool;
 pub mod processor;
+pub mod ruined_portal;
 pub mod set;
 pub mod shipwreck;
 pub mod start;
@@ -75,7 +76,7 @@ pub enum StructureError {
     EmptyPool { pool: String },
     /// `start_jigsaw_name` did not match any connector in the start element.
     StartJigsawNotFound { structure: String, name: String },
-    /// Jigsaw expansion needs a level for heightmap/dimension queries.
+    /// Start generation needs a level for heightmap/dimension queries.
     MissingHeightSource { structure: String },
     /// A jigsaw start was placed without its template/processor catalogs.
     JigsawRequiresTemplates { structure: String },
@@ -151,7 +152,7 @@ impl fmt::Display for StructureError {
             ),
             StructureError::MissingHeightSource { structure } => write!(
                 formatter,
-                "structure `{structure}` needs a level/height source for jigsaw expansion"
+                "structure `{structure}` needs a level/height source for start generation"
             ),
             StructureError::JigsawRequiresTemplates { structure } => write!(
                 formatter,
@@ -222,6 +223,10 @@ pub use processor::{
     ProcessorApplyContext, ProcessorCatalogIndex, ProcessorError, ProcessorRule, RawBlockInfo,
     RuleTest, StructureProcessor, StructureProcessorCatalog, StructureProcessorList,
     apply_processors, template_block_infos,
+};
+pub use ruined_portal::{
+    RuinedPortalPiece, RuinedPortalPlacement, RuinedPortalSetup, RuinedPortalStart,
+    RuinedPortalVariant,
 };
 pub use set::{
     ConcentricRingsStructurePlacement, ExclusionZone, FrequencyReductionMethod, PlacementError,

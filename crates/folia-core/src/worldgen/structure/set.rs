@@ -656,7 +656,7 @@ impl StructureSetRegistry {
         accept: impl Fn(&str) -> bool,
     ) -> Result<Option<SelectedStructure>, StructureSetError> {
         for set in &self.sets {
-            if set_dimension(&set.name) != dimension {
+            if !set_supports_dimension(&set.name, dimension) {
                 continue;
             }
             let mut stack = Vec::new();
@@ -981,9 +981,15 @@ fn biome_matches(tag: &str, biome: &str) -> bool {
     )
 }
 
-/// The dimension a set is registered in. This is the vanilla
-/// `structure_set` dimension split: only the Nether complexes/fossils and End
-/// cities belong outside the Overworld.
+fn set_supports_dimension(set_name: &str, dimension: StructureDimension) -> bool {
+    set_dimension(set_name) == dimension
+        || (canonical_name(set_name) == "minecraft:ruined_portals"
+            && dimension == StructureDimension::Nether)
+}
+
+/// The primary dimension a set is registered in. Ruined portals also run in the
+/// Nether; the other Nether complexes/fossils and End cities are exclusive to
+/// their respective dimensions.
 pub fn set_dimension(set_name: &str) -> StructureDimension {
     match canonical_name(set_name).as_str() {
         "minecraft:nether_complexes" | "minecraft:nether_fossils" => StructureDimension::Nether,

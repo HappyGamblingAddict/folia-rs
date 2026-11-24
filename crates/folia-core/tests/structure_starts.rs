@@ -7,6 +7,9 @@ use folia_core::worldgen::structure::StructureError;
 use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
+use folia_core::worldgen::structure::ruined_portal::{
+    RuinedPortalPlacement, RuinedPortalStart, RuinedPortalVariant,
+};
 use folia_core::worldgen::structure::set::{
     PlacementError, RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
     StructureSetError, StructureSetRegistry,
@@ -80,6 +83,7 @@ struct MockLevel {
     min_y: i32,
     height: i32,
     fixed_height: Option<i32>,
+    ocean_floor_height: Option<i32>,
     heights: HashMap<(i32, i32), i32>,
     blocks: HashMap<BlockPos, BlockState>,
 }
@@ -90,6 +94,7 @@ impl MockLevel {
             min_y,
             height,
             fixed_height: None,
+            ocean_floor_height: None,
             heights: HashMap::new(),
             blocks: HashMap::new(),
         }
@@ -117,8 +122,14 @@ impl FeatureLevel for MockLevel {
         true
     }
 
-    fn heightmap(&self, _kind: Heightmap, x: i32, z: i32) -> Option<i32> {
-        self.heights.get(&(x, z)).copied().or(self.fixed_height)
+    fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        self.heights.get(&(x, z)).copied().or_else(|| {
+            if matches!(kind, Heightmap::OceanFloor | Heightmap::OceanFloorWg) {
+                self.ocean_floor_height.or(self.fixed_height)
+            } else {
+                self.fixed_height
+            }
+        })
     }
 }
 
@@ -1749,6 +1760,483 @@ fn start_for_shipwreck(
     definition
         .generate_start(&context)
         .expect("shipwreck start")
+}
+
+#[test]
+fn ruined_portal_definitions_cover_all_shipped_variants() {
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures =
+        StructureGenerator::from_catalog(catalog.clone()).expect("ruined portal generator");
+    for (name, variant, biomes, heightmap, placements) in [
+        (
+            "minecraft:ruined_portal",
+            RuinedPortalVariant::Standard,
+            "#minecraft:has_structure/ruined_portal_standard",
+            Heightmap::WorldSurfaceWg,
+            vec![
+                RuinedPortalPlacement::Underground,
+                RuinedPortalPlacement::OnLandSurface,
+            ],
+        ),
+        (
+            "minecraft:ruined_portal_desert",
+            RuinedPortalVariant::Desert,
+            "#minecraft:has_structure/ruined_portal_desert",
+            Heightmap::WorldSurfaceWg,
+            vec![RuinedPortalPlacement::PartlyBuried],
+        ),
+        (
+            "minecraft:ruined_portal_jungle",
+            RuinedPortalVariant::Jungle,
+            "#minecraft:has_structure/ruined_portal_jungle",
+            Heightmap::WorldSurfaceWg,
+            vec![RuinedPortalPlacement::OnLandSurface],
+        ),
+        (
+            "minecraft:ruined_portal_swamp",
+            RuinedPortalVariant::Swamp,
+            "#minecraft:has_structure/ruined_portal_swamp",
+            Heightmap::OceanFloorWg,
+            vec![RuinedPortalPlacement::OnOceanFloor],
+        ),
+        (
+            "minecraft:ruined_portal_mountain",
+            RuinedPortalVariant::Mountain,
+            "#minecraft:has_structure/ruined_portal_mountain",
+            Heightmap::WorldSurfaceWg,
+            vec![
+                RuinedPortalPlacement::InMountain,
+                RuinedPortalPlacement::OnLandSurface,
+            ],
+        ),
+        (
+            "minecraft:ruined_portal_ocean",
+            RuinedPortalVariant::Ocean,
+            "#minecraft:has_structure/ruined_portal_ocean",
+            Heightmap::OceanFloorWg,
+            vec![RuinedPortalPlacement::OnOceanFloor],
+        ),
+        (
+            "minecraft:ruined_portal_nether",
+            RuinedPortalVariant::Nether,
+            "#minecraft:has_structure/ruined_portal_nether",
+            Heightmap::WorldSurfaceWg,
+            vec![RuinedPortalPlacement::InNether],
+        ),
+    ] {
+        let definition = structures
+            .definitions()
+            .get(name)
+            .expect("shipped ruined portal definition");
+        assert_eq!(
+            definition.kind,
+            StructureKind::RuinedPortal { variant },
+            "definition {name}"
+        );
+        assert_eq!(definition.biomes, BiomeSet::Tag(biomes.to_owned()));
+        assert_eq!(definition.step(), Decoration::SurfaceStructures);
+        assert_eq!(variant.heightmap(), heightmap);
+        assert_eq!(
+            variant
+                .setups()
+                .iter()
+                .map(|setup| setup.placement)
+                .collect::<Vec<_>>(),
+            placements
+        );
+    }
+}
+
+#[test]
+fn ruined_portal_set_pipeline_selects_each_biome_and_rejects_other_dimensions() {
+    let seed = 12_345;
+    let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+        .expect("ruined portal generator");
+    let set = structures.sets().get("ruined_portals").expect("portal set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("ruined portals must use random spread");
+    };
+    assert_eq!(spread.spacing, 40);
+    assert_eq!(spread.separation, 15);
+    assert_eq!(spread.salt, 34_222_645);
+    let find_chunk = |target: &str| {
+        for x in -128..=128 {
+            for z in -128..=128 {
+                if spread.is_placement_chunk(seed, x, z)
+                    && set
+                        .select_structure(seed, x, z)
+                        .expect("weighted portal selection")
+                        .structure
+                        == target
+                {
+                    return ChunkPos::new(x, z);
+                }
+            }
+        }
+        panic!("no placement chunk selecting {target}");
+    };
+
+    for (biome, dimension, expected) in [
+        (
+            "minecraft:plains",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal",
+        ),
+        (
+            "minecraft:desert",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal_desert",
+        ),
+        (
+            "minecraft:jungle",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal_jungle",
+        ),
+        (
+            "minecraft:swamp",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal_swamp",
+        ),
+        (
+            "minecraft:windswept_hills",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal_mountain",
+        ),
+        (
+            "minecraft:ocean",
+            StructureDimension::Overworld,
+            "minecraft:ruined_portal_ocean",
+        ),
+        (
+            "minecraft:nether_wastes",
+            StructureDimension::Nether,
+            "minecraft:ruined_portal_nether",
+        ),
+    ] {
+        let chunk = find_chunk(expected);
+        let selection = structures
+            .structure_at_chunk(chunk.x, chunk.z, seed, dimension, 63, &StaticBiomes(biome))
+            .expect("portal selection")
+            .unwrap_or_else(|| panic!("matching portal biome {biome} in {dimension:?}"));
+        assert_eq!(selection.structure, expected, "biome {biome}");
+        assert_eq!(selection.set, "minecraft:ruined_portals");
+        assert_eq!(selection.chunk, chunk);
+    }
+
+    let standard_chunk = find_chunk("minecraft:ruined_portal");
+    assert_eq!(standard_chunk, ChunkPos::new(-96, 62));
+    for (biome, dimension) in [
+        ("minecraft:deep_dark", StructureDimension::Overworld),
+        ("minecraft:desert", StructureDimension::Overworld),
+        ("minecraft:nether_wastes", StructureDimension::Overworld),
+        ("minecraft:plains", StructureDimension::Nether),
+    ] {
+        assert!(
+            structures
+                .structure_at_chunk(
+                    standard_chunk.x,
+                    standard_chunk.z,
+                    seed,
+                    dimension,
+                    63,
+                    &StaticBiomes(biome),
+                )
+                .expect("portal rejection")
+                .is_none(),
+            "unexpected portal in {biome} ({dimension:?})"
+        );
+    }
+}
+
+#[test]
+fn ruined_portal_standard_fixed_seed_selects_template_bounds_and_portal_blocks() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(0, 0);
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures = StructureGenerator::from_catalog(catalog.clone())
+        .expect("ruined portal generator")
+        .with_enabled_structures(["minecraft:ruined_portal"]);
+    let definition = structures
+        .definitions()
+        .get("minecraft:ruined_portal")
+        .expect("standard definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(64);
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, catalog).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("standard ruined portal start");
+    assert!(start.is_valid());
+    assert!(start.pieces().is_empty());
+    let portal = start.ruined_portal().expect("ruined portal payload");
+    let template = portal.template();
+    assert_eq!(template.template_name, "minecraft:ruined_portal/portal_2");
+    assert_eq!(
+        template.place_settings.rotation(),
+        Rotation::CounterClockwise90
+    );
+    assert_eq!(template.place_settings.mirror(), Mirror::FrontBack);
+    assert_eq!(template.template_position, BlockPos::new(0, 25, 0));
+    assert_eq!(portal.bounding_box(), BoundingBox::new(0, 25, 8, 8, 36, 16));
+    assert_eq!(portal.placement(), RuinedPortalPlacement::Underground);
+    assert!(portal.air_pocket());
+    assert!(matches!(
+        RuinedPortalVariant::from_structure_id("minecraft:ruined_portal"),
+        Some(RuinedPortalVariant::Standard)
+    ));
+    assert!(matches!(
+        template.template_name.as_str(),
+        "minecraft:ruined_portal/portal_1"
+            | "minecraft:ruined_portal/portal_2"
+            | "minecraft:ruined_portal/portal_3"
+            | "minecraft:ruined_portal/portal_4"
+            | "minecraft:ruined_portal/portal_5"
+            | "minecraft:ruined_portal/portal_6"
+            | "minecraft:ruined_portal/portal_7"
+            | "minecraft:ruined_portal/portal_8"
+            | "minecraft:ruined_portal/portal_9"
+            | "minecraft:ruined_portal/portal_10"
+            | "minecraft:ruined_portal/giant_portal_1"
+            | "minecraft:ruined_portal/giant_portal_2"
+            | "minecraft:ruined_portal/giant_portal_3"
+    ));
+    assert_eq!(
+        template.place_settings.rotation_pivot(),
+        BlockPos::new(
+            template.template.size_x() / 2,
+            0,
+            template.template.size_z() / 2
+        )
+    );
+    assert_eq!(portal.bounding_box(), start.bounding_box().unwrap());
+    assert_eq!(
+        definition
+            .generate_start(&context)
+            .expect("second ruined portal start"),
+        start
+    );
+
+    let center = portal.bounding_box().center();
+    let center_chunk = ChunkPos::new(center.x() >> 4, center.z() >> 4);
+    let mut placed = 0;
+    let mut obsidian = Vec::new();
+    let mut lava = Vec::new();
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            let candidate = ChunkPos::new(chunk.x + dx, chunk.z + dz);
+            let mut level = MockLevel::new(-64, 384);
+            let placement = start
+                .place_in_chunk_with_height_source(&mut level, &height_source, candidate)
+                .expect("ruined portal chunk placement");
+            assert_eq!(
+                usize::from(candidate == center_chunk),
+                placement.placed_pieces
+            );
+            assert_eq!(
+                placement.skipped_pieces,
+                usize::from(candidate != center_chunk)
+            );
+            placed += placement.placed_pieces;
+            assert!(placement.written_blocks.iter().all(|pos| {
+                (candidate.x << 4) <= pos.x()
+                    && pos.x() < (candidate.x << 4) + 16
+                    && (candidate.z << 4) <= pos.z()
+                    && pos.z() < (candidate.z << 4) + 16
+                    && (-64..320).contains(&pos.y())
+            }));
+            for (pos, block) in &level.blocks {
+                match block.name.as_str() {
+                    "minecraft:obsidian" => obsidian.push(*pos),
+                    "minecraft:lava" => lava.push(*pos),
+                    "minecraft:structure_block" => panic!("structure block leaked into the world"),
+                    _ => {}
+                }
+            }
+        }
+    }
+    obsidian.sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+    lava.sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+    assert_eq!(placed, 1);
+    assert_eq!(
+        obsidian,
+        vec![
+            BlockPos::new(2, 29, 13),
+            BlockPos::new(2, 30, 13),
+            BlockPos::new(2, 31, 13),
+            BlockPos::new(2, 32, 13),
+            BlockPos::new(2, 33, 13),
+            BlockPos::new(3, 33, 13),
+            BlockPos::new(4, 33, 13),
+            BlockPos::new(5, 32, 13),
+            BlockPos::new(5, 33, 13),
+            BlockPos::new(6, 26, 11),
+            BlockPos::new(6, 27, 11),
+        ]
+    );
+    assert!(lava.contains(&BlockPos::new(1, 26, 14)));
+    assert!(lava.contains(&BlockPos::new(7, 26, 10)));
+}
+
+#[test]
+fn ruined_portal_ocean_uses_floor_height_and_missing_inputs_fail_explicitly() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(0, 0);
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures =
+        StructureGenerator::from_catalog(catalog.clone()).expect("ruined portal generator");
+    let definition = structures
+        .definitions()
+        .get("minecraft:ruined_portal_ocean")
+        .expect("ocean definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(90);
+    height_source.ocean_floor_height = Some(40);
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, catalog).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("ocean ruined portal start");
+    let portal = start.ruined_portal().expect("ocean ruined portal piece");
+    assert_eq!(portal.variant(), RuinedPortalVariant::Ocean);
+    assert_eq!(portal.placement(), RuinedPortalPlacement::OnOceanFloor);
+    assert_eq!(portal.bounding_box().min_y(), 39);
+
+    let mut level = MockLevel::new(-64, 384);
+    let placement = start
+        .place_in_chunk(&mut level, chunk)
+        .expect("ocean ruined portal placement");
+    assert!(placement.written > 0);
+    assert!(
+        placement
+            .written_blocks
+            .iter()
+            .all(|pos| (0..16).contains(&pos.x()) && (0..16).contains(&pos.z()) && pos.y() < 60)
+    );
+
+    let missing_height = MockLevel::new(-64, 384);
+    let error = definition
+        .generate_start(
+            &StructureGenerationContext::new(seed, chunk, 0, StructureTemplateCatalog::shipped())
+                .with_level(&missing_height),
+        )
+        .expect_err("missing heights must fail explicitly");
+    assert!(matches!(error, StructureError::MissingHeightSource { .. }));
+
+    let no_templates = HashMap::new();
+    let error = definition
+        .generate_start(
+            &StructureGenerationContext::new(seed, chunk, 0, &no_templates)
+                .with_level(&height_source),
+        )
+        .expect_err("missing templates must fail explicitly");
+    assert!(matches!(
+        error,
+        StructureError::UnknownTemplate { ref template, .. }
+            if template.starts_with("minecraft:ruined_portal/")
+    ));
+}
+
+#[test]
+fn ruined_portal_all_variants_generate_valid_template_backed_starts() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(3, -5);
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures =
+        StructureGenerator::from_catalog(catalog.clone()).expect("ruined portal generator");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(64);
+    for (name, variant) in [
+        ("minecraft:ruined_portal", RuinedPortalVariant::Standard),
+        (
+            "minecraft:ruined_portal_desert",
+            RuinedPortalVariant::Desert,
+        ),
+        (
+            "minecraft:ruined_portal_jungle",
+            RuinedPortalVariant::Jungle,
+        ),
+        ("minecraft:ruined_portal_swamp", RuinedPortalVariant::Swamp),
+        (
+            "minecraft:ruined_portal_mountain",
+            RuinedPortalVariant::Mountain,
+        ),
+        ("minecraft:ruined_portal_ocean", RuinedPortalVariant::Ocean),
+        (
+            "minecraft:ruined_portal_nether",
+            RuinedPortalVariant::Nether,
+        ),
+    ] {
+        let definition = structures
+            .definitions()
+            .get(name)
+            .expect("ruined portal definition");
+        let context =
+            StructureGenerationContext::new(seed, chunk, 0, catalog).with_level(&height_source);
+        let start = definition
+            .generate_start(&context)
+            .expect("ruined portal start");
+        assert!(start.is_valid(), "variant {variant:?}");
+        let portal = start.ruined_portal().expect("ruined portal piece");
+        assert_eq!(portal.variant(), variant);
+        assert!(
+            portal
+                .template()
+                .template_name
+                .starts_with("minecraft:ruined_portal/")
+        );
+        let center = portal.bounding_box().center();
+        let center_chunk = ChunkPos::new(center.x() >> 4, center.z() >> 4);
+        let mut level = MockLevel::new(-64, 384);
+        let placement = start
+            .place_in_chunk(&mut level, center_chunk)
+            .expect("ruined portal placement");
+        assert_eq!(placement.placed_pieces, 1, "variant {variant:?}");
+        assert!(placement.written > 0, "variant {variant:?}");
+    }
+}
+
+#[test]
+fn ruined_portal_common_and_giant_templates_are_selected_deterministically() {
+    let seed = 12_345;
+    let catalog = StructureTemplateCatalog::shipped();
+    let structures = StructureGenerator::from_catalog(catalog.clone())
+        .expect("ruined portal generator")
+        .with_enabled_structures(["minecraft:ruined_portal"]);
+    let definition = structures
+        .definitions()
+        .get("minecraft:ruined_portal")
+        .expect("standard definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(64);
+    let mut names = std::collections::BTreeSet::new();
+    for x in -8..=8 {
+        for z in -8..=8 {
+            let context = StructureGenerationContext::new(seed, ChunkPos::new(x, z), 0, catalog)
+                .with_level(&height_source);
+            let start = definition.generate_start(&context).expect("portal start");
+            names.insert(
+                start
+                    .ruined_portal()
+                    .expect("portal piece")
+                    .template()
+                    .template_name
+                    .clone(),
+            );
+        }
+    }
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("minecraft:ruined_portal/portal_"))
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("minecraft:ruined_portal/giant_portal_"))
+    );
+    assert_eq!(RuinedPortalStart::COMMON_TEMPLATES.len(), 10);
+    assert_eq!(RuinedPortalStart::GIANT_TEMPLATES.len(), 3);
 }
 
 // Keep the TemplateProvider trait in scope for the HashMap implementation even

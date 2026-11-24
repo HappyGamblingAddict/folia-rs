@@ -5,11 +5,14 @@
 //! and no chest block entities are created yet; those outputs are explicit
 //! placement results rather than world state.
 
+use folia_core::chunk::BlockState;
+use folia_core::math::BlockPos;
 use folia_core::region::ChunkPos;
-use folia_core::worldgen::feature::{Decoration, WorldGenRegion};
+use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap, WorldGenRegion};
 use folia_core::worldgen::generator::WorldGenerator;
 use folia_core::worldgen::structure::StructureGenerator;
 use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
+use folia_core::worldgen::structure::ruined_portal::RuinedPortalPlacement;
 use folia_core::worldgen::structure::set::{
     StructureBiomeLookup, StructureDimension, StructureSetRegistry,
 };
@@ -71,6 +74,30 @@ struct GenBiomes<'a> {
 impl StructureBiomeLookup for GenBiomes<'_> {
     fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
         self.generator.biome_at(x, y, z)
+    }
+}
+
+struct FixedHeightSource;
+
+impl FeatureLevel for FixedHeightSource {
+    fn min_y(&self) -> i32 {
+        -64
+    }
+
+    fn height(&self) -> i32 {
+        384
+    }
+
+    fn get_block(&self, _pos: BlockPos) -> Option<&BlockState> {
+        None
+    }
+
+    fn set_block(&mut self, _pos: BlockPos, _state: BlockState) -> bool {
+        false
+    }
+
+    fn heightmap(&self, _kind: Heightmap, _x: i32, _z: i32) -> Option<i32> {
+        Some(64)
     }
 }
 
@@ -583,6 +610,92 @@ fn generated_ocean_chunk_contains_shipwreck_wood_and_chest() {
             .name
             != "minecraft:chest"
     })));
+}
+
+#[test]
+fn generated_chunk_contains_standard_ruined_portal_obsidian_and_lava() {
+    let seed = 12_345;
+    let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+        .expect("ruined portal generator")
+        .with_enabled_structures(["minecraft:ruined_portal"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let structures = generator.structures().expect("structures");
+    let definition = structures
+        .definitions()
+        .get("minecraft:ruined_portal")
+        .expect("standard portal definition");
+    let catalog = structures.template_catalog().expect("template catalog");
+    let mut found = None;
+    for x in -64..=64 {
+        for z in -64..=64 {
+            let Some(selection) = structures
+                .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+                .expect("selection")
+            else {
+                continue;
+            };
+            if selection.structure != "minecraft:ruined_portal" {
+                continue;
+            }
+            let context = StructureGenerationContext::new(seed, ChunkPos::new(x, z), 0, catalog)
+                .with_level(&FixedHeightSource);
+            let start = definition.generate_start(&context).expect("portal start");
+            let portal = start.ruined_portal().expect("portal piece");
+            if portal.placement() != RuinedPortalPlacement::OnLandSurface {
+                continue;
+            }
+            let center = portal.bounding_box().center();
+            if center.x() >> 4 == x && center.z() >> 4 == z {
+                found = Some((x, z));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+    let (x, z) = found.expect("centered standard ruined portal near origin");
+    let plain = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk(x, z)
+        .expect("plain chunk");
+    let structured = generator.generate_chunk(x, z).expect("structured chunk");
+    let mut obsidian = 0;
+    let mut lava = 0;
+    let mut plain_lava = 0;
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("structured block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:obsidian" => obsidian += 1,
+                    "minecraft:lava" if y > 0 => lava += 1,
+                    _ => {}
+                }
+                if y > 0
+                    && plain
+                        .block_state(local_x, y, local_z)
+                        .expect("plain block")
+                        .name
+                        == "minecraft:lava"
+                {
+                    plain_lava += 1;
+                }
+            }
+        }
+    }
+    assert!(obsidian > 0, "ruined portal obsidian in chunk {x},{z}");
+    assert!(lava > 0, "ruined portal lava in chunk {x},{z}");
+    assert_eq!(plain_lava, 0);
 }
 
 #[test]

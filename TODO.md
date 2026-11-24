@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,622
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,629
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1419,6 +1419,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   two dispensers/two loot chests, and a real generated-jungle-chunk fixture.
   Shipwreck adds template-backed placement plus ocean-floor heightmap routing;
   template placements now report sorted/deduplicated written positions.
+  Ruined portals add all seven variants, 13 common/giant templates,
+  rotation/mirror, center-chunk clipping, Overworld/Nether selection, and
+  fixed-seed/generated-chunk fixtures. Java height/processors/decor remain open.
 
 ### P2.11 Feature/structure parity harness `[ ]` `M`
 

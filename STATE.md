@@ -19,7 +19,7 @@ Last updated: 2026-11-24
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
 - Tests: **1,684 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); parity harness and section-lookup slices next expected 1,693. Parity is **98.75% block-class /
+  benchmark); parity/section-lookup/ore slices next expected 1,698. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -34,6 +34,9 @@ Last updated: 2026-11-24
   portal-driven live dimension switching, region-scoped ticking, and live
   bridge chat/effects.
 - Legacy note: check `git log` for the current CI-green HEAD.
+- P2.13 ore placement now resolves targets once, borrows states, bounds column
+  scans, and uses borrowed palette writes; RNG/block digests unchanged, focused
+  release minima ~19% lower but host-noisy.
 - P2.13 indexed section lookup landed; 2M warmed feature reads measured
   12.78 ns -> 6.24 ns, with block/placement digests unchanged. End-to-end
   timings remain host-noisy; ore scans/light invalidation are next hotspots.

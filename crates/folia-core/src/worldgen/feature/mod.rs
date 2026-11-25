@@ -166,6 +166,9 @@ pub trait FeatureLevel {
     fn height(&self) -> i32;
     fn get_block(&self, pos: BlockPos) -> Option<&BlockState>;
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool;
+    fn set_block_ref(&mut self, pos: BlockPos, state: &BlockState) -> bool {
+        self.set_block(pos, state.clone())
+    }
 
     /// `Level.getSeed()`.
     ///
@@ -461,10 +464,14 @@ impl FeatureLevel for WorldGenRegion<'_> {
     }
 
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
+        self.set_block_ref(pos, &state)
+    }
+
+    fn set_block_ref(&mut self, pos: BlockPos, state: &BlockState) -> bool {
         let Some((x, y, z)) = self.local(pos) else {
             return false;
         };
-        self.chunk.set_block_state(x, y, z, state);
+        self.chunk.set_block_state_ref(x, y, z, state);
         if self.record_writes {
             self.written_blocks.insert((pos.x(), pos.y(), pos.z()));
         }

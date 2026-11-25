@@ -15,12 +15,14 @@ use crate::worldgen::carver::mth_sin;
 use folia_math::BlockPos;
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::io;
 
 #[derive(Debug, Clone)]
 pub struct OreFeature {
     size: i32,
-    targets: Vec<OreTargetBlock>,
+    targets: Vec<BlockState>,
+    target_indices: HashMap<String, usize>,
     discard_chance_on_air_exposure: f32,
 }
 
@@ -34,15 +36,6 @@ struct OreTargetBlock {
 enum OreTarget {
     Block(String),
     Tag(&'static str),
-}
-
-impl OreTarget {
-    fn matches(&self, state: &BlockState) -> bool {
-        match self {
-            Self::Block(name) => state.name == *name,
-            Self::Tag(tag) => tags::block_has(tag, &state.name),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -103,9 +96,26 @@ pub fn parse_ore_config(config: &Value) -> io::Result<Option<OreFeature>> {
         parsed_targets.push(OreTargetBlock { target, state });
     }
 
+    let mut target_indices = HashMap::new();
+    let mut target_states = Vec::with_capacity(parsed_targets.len());
+    for (index, target) in parsed_targets.into_iter().enumerate() {
+        match &target.target {
+            OreTarget::Block(name) => {
+                target_indices.entry(name.clone()).or_insert(index);
+            }
+            OreTarget::Tag(tag) => {
+                for name in tags::members(crate::tags::TagRegistryKind::Block, tag) {
+                    target_indices.entry(name.clone()).or_insert(index);
+                }
+            }
+        }
+        target_states.push(target.state);
+    }
+
     Ok(Some(OreFeature {
         size,
-        targets: parsed_targets,
+        targets: target_states,
+        target_indices,
         discard_chance_on_air_exposure,
     }))
 }
@@ -185,7 +195,7 @@ impl OreFeature {
 
         for i in x..=x + width {
             for j in z..=z + width {
-                if y <= ocean_floor_wg_height(level, i, j) {
+                if has_motion_blocking_at_or_above(level, i, j, y) {
                     return self
                         .do_place(level, random, d, d1, d2, d3, d4, d5, x, y, z, width, height);
                 }
@@ -294,11 +304,11 @@ impl OreFeature {
                         }
                         visited[bit] = true;
                         let pos = BlockPos::new(bx, by, bz);
-                        let Some(current) = level.get_block(pos).cloned() else {
+                        let Some(current) = level.get_block(pos) else {
                             continue;
                         };
-                        if let Some(state) = self.target_state(level, random, &current, pos)
-                            && level.set_block(pos, state)
+                        if let Some(state) = self.target_state(level, random, current, pos)
+                            && level.set_block_ref(pos, state)
                         {
                             placed += 1;
                         }
@@ -315,14 +325,10 @@ impl OreFeature {
         random: &mut dyn RandomSource,
         current: &BlockState,
         pos: BlockPos,
-    ) -> Option<BlockState> {
-        for target in &self.targets {
-            if !target.target.matches(current) {
-                continue;
-            }
-            if self.should_skip_air_check(random) || !is_adjacent_to_air(level, pos) {
-                return Some(target.state.clone());
-            }
+    ) -> Option<&BlockState> {
+        let index = *self.target_indices.get(current.name.as_str())?;
+        if self.should_skip_air_check(random) || !is_adjacent_to_air(level, pos) {
+            return Some(&self.targets[index]);
         }
         None
     }
@@ -349,11 +355,11 @@ impl ScatteredOreFeature {
             let dy = java_round((random.next_float() - random.next_float()) * magnitude as f32);
             let dz = java_round((random.next_float() - random.next_float()) * magnitude as f32);
             let pos = origin.offset(dx, dy, dz);
-            let Some(current) = level.get_block(pos).cloned() else {
+            let Some(current) = level.get_block(pos) else {
                 continue;
             };
-            if let Some(state) = self.ore.target_state(level, random, &current, pos) {
-                level.set_block(pos, state);
+            if let Some(state) = self.ore.target_state(level, random, current, pos) {
+                level.set_block_ref(pos, state);
             }
         }
         true
@@ -380,17 +386,20 @@ fn is_adjacent_to_air(level: &dyn FeatureLevel, pos: BlockPos) -> bool {
     })
 }
 
-fn ocean_floor_wg_height(level: &dyn FeatureLevel, x: i32, z: i32) -> i32 {
+fn has_motion_blocking_at_or_above(level: &dyn FeatureLevel, x: i32, z: i32, y: i32) -> bool {
+    if y <= level.min_y() {
+        return true;
+    }
     let max_y = level.min_y() + level.height() - 1;
-    for y in (level.min_y()..=max_y).rev() {
+    for scan_y in (y..=max_y).rev() {
         if level
-            .get_block(BlockPos::new(x, y, z))
+            .get_block(BlockPos::new(x, scan_y, z))
             .is_some_and(is_motion_blocking)
         {
-            return y;
+            return true;
         }
     }
-    level.min_y()
+    false
 }
 
 fn is_motion_blocking(state: &BlockState) -> bool {
@@ -442,9 +451,124 @@ fn invalid(message: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
     use crate::chunk::Chunk;
+    use crate::worldgen::diagnostics::chunk_digest;
     use crate::worldgen::feature::WorldGenRegion;
     use folia_random::LegacyRandomSource;
     use serde_json::Value;
+
+    #[derive(Debug, Clone, Copy)]
+    enum RandomDraw {
+        Int(i32),
+        IntBound(i32, i32),
+        Long(i64),
+        Double(u64),
+        Float(u32),
+        Boolean(bool),
+        Gaussian(u64),
+    }
+
+    struct RecordingRandom {
+        inner: LegacyRandomSource,
+        draws: Vec<RandomDraw>,
+    }
+
+    impl RecordingRandom {
+        fn new(seed: i64) -> Self {
+            Self {
+                inner: LegacyRandomSource::new(seed),
+                draws: Vec::new(),
+            }
+        }
+
+        fn digest(&self) -> u64 {
+            fn feed(hash: &mut u64, bytes: &[u8]) {
+                for byte in bytes {
+                    *hash ^= u64::from(*byte);
+                    *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            feed(&mut hash, &(self.draws.len() as u64).to_le_bytes());
+            for draw in &self.draws {
+                match *draw {
+                    RandomDraw::Int(value) => {
+                        feed(&mut hash, &[0]);
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                    RandomDraw::IntBound(bound, value) => {
+                        feed(&mut hash, &[1]);
+                        feed(&mut hash, &bound.to_le_bytes());
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                    RandomDraw::Long(value) => {
+                        feed(&mut hash, &[2]);
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                    RandomDraw::Double(value) => {
+                        feed(&mut hash, &[3]);
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                    RandomDraw::Float(value) => {
+                        feed(&mut hash, &[4]);
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                    RandomDraw::Boolean(value) => {
+                        feed(&mut hash, &[5, u8::from(value)]);
+                    }
+                    RandomDraw::Gaussian(value) => {
+                        feed(&mut hash, &[6]);
+                        feed(&mut hash, &value.to_le_bytes());
+                    }
+                }
+            }
+            hash
+        }
+    }
+
+    impl RandomSource for RecordingRandom {
+        fn next_int(&mut self) -> i32 {
+            let value = self.inner.next_int();
+            self.draws.push(RandomDraw::Int(value));
+            value
+        }
+
+        fn next_int_bound(&mut self, bound: i32) -> i32 {
+            let value = self.inner.next_int_bound(bound);
+            self.draws.push(RandomDraw::IntBound(bound, value));
+            value
+        }
+
+        fn next_long(&mut self) -> i64 {
+            let value = self.inner.next_long();
+            self.draws.push(RandomDraw::Long(value));
+            value
+        }
+
+        fn next_double(&mut self) -> f64 {
+            let value = self.inner.next_double();
+            self.draws.push(RandomDraw::Double(value.to_bits()));
+            value
+        }
+
+        fn next_float(&mut self) -> f32 {
+            let value = self.inner.next_float();
+            self.draws.push(RandomDraw::Float(value.to_bits()));
+            value
+        }
+
+        fn next_boolean(&mut self) -> bool {
+            let value = self.inner.next_boolean();
+            self.draws.push(RandomDraw::Boolean(value));
+            value
+        }
+
+        fn next_gaussian(&mut self) -> f64 {
+            let value = self.inner.next_gaussian();
+            self.draws.push(RandomDraw::Gaussian(value.to_bits()));
+            value
+        }
+    }
 
     const MIN_Y: i32 = -64;
     const HEIGHT: i32 = 384;
@@ -554,6 +678,39 @@ mod tests {
     }
 
     #[test]
+    fn resolved_targets_keep_the_first_matching_rule() {
+        let config = serde_json::json!({
+            "size": 3,
+            "discard_chance_on_air_exposure": 1.0,
+            "targets": [
+                {
+                    "target": {
+                        "predicate_type": "minecraft:tag_match",
+                        "tag": "minecraft:base_stone_overworld"
+                    },
+                    "state": { "Name": "minecraft:diamond_ore" }
+                },
+                {
+                    "target": {
+                        "predicate_type": "minecraft:block_match",
+                        "block": "minecraft:stone"
+                    },
+                    "state": { "Name": "minecraft:gold_ore" }
+                }
+            ]
+        });
+        let feature = parse_ore_config(&config).unwrap().unwrap();
+        let mut chunk = flat_stone();
+        {
+            let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+            let mut random = LegacyRandomSource::new(7);
+            assert!(feature.place(&mut level, &mut random, BlockPos::new(8, 0, 8)));
+        }
+        assert!(count(&chunk, "minecraft:diamond_ore") > 0);
+        assert_eq!(count(&chunk, "minecraft:gold_ore"), 0);
+    }
+
+    #[test]
     fn ore_configs_parse_and_place_into_stone() {
         let diamond = ore("ore_diamond_medium");
         let mut chunk = flat_stone();
@@ -578,5 +735,102 @@ mod tests {
             assert!(scattered.place(&mut level, &mut random, BlockPos::new(8, 0, 8)));
         }
         assert!(count(&chunk, "minecraft:ancient_debris") > 0);
+    }
+
+    #[test]
+    fn column_precheck_matches_the_ocean_floor_predicate() {
+        let mut chunk = Chunk {
+            x: 0,
+            z: 0,
+            sections: Vec::new(),
+        };
+        for (y, name) in [
+            (MIN_Y, "minecraft:water"),
+            (-32, "minecraft:stone"),
+            (0, "minecraft:oak_leaves"),
+            (16, "minecraft:vine"),
+            (100, "minecraft:grass_block"),
+        ] {
+            chunk.set_block_state(
+                0,
+                y,
+                0,
+                BlockState {
+                    name: name.into(),
+                    properties: Vec::new(),
+                },
+            );
+        }
+        let level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+        for (x, z) in [(0, 0), (1, 0)] {
+            let max_y = MIN_Y + HEIGHT - 1;
+            let floor = (MIN_Y..=max_y)
+                .rev()
+                .find(|&y| {
+                    level
+                        .get_block(BlockPos::new(x, y, z))
+                        .is_some_and(is_motion_blocking)
+                })
+                .unwrap_or(MIN_Y);
+            for y in MIN_Y - 2..=max_y + 2 {
+                assert_eq!(
+                    has_motion_blocking_at_or_above(&level, x, z, y),
+                    y <= floor,
+                    "column ({x},{z}), threshold {y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ore_rng_draw_order_is_stable() {
+        let diamond = ore("ore_diamond_medium");
+        let mut diamond_chunk = flat_stone();
+        diamond_chunk.set_block_state(
+            8,
+            0,
+            8,
+            BlockState {
+                name: "minecraft:air".into(),
+                properties: Vec::new(),
+            },
+        );
+        let mut diamond_random = RecordingRandom::new(7);
+        let diamond_success = {
+            let mut level = WorldGenRegion::new(&mut diamond_chunk, MIN_Y, HEIGHT);
+            diamond.place(&mut level, &mut diamond_random, BlockPos::new(8, 0, 8))
+        };
+        let diamond_draws = diamond_random.digest();
+        let diamond_next = diamond_random.next_long();
+        println!(
+            "diamond rng: success={diamond_success}, draws={}, digest={diamond_draws:#018x}, next={diamond_next:#018x}, blocks={:#018x}",
+            diamond_random.draws.len(),
+            chunk_digest(&diamond_chunk)
+        );
+
+        let value = test_config("ore_ancient_debris_small");
+        let scattered = parse_scattered_ore_config(&value).unwrap().unwrap();
+        let mut scattered_chunk = flat_netherrack();
+        let mut scattered_random = RecordingRandom::new(7);
+        let scattered_success = {
+            let mut level = WorldGenRegion::new(&mut scattered_chunk, MIN_Y, HEIGHT);
+            scattered.place(&mut level, &mut scattered_random, BlockPos::new(8, 0, 8))
+        };
+        let scattered_draws = scattered_random.digest();
+        let scattered_next = scattered_random.next_long();
+        println!(
+            "scattered rng: success={scattered_success}, draws={}, digest={scattered_draws:#018x}, next={scattered_next:#018x}, blocks={:#018x}",
+            scattered_random.draws.len(),
+            chunk_digest(&scattered_chunk)
+        );
+
+        assert!(diamond_success);
+        assert_eq!(diamond_draws, 0xd03e_48eb_3aa1_8891);
+        assert_eq!(diamond_next, 0x9732_95f1_4121_c8e1u64.cast_signed());
+        assert_eq!(chunk_digest(&diamond_chunk), 0xf7e5_3335_07f3_ea9c);
+        assert!(scattered_success);
+        assert_eq!(scattered_draws, 0x1ea5_d17c_0d96_0d19);
+        assert_eq!(scattered_next, 0xbe1a_4791_b54b_1905u64.cast_signed());
+        assert_eq!(chunk_digest(&scattered_chunk), 0x480b_a613_4c04_5826);
     }
 }

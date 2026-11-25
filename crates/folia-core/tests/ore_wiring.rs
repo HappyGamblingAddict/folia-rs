@@ -7,6 +7,7 @@
 //! `OreVeinifier` filler enabled. The tests below lock in the enabled default
 //! and the main behavioral effects rather than a brittle single block.
 
+use folia_core::worldgen::diagnostics::{FeaturePlacement, chunk_digest};
 use folia_core::worldgen::feature::Decoration;
 use folia_core::worldgen::generator::WorldGenerator;
 use std::collections::HashMap;
@@ -133,6 +134,25 @@ fn ore_generation_is_deterministic() {
 }
 
 #[test]
+fn ore_diagnostics_and_blocks_are_pinned() {
+    let seed = 12_345;
+    let generator = WorldGenerator::overworld(seed).unwrap();
+    let generated = generator
+        .generate_chunk_with_diagnostics(CHUNK_X, CHUNK_Z)
+        .unwrap();
+    assert_eq!(chunk_digest(&generated.chunk), 0x9976_5447_f433_a939);
+    assert!(generated.diagnostics.features.iter().any(|feature| {
+        feature.decoration == "underground_ores" && !feature.written_blocks.is_empty()
+    }));
+    let digest = feature_diagnostics_digest(&generated.diagnostics.features);
+    println!(
+        "seed={seed} chunk=({CHUNK_X},{CHUNK_Z}): {} feature placements, diagnostics digest={digest:#018x}",
+        generated.diagnostics.features.len()
+    );
+    assert_eq!(digest, 0x7ea2_39c7_cd23_9e69);
+}
+
+#[test]
 fn ore_wiring_improves_the_java_parity_fixture() {
     let generator = WorldGenerator::overworld(12345).unwrap();
     let with_ores = generator.generate_chunk(CHUNK_X, CHUNK_Z).unwrap();
@@ -207,4 +227,44 @@ fn ore_wiring_improves_the_java_parity_fixture() {
         matched_ores >= 24,
         "only {matched_ores} of {java_ores} Java ore blocks matched"
     );
+}
+
+fn feature_diagnostics_digest(features: &[FeaturePlacement]) -> u64 {
+    fn feed_bytes(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn feed_str(hash: &mut u64, value: &str) {
+        feed_bytes(hash, &(value.len() as u64).to_le_bytes());
+        feed_bytes(hash, value.as_bytes());
+    }
+
+    fn feed_i32(hash: &mut u64, value: i32) {
+        feed_bytes(hash, &value.to_le_bytes());
+    }
+
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    feed_bytes(&mut hash, &(features.len() as u64).to_le_bytes());
+    for feature in features {
+        feed_str(&mut hash, &feature.placed_feature);
+        feed_str(&mut hash, &feature.configured_feature);
+        feed_str(&mut hash, &feature.decoration);
+        for coordinate in feature.origin {
+            feed_i32(&mut hash, coordinate);
+        }
+        feed_bytes(&mut hash, &[u8::from(feature.success)]);
+        feed_bytes(
+            &mut hash,
+            &(feature.written_blocks.len() as u64).to_le_bytes(),
+        );
+        for position in &feature.written_blocks {
+            for coordinate in position {
+                feed_i32(&mut hash, *coordinate);
+            }
+        }
+    }
+    hash
 }

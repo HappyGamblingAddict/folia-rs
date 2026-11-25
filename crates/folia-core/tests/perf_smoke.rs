@@ -27,8 +27,10 @@ use folia_core::light;
 use folia_core::math::{BlockPos, Vec3};
 use folia_core::tick;
 use folia_core::world::WorldStorage;
-use folia_core::worldgen::feature::{FeatureLevel, WorldGenRegion};
+use folia_core::worldgen::diagnostics::chunk_digest;
+use folia_core::worldgen::feature::{FeatureData, FeatureLevel, WorldGenRegion};
 use folia_core::worldgen::generator::WorldGenerator;
+use folia_random::LegacyRandomSource;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -166,6 +168,83 @@ fn feature_block_lookup_smoke() {
     );
     assert_eq!(found, reads, "every generated-chunk read resolves a state");
     assert_eq!(linear_found, found, "lookup paths resolve identical states");
+}
+
+#[test]
+#[ignore = "focused release benchmark; run explicitly with --ignored"]
+fn ore_placement_smoke() {
+    const CASES: &[(&str, i32, i32, i32, i64)] = &[
+        ("minecraft:ore_coal", 3, -4, 5, 11),
+        ("minecraft:ore_iron", 6, -28, 4, 12),
+        ("minecraft:ore_copper_small", 9, -12, 9, 13),
+        ("minecraft:ore_gold_buried", 12, -20, 7, 14),
+        ("minecraft:ore_diamond_medium", 5, -32, 11, 15),
+        ("minecraft:ore_redstone", 10, -36, 3, 16),
+        ("minecraft:ore_lapis_buried", 14, -8, 13, 17),
+    ];
+    const SAMPLES: usize = 15;
+    const BATCHES: usize = 64;
+
+    let generator = WorldGenerator::overworld(12_345).expect("overworld generator");
+    let base = generator
+        .generate_chunk_with_steps(0, 0, &[])
+        .expect("terrain-only chunk");
+    let data = FeatureData::vanilla();
+    let features: Vec<_> = CASES
+        .iter()
+        .map(|&(id, _, _, _, _)| {
+            data.configured(id)
+                .unwrap_or_else(|| panic!("{id} should be supported"))
+        })
+        .collect();
+    let mut chunks = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        chunks.push(base.clone());
+    }
+
+    let mut timings = Vec::with_capacity(SAMPLES);
+    let mut digest = 0u64;
+    let mut placements = 0usize;
+    for mut chunk in chunks {
+        let start = Instant::now();
+        let mut successes = 0usize;
+        for batch in 0..BATCHES {
+            for (index, &(_, x, y, z, seed)) in CASES.iter().enumerate() {
+                let mut region =
+                    WorldGenRegion::new(&mut chunk, generator.min_y(), generator.height());
+                let mut random = LegacyRandomSource::new(seed + batch as i64);
+                successes += usize::from(
+                    black_box(features[index].place(
+                        &mut region,
+                        &mut random,
+                        BlockPos::new(x, y, z),
+                    ))
+                    .expect("ore feature places"),
+                );
+            }
+        }
+        let elapsed = start.elapsed();
+        placements += successes;
+        digest ^= chunk_digest(black_box(&chunk));
+        timings.push(elapsed);
+        guard("ore_placement_smoke", elapsed);
+    }
+
+    timings.sort_unstable();
+    let median = timings[SAMPLES / 2];
+    eprintln!(
+        "ore_placement_smoke: {} samples of {} placements in {median:?} ({:.2} us/placement), min {:?}, max {:?}, placements={placements}, digest={digest:#018x}",
+        SAMPLES,
+        CASES.len() * BATCHES,
+        median.as_secs_f64() * 1_000_000.0 / (CASES.len() * BATCHES) as f64,
+        timings[0],
+        timings[SAMPLES - 1],
+    );
+    assert!(
+        placements > 0,
+        "benchmark must execute successful ore placements"
+    );
+    assert_eq!(digest, 0x3a73_cac7_98af_d1c2);
 }
 
 #[test]

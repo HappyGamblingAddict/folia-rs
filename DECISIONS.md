@@ -3401,6 +3401,25 @@ Format:
   processors, or exact chest RNG. Fixed-seed selection/bounds/rotation/clipping/
   chest tests and a generated-ocean-chunk test cover the implemented behavior.
 
+## 2026-11-25 — Ocean monuments use a documented procedural approximation
+- Context: P2.10 requires an Ocean Monument vertical slice through the shipped
+  Overworld structure pipeline, but the local checkout has no Java reference
+  tree or Ocean Monument template fixture.
+- Decision: add `StructureKind::OceanMonument`, the shipped
+  `minecraft:monument` definition using `#minecraft:has_structure/ocean_monument`,
+  and a deterministic 35x28x26 piece with a five-block foundation. The piece has
+  a 19x19 core, two 8x11 wings, a 7x6 entrance, an elliptical roof, four finials,
+  an elder-guardian room, and two sponge rooms. Rotation uses the existing
+  large-feature seed stream; coordinate hashes choose prismarine/sponge variants.
+  Placement averages `OCEAN_FLOOR_WG` over the bounding footprint and writes only
+  the cross-shaped floor/support through replaceable blocks, clipped per chunk.
+- Why: this preserves split-chunk determinism and recognizable monument geometry
+  without claiming unavailable Java template parity.
+- Consequences: exact vanilla dimensions, room layouts, guardian spawning,
+  processors, full waterlogging, and a Java block fixture remain open. Fixed-seed
+  selection/bounds/support/core tests, four-rotation clipping equivalence, and a
+  generated deep-ocean fixture at seed 12345 / chunk (-247, -46) cover the slice.
+
 ## 2026-11-12 Progressive join streaming
 - Context: the initial view-distance batch was generated and sent synchronously
   before the play loop. At `view-distance=10` that is 441 columns; a debug

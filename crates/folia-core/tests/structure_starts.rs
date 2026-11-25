@@ -6,6 +6,7 @@ use folia_core::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
 use folia_core::worldgen::structure::StructureError;
 use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+use folia_core::worldgen::structure::ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 use folia_core::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
 use folia_core::worldgen::structure::ruined_portal::{
@@ -80,6 +81,8 @@ const SHIPWRECK_BEACHED_JSON: &str = r##"{ "type": "minecraft:shipwreck", "biome
 const OCEAN_RUIN_COLD_JSON: &str = r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_cold", "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const OCEAN_RUIN_WARM_JSON: &str = r##"{ "type": "minecraft:ocean_ruin", "biomes": "#minecraft:has_structure/ocean_ruin_warm", "spawn_overrides": {}, "step": "surface_structures" }"##;
+
+const OCEAN_MONUMENT_JSON: &str = r##"{ "type": "minecraft:ocean_monument", "biomes": "#minecraft:has_structure/ocean_monument", "spawn_overrides": {}, "step": "surface_structures" }"##;
 
 const VILLAGE_PLAINS_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/village_plains", "max_distance_from_center": 80, "project_start_to_heightmap": "WORLD_SURFACE_WG", "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 0 }, "start_pool": "minecraft:village/plains/town_centers", "step": "surface_structures", "terrain_adaptation": "beard_thin", "use_expansion_hack": true }"##;
 
@@ -1849,6 +1852,451 @@ fn ocean_ruin_rotation_clipping_and_material_palettes_are_deterministic() {
     cold.place_with_height_source(&mut repeated_level, &source, cold_box)
         .expect("repeated cold ocean ruin materials");
     assert_eq!(repeated_level.blocks, cold_level.blocks);
+}
+
+#[test]
+fn ocean_monument_definition_and_selection_use_the_shipped_deep_ocean_tag() {
+    let definition = StructureDefinition::from_json("minecraft:monument", OCEAN_MONUMENT_JSON)
+        .expect("ocean monument JSON parses");
+    assert_eq!(definition.kind, StructureKind::OceanMonument);
+    assert_eq!(definition.step(), Decoration::SurfaceStructures);
+    assert_eq!(
+        definition.biomes,
+        BiomeSet::Tag("#minecraft:has_structure/ocean_monument".to_owned())
+    );
+    assert_eq!(
+        StructureGenerator::shipped(HashMap::new())
+            .expect("ocean monument generator")
+            .definitions()
+            .get("minecraft:monument")
+            .expect("shipped monument definition")
+            .kind,
+        StructureKind::OceanMonument
+    );
+
+    let structures = StructureGenerator::shipped(HashMap::new()).expect("monument generator");
+    let set = structures
+        .sets()
+        .get("ocean_monuments")
+        .expect("ocean monument set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("ocean monuments must use random spread");
+    };
+    assert_eq!(spread.spacing, 32);
+    assert_eq!(spread.separation, 5);
+    assert_eq!(spread.spread_type, RandomSpreadType::Triangular);
+    assert_eq!(spread.salt, 10_387_313);
+
+    let chunk = ChunkPos::new(42, -58);
+    assert!(
+        spread.is_placement_chunk(12_345, chunk.x, chunk.z),
+        "potential monument chunk: {:?}",
+        spread.get_potential_structure_chunk(12_345, chunk.x, chunk.z)
+    );
+    for biome in [
+        "minecraft:deep_cold_ocean",
+        "minecraft:deep_frozen_ocean",
+        "minecraft:deep_lukewarm_ocean",
+        "minecraft:deep_ocean",
+    ] {
+        let selection = structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                12_345,
+                StructureDimension::Overworld,
+                63,
+                &StaticBiomes(biome),
+            )
+            .expect("monument selection")
+            .expect("deep ocean monument placement chunk");
+        assert_eq!(selection.structure, "minecraft:monument");
+        assert_eq!(selection.set, "minecraft:ocean_monuments");
+        assert_eq!(selection.chunk, chunk);
+    }
+    for biome in [
+        "minecraft:ocean",
+        "minecraft:cold_ocean",
+        "minecraft:frozen_ocean",
+        "minecraft:lukewarm_ocean",
+        "minecraft:warm_ocean",
+        "minecraft:river",
+        "minecraft:plains",
+    ] {
+        assert!(
+            structures
+                .structure_at_chunk(
+                    chunk.x,
+                    chunk.z,
+                    12_345,
+                    StructureDimension::Overworld,
+                    63,
+                    &StaticBiomes(biome),
+                )
+                .expect("shallow biome monument selection")
+                .is_none(),
+            "monuments must reject {biome}"
+        );
+    }
+    assert!(
+        structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                12_345,
+                StructureDimension::Nether,
+                63,
+                &StaticBiomes("minecraft:deep_ocean"),
+            )
+            .expect("Nether monument selection")
+            .is_none()
+    );
+}
+
+#[test]
+fn ocean_monument_fixed_seed_pins_bounds_height_support_and_core_blocks() {
+    let seed = 12_345;
+    let chunk = ChunkPos::new(42, -58);
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("monument generator")
+        .with_enabled_structures(["minecraft:monument"]);
+    let ocean = StaticBiomes("minecraft:deep_ocean");
+    let definition = structures
+        .definitions()
+        .get("minecraft:monument")
+        .expect("monument definition");
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(40);
+    let templates = HashMap::new();
+    let context =
+        StructureGenerationContext::new(seed, chunk, 0, &templates).with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("ocean monument start");
+    assert!(start.is_valid());
+    assert!(start.pieces().is_empty());
+    let monument = start.ocean_monument().expect("ocean monument piece");
+    assert_eq!(monument.rotation(), Rotation::None);
+    let min_x = chunk.x << 4;
+    let min_z = chunk.z << 4;
+    let bounds = BoundingBox::new(
+        min_x,
+        OceanMonumentStart::GENERATION_HEIGHT - OceanMonumentStart::FOUNDATION_DEPTH,
+        min_z,
+        min_x + OceanMonumentStart::WIDTH - 1,
+        OceanMonumentStart::GENERATION_HEIGHT + OceanMonumentStart::HEIGHT - 1,
+        min_z + OceanMonumentStart::DEPTH - 1,
+    );
+    assert_eq!(start.bounding_box(), Some(bounds));
+    assert_eq!(monument.bounding_box(), bounds);
+    assert_eq!(
+        definition
+            .generate_start(&context)
+            .expect("second monument start"),
+        start
+    );
+
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &ocean,
+            0,
+            Decoration::SurfaceStructures,
+        )
+        .expect("monument structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert_eq!(placement.placed_pieces, 1);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert!(placement.written > 0);
+    assert!(placement.written_blocks.iter().all(|pos| {
+        (min_x..=min_x + 15).contains(&pos.x())
+            && (min_z..=min_z + 15).contains(&pos.z())
+            && (-64..=319).contains(&pos.y())
+    }));
+    assert!(placement.written_blocks.windows(2).all(|pair| {
+        (pair[0].x(), pair[0].y(), pair[0].z()) < (pair[1].x(), pair[1].y(), pair[1].z())
+    }));
+
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(100);
+    let full_box = BoundingBox::new(
+        bounds.min_x(),
+        -64,
+        bounds.min_z(),
+        bounds.max_x(),
+        319,
+        bounds.max_z(),
+    );
+    let full = monument
+        .place_with_height_source(&mut level, &height_source, full_box)
+        .expect("full monument core placement");
+    assert_eq!(full.placed_pieces, 1);
+    assert_eq!(full.rejected, 0);
+
+    let base_y = 39;
+    assert_eq!(
+        level
+            .get_block(BlockPos::new(min_x + 17, base_y, min_z + 12))
+            .expect("elder guardian gold block")
+            .name,
+        "minecraft:gold_block"
+    );
+    for (x, z) in [(13, 12), (21, 12), (17, 8)] {
+        assert_eq!(
+            level
+                .get_block(BlockPos::new(min_x + x, base_y + 3, min_z + z))
+                .expect("elder guardian sea lantern")
+                .name,
+            "minecraft:sea_lantern"
+        );
+    }
+    assert!(matches!(
+        level
+            .get_block(BlockPos::new(min_x + 2, base_y, min_z + 10))
+            .expect("left sponge room floor")
+            .name
+            .as_str(),
+        "minecraft:sponge" | "minecraft:wet_sponge"
+    ));
+    for depth in 1..=OceanMonumentStart::FOUNDATION_DEPTH {
+        assert!(
+            level
+                .get_block(BlockPos::new(min_x + 2, base_y - depth, min_z + 10))
+                .is_some_and(|block| block.name != "minecraft:air"),
+            "foundation support at depth {depth}"
+        );
+    }
+    assert!(
+        !level
+            .blocks
+            .contains_key(&BlockPos::new(min_x + 2, base_y - 6, min_z + 10))
+    );
+    assert!(
+        !level
+            .blocks
+            .contains_key(&BlockPos::new(min_x + 17, 100, min_z + 12)),
+        "placement must use the supplied ocean-floor height source"
+    );
+
+    let missing = MockLevel::new(-64, 384);
+    let mut skipped_level = MockLevel::new(-64, 384);
+    let skipped = start
+        .place_in_chunk_with_height_source(&mut skipped_level, &missing, chunk)
+        .expect("missing ocean-floor heights skip placement");
+    assert_eq!(skipped.placed_pieces, 0);
+    assert_eq!(skipped.written, 0);
+}
+
+#[test]
+fn ocean_monument_rotation_clipping_and_geometry_are_deterministic() {
+    let source = MockLevel {
+        fixed_height: Some(40),
+        ..MockLevel::new(-64, 384)
+    };
+    for rotation in Rotation::ALL {
+        let piece = OceanMonumentPiece::new(12_346, 8, 8, rotation);
+        let bounds = piece.bounding_box();
+        let (width, depth) = if rotation.swaps_horizontal_axes() {
+            (OceanMonumentStart::DEPTH, OceanMonumentStart::WIDTH)
+        } else {
+            (OceanMonumentStart::WIDTH, OceanMonumentStart::DEPTH)
+        };
+        assert_eq!(bounds.x_span(), width);
+        assert_eq!(bounds.z_span(), depth);
+        assert_eq!(
+            bounds.y_span(),
+            OceanMonumentStart::HEIGHT + OceanMonumentStart::FOUNDATION_DEPTH
+        );
+        let full_box = BoundingBox::new(
+            bounds.min_x(),
+            -64,
+            bounds.min_z(),
+            bounds.max_x(),
+            319,
+            bounds.max_z(),
+        );
+        let mut full_level = MockLevel::new(-64, 384);
+        let full = piece
+            .place_with_height_source(&mut full_level, &source, full_box)
+            .expect("full ocean monument placement");
+        assert_eq!(full.placed_pieces, 1);
+        assert_eq!(full.rejected, 0);
+        assert!(full.written > 0);
+
+        let base_y = 39;
+        let rotated_local = |x, z| match rotation {
+            Rotation::None => (x, z),
+            Rotation::Clockwise90 => (OceanMonumentStart::DEPTH - 1 - z, x),
+            Rotation::Clockwise180 => (
+                OceanMonumentStart::WIDTH - 1 - x,
+                OceanMonumentStart::DEPTH - 1 - z,
+            ),
+            Rotation::CounterClockwise90 => (z, OceanMonumentStart::WIDTH - 1 - x),
+        };
+        let gold_blocks = full_level
+            .blocks
+            .values()
+            .filter(|block| block.name == "minecraft:gold_block")
+            .count();
+        assert_eq!(gold_blocks, 1);
+        let (core_x, core_z) = rotated_local(17, 12);
+        assert_eq!(
+            full_level
+                .blocks
+                .get(&BlockPos::new(8 + core_x, base_y, 8 + core_z))
+                .expect("guardian room gold")
+                .name,
+            "minecraft:gold_block"
+        );
+        let sea_lanterns = full_level
+            .blocks
+            .values()
+            .filter(|block| block.name == "minecraft:sea_lantern")
+            .count();
+        assert_eq!(sea_lanterns, 4);
+        assert!(
+            full_level
+                .blocks
+                .values()
+                .any(|block| block.name == "minecraft:sponge")
+        );
+        assert!(
+            full_level
+                .blocks
+                .values()
+                .any(|block| block.name == "minecraft:wet_sponge")
+        );
+        for name in [
+            "minecraft:prismarine",
+            "minecraft:prismarine_bricks",
+            "minecraft:dark_prismarine",
+            "minecraft:prismarine_brick_stairs",
+        ] {
+            assert!(
+                full_level.blocks.values().any(|block| block.name == name),
+                "monument missing {name}"
+            );
+        }
+        for (x, z, expected) in [
+            (2, 10, "minecraft:sponge"),
+            (29, 10, "minecraft:wet_sponge"),
+        ] {
+            let (room_x, room_z) = rotated_local(x, z);
+            assert_eq!(
+                full_level
+                    .blocks
+                    .get(&BlockPos::new(8 + room_x, base_y, 8 + room_z))
+                    .expect("sponge room floor")
+                    .name,
+                expected
+            );
+        }
+        let (wing_x, wing_z) = rotated_local(3, 12);
+        assert!(matches!(
+            full_level
+                .blocks
+                .get(&BlockPos::new(8 + wing_x, base_y, 8 + wing_z))
+                .expect("left wing floor")
+                .name
+                .as_str(),
+            "minecraft:sponge" | "minecraft:wet_sponge"
+        ));
+        let (wall_x, wall_z) = rotated_local(8, 7);
+        assert!(
+            full_level
+                .blocks
+                .contains_key(&BlockPos::new(8 + wall_x, base_y + 2, 8 + wall_z))
+        );
+        let (entrance_wall_x, entrance_wall_z) = rotated_local(14, 25);
+        assert!(full_level.blocks.contains_key(&BlockPos::new(
+            8 + entrance_wall_x,
+            base_y + 2,
+            8 + entrance_wall_z
+        )));
+        let (corner_x, corner_z) = rotated_local(0, 0);
+        assert!(!full_level.blocks.contains_key(&BlockPos::new(
+            8 + corner_x,
+            base_y,
+            8 + corner_z
+        )));
+
+        let (entrance_x, entrance_z) = rotated_local(17, 27);
+        assert_eq!(
+            full_level
+                .blocks
+                .get(&BlockPos::new(8 + entrance_x, base_y + 1, 8 + entrance_z))
+                .expect("entrance doorway")
+                .name,
+            "minecraft:air"
+        );
+        assert_eq!(
+            full_level
+                .blocks
+                .get(&BlockPos::new(8 + entrance_x, base_y + 2, 8 + entrance_z))
+                .expect("entrance doorway")
+                .name,
+            "minecraft:air"
+        );
+        assert!(full_level.blocks.contains_key(&BlockPos::new(
+            8 + entrance_x,
+            base_y + 4,
+            8 + entrance_z
+        )));
+        assert!(full_level.blocks.contains_key(&BlockPos::new(
+            8 + core_x,
+            base_y + 21,
+            8 + core_z
+        )));
+        for (x, z) in [(8, 3), (26, 3), (8, 21), (26, 21)] {
+            let (finial_x, finial_z) = rotated_local(x, z);
+            assert!(full_level.blocks.contains_key(&BlockPos::new(
+                8 + finial_x,
+                base_y + 25,
+                8 + finial_z
+            )));
+        }
+
+        let mut split_level = MockLevel::new(-64, 384);
+        let mut split_written = 0;
+        for chunk_x in [0, 16, 32] {
+            for chunk_z in [0, 16, 32] {
+                let chunk_box =
+                    BoundingBox::new(chunk_x, -64, chunk_z, chunk_x + 15, 319, chunk_z + 15);
+                let split = piece
+                    .place_with_height_source(&mut split_level, &source, chunk_box)
+                    .expect("chunk-clipped monument placement");
+                assert_eq!(split.placed_pieces, 1);
+                assert_eq!(split.rejected, 0);
+                assert!(
+                    split
+                        .written_blocks
+                        .iter()
+                        .all(|pos| chunk_box.is_inside(*pos))
+                );
+                assert!(split.written_blocks.windows(2).all(|pair| {
+                    (pair[0].x(), pair[0].y(), pair[0].z())
+                        < (pair[1].x(), pair[1].y(), pair[1].z())
+                }));
+                split_written += split.written;
+            }
+        }
+        assert_eq!(split_written, full.written);
+        assert_eq!(split_level.blocks, full_level.blocks);
+
+        let mut repeated_level = MockLevel::new(-64, 384);
+        piece
+            .place_with_height_source(&mut repeated_level, &source, full_box)
+            .expect("repeated monument placement");
+        assert_eq!(repeated_level.blocks, full_level.blocks);
+    }
 }
 
 #[test]

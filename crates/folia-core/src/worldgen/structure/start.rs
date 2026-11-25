@@ -16,6 +16,7 @@ use crate::worldgen::structure::end_city::EndCityStart;
 use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
 use crate::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+use crate::worldgen::structure::ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 use crate::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
@@ -95,6 +96,7 @@ pub enum StructureKind {
     BuriedTreasure,
     DesertPyramid,
     JunglePyramid,
+    OceanMonument,
     OceanRuin {
         warm: bool,
     },
@@ -168,6 +170,7 @@ impl StructureDefinition {
             "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
             "minecraft:jungle_pyramid" => StructureKind::JunglePyramid,
+            "minecraft:ocean_monument" => StructureKind::OceanMonument,
             "minecraft:ocean_ruin" => StructureKind::OceanRuin {
                 warm: name == "minecraft:ocean_ruin_warm",
             },
@@ -343,6 +346,9 @@ impl StructureDefinition {
             StructureKind::JunglePyramid => {
                 JunglePyramidStart::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::OceanMonument => {
+                OceanMonumentStart::generate(&self.name, context, self.terrain_adaptation)
+            }
             StructureKind::OceanRuin { warm } => {
                 OceanRuinStart::generate(&self.name, context, self.terrain_adaptation, *warm)
             }
@@ -443,6 +449,7 @@ pub struct StructureStart {
     buried_treasure: Option<BuriedTreasurePiece>,
     desert_pyramid: Option<DesertPyramidPiece>,
     jungle_pyramid: Option<JunglePyramidPiece>,
+    ocean_monument: Option<OceanMonumentPiece>,
     ocean_ruin: Option<OceanRuinPiece>,
     witch_hut: Option<WitchHutPiece>,
     fortress: Option<FortressStart>,
@@ -469,6 +476,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -495,6 +503,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -521,6 +530,7 @@ impl StructureStart {
             buried_treasure: Some(piece),
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -547,6 +557,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: Some(piece),
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -573,6 +584,34 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: Some(piece),
+            ocean_monument: None,
+            ocean_ruin: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: None,
+            ruined_portal: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_ocean_monument(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: OceanMonumentPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            ocean_monument: Some(piece),
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -599,6 +638,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: Some(piece),
             witch_hut: None,
             fortress: None,
@@ -625,6 +665,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: Some(piece),
             fortress: None,
@@ -651,6 +692,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -677,6 +719,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -703,6 +746,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: Some(fortress),
@@ -729,6 +773,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -750,6 +795,7 @@ impl StructureStart {
             buried_treasure: None,
             desert_pyramid: None,
             jungle_pyramid: None,
+            ocean_monument: None,
             ocean_ruin: None,
             witch_hut: None,
             fortress: None,
@@ -787,6 +833,10 @@ impl StructureStart {
 
     pub fn jungle_pyramid(&self) -> Option<&JunglePyramidPiece> {
         self.jungle_pyramid.as_ref()
+    }
+
+    pub fn ocean_monument(&self) -> Option<&OceanMonumentPiece> {
+        self.ocean_monument.as_ref()
     }
 
     pub fn ocean_ruin(&self) -> Option<&OceanRuinPiece> {
@@ -847,6 +897,7 @@ impl StructureStart {
             || self.buried_treasure.is_some()
             || self.desert_pyramid.is_some()
             || self.jungle_pyramid.is_some()
+            || self.ocean_monument.is_some()
             || self.ocean_ruin.is_some()
             || self.witch_hut.is_some()
             || self.shipwreck.is_some()
@@ -881,6 +932,9 @@ impl StructureStart {
         }
         if let Some(temple) = &self.jungle_pyramid {
             boxes.push(temple.bounding_box());
+        }
+        if let Some(monument) = &self.ocean_monument {
+            boxes.push(monument.bounding_box());
         }
         if let Some(ruin) = &self.ocean_ruin {
             boxes.push(ruin.bounding_box());
@@ -1063,6 +1117,17 @@ impl StructureStart {
             let placement = match height_source {
                 Some(source) => temple.place_with_height_source(level, source, chunk_box)?,
                 None => temple.place(level, chunk_box)?,
+            };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(monument) = &self.ocean_monument {
+            let placement = match height_source {
+                Some(source) => monument.place_with_height_source(level, source, chunk_box)?,
+                None => monument.place(level, chunk_box)?,
             };
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
@@ -2351,6 +2416,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:jungle_pyramid",
         r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:monument",
+        r##"{ "type": "minecraft:ocean_monument", "biomes": "#minecraft:has_structure/ocean_monument", "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
     (
         "minecraft:ocean_ruin_cold",

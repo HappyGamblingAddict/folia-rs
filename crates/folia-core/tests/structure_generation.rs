@@ -711,6 +711,93 @@ fn generated_ocean_chunk_contains_cold_ruin_materials_and_loot_chest() {
 }
 
 #[test]
+fn generated_deep_ocean_chunk_contains_monument_core_and_sponge_room() {
+    let seed = 12_345;
+    let structures = StructureGenerator::shipped(HashMap::new())
+        .expect("ocean monument generator")
+        .with_enabled_structures(["minecraft:monument"]);
+    let generator = WorldGenerator::overworld(seed)
+        .expect("generator")
+        .with_structure_generator(structures);
+    let biomes = GenBiomes {
+        generator: &generator,
+    };
+    let structures = generator.structures().expect("structures");
+    let (x, z) = (-247, -46);
+    let selection = structures
+        .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
+        .expect("selection")
+        .expect("monument placement chunk");
+    assert_eq!(selection.structure, "minecraft:monument");
+    assert_eq!(selection.set, "minecraft:ocean_monuments");
+    assert_eq!(
+        generator.biome_at((x << 4) + 8, 63, (z << 4) + 8),
+        "minecraft:deep_ocean"
+    );
+
+    let plain_generator = WorldGenerator::overworld(seed).expect("plain generator");
+    let mut plain_chunks = Vec::new();
+    let mut structured_chunks = Vec::new();
+    for dx in 0..2 {
+        for dz in 0..2 {
+            plain_chunks.push(
+                plain_generator
+                    .generate_chunk_with_steps(x + dx, z + dz, &[])
+                    .expect("terrain chunk"),
+            );
+            structured_chunks.push(
+                generator
+                    .generate_chunk(x + dx, z + dz)
+                    .expect("structured chunk"),
+            );
+        }
+    }
+    let mut prismarine = 0;
+    let mut gold = 0;
+    let mut sea_lanterns = 0;
+    let mut sponges = 0;
+    for chunk in &structured_chunks {
+        for local_x in 0..16 {
+            for local_z in 0..16 {
+                for y in generator.min_y()..generator.min_y() + generator.height() {
+                    match chunk
+                        .block_state(local_x, y, local_z)
+                        .expect("block")
+                        .name
+                        .as_str()
+                    {
+                        "minecraft:prismarine"
+                        | "minecraft:prismarine_bricks"
+                        | "minecraft:dark_prismarine" => prismarine += 1,
+                        "minecraft:gold_block" => gold += 1,
+                        "minecraft:sea_lantern" => sea_lanterns += 1,
+                        "minecraft:sponge" | "minecraft:wet_sponge" => sponges += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    assert!(prismarine > 50, "monument prismarine near chunk {x},{z}");
+    assert_eq!(gold, 1, "monument guardian gold near chunk {x},{z}");
+    assert_eq!(sea_lanterns, 4, "monument sea lanterns near chunk {x},{z}");
+    assert!(sponges > 0, "monument sponge room near chunk {x},{z}");
+    assert!(plain_chunks.iter().all(|chunk| {
+        (0..16).all(|local_x| {
+            (0..16).all(|local_z| {
+                (generator.min_y()..generator.min_y() + generator.height()).all(|y| {
+                    chunk
+                        .block_state(local_x, y, local_z)
+                        .expect("plain block")
+                        .name
+                        != "minecraft:gold_block"
+                })
+            })
+        })
+    }));
+}
+
+#[test]
 fn generated_chunk_contains_standard_ruined_portal_obsidian_and_lava() {
     let seed = 12_345;
     let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())

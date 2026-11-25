@@ -3510,3 +3510,33 @@ Format:
   persisted or instantiated by `WorldGenerator`, `spawn_overrides` are not
   modeled, and `encapsulate` still only inflates bounds rather than reshaping
   terrain. Exact Java block/RNG differential fixtures remain open.
+
+## 2026-11-25 — Nether Bastion jigsaw wiring and Nether structure decoration
+- Context: all 167 bastion templates, 60 bastion pools, and the generic
+  degradation processor list already shipped, but the shared structure manager
+  had no `minecraft:bastion_remnant` definition and `NetherGenerator` only
+  selected starts without placing them. The local decompiled reference tree is
+  unavailable in this environment.
+- Decision: add the shipped jigsaw definition (`minecraft:bastion/starts`, size
+  6, absolute Y=33, max distance 80, no expansion hack, no pool aliases, no
+  terrain adaptation, `surface_structures`) and enable it with the procedural
+  fortress definition in the catalog-backed and Nether managers. Nether
+  decoration now runs the shared structure pass at `underground_structures`,
+  `surface_structures`, and `underground_decoration`; the shipped bastion uses
+  the surface step, while the fortress fallback uses underground decoration.
+  Selection samples non-projected jigsaw start heights and retains weighted
+  fortress fallback when the bastion biome tag rejects a candidate.
+- Why: the existing pool graph directly names all concrete bastion sub-pools,
+  so aliases would invent behavior. Absolute height plus rigid pool projections
+  needs dimension bounds but no terrain heightmap. Reusing the shared manager
+  preserves set placement, weighted selection, biome filtering, processors, and
+  recursive jigsaw expansion rather than adding a Nether-specific generator.
+- Consequences: seed 12345 selects the bastion at chunk (12,20), expands the
+  treasure start to 25 pieces with raw bounds (154,29,283)..(229,102,322), and
+  writes blackstone into generated chunk (12,19). All four start-pool variants
+  expand in a deterministic seed sweep; the fortress fixture at (6,-32) writes
+  nether bricks. Exact Java block/RNG differential remains open. Starts are
+  regenerated per target chunk rather than cached, template block-entity/entity
+  descriptors are not yet persisted or spawned, `spawn_overrides` remain
+  unmodeled, and the pre-existing approximate Nether terrain/noise path is
+  unchanged.

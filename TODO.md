@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,667
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,676
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1403,10 +1403,10 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   start-height biome sampling, five-piece generated fixture); one template NBT
   and exact encapsulate/Java differential remain open. Trial chambers still need
   their jigsaw attachment path (191 templates shipped).
-- [~] Nether fortresses, bastions, end cities (placement selection, weighted
-  choice, and 187 bastion/End-city template NBTs shipped; fortress and
-  End-city procedural `FortressPieces`/`EndCityPieces` ports and jigsaw
-  attachment remain).
+- [~] **Nether fortresses and bastions wired** through shared Nether structure
+  decoration; all 167 bastion templates/60 pools and four start variants resolve,
+  with nine selection/bounds/generation fixtures. End-city jigsaw attachment and
+  exact Java differential/live descriptors remain open.
 - **Why:** Structures are content-heavy but mostly data-driven once P2.8/P2.9
   exist.
 - **Done when:** Structure starts/bounding boxes and sampled blocks match Java

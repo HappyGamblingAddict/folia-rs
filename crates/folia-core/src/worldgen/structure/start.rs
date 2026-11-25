@@ -2702,14 +2702,23 @@ fn required_str<'a>(
 
 /// The shipped structure definitions this slice can generate end to end.
 ///
-/// Villages, igloos, desert pyramids, jungle temples, mineshafts, and strongholds
-/// are complete vertical slices; other structure types stay parsed-but-unsupported
-/// and are skipped explicitly by [`StructureGenerator`]. The JSON is the 1.21.11
-/// data-pack document with insignificant whitespace removed.
+/// Jigsaw structures, igloos, desert pyramids, jungle temples, mineshafts,
+/// strongholds, and Nether fortresses are complete vertical slices; other
+/// structure types stay parsed-but-unsupported and are skipped explicitly by
+/// [`StructureGenerator`]. The JSON is the 1.21.11 data-pack document with
+/// insignificant whitespace removed.
 pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:ancient_city",
         r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/ancient_city", "dimension_padding": 1, "liquid_settings": "apply_waterlogging", "max_distance_from_center": 80, "size": 1, "spawn_overrides": {}, "start_height": { "absolute": -27 }, "start_jigsaw_name": "minecraft:city_anchor", "start_pool": "minecraft:ancient_city/city_center", "step": "underground_structures", "terrain_adaptation": "encapsulate", "use_expansion_hack": false }"##,
+    ),
+    (
+        "minecraft:bastion_remnant",
+        r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/bastion_remnant", "max_distance_from_center": 80, "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 33 }, "start_pool": "minecraft:bastion/starts", "step": "surface_structures", "use_expansion_hack": false }"##,
+    ),
+    (
+        "minecraft:fortress",
+        r##"{ "type": "minecraft:fortress", "biomes": "#minecraft:has_structure/nether_fortress", "spawn_overrides": {}, "step": "underground_decoration" }"##,
     ),
     (
         "minecraft:trial_chambers",
@@ -2919,12 +2928,14 @@ impl StructureGenerator {
         Ok(generator)
     }
 
-    /// Builds a manager backed by the embedded village catalog.
+    /// Builds a manager backed by the embedded structure-template catalogs.
     pub fn shipped_catalog() -> Result<Self, StructureError> {
         Ok(
             Self::from_catalog(StructureTemplateCatalog::shipped().clone())?
                 .with_enabled_structures([
                     "minecraft:ancient_city",
+                    "minecraft:bastion_remnant",
+                    "minecraft:fortress",
                     "minecraft:trial_chambers",
                     "minecraft:village_plains",
                     "minecraft:village_desert",
@@ -3191,11 +3202,10 @@ impl StructureGenerator {
     /// Approximate Java's `i1` in `ChunkGenerator.addVanillaDecorations`: the
     /// index of a structure within its decoration step.
     ///
-    /// The shipped catalog only contains the seven implemented definitions, so
-    /// this is alphabetical over those definitions rather than the full
-    /// vanilla registry order. That is deterministic and recorded as a parity
-    /// gap; it does not change which blocks a feature writes once the seed is
-    /// fixed.
+    /// This is alphabetical over the implemented definitions rather than the
+    /// full vanilla registry order. That is deterministic and recorded as a
+    /// parity gap; it does not change which blocks a feature writes once the
+    /// seed is fixed.
     fn structure_step_index(&self, structure: &str, step: Decoration) -> i32 {
         self.definitions
             .values()

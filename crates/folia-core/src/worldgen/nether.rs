@@ -18,10 +18,10 @@
 //!   like `NoiseBasedChunkGenerator.applyCarvers`, but without an aquifer:
 //!   carved blocks below the lava sea become lava, everything above becomes
 //!   cave air, and the top seven layers stay untouched below the roof.
-//! - Nether structure *selection* (fortress/bastion) runs through the merged
-//!   structure-set foundation. Start generation fails loudly because the
-//!   project has no shipped fortress/bastion template assets yet; the error is
-//!   the API contract, not a silent skip.
+//! - Nether structure selection and generation run through the shared
+//!   structure manager. Bastions use the shipped jigsaw templates/pools at
+//!   `surface_structures`; procedural fortresses use `underground_decoration`
+//!   and remain the biome-rejection fallback.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
 use crate::worldgen::carver::{mth_cos, mth_sin};
@@ -33,16 +33,15 @@ use crate::worldgen::feature::{
 use crate::worldgen::generator::sample_grid;
 use crate::worldgen::noise::{BlendedNoise, NormalNoise};
 use crate::worldgen::structure::{
-    SelectedStructure, StructureBiomeLookup, StructureDefinition, StructureDimension,
-    StructureError, StructureGenerationContext, StructureSetRegistry, StructureStart,
-    StructureTemplate,
+    SelectedStructure, StructureBiomeLookup, StructureDimension, StructureError,
+    StructureGenerationContext, StructureGenerator, StructureStart, StructureTemplateCatalog,
 };
 use folia_math::BlockPos;
 use folia_random::{
     LegacyRandomSource, RandomSource, WorldgenRandom, XoroshiroPositionalRandomFactory,
     XoroshiroRandomSource,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io;
 use std::sync::Arc;
 
@@ -136,7 +135,7 @@ pub struct NetherGenerator {
     bedrock_roof: XoroshiroPositionalRandomFactory,
     feature_data: &'static FeatureData,
     step_order: Vec<Vec<String>>,
-    structures: StructureSetRegistry,
+    structures: StructureGenerator,
 }
 
 impl NetherGenerator {
@@ -188,12 +187,15 @@ impl NetherGenerator {
         let feature_data = FeatureData::vanilla();
         let step_order =
             nether_step_feature_order(feature_data, &NETHER_BIOMES.map(|entry| entry.name));
-        let structures = StructureSetRegistry::shipped().map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("shipped structure sets: {error}"),
-            )
-        })?;
+        let structures =
+            StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+                .map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("shipped structure generator: {error}"),
+                    )
+                })?
+                .with_enabled_structures(["minecraft:fortress", "minecraft:bastion_remnant"]);
 
         Ok(Self {
             seed,
@@ -393,18 +395,16 @@ impl NetherGenerator {
 
     /// Nether structure placement selection for `minecraft:nether_complexes`.
     ///
-    /// This is the same `RandomSpreadStructurePlacement` + weighted selection +
-    /// dimension/biome filter used by the Overworld structure manager. The
-    /// selected start itself cannot be generated until fortress/bastion
-    /// templates are shipped; [`Self::structure_start`] returns the explicit
-    /// error instead of pretending an empty structure was placed.
+    /// Weighted bastion/fortress selection uses the shared set registry and
+    /// samples each candidate at its definition's start height. A bastion
+    /// rejected by the biome tag falls back to the next weighted candidate.
     pub fn structure_at_chunk(
         &self,
         chunk_x: i32,
         chunk_z: i32,
     ) -> io::Result<Option<SelectedStructure>> {
         self.structures
-            .structure_at_chunk_filtered(
+            .structure_at_chunk(
                 chunk_x,
                 chunk_z,
                 self.seed,
@@ -421,31 +421,35 @@ impl NetherGenerator {
     }
 
     /// Generates the selected fortress/bastion start from the shipped
-    /// definition JSON.
-    ///
-    /// Fortresses have no procedural piece port, and bastions are jigsaw starts
-    /// that require the unshipped template/pool assets. Both paths fail loudly
-    /// with [`StructureError`]; the caller can surface the message to logs or
-    /// tests. When templates are added, replace the empty map with the loaded
-    /// catalog without touching the selection contract.
+    /// definitions and template catalog.
     pub fn structure_start(
         &self,
         selection: &SelectedStructure,
     ) -> Result<StructureStart, StructureError> {
-        let json = match selection.structure.as_str() {
-            "minecraft:fortress" => NETHER_FORTRESS_JSON,
-            "minecraft:bastion_remnant" => NETHER_BASTION_JSON,
-            other => {
-                return Err(StructureError::UnsupportedStructureType {
-                    structure: other.to_owned(),
-                    type_name: "selected set is not a nether complex".to_owned(),
-                });
-            }
-        };
-        let definition = StructureDefinition::from_json(&selection.structure, json)?;
-        let templates: HashMap<String, StructureTemplate> = HashMap::new();
-        let context = StructureGenerationContext::new(self.seed, selection.chunk, 0, &templates)
-            .with_level(&EMPTY_NETHER_LEVEL);
+        if !matches!(
+            selection.structure.as_str(),
+            "minecraft:fortress" | "minecraft:bastion_remnant"
+        ) {
+            return Err(StructureError::UnsupportedStructureType {
+                structure: selection.structure.clone(),
+                type_name: "selected set is not a nether complex".to_owned(),
+            });
+        }
+        let definition = self
+            .structures
+            .definitions()
+            .get(&selection.structure)
+            .ok_or_else(|| StructureError::UnsupportedStructureType {
+                structure: selection.structure.clone(),
+                type_name: "nether complex is not enabled".to_owned(),
+            })?;
+        let context = StructureGenerationContext::new(
+            self.seed,
+            selection.chunk,
+            0,
+            StructureTemplateCatalog::shipped(),
+        )
+        .with_level(&EMPTY_NETHER_LEVEL);
         definition.generate_start(&context)
     }
 
@@ -728,12 +732,21 @@ impl NetherGenerator {
         let origin = BlockPos::new(chunk.x.wrapping_mul(16), MIN_Y, chunk.z.wrapping_mul(16));
         for step in [
             Decoration::LocalModifications,
+            Decoration::UndergroundStructures,
             Decoration::SurfaceStructures,
             Decoration::UndergroundOres,
             Decoration::UndergroundDecoration,
             Decoration::VegetalDecoration,
             Decoration::TopLayerModification,
         ] {
+            if matches!(
+                step,
+                Decoration::UndergroundStructures
+                    | Decoration::SurfaceStructures
+                    | Decoration::UndergroundDecoration
+            ) {
+                self.apply_structures(chunk, step)?;
+            }
             let mut active = HashSet::new();
             for biome in &chunk_biomes {
                 let Some(steps) = self.feature_data.biome_features(biome) else {
@@ -767,6 +780,24 @@ impl NetherGenerator {
             }
         }
         Ok(())
+    }
+
+    fn apply_structures(&self, chunk: &mut Chunk, step: Decoration) -> io::Result<()> {
+        let chunk_pos = crate::region::ChunkPos::new(chunk.x, chunk.z);
+        let mut region = WorldGenRegion::new(chunk, MIN_Y, HEIGHT).with_seed(self.seed);
+        self.structures
+            .place_for_chunk(
+                &mut region,
+                chunk_pos,
+                self.seed,
+                StructureDimension::Nether,
+                NETHER_STRUCTURE_BIOME_Y,
+                self,
+                8,
+                step,
+            )
+            .map(|_| ())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
     }
 
     fn place_placed_feature(
@@ -823,8 +854,8 @@ impl StructureBiomeLookup for NetherGenerator {
     }
 }
 
-/// Height source used only to reach the template lookup in a jigsaw start.
-/// Terrain-matching placement still fails at the first missing template.
+/// Dimension bounds used by direct jigsaw start generation. Bastion pools are
+/// rigid and use an absolute start height, so no terrain heightmap is required.
 struct EmptyNetherLevel;
 
 static EMPTY_NETHER_LEVEL: EmptyNetherLevel = EmptyNetherLevel;
@@ -846,12 +877,6 @@ impl FeatureLevel for EmptyNetherLevel {
         false
     }
 }
-
-/// `minecraft:fortress` definition used by the structure-selection contract.
-const NETHER_FORTRESS_JSON: &str = r##"{ "type": "minecraft:fortress", "biomes": "#minecraft:has_structure/nether_fortress", "spawn_overrides": {}, "step": "underground_decoration" }"##;
-/// `minecraft:bastion_remnant` definition used by the structure-selection
-/// contract.
-const NETHER_BASTION_JSON: &str = r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/bastion_remnant", "max_distance_from_center": 80, "size": 6, "spawn_overrides": {}, "start_height": { "absolute": 33 }, "start_pool": "minecraft:bastion/starts", "step": "surface_structures", "use_expansion_hack": false }"##;
 
 #[derive(Debug, Clone, Copy)]
 struct ChunkOrigin {

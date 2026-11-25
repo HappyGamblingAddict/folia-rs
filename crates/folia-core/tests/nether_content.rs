@@ -8,7 +8,6 @@ use folia_core::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
 use folia_core::light::SectionLight;
 use folia_core::worldgen::generator::{Dimension, WorldGenerator, generate_dimension};
 use folia_core::worldgen::nether::{HEIGHT, MIN_Y, NetherGenerator, SEA_LEVEL};
-use folia_core::worldgen::structure::StructureError;
 
 const SEED: i64 = 12345;
 
@@ -159,7 +158,7 @@ fn nether_complex_structure_selection_is_pinned_for_seed_12345() {
 }
 
 #[test]
-fn nether_structure_starts_port_fortress_and_reject_missing_bastion_templates() {
+fn nether_structure_starts_port_fortress_and_shipped_bastion_templates() {
     let generator = NetherGenerator::new(SEED).unwrap();
 
     let fortress = generator.structure_at_chunk(6, -32).unwrap().unwrap();
@@ -173,17 +172,19 @@ fn nether_structure_starts_port_fortress_and_reject_missing_bastion_templates() 
     );
 
     let bastion = generator.structure_at_chunk(12, 20).unwrap().unwrap();
-    let error = generator
+    let start = generator
         .structure_start(&bastion)
-        .expect_err("bastion starts require the unshipped template pool");
-    assert!(matches!(
-        error,
-        StructureError::UnknownTemplate { ref structure, .. }
-            if structure == "minecraft:bastion/starts"
-    ));
+        .expect("bastion starts use the shipped template catalog");
+    let jigsaw = start.jigsaw().expect("bastion jigsaw start data");
     assert!(
-        error.to_string().contains("template"),
-        "the failure must name the missing template asset: {error}"
+        jigsaw.pieces().len() > 6,
+        "bastion should expand beyond its start pool"
+    );
+    assert!(
+        jigsaw
+            .pieces()
+            .iter()
+            .all(|piece| piece.pool.starts_with("minecraft:bastion/"))
     );
 }
 

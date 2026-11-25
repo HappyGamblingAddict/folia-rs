@@ -310,9 +310,10 @@ impl WorldGenerator {
     /// Decoration steps run by `generate_chunk`. Keeping this explicit lets the
     /// ore tests generate the same terrain with and without a step so the exact
     /// fixture delta can be attributed.
-    pub const DEFAULT_DECORATION_STEPS: [Decoration; 6] = [
+    pub const DEFAULT_DECORATION_STEPS: [Decoration; 7] = [
         Decoration::UndergroundStructures,
         Decoration::SurfaceStructures,
+        Decoration::Strongholds,
         Decoration::UndergroundOres,
         Decoration::UndergroundDecoration,
         Decoration::VegetalDecoration,
@@ -539,7 +540,9 @@ impl WorldGenerator {
             if self.structures.is_some()
                 && matches!(
                     step,
-                    Decoration::UndergroundStructures | Decoration::SurfaceStructures
+                    Decoration::UndergroundStructures
+                        | Decoration::SurfaceStructures
+                        | Decoration::Strongholds
                 )
                 && placed_structure_steps.insert(step)
             {

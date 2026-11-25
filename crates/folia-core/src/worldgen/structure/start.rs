@@ -33,6 +33,7 @@ use crate::worldgen::structure::set::{
     StructureSetRegistry, set_large_feature_seed,
 };
 use crate::worldgen::structure::shipwreck::{ShipwreckPiece, ShipwreckStart};
+use crate::worldgen::structure::stronghold::{StrongholdPiece, StrongholdStart};
 use crate::worldgen::structure::template::{
     PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,
 };
@@ -112,6 +113,7 @@ pub enum StructureKind {
         variant: RuinedPortalVariant,
     },
     Fortress,
+    Stronghold,
     EndCity,
     Jigsaw {
         start_pool: String,
@@ -193,6 +195,7 @@ impl StructureDefinition {
                 })?,
             },
             "minecraft:fortress" => StructureKind::Fortress,
+            "minecraft:stronghold" => StructureKind::Stronghold,
             "minecraft:end_city" => StructureKind::EndCity,
             "minecraft:jigsaw" => {
                 if root.contains_key("pool_aliases")
@@ -297,6 +300,9 @@ impl StructureDefinition {
                     fortress,
                     self.terrain_adaptation,
                 ))
+            }
+            StructureKind::Stronghold => {
+                StrongholdStart::generate(&self.name, context, self.terrain_adaptation)
             }
             StructureKind::EndCity => match EndCityStart::generate(&self.name, context)? {
                 Some(end_city) => Ok(StructureStart::new_end_city(
@@ -465,6 +471,7 @@ pub struct StructureStart {
     desert_pyramid: Option<DesertPyramidPiece>,
     jungle_pyramid: Option<JunglePyramidPiece>,
     mineshaft: Option<MineshaftPiece>,
+    stronghold: Option<StrongholdPiece>,
     ocean_monument: Option<OceanMonumentPiece>,
     ocean_ruin: Option<OceanRuinPiece>,
     witch_hut: Option<WitchHutPiece>,
@@ -495,6 +502,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -523,6 +531,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -551,6 +560,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -579,6 +589,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -607,6 +618,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -635,6 +647,36 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: Some(piece),
+            stronghold: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: None,
+            ruined_portal: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_stronghold(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: StrongholdPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            ocean_monument: None,
+            ocean_ruin: None,
+            mineshaft: None,
+            stronghold: Some(piece),
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -663,6 +705,7 @@ impl StructureStart {
             ocean_monument: Some(piece),
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -691,6 +734,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: Some(piece),
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -719,6 +763,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: Some(piece),
             fortress: None,
             end_city: None,
@@ -747,6 +792,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -775,6 +821,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -803,6 +850,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: Some(fortress),
             end_city: None,
@@ -831,6 +879,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: Some(end_city),
@@ -854,6 +903,7 @@ impl StructureStart {
             ocean_monument: None,
             ocean_ruin: None,
             mineshaft: None,
+            stronghold: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -894,6 +944,10 @@ impl StructureStart {
 
     pub fn mineshaft(&self) -> Option<&MineshaftPiece> {
         self.mineshaft.as_ref()
+    }
+
+    pub fn stronghold(&self) -> Option<&StrongholdPiece> {
+        self.stronghold.as_ref()
     }
 
     pub fn ocean_monument(&self) -> Option<&OceanMonumentPiece> {
@@ -959,6 +1013,7 @@ impl StructureStart {
             || self.desert_pyramid.is_some()
             || self.jungle_pyramid.is_some()
             || self.mineshaft.is_some()
+            || self.stronghold.is_some()
             || self.ocean_monument.is_some()
             || self.ocean_ruin.is_some()
             || self.witch_hut.is_some()
@@ -997,6 +1052,9 @@ impl StructureStart {
         }
         if let Some(mineshaft) = &self.mineshaft {
             boxes.push(mineshaft.bounding_box());
+        }
+        if let Some(stronghold) = &self.stronghold {
+            boxes.push(stronghold.bounding_box());
         }
         if let Some(monument) = &self.ocean_monument {
             boxes.push(monument.bounding_box());
@@ -1191,6 +1249,14 @@ impl StructureStart {
         }
         if let Some(mineshaft) = &self.mineshaft {
             let placement = mineshaft.place(level, chunk_box)?;
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(stronghold) = &self.stronghold {
+            let placement = stronghold.place(level, chunk_box)?;
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
             } else {
@@ -2469,8 +2535,8 @@ fn required_str<'a>(
 
 /// The shipped structure definitions this slice can generate end to end.
 ///
-/// Villages, igloos, desert pyramids, jungle temples, and mineshafts are
-/// complete vertical slices; other structure types stay parsed-but-unsupported
+/// Villages, igloos, desert pyramids, jungle temples, mineshafts, and strongholds
+/// are complete vertical slices; other structure types stay parsed-but-unsupported
 /// and are skipped explicitly by [`StructureGenerator`]. The JSON is the 1.21.11
 /// data-pack document with insignificant whitespace removed.
 pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
@@ -2497,6 +2563,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:mineshaft_mesa",
         r##"{ "type": "minecraft:mineshaft", "biomes": "#minecraft:has_structure/mineshaft_mesa", "spawn_overrides": {}, "step": "underground_structures" }"##,
+    ),
+    (
+        "minecraft:stronghold",
+        r##"{ "type": "minecraft:stronghold", "biomes": "#minecraft:has_structure/stronghold", "spawn_overrides": {}, "step": "strongholds" }"##,
     ),
     (
         "minecraft:monument",

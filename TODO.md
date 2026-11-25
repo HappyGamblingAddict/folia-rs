@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,645
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,652
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1378,7 +1378,7 @@ errors are concentrated in `root_system`, `geode`, `freeze_top_layer`,
 
 Implement in dependency order, each with loot/tags and a parity fixture:
 
-- [~] **Normal and mesa mineshafts done**; strongholds remain. Mineshafts add deterministic spine/branch corridors, supports, rails, torches, cobwebs/chests, cave-density Y placement, weighted biome fallback, and five fixtures.
+- [~] **Normal/mesa mineshafts and procedural strongholds done**. Mineshafts add deterministic spine/branch corridors, supports, rails, torches, cobwebs/chests, cave-density Y placement, weighted biome fallback, and five fixtures.
 - [~] Villages (village template NBTs, recursive plains generation, pools,
   processors, deterministic placement, and feature-pool trees/decor; loot/chest
   block entities, entity spawning, terrain adaptation, and Java

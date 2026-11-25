@@ -13,8 +13,8 @@ use folia_core::worldgen::structure::ruined_portal::{
     RuinedPortalPlacement, RuinedPortalStart, RuinedPortalVariant,
 };
 use folia_core::worldgen::structure::set::{
-    PlacementError, RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
-    StructureSetError, StructureSetRegistry,
+    RandomSpreadType, StructureBiomeLookup, StructureDimension, StructurePlacement,
+    StructureSetRegistry,
 };
 use folia_core::worldgen::structure::shipwreck::ShipwreckStart;
 use folia_core::worldgen::structure::start::{
@@ -182,10 +182,7 @@ fn shipped_structure_sets_parse_with_expected_counts() {
     assert_eq!(concentric, 1);
     assert_eq!(triangular, 3);
     assert_eq!((legacy_type_1, legacy_type_2, legacy_type_3), (1, 1, 1));
-    assert_eq!(
-        registry.unsupported_placements(),
-        vec![("minecraft:strongholds", "minecraft:concentric_rings")]
-    );
+    assert!(registry.unsupported_placements().is_empty());
     assert_eq!(
         registry
             .get("villages")
@@ -468,16 +465,16 @@ fn structure_at_chunk_selects_only_placement_chunks() {
     assert_eq!(outpost.set, "minecraft:pillager_outposts");
     assert_eq!(outpost.structure, "minecraft:pillager_outpost");
 
-    let error = registry
-        .is_structure_chunk("strongholds", 0, 0, 12_345)
-        .expect_err("concentric rings need a biome source");
-    assert!(matches!(
-        error,
-        StructureSetError::Placement {
-            source: PlacementError::RequiresBiomeSource { .. },
-            ..
-        }
-    ));
+    assert!(
+        registry
+            .is_structure_chunk("strongholds", 0, 0, 12_345)
+            .expect("stronghold origin placement")
+    );
+    assert!(
+        !registry
+            .is_structure_chunk("strongholds", 1, 0, 12_345)
+            .expect("non-ring stronghold chunk")
+    );
 }
 
 struct StaticBiomes(&'static str);

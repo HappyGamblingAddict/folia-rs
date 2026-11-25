@@ -49,6 +49,7 @@ pub mod ruined_portal;
 pub mod set;
 pub mod shipwreck;
 pub mod start;
+pub mod stronghold;
 pub mod template;
 pub mod witch_hut;
 
@@ -249,6 +250,7 @@ pub use start::{
     StartPlacement, StructureChunkPlacement, StructureDefinition, StructureGenerationContext,
     StructureGenerator, StructureKind, StructureStart, TemplateProvider, TerrainAdjustment,
 };
+pub use stronghold::{StrongholdPiece, StrongholdRoom, StrongholdRoomKind, StrongholdStart};
 pub use template::{
     Mirror, PlacedBlock, PlacedEntity, Rotation, StructurePlaceSettings, StructureTemplate,
     TemplateBlock, TemplateEntity, transform, transform_state, transform_vec3,

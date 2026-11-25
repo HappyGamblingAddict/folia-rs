@@ -8,7 +8,7 @@
 
 use crate::region::ChunkPos;
 use crate::tags::{self, TagRegistryKind};
-use folia_random::{LegacyRandomSource, RandomSource};
+use folia_random::{LegacyRandomSource, RandomSource, get_seed};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -270,9 +270,11 @@ impl RandomSpreadStructurePlacement {
 
 /// `ConcentricRingsStructurePlacement`.
 ///
-/// Parsed faithfully, but [`StructurePlacement::is_structure_chunk`] returns
-/// [`PlacementError::RequiresBiomeSource`]: selecting stronghold rings needs
-/// the generator's biome source and seeded ring search, which is a later slice.
+/// Ring angles use `Mth.getSeed` jitter, radii use a legacy random stream, and
+/// every region maps to its nearest ring candidate. The origin is always a
+/// placement chunk. The parsed `preferred_biomes` field is retained for data
+/// compatibility; the structure's biome tag is checked by the registry after
+/// placement selection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConcentricRingsStructurePlacement {
     pub locate_offset: [i32; 3],
@@ -284,6 +286,80 @@ pub struct ConcentricRingsStructurePlacement {
     pub spread: i32,
     pub count: i32,
     pub preferred_biomes: Vec<String>,
+}
+
+impl ConcentricRingsStructurePlacement {
+    pub fn ring_positions(&self, seed: i64) -> Vec<ChunkPos> {
+        let mut positions = Vec::with_capacity(self.count as usize);
+        let seed_rotation = (seed as u32 as f64) / 4_294_967_296.0;
+        let global_rotation = std::f64::consts::PI * (6.0 * seed_rotation - 1.0);
+        for index in 0..self.count {
+            let angular_hash = get_seed(seed as i32, index, 0) as u32;
+            let angular_jitter = (f64::from(angular_hash) / 4_294_967_296.0 * 2.0 - 1.0)
+                * std::f64::consts::PI
+                / f64::from(self.count);
+            let angle = global_rotation
+                + f64::from(index) * std::f64::consts::TAU / f64::from(self.count)
+                + angular_jitter;
+            let mut random = LegacyRandomSource::new(seed ^ i64::from(index));
+            let radius_jitter = random.next_int_between_inclusive(0, self.spread);
+            let radius = f64::from(self.distance + index * (self.spread * 2 + 1))
+                + f64::from(radius_jitter * 2 - 1) * f64::from(self.spread);
+            positions.push(ChunkPos::new(
+                java_round(angle.cos() * radius),
+                java_round(angle.sin() * radius),
+            ));
+        }
+        positions
+    }
+
+    pub fn get_potential_structure_chunk(
+        &self,
+        seed: i64,
+        region_x: i32,
+        region_z: i32,
+    ) -> ChunkPos {
+        let mut best = ChunkPos::new(0, 0);
+        let mut best_distance = i64::MAX;
+        for candidate in self.ring_positions(seed) {
+            let dx = i64::from(region_x) - i64::from(candidate.x);
+            let dz = i64::from(region_z) - i64::from(candidate.z);
+            let distance = dx * dx + dz * dz;
+            if distance < best_distance {
+                best = candidate;
+                best_distance = distance;
+            }
+        }
+        best
+    }
+
+    pub fn is_structure_chunk(
+        &self,
+        seed: i64,
+        chunk_x: i32,
+        chunk_z: i32,
+        salt_override: Option<i32>,
+    ) -> bool {
+        if self.frequency < 1.0
+            && !self.frequency_reduction_method.should_generate(
+                seed,
+                self.salt,
+                chunk_x,
+                chunk_z,
+                self.frequency,
+                salt_override,
+            )
+        {
+            return false;
+        }
+        (chunk_x == 0 && chunk_z == 0)
+            || self.get_potential_structure_chunk(seed, chunk_x, chunk_z)
+                == ChunkPos::new(chunk_x, chunk_z)
+    }
+}
+
+fn java_round(value: f64) -> i32 {
+    (value + 0.5).floor() as i32
 }
 
 /// `StructurePlacement` kind.
@@ -336,9 +412,9 @@ impl StructurePlacement {
             StructurePlacement::RandomSpread(placement) => {
                 Ok(placement.is_structure_chunk(seed, chunk_x, chunk_z, salt_override))
             }
-            StructurePlacement::ConcentricRings(_) => Err(PlacementError::RequiresBiomeSource {
-                placement: "minecraft:concentric_rings",
-            }),
+            StructurePlacement::ConcentricRings(placement) => {
+                Ok(placement.is_structure_chunk(seed, chunk_x, chunk_z, salt_override))
+            }
         }
     }
 }
@@ -547,9 +623,7 @@ impl StructureSetRegistry {
         self.sets.iter().find(|set| set.name == name)
     }
 
-    /// Evaluates one named set, including its exclusion zone. Concentric rings
-    /// return a [`PlacementError::RequiresBiomeSource`] wrapped in
-    /// [`StructureSetError::Placement`].
+    /// Evaluates one named set, including its exclusion zone.
     pub fn is_structure_chunk(
         &self,
         set_name: &str,
@@ -579,13 +653,9 @@ impl StructureSetRegistry {
     }
 
     /// Placement types that parse but cannot be evaluated without more world
-    /// state. `structure_at_chunk` skips them.
+    /// state. All shipped placement kinds are currently evaluable.
     pub fn unsupported_placements(&self) -> Vec<(&str, &'static str)> {
-        self.sets
-            .iter()
-            .filter(|set| matches!(set.placement, StructurePlacement::ConcentricRings(_)))
-            .map(|set| (set.name.as_str(), set.placement.type_name()))
-            .collect()
+        Vec::new()
     }
 
     /// `ChunkGenerator.createStructures` placement test plus weighted

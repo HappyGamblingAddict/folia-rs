@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,697 passing** at the a2d5bc1 gate (0 failed, 1 ignored benchmark); ore column-cache slice next expected 1,702
+> Test status: **1,697 passing** at the a2d5bc1 gate (0 failed, 1 ignored benchmark); ore column-cache slice next expected 1,702; region-reuse slice next expected 1,705
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1489,10 +1489,14 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   loaded-host medians remain noisy. Motion-blocking column tops are now cached
   per `WorldGenRegion` with per-column write invalidation; 8,192 repeated queries
   improved from 1,639 ns to 58 ns in release while ore RNG/blocks stayed stable.
+  Overworld decoration now reuses one `WorldGenRegion` for the whole chunk,
+  resetting per-feature outputs while retaining the column cache. The focused
+  4,096-placement release probe improved 1,471 ns -> 54 ns per placement with
+  identical digests; end-to-end timings remain host-noisy.
 - **Done when:** Release-mode chunk generation has a measured budget and a
-  regression benchmark; remaining hotspots are reusing one region across a whole
-  chunk, per-feature scratch allocations, palette searches, whole-chunk light
-  invalidation, and biome/noise sampling.
+  regression benchmark; remaining hotspots are per-feature scratch allocations,
+  palette searches, whole-chunk light invalidation, biome/noise sampling, and
+  diagnostic write-set inserts when capturing.
 
 ### P2.14 Custom worldgen/datapack loading `[ ]` `L` optional
 

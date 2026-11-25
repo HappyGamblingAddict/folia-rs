@@ -19,7 +19,7 @@ Last updated: 2026-11-24
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
 - Tests: **1,697 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); ore column-cache slice next expected 1,702. Parity is **98.75% block-class /
+  benchmark); ore column-cache/region-reuse slices next expected 1,705. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -34,6 +34,8 @@ Last updated: 2026-11-24
   portal-driven live dimension switching, region-scoped ticking, and live
   bridge chat/effects.
 - Legacy note: check `git log` for the current CI-green HEAD.
+- P2.13 Overworld decoration reuses one WorldGenRegion per chunk; focused
+  release probe improved 1,471 ns -> 54 ns per placement with identical digests.
 - P2.13 ore column tops are cached per WorldGenRegion with per-column write
   invalidation; 8,192 release queries improved 1,639 ns -> 58 ns with unchanged
   ore RNG/block digests. One region per placed feature still limits reuse.

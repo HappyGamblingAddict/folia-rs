@@ -567,6 +567,14 @@ impl WorldGenerator {
             self.min_y,
             chunk.z.wrapping_mul(16),
         );
+        // One writable region serves the whole chunk. Its motion-blocking
+        // column cache therefore survives across every feature placement and
+        // decoration step instead of being discarded with a per-placement
+        // region. `reset_feature_output` keeps each placement's output isolated.
+        let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
+        if diagnostics.is_capturing() {
+            region = region.record_writes();
+        }
         let mut placed_structure_steps = BTreeSet::new();
         for step in steps {
             let step = *step;
@@ -579,7 +587,8 @@ impl WorldGenerator {
                 )
                 && placed_structure_steps.insert(step)
             {
-                self.apply_structures(chunk, step, diagnostics)?;
+                self.apply_structures(&mut region, step, diagnostics)?;
+                region.reset_feature_output();
             }
             let active = biome_region.active_feature_indices(data, step, &step_order[step.index()]);
             if active.is_empty() {
@@ -618,7 +627,7 @@ impl WorldGenerator {
                 self.place_placed_feature(
                     placed,
                     configured,
-                    chunk,
+                    &mut region,
                     biome_region,
                     &mut worldgen_random,
                     origin,
@@ -635,14 +644,14 @@ impl WorldGenerator {
     /// own sampler at sea level and restricted to the Overworld.
     fn apply_structures(
         &self,
-        chunk: &mut Chunk,
+        region: &mut WorldGenRegion<'_>,
         step: Decoration,
         diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
         let Some(structures) = &self.structures else {
             return Ok(());
         };
-        let chunk_pos = crate::region::ChunkPos::new(chunk.x, chunk.z);
+        let chunk_pos = crate::region::ChunkPos::new(region.chunk().x, region.chunk().z);
         let biomes = GeneratorBiomeLookup {
             sampler: &self.biomes,
         };
@@ -651,10 +660,9 @@ impl WorldGenerator {
             cache: RefCell::new(HashMap::new()),
             densities: RefCell::new(HashMap::new()),
         };
-        let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
         let placement = structures
             .place_for_chunk_with_height_source(
-                &mut region,
+                &mut *region,
                 &height_source,
                 chunk_pos,
                 self.seed,
@@ -687,7 +695,7 @@ impl WorldGenerator {
         &self,
         placed: &PlacedFeature,
         configured: &ConfiguredFeature,
-        chunk: &mut Chunk,
+        region: &mut WorldGenRegion<'_>,
         biome_region: &FeatureBiomeRegion,
         random: &mut WorldgenRandom,
         origin: BlockPos,
@@ -697,7 +705,7 @@ impl WorldGenerator {
         self.place_modifier_step(
             placed,
             configured,
-            chunk,
+            region,
             biome_region,
             random,
             origin,
@@ -712,7 +720,7 @@ impl WorldGenerator {
         &self,
         placed: &PlacedFeature,
         configured: &ConfiguredFeature,
-        chunk: &mut Chunk,
+        region: &mut WorldGenRegion<'_>,
         biome_region: &FeatureBiomeRegion,
         random: &mut WorldgenRandom,
         pos: BlockPos,
@@ -721,12 +729,9 @@ impl WorldGenerator {
         diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
         let Some(modifier) = placed.placement_modifiers().get(index) else {
-            let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
-            if diagnostics.is_capturing() {
-                region = region.record_writes();
-            }
+            region.reset_feature_output();
             let success = configured
-                .place(&mut region, random, pos)
+                .place(&mut *region, random, pos)
                 .map_err(|feature| {
                     io::Error::new(io::ErrorKind::InvalidData, feature.to_string())
                 })?;
@@ -748,7 +753,7 @@ impl WorldGenerator {
         };
         let positions = {
             let world = FeaturePlacementWorld {
-                chunk: &*chunk,
+                chunk: region.chunk(),
                 data: FeatureData::vanilla(),
                 biome_region,
                 biomes: &self.biomes,
@@ -765,7 +770,7 @@ impl WorldGenerator {
             self.place_modifier_step(
                 placed,
                 configured,
-                chunk,
+                &mut *region,
                 biome_region,
                 random,
                 next,

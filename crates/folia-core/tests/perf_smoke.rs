@@ -299,6 +299,71 @@ fn ore_height_cache_smoke() {
     assert_eq!(region.motion_blocking_cache_len(), 16 * 16);
 }
 
+/// Region construction and cold column scans were repeated once per placed
+/// feature. Reusing one region and resetting only the per-placement outputs
+/// keeps the same blocks and answers while amortising both costs.
+#[test]
+fn region_reuse_smoke() {
+    const PLACEMENTS: usize = 4096;
+    const MIX: u64 = 0x0000_0100_0000_01b3;
+
+    let generator = WorldGenerator::overworld(12_345).expect("overworld generator");
+    let base = generator
+        .generate_chunk_with_steps(0, 0, &[])
+        .expect("terrain-only chunk");
+    // Writes stay in the x/z 8..16 quadrant so the probed column (0, 0) is
+    // never invalidated: a reused region should serve it from the cache.
+    let position = |index: usize| {
+        BlockPos::new(
+            8 + (index % 8) as i32,
+            generator.min_y() + (index % 8) as i32,
+            8 + ((index / 8) % 8) as i32,
+        )
+    };
+
+    let mut fresh_chunk = base.clone();
+    let mut fresh_digest = 0u64;
+    let start = Instant::now();
+    for index in 0..PLACEMENTS {
+        let pos = position(index);
+        let mut region =
+            WorldGenRegion::new(&mut fresh_chunk, generator.min_y(), generator.height());
+        let placed = region.set_block(pos, state("minecraft:stone"));
+        let blocked = region.has_motion_blocking_at_or_above(0, 0, 0);
+        fresh_digest = fresh_digest.wrapping_mul(MIX) ^ u64::from(placed && blocked);
+    }
+    let fresh = start.elapsed();
+
+    let mut shared_chunk = base.clone();
+    let mut shared_digest = 0u64;
+    let shared_cache_columns;
+    let start = Instant::now();
+    {
+        let mut region =
+            WorldGenRegion::new(&mut shared_chunk, generator.min_y(), generator.height());
+        for index in 0..PLACEMENTS {
+            region.reset_feature_output();
+            let pos = position(index);
+            let placed = region.set_block(pos, state("minecraft:stone"));
+            let blocked = region.has_motion_blocking_at_or_above(0, 0, 0);
+            shared_digest = shared_digest.wrapping_mul(MIX) ^ u64::from(placed && blocked);
+        }
+        shared_cache_columns = region.motion_blocking_cache_len();
+    }
+    let shared = start.elapsed();
+
+    eprintln!(
+        "region_reuse_smoke: {PLACEMENTS} placements, fresh regions {fresh:?} ({:.2} ns/placement), one reused region {shared:?} ({:.2} ns/placement), {} cached columns",
+        fresh.as_nanos() as f64 / PLACEMENTS as f64,
+        shared.as_nanos() as f64 / PLACEMENTS as f64,
+        shared_cache_columns
+    );
+    guard("region_reuse_smoke fresh", fresh);
+    guard("region_reuse_smoke shared", shared);
+    assert_eq!(fresh_digest, shared_digest, "cache must be transparent");
+    assert_eq!(chunk_digest(&fresh_chunk), chunk_digest(&shared_chunk));
+}
+
 #[test]
 fn lighting_smoke() {
     let mut chunk = flat_chunk(0, 0);

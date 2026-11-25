@@ -961,4 +961,65 @@ mod tests {
         assert_eq!(chunk_digest(&cached_chunk), chunk_digest(&scanned_chunk));
         assert_eq!(chunk_digest(&cached_chunk), 0xf7e5_3335_07f3_ea9c);
     }
+
+    /// One region serves both placements: the column cache survives the reset
+    /// between them, while the RNG stream and generated blocks match the old
+    /// behaviour of building a fresh region for every placement.
+    #[test]
+    fn shared_region_reuses_cache_between_ore_placements() {
+        let diamond = ore("ore_diamond_medium");
+        let origin = BlockPos::new(8, 0, 8);
+        let mut shared_chunk = flat_stone();
+        let mut fresh_chunk = flat_stone();
+        for chunk in [&mut shared_chunk, &mut fresh_chunk] {
+            chunk.set_block_state(
+                8,
+                0,
+                8,
+                BlockState {
+                    name: "minecraft:air".into(),
+                    properties: Vec::new(),
+                },
+            );
+        }
+
+        let mut shared_random = RecordingRandom::new(23);
+        let (cached_after_first, second_writes) = {
+            let mut level = WorldGenRegion::new(&mut shared_chunk, MIN_Y, HEIGHT).record_writes();
+            assert!(diamond.place(&mut level, &mut shared_random, origin));
+            let cached = level.motion_blocking_cache_len();
+            assert!(cached > 0, "ore placement must populate the column cache");
+            let first = level.take_written_blocks();
+            assert!(!first.is_empty());
+
+            level.reset_feature_output();
+            assert_eq!(
+                level.motion_blocking_cache_len(),
+                cached,
+                "reset must not discard terrain cache entries"
+            );
+            assert!(
+                level.take_written_blocks().is_empty(),
+                "reset must isolate writes"
+            );
+
+            assert!(diamond.place(&mut level, &mut shared_random, origin));
+            assert!(
+                level.motion_blocking_cache_len() >= cached,
+                "reused region must keep serving cached columns"
+            );
+            (cached, level.take_written_blocks())
+        };
+        assert!(!second_writes.is_empty());
+
+        let mut fresh_random = RecordingRandom::new(23);
+        for _ in 0..2 {
+            let mut level = WorldGenRegion::new(&mut fresh_chunk, MIN_Y, HEIGHT);
+            assert!(diamond.place(&mut level, &mut fresh_random, origin));
+        }
+
+        assert_eq!(shared_random.digest(), fresh_random.digest());
+        assert_eq!(chunk_digest(&shared_chunk), chunk_digest(&fresh_chunk));
+        assert!(cached_after_first > 0);
+    }
 }

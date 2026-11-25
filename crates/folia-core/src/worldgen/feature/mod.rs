@@ -447,6 +447,31 @@ impl<'a> WorldGenRegion<'a> {
             .collect()
     }
 
+    /// Immutable view of the generated chunk.
+    ///
+    /// Placement modifiers read block and biome state through this view while a
+    /// single region is reused for a whole chunk; the region keeps the mutable
+    /// handle and reborrows it immutably here.
+    pub fn chunk(&self) -> &Chunk {
+        &*self.chunk
+    }
+
+    /// Clears the outputs that belong to one feature placement so this region
+    /// can be reused for the next one.
+    ///
+    /// Block entities, spawned entities, scheduled ticks, and the recorded write
+    /// set are all per-placement: a fresh region used to be built for every
+    /// placement and dropped afterwards, so a later feature could not observe
+    /// them. The motion-blocking column cache is deliberately retained because
+    /// it describes the chunk terrain, not any single feature's output; writes
+    /// through this region keep it coherent via per-column invalidation.
+    pub fn reset_feature_output(&mut self) {
+        self.scheduled_ticks = ScheduledTickQueue::new();
+        self.block_entities.clear();
+        self.entities.clear();
+        self.written_blocks.clear();
+    }
+
     /// Number of columns with a cached motion-blocking top. Useful for
     /// checking cache population, hits, and per-column invalidation.
     pub fn motion_blocking_cache_len(&self) -> usize {
@@ -2543,6 +2568,61 @@ mod tests {
         };
         assert!(NoOpFeature.place(&mut context));
         assert!(level.chunk.sections.is_empty());
+    }
+
+    #[test]
+    fn reset_feature_output_isolates_outputs_but_keeps_the_motion_cache() {
+        let mut chunk = chunk();
+        {
+            let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT).record_writes();
+            let stone_pos = BlockPos::new(0, 0, 0);
+            assert!(level.set_block(stone_pos, stone()));
+            assert!(level.has_motion_blocking_at_or_above(0, 0, 0));
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+
+            // Everything one placement can hand back to its caller.
+            assert!(level.set_block(BlockPos::new(1, 0, 1), stone()));
+            assert!(level.set_block_entity(BlockPos::new(2, 0, 2), Tag::String("chest".into())));
+            assert!(level.spawn_entity(FeatureEntity {
+                entity_type: "minecraft:cow".into(),
+                pos: (3.5, 0.0, 3.5),
+                yaw: 0.0,
+                pitch: 0.0,
+                nbt: None,
+            }));
+            assert!(level.schedule_tick(BlockPos::new(4, 0, 4), "minecraft:stone", 1));
+            assert_eq!(level.block_entities().len(), 1);
+            assert_eq!(level.entities().len(), 1);
+            assert_eq!(level.scheduled_ticks().len(), 1);
+            assert_eq!(level.take_written_blocks().len(), 2);
+            assert!(level.set_block(BlockPos::new(5, 0, 5), stone()));
+
+            level.reset_feature_output();
+
+            assert!(level.block_entities().is_empty());
+            assert!(level.entities().is_empty());
+            assert!(level.scheduled_ticks().is_empty());
+            assert!(level.take_written_blocks().is_empty());
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+            assert!(level.has_motion_blocking_at_or_above(0, 0, 0));
+            assert_eq!(
+                level.motion_blocking_cache_len(),
+                1,
+                "retained cache entries must still be hits"
+            );
+            assert_eq!(
+                level.get_block(BlockPos::new(1, 0, 1)).unwrap().name,
+                "minecraft:stone",
+                "reset must not undo written blocks"
+            );
+
+            // Per-column invalidation still works after a reset: writing the
+            // cached column drops only that column's entry.
+            assert!(level.set_block(BlockPos::new(0, 1, 0), stone()));
+            assert_eq!(level.motion_blocking_cache_len(), 0);
+            assert!(level.has_motion_blocking_at_or_above(0, 0, 1));
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+        }
     }
 
     #[test]

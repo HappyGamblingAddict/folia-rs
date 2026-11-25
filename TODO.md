@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,676 passing** at the 68e3dad gate (0 failed, 1 ignored benchmark); End cities should bring the next gate to 1,684
+> Test status: **1,684 passing** at the e889793 gate (0 failed, 1 ignored benchmark)
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1401,8 +1401,9 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   fixtures are still open.
 - [~] **Ancient cities wired** through the jigsaw pipeline (city_center pool,
   start-height biome sampling, five-piece generated fixture); one template NBT
-  and exact encapsulate/Java differential remain open. Trial chambers still need
-  their jigsaw attachment path (191 templates shipped).
+  and exact encapsulate/Java differential remain open. **Trial chambers are
+  wired** across 191 templates/47 pools with aliases, uniform height, processors,
+  and generated-chunk coverage; Java differential/live descriptors remain open.
 - [~] **Nether fortresses and bastions wired** through shared Nether structure
   decoration; all 167 bastion templates/60 pools and four start variants resolve,
   with nine selection/bounds/generation fixtures. **End cities are wired** through

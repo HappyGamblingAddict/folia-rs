@@ -20,14 +20,23 @@
 //! - `chorus_plant`, `end_gateway`, `end_platform`, and `end_spike` are still
 //!   explicit unsupported types in the shared configured-feature registry. This
 //!   module provides an id-keyed dispatch for the usable pieces and fails
-//!   loudly for the rest; end cities themselves remain unimplemented.
+//!   loudly for the rest. End cities use the shipped procedural structure
+//!   definition and `EndCityPieces` templates at `surface_structures`.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
+use crate::region::ChunkPos;
+use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap, WorldGenRegion};
 use crate::worldgen::generator::sample_grid;
 use crate::worldgen::noise::BlendedNoise;
 use crate::worldgen::simplex::SimplexNoise;
+use crate::worldgen::structure::{
+    SelectedStructure, StructureBiomeLookup, StructureDimension, StructureError,
+    StructureGenerationContext, StructureGenerator, StructureStart, StructureTemplateCatalog,
+};
 use folia_math::BlockPos;
 use folia_random::{LegacyRandomSource, RandomSource, XoroshiroRandomSource};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
@@ -195,23 +204,36 @@ impl std::error::Error for EndFeatureError {}
 const CELL_WIDTH: i32 = 8;
 const CELL_HEIGHT: i32 = 4;
 const END_STONE: &str = "minecraft:end_stone";
+const END_STRUCTURE_BIOME_Y: i32 = 64;
+const END_CITY_STRUCTURE_RADIUS: i32 = 16;
 
 pub struct EndGenerator {
     seed: i64,
     islands: EndIslandDensity,
     base_noise: BlendedNoise,
     spikes: Vec<EndSpike>,
+    structures: StructureGenerator,
 }
 
 impl EndGenerator {
     pub fn new(seed: i64) -> io::Result<Self> {
         let mut random = XoroshiroRandomSource::new(seed);
         let base_noise = BlendedNoise::create(&mut random, 0.25, 0.25, 80.0, 160.0, 4.0);
+        let structures =
+            StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+                .map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("shipped End structure generator: {error}"),
+                    )
+                })?
+                .with_enabled_structures(["minecraft:end_city"]);
         Ok(Self {
             seed,
             islands: EndIslandDensity::new(seed),
             base_noise,
             spikes: end_spikes_for_seed(seed),
+            structures,
         })
     }
 
@@ -276,22 +298,12 @@ impl EndGenerator {
     }
 
     pub fn generate_chunk(&self, chunk_x: i32, chunk_z: i32) -> io::Result<Chunk> {
+        let grid = self.density_grid(chunk_x, chunk_z);
         let cells_x = (16 / CELL_WIDTH + 1) as usize;
         let cells_z = cells_x;
         let cells_y = (HEIGHT / CELL_HEIGHT + 1) as usize;
-        let mut grid = vec![0.0f64; cells_x * cells_z * cells_y];
-        for xi in 0..cells_x {
-            for zi in 0..cells_z {
-                for yi in 0..cells_y {
-                    let x = chunk_x * 16 + xi as i32 * CELL_WIDTH;
-                    let y = MIN_Y + yi as i32 * CELL_HEIGHT;
-                    let z = chunk_z * 16 + zi as i32 * CELL_WIDTH;
-                    grid[(xi * cells_z + zi) * cells_y + yi] = self.density(x, y, z);
-                }
-            }
-        }
-
         let section_count = DIMENSION_HEIGHT / 16;
+
         let mut sections = Vec::with_capacity(section_count as usize);
         for index in 0..section_count {
             sections.push(ChunkSection {
@@ -347,7 +359,97 @@ impl EndGenerator {
         self.fill_biomes(&mut chunk, chunk_x, chunk_z);
         self.place_platform(&mut chunk);
         self.place_spikes(&mut chunk);
+        self.apply_structures(&mut chunk)?;
         Ok(chunk)
+    }
+
+    fn density_grid(&self, chunk_x: i32, chunk_z: i32) -> Vec<f64> {
+        let cells_x = (16 / CELL_WIDTH + 1) as usize;
+        let cells_z = cells_x;
+        let cells_y = (HEIGHT / CELL_HEIGHT + 1) as usize;
+        let mut grid = vec![0.0f64; cells_x * cells_z * cells_y];
+        for xi in 0..cells_x {
+            for zi in 0..cells_z {
+                for yi in 0..cells_y {
+                    let x = chunk_x * 16 + xi as i32 * CELL_WIDTH;
+                    let y = MIN_Y + yi as i32 * CELL_HEIGHT;
+                    let z = chunk_z * 16 + zi as i32 * CELL_WIDTH;
+                    grid[(xi * cells_z + zi) * cells_y + yi] = self.density(x, y, z);
+                }
+            }
+        }
+        grid
+    }
+
+    pub fn structure_at_chunk(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<SelectedStructure>> {
+        self.structures
+            .structure_at_chunk(
+                chunk_x,
+                chunk_z,
+                self.seed,
+                StructureDimension::End,
+                END_STRUCTURE_BIOME_Y,
+                self,
+            )
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("End structure selection: {error}"),
+                )
+            })
+    }
+
+    pub fn structure_start(
+        &self,
+        selection: &SelectedStructure,
+    ) -> Result<StructureStart, StructureError> {
+        if selection.structure != "minecraft:end_city" {
+            return Err(StructureError::UnsupportedStructureType {
+                structure: selection.structure.clone(),
+                type_name: "selected set is not an End city".to_owned(),
+            });
+        }
+        let definition = self
+            .structures
+            .definitions()
+            .get(&selection.structure)
+            .ok_or_else(|| StructureError::UnsupportedStructureType {
+                structure: selection.structure.clone(),
+                type_name: "End city is not enabled".to_owned(),
+            })?;
+        let heights = EndHeightSource::new(self);
+        let context = StructureGenerationContext::new(
+            self.seed,
+            selection.chunk,
+            0,
+            StructureTemplateCatalog::shipped(),
+        )
+        .with_level(&heights);
+        definition.generate_start(&context)
+    }
+
+    fn apply_structures(&self, chunk: &mut Chunk) -> io::Result<()> {
+        let chunk_pos = ChunkPos::new(chunk.x, chunk.z);
+        let heights = EndHeightSource::new(self);
+        let mut region = WorldGenRegion::new(chunk, MIN_Y, DIMENSION_HEIGHT).with_seed(self.seed);
+        self.structures
+            .place_for_chunk_with_height_source(
+                &mut region,
+                &heights,
+                chunk_pos,
+                self.seed,
+                StructureDimension::End,
+                END_STRUCTURE_BIOME_Y,
+                self,
+                END_CITY_STRUCTURE_RADIUS,
+                Decoration::SurfaceStructures,
+            )
+            .map(|_| ())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
     }
 
     /// The deterministic `SpikeFeature` list for this seed.
@@ -407,6 +509,87 @@ impl EndGenerator {
             section.biomes = Some(PalettedContainer { palette, indices });
         }
         debug_assert_eq!(cursor, quart_layers * 16);
+    }
+}
+
+impl StructureBiomeLookup for EndGenerator {
+    fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
+        self.biome_at_block(x, y, z)
+    }
+}
+
+struct EndHeightSource<'a> {
+    generator: &'a EndGenerator,
+    heights: RefCell<HashMap<(i32, i32), [i32; DIMENSION_HEIGHT as usize]>>,
+}
+
+impl<'a> EndHeightSource<'a> {
+    fn new(generator: &'a EndGenerator) -> Self {
+        Self {
+            generator,
+            heights: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn chunk_heights(&self, chunk_x: i32, chunk_z: i32) -> [i32; DIMENSION_HEIGHT as usize] {
+        let key = (chunk_x, chunk_z);
+        if let Some(heights) = self.heights.borrow().get(&key) {
+            return *heights;
+        }
+        let grid = self.generator.density_grid(chunk_x, chunk_z);
+        let cells_x = (16 / CELL_WIDTH + 1) as usize;
+        let cells_z = cells_x;
+        let cells_y = (HEIGHT / CELL_HEIGHT + 1) as usize;
+        let mut heights = [MIN_Y; DIMENSION_HEIGHT as usize];
+        for local_x in 0..16 {
+            for local_z in 0..16 {
+                for y in (MIN_Y..HEIGHT).rev() {
+                    if sample_grid(
+                        &grid,
+                        cells_x,
+                        cells_z,
+                        cells_y,
+                        CELL_WIDTH,
+                        CELL_HEIGHT,
+                        local_x,
+                        local_z,
+                        y - MIN_Y,
+                    ) > 0.0
+                    {
+                        heights[(local_z * 16 + local_x) as usize] = y + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        self.heights.borrow_mut().insert(key, heights);
+        heights
+    }
+}
+
+impl FeatureLevel for EndHeightSource<'_> {
+    fn min_y(&self) -> i32 {
+        MIN_Y
+    }
+
+    fn height(&self) -> i32 {
+        DIMENSION_HEIGHT
+    }
+
+    fn get_block(&self, _pos: BlockPos) -> Option<&BlockState> {
+        None
+    }
+
+    fn set_block(&mut self, _pos: BlockPos, _state: BlockState) -> bool {
+        false
+    }
+
+    fn heightmap(&self, _kind: Heightmap, x: i32, z: i32) -> Option<i32> {
+        let chunk_x = x.div_euclid(16);
+        let chunk_z = z.div_euclid(16);
+        let local_x = x.rem_euclid(16) as usize;
+        let local_z = z.rem_euclid(16) as usize;
+        Some(self.chunk_heights(chunk_x, chunk_z)[local_z * 16 + local_x])
     }
 }
 

@@ -16,10 +16,10 @@ Last updated: 2026-11-24
   P11.4 perf smoke, and P11.6-P11.8 docs/packaging/security are done. Desert
   pyramid, buried treasure, witch hut, jungle temple, shipwreck, ruined portal,
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
-  and Nether bastion/fortress wiring/fixtures are complete locally; expected next
-  gate is 1,676.
+  Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
+  expected next gate is 1,684.
 - Tests: **1,667 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,676. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,684. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -101,6 +101,9 @@ Last updated: 2026-11-24
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-24: P2.10 End cities — procedural EndCityPieces selection/placement,
+  cross-chunk density heights, chest marker fix-ups, and eight fixtures; exact
+  Java differential/live descriptors remain open.
 - 2026-11-24: P2.10 Nether bastions/fortresses — shared Nether structure
   decoration, 167 bastion templates/60 pools/four variants, weighted fallback,
   and nine fixtures; live descriptors/Java differential remain open.
@@ -870,6 +873,9 @@ Last updated: 2026-11-24
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 End cities — procedural EndCityPieces selection/placement,
+  cross-chunk density heights, chest marker fix-ups, and eight fixtures; exact
+  Java differential/live descriptors remain open.
 - 2026-11-24: P2.10 Nether bastions/fortresses — shared Nether structure
   decoration, 167 bastion templates/60 pools/four variants, weighted fallback,
   and nine fixtures; live descriptors/Java differential remain open.
@@ -1263,6 +1269,9 @@ Last updated: 2026-11-24
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 End cities — procedural EndCityPieces selection/placement,
+  cross-chunk density heights, chest marker fix-ups, and eight fixtures; exact
+  Java differential/live descriptors remain open.
 - 2026-11-24: P2.10 Nether bastions/fortresses — shared Nether structure
   decoration, 167 bastion templates/60 pools/four variants, weighted fallback,
   and nine fixtures; live descriptors/Java differential remain open.

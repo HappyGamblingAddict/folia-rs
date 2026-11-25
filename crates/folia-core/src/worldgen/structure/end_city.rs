@@ -122,7 +122,7 @@ impl EndCityPiece {
                     pos,
                     nbt: block.nbt.clone(),
                 });
-                self.handle_data_marker(name, pos, chunk_box, &mut result, random);
+                self.handle_data_marker(name, pos, chunk_box, &mut result, random, level);
             }
             if block.state.name == "minecraft:structure_block" || !chunk_box.is_inside(pos) {
                 continue;
@@ -151,17 +151,38 @@ impl EndCityPiece {
         chunk_box: BoundingBox,
         result: &mut StartPlacement,
         random: &mut dyn RandomSource,
+        level: &mut dyn FeatureLevel,
     ) {
         if name.starts_with("Chest") {
             let chest_pos = pos.below();
             if chunk_box.is_inside(chest_pos) {
-                let seed = random.next_long();
-                let nbt = chest_nbt(seed);
-                result.block_entities.push(PlacedBlock {
-                    pos: chest_pos,
-                    state: chest_state(),
-                    nbt: Some(nbt),
-                });
+                let existing = level.get_block(chest_pos).cloned();
+                if existing
+                    .as_ref()
+                    .is_some_and(|state| state.name == "minecraft:chest")
+                {
+                    result.block_entities.push(PlacedBlock {
+                        pos: chest_pos,
+                        state: existing.expect("existing chest state"),
+                        nbt: Some(chest_nbt(random.next_long())),
+                    });
+                } else if existing
+                    .as_ref()
+                    .is_none_or(|state| crate::worldgen::feature::is_air_name(&state.name))
+                {
+                    let state = chest_state(self.rotation);
+                    if level.set_block(chest_pos, state.clone()) {
+                        result.written += 1;
+                        result.written_blocks.push(chest_pos);
+                        result.block_entities.push(PlacedBlock {
+                            pos: chest_pos,
+                            state,
+                            nbt: Some(chest_nbt(random.next_long())),
+                        });
+                    } else {
+                        result.rejected += 1;
+                    }
+                }
             }
         } else if name.starts_with("Sentry") {
             result.entities.push(entity_descriptor(
@@ -959,10 +980,18 @@ fn chest_nbt(seed: i64) -> Tag {
     ])
 }
 
-fn chest_state() -> BlockState {
+fn chest_state(rotation: Rotation) -> BlockState {
+    let facing = match rotation.rotate_direction(Direction::South) {
+        Direction::Down => "down",
+        Direction::Up => "up",
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::East => "east",
+    };
     BlockState {
         name: "minecraft:chest".to_owned(),
-        properties: vec![("facing".to_owned(), "north".to_owned())],
+        properties: vec![("facing".to_owned(), facing.to_owned())],
     }
 }
 

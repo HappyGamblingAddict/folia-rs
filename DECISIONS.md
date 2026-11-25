@@ -3540,3 +3540,37 @@ Format:
   descriptors are not yet persisted or spawned, `spawn_overrides` remain
   unmodeled, and the pre-existing approximate Nether terrain/noise path is
   unchanged.
+
+## 2026-11-25 — End City procedural structure wiring
+- Context: the shipped non-village catalog contains 20 `minecraft:end_city/*`
+  templates, but the shared structure manager had no End City definition,
+  `EndGenerator` never ran structure decoration, and the procedural
+  `EndCityPieces` port had no integration fixtures. The shipped pool and
+  processor catalogs contain no End City pool graph or processor lists.
+- Decision: retain the procedural `minecraft:end_city` path rather than inventing
+  jigsaw pools. Add the shipped procedural definition at
+  `surface_structures`, enable it in the catalog-backed manager, and run the
+  shared structure pass from `EndGenerator`. A chunk-local height-source cache
+  computes neighbouring base columns from the same interpolated End density
+  grid used by terrain generation, so starts and cross-chunk pieces do not read
+  the writable chunk as their only height source. The search radius is 16
+  chunks; a 512-seed layout sweep remains within nine chunks.
+- Why: the shipped structure type is `minecraft:end_city`, not
+  `minecraft:jigsaw`; its recursive section generators select the 20 templates
+  directly. Routing it through a synthetic pool graph would change vanilla RNG,
+  collision, tower/bridge/ship layout, and bounds.
+- Consequences: seed 12345 pins End-only triangular selection at chunk (3,1)
+  with Highlands/Midlands biome filtering. Seed 1 at chunk (3,1) pins a
+  126-piece core/tower/bridge/ship layout with bounds
+  (11,80,-38)..(133,180,28) and ship bounds (105,143,-7)..(133,166,5). Generated
+  seed-12345 chunks (-236,-177) and (-237,-177) contain 751 and 112 purpur
+  blocks respectively, proving cross-chunk placement. Chest data markers now
+  attach End-city loot NBT to existing chests, place a rotated chest when the
+  marker cell is empty, and use the shared decoration RNG stream.
+- Approximations: no local Java oracle is available for a block/RNG differential.
+  Starts are still regenerated per target chunk, the 16-chunk search window is
+  conservative rather than derived from a cached vanilla structure reference,
+  End terrain/noise remains the pre-existing approximation, platform/spikes are
+  still placed before the structure pass, `spawn_overrides` remain unmodeled,
+  and returned shulker/item-frame/block-entity descriptors are not yet persisted
+  or spawned by chunk generation.

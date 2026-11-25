@@ -2721,6 +2721,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
         r##"{ "type": "minecraft:fortress", "biomes": "#minecraft:has_structure/nether_fortress", "spawn_overrides": {}, "step": "underground_decoration" }"##,
     ),
     (
+        "minecraft:end_city",
+        r##"{ "type": "minecraft:end_city", "biomes": "#minecraft:has_structure/end_city", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
         "minecraft:trial_chambers",
         r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/trial_chambers", "dimension_padding": 10, "liquid_settings": "ignore_waterlogging", "max_distance_from_center": 116, "pool_aliases": [ { "type": "minecraft:random_group", "groups": [ { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/skeleton" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/skeleton" } ], "weight": 1 }, { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/stray" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/stray" } ], "weight": 1 }, { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/poison_skeleton" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/poison_skeleton" } ], "weight": 1 } ] }, { "type": "minecraft:random", "alias": "minecraft:trial_chambers/spawner/contents/melee", "targets": [ { "data": "minecraft:trial_chambers/spawner/melee/zombie", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/melee/husk", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/melee/spider", "weight": 1 } ] }, { "type": "minecraft:random", "alias": "minecraft:trial_chambers/spawner/contents/small_melee", "targets": [ { "data": "minecraft:trial_chambers/spawner/small_melee/slime", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/cave_spider", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/silverfish", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/baby_zombie", "weight": 1 } ] } ], "size": 20, "spawn_overrides": { "ambient": { "bounding_box": "piece", "spawns": [] }, "axolotls": { "bounding_box": "piece", "spawns": [] }, "creature": { "bounding_box": "piece", "spawns": [] }, "misc": { "bounding_box": "piece", "spawns": [] }, "monster": { "bounding_box": "piece", "spawns": [] }, "underground_water_creature": { "bounding_box": "piece", "spawns": [] }, "water_ambient": { "bounding_box": "piece", "spawns": [] }, "water_creature": { "bounding_box": "piece", "spawns": [] } }, "start_height": { "type": "minecraft:uniform", "max_inclusive": { "absolute": -20 }, "min_inclusive": { "absolute": -40 } }, "start_pool": "minecraft:trial_chambers/chamber/end", "step": "underground_structures", "terrain_adaptation": "encapsulate", "use_expansion_hack": false }"##,
     ),
@@ -2935,6 +2939,7 @@ impl StructureGenerator {
                 .with_enabled_structures([
                     "minecraft:ancient_city",
                     "minecraft:bastion_remnant",
+                    "minecraft:end_city",
                     "minecraft:fortress",
                     "minecraft:trial_chambers",
                     "minecraft:village_plains",
@@ -3168,6 +3173,15 @@ impl StructureGenerator {
                         seed,
                         &mut random,
                     )?
+                } else if selection.structure == "minecraft:end_city" {
+                    if seeded_structures.insert(selection.structure.clone()) {
+                        random.set_feature_seed(
+                            decoration_seed,
+                            self.structure_step_index(&selection.structure, step),
+                            step.index() as i32,
+                        );
+                    }
+                    start.place_in_chunk_with_random(level, chunk_pos, &mut random)?
                 } else if let Some(source) = height_source {
                     start.place_in_chunk_with_height_source(level, source, chunk_pos)?
                 } else {

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,667 passing** at the 43f82c8 gate (0 failed, 1 ignored benchmark); Nether bastions/fortresses should bring the next gate to 1,676
+> Test status: **1,667 passing** at the 43f82c8 gate (0 failed, 1 ignored benchmark); Nether bastions/fortresses should bring the next gate to 1,684
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1405,8 +1405,10 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   their jigsaw attachment path (191 templates shipped).
 - [~] **Nether fortresses and bastions wired** through shared Nether structure
   decoration; all 167 bastion templates/60 pools and four start variants resolve,
-  with nine selection/bounds/generation fixtures. End-city jigsaw attachment and
-  exact Java differential/live descriptors remain open.
+  with nine selection/bounds/generation fixtures. **End cities are wired** through
+  the shipped procedural `minecraft:end_city`/`EndCityPieces` path with End-only
+  selection, surface placement, cross-chunk density heights, chest fix-ups, and
+  eight fixtures. Exact Java differential/live descriptors remain open.
 - **Why:** Structures are content-heavy but mostly data-driven once P2.8/P2.9
   exist.
 - **Done when:** Structure starts/bounding boxes and sampled blocks match Java

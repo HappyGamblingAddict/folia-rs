@@ -23,7 +23,7 @@ use crate::worldgen::structure::piece::{
     BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
     TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,
 };
-use crate::worldgen::structure::pool::{LiquidSettings, PoolCatalog};
+use crate::worldgen::structure::pool::{LiquidSettings, PoolAliasBinding, PoolCatalog};
 use crate::worldgen::structure::processor::StructureProcessorCatalog;
 use crate::worldgen::structure::ruined_portal::{
     RuinedPortalPiece, RuinedPortalStart, RuinedPortalVariant,
@@ -91,6 +91,45 @@ pub enum BiomeSet {
     List(Vec<String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureStartHeight {
+    Absolute(i32),
+    Uniform {
+        min_inclusive: i32,
+        max_inclusive: i32,
+    },
+}
+
+impl From<i32> for StructureStartHeight {
+    fn from(value: i32) -> Self {
+        Self::Absolute(value)
+    }
+}
+
+impl StructureStartHeight {
+    pub fn sample(self, random: &mut impl RandomSource) -> i32 {
+        match self {
+            Self::Absolute(value) => value,
+            Self::Uniform {
+                min_inclusive,
+                max_inclusive,
+            } => {
+                if min_inclusive > max_inclusive {
+                    min_inclusive
+                } else {
+                    random.next_int_between_inclusive(min_inclusive, max_inclusive)
+                }
+            }
+        }
+    }
+
+    pub fn sample_at_chunk(self, seed: i64, chunk_pos: ChunkPos) -> i32 {
+        let mut random = LegacyRandomSource::new(0);
+        set_large_feature_seed(&mut random, seed, chunk_pos.x, chunk_pos.z);
+        self.sample(&mut random)
+    }
+}
+
 /// Structure codec kinds this slice can distinguish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructureKind {
@@ -119,7 +158,7 @@ pub enum StructureKind {
         start_pool: String,
         start_jigsaw_name: Option<String>,
         size: i32,
-        start_height: i32,
+        start_height: StructureStartHeight,
         use_expansion_hack: bool,
         project_start_to_heightmap: Option<Heightmap>,
         max_distance_horizontal: i32,
@@ -127,6 +166,7 @@ pub enum StructureKind {
         dimension_padding_bottom: i32,
         dimension_padding_top: i32,
         liquid_settings: LiquidSettings,
+        pool_aliases: Vec<PoolAliasBinding>,
     },
     Unsupported {
         type_name: String,
@@ -198,16 +238,6 @@ impl StructureDefinition {
             "minecraft:stronghold" => StructureKind::Stronghold,
             "minecraft:end_city" => StructureKind::EndCity,
             "minecraft:jigsaw" => {
-                if root.contains_key("pool_aliases")
-                    && root
-                        .get("pool_aliases")
-                        .and_then(Value::as_array)
-                        .is_some_and(|aliases| !aliases.is_empty())
-                {
-                    return Err(StructureError::UnsupportedPoolAliases {
-                        structure: name.to_owned(),
-                    });
-                }
                 let start_pool = required_str(root, "start_pool", name)?;
                 let size = required_i32(root, "size", name)?;
                 if !(0..=20).contains(&size) {
@@ -258,6 +288,12 @@ impl StructureDefinition {
                     dimension_padding_bottom,
                     dimension_padding_top,
                     liquid_settings,
+                    pool_aliases: PoolAliasBinding::from_json_list(root.get("pool_aliases"))
+                        .map_err(|error| {
+                            StructureError::InvalidDefinition(format!(
+                                "{name}: invalid pool_aliases: {error}"
+                            ))
+                        })?,
                 }
             }
             other => StructureKind::Unsupported {
@@ -326,6 +362,7 @@ impl StructureDefinition {
                 dimension_padding_bottom,
                 dimension_padding_top,
                 liquid_settings,
+                pool_aliases,
             } => {
                 let mut config = JigsawConfig::new(start_pool.clone(), *size, *start_height);
                 config.start_jigsaw_name = start_jigsaw_name.clone();
@@ -336,6 +373,7 @@ impl StructureDefinition {
                 config.dimension_padding_bottom = *dimension_padding_bottom;
                 config.dimension_padding_top = *dimension_padding_top;
                 config.liquid_settings = *liquid_settings;
+                config.pool_aliases = pool_aliases.clone();
                 let placement = JigsawPlacement::new(
                     PoolCatalog::shipped(),
                     context.templates,
@@ -2439,7 +2477,10 @@ fn igloo_piece(
     StructurePiece::template(piece)
 }
 
-fn parse_start_height(value: Option<&Value>, name: &str) -> Result<i32, StructureError> {
+fn parse_start_height(
+    value: Option<&Value>,
+    name: &str,
+) -> Result<StructureStartHeight, StructureError> {
     let value = value.ok_or_else(|| {
         StructureError::InvalidDefinition(format!("{name}: missing `start_height`"))
     })?;
@@ -2447,26 +2488,75 @@ fn parse_start_height(value: Option<&Value>, name: &str) -> Result<i32, Structur
         StructureError::InvalidDefinition(format!("{name}: `start_height` must be an object"))
     })?;
     if let Some(absolute) = object.get("absolute").and_then(Value::as_i64) {
-        return i32::try_from(absolute).map_err(|_| {
-            StructureError::InvalidDefinition(format!(
-                "{name}: absolute start_height is outside the int range"
-            ))
-        });
+        return i32::try_from(absolute)
+            .map(StructureStartHeight::Absolute)
+            .map_err(|_| {
+                StructureError::InvalidDefinition(format!(
+                    "{name}: absolute start_height is outside the int range"
+                ))
+            });
     }
     if let Some(constant) = object.get("constant").and_then(Value::as_i64) {
-        return i32::try_from(constant).map_err(|_| {
-            StructureError::InvalidDefinition(format!(
-                "{name}: constant start_height is outside the int range"
-            ))
-        });
+        return i32::try_from(constant)
+            .map(StructureStartHeight::Absolute)
+            .map_err(|_| {
+                StructureError::InvalidDefinition(format!(
+                    "{name}: constant start_height is outside the int range"
+                ))
+            });
     }
     let type_name = object
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("<unspecified>");
+    if type_name == "minecraft:uniform" {
+        let min_inclusive = parse_absolute_anchor(
+            object.get("min_inclusive").ok_or_else(|| {
+                StructureError::InvalidDefinition(format!(
+                    "{name}: uniform start_height is missing `min_inclusive`"
+                ))
+            })?,
+            name,
+            "min_inclusive",
+        )?;
+        let max_inclusive = parse_absolute_anchor(
+            object.get("max_inclusive").ok_or_else(|| {
+                StructureError::InvalidDefinition(format!(
+                    "{name}: uniform start_height is missing `max_inclusive`"
+                ))
+            })?,
+            name,
+            "max_inclusive",
+        )?;
+        return Ok(StructureStartHeight::Uniform {
+            min_inclusive,
+            max_inclusive,
+        });
+    }
     Err(StructureError::UnsupportedHeightProvider {
         structure: name.to_owned(),
         type_name: type_name.to_owned(),
+    })
+}
+
+fn parse_absolute_anchor(value: &Value, name: &str, field: &str) -> Result<i32, StructureError> {
+    let object = value.as_object().ok_or_else(|| {
+        StructureError::InvalidDefinition(format!(
+            "{name}: start_height `{field}` must be an object"
+        ))
+    })?;
+    let value = object
+        .get("absolute")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            StructureError::InvalidDefinition(format!(
+                "{name}: start_height `{field}` requires an absolute anchor"
+            ))
+        })?;
+    i32::try_from(value).map_err(|_| {
+        StructureError::InvalidDefinition(format!(
+            "{name}: start_height `{field}` is outside the int range"
+        ))
     })
 }
 
@@ -2620,6 +2710,10 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:ancient_city",
         r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/ancient_city", "dimension_padding": 1, "liquid_settings": "apply_waterlogging", "max_distance_from_center": 80, "size": 1, "spawn_overrides": {}, "start_height": { "absolute": -27 }, "start_jigsaw_name": "minecraft:city_anchor", "start_pool": "minecraft:ancient_city/city_center", "step": "underground_structures", "terrain_adaptation": "encapsulate", "use_expansion_hack": false }"##,
+    ),
+    (
+        "minecraft:trial_chambers",
+        r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/trial_chambers", "dimension_padding": 10, "liquid_settings": "ignore_waterlogging", "max_distance_from_center": 116, "pool_aliases": [ { "type": "minecraft:random_group", "groups": [ { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/skeleton" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/skeleton" } ], "weight": 1 }, { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/stray" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/stray" } ], "weight": 1 }, { "data": [ { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/ranged", "target": "minecraft:trial_chambers/spawner/ranged/poison_skeleton" }, { "type": "minecraft:direct", "alias": "minecraft:trial_chambers/spawner/contents/slow_ranged", "target": "minecraft:trial_chambers/spawner/slow_ranged/poison_skeleton" } ], "weight": 1 } ] }, { "type": "minecraft:random", "alias": "minecraft:trial_chambers/spawner/contents/melee", "targets": [ { "data": "minecraft:trial_chambers/spawner/melee/zombie", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/melee/husk", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/melee/spider", "weight": 1 } ] }, { "type": "minecraft:random", "alias": "minecraft:trial_chambers/spawner/contents/small_melee", "targets": [ { "data": "minecraft:trial_chambers/spawner/small_melee/slime", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/cave_spider", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/silverfish", "weight": 1 }, { "data": "minecraft:trial_chambers/spawner/small_melee/baby_zombie", "weight": 1 } ] } ], "size": 20, "spawn_overrides": { "ambient": { "bounding_box": "piece", "spawns": [] }, "axolotls": { "bounding_box": "piece", "spawns": [] }, "creature": { "bounding_box": "piece", "spawns": [] }, "misc": { "bounding_box": "piece", "spawns": [] }, "monster": { "bounding_box": "piece", "spawns": [] }, "underground_water_creature": { "bounding_box": "piece", "spawns": [] }, "water_ambient": { "bounding_box": "piece", "spawns": [] }, "water_creature": { "bounding_box": "piece", "spawns": [] } }, "start_height": { "type": "minecraft:uniform", "max_inclusive": { "absolute": -20 }, "min_inclusive": { "absolute": -40 } }, "start_pool": "minecraft:trial_chambers/chamber/end", "step": "underground_structures", "terrain_adaptation": "encapsulate", "use_expansion_hack": false }"##,
     ),
     (
         "minecraft:igloo",
@@ -2831,6 +2925,7 @@ impl StructureGenerator {
             Self::from_catalog(StructureTemplateCatalog::shipped().clone())?
                 .with_enabled_structures([
                     "minecraft:ancient_city",
+                    "minecraft:trial_chambers",
                     "minecraft:village_plains",
                     "minecraft:village_desert",
                     "minecraft:village_savanna",
@@ -2888,7 +2983,14 @@ impl StructureGenerator {
                 chunk_z,
                 seed,
                 dimension,
-                |structure| self.structure_biome_y(structure, biome_y),
+                |structure| {
+                    self.structure_biome_y(
+                        structure,
+                        ChunkPos::new(chunk_x, chunk_z),
+                        seed,
+                        biome_y,
+                    )
+                },
                 biomes,
                 |structure| self.enabled.contains(structure),
             )
@@ -2897,7 +2999,13 @@ impl StructureGenerator {
             })
     }
 
-    fn structure_biome_y(&self, structure: &str, fallback: i32) -> i32 {
+    fn structure_biome_y(
+        &self,
+        structure: &str,
+        chunk_pos: ChunkPos,
+        seed: i64,
+        fallback: i32,
+    ) -> i32 {
         match self
             .definitions
             .get(structure)
@@ -2907,7 +3015,7 @@ impl StructureGenerator {
                 start_height,
                 project_start_to_heightmap: None,
                 ..
-            }) => *start_height,
+            }) => start_height.sample_at_chunk(seed, chunk_pos),
             _ => fallback,
         }
     }

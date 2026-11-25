@@ -92,8 +92,6 @@ pub enum StructureError {
         feature: String,
         reason: String,
     },
-    /// `pool_aliases` are not implemented.
-    UnsupportedPoolAliases { structure: String },
     /// A `start_height` provider kind is not implemented.
     UnsupportedHeightProvider {
         structure: String,
@@ -176,10 +174,6 @@ impl fmt::Display for StructureError {
                 "template pool `{pool}` selected feature element `{feature}`, which cannot be \
                  placed: {reason}"
             ),
-            StructureError::UnsupportedPoolAliases { structure } => write!(
-                formatter,
-                "structure `{structure}` uses pool aliases, which are not implemented"
-            ),
             StructureError::UnsupportedHeightProvider {
                 structure,
                 type_name,
@@ -224,8 +218,9 @@ pub use piece::{
     template_bounding_box,
 };
 pub use pool::{
-    LiquidSettings, PoolCatalog, PoolCatalogIndex, PoolElement, PoolElementEntry, PoolError,
-    PoolExpansion, PoolPlacement, ProcessorListRef, Projection, StructureTemplatePool,
+    LiquidSettings, PoolAliasBinding, PoolAliasLookup, PoolCatalog, PoolCatalogIndex, PoolElement,
+    PoolElementEntry, PoolError, PoolExpansion, PoolPlacement, ProcessorListRef, Projection,
+    StructureTemplatePool,
 };
 pub use processor::{
     BlockEntityModifier, BlockSet, IntProvider, PositionTest, ProcessedBlock,
@@ -248,7 +243,8 @@ pub use shipwreck::{ShipwreckPiece, ShipwreckStart};
 pub use start::{
     BiomeSet, DesertPyramidPiece, DesertPyramidStart, IglooStructure, SHIPPED_STRUCTURE_JSON,
     StartPlacement, StructureChunkPlacement, StructureDefinition, StructureGenerationContext,
-    StructureGenerator, StructureKind, StructureStart, TemplateProvider, TerrainAdjustment,
+    StructureGenerator, StructureKind, StructureStart, StructureStartHeight, TemplateProvider,
+    TerrainAdjustment,
 };
 pub use stronghold::{StrongholdPiece, StrongholdRoom, StrongholdRoomKind, StrongholdStart};
 pub use template::{

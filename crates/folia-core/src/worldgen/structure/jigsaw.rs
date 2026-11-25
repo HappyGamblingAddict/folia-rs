@@ -25,12 +25,13 @@ use crate::worldgen::structure::piece::{
     BoundingBox, PiecePlacement, StructureDataMarker, template_bounding_box,
 };
 use crate::worldgen::structure::pool::{
-    LiquidSettings, PoolCatalog, PoolElement, PoolError, PoolExpansion, Projection,
-    StructureTemplatePool,
+    LiquidSettings, PoolAliasBinding, PoolAliasLookup, PoolCatalog, PoolElement, PoolError,
+    PoolExpansion, Projection, StructureTemplatePool,
 };
 use crate::worldgen::structure::processor::StructureProcessorCatalog;
 use crate::worldgen::structure::start::{
-    StartPlacement, StructureGenerationContext, TemplateProvider, TerrainAdjustment,
+    StartPlacement, StructureGenerationContext, StructureStartHeight, TemplateProvider,
+    TerrainAdjustment,
 };
 use crate::worldgen::structure::template::{
     Mirror, PlacedBlock, PlacedEntity, Rotation, StructureTemplate, transform, transform_state,
@@ -484,8 +485,7 @@ pub struct JigsawConfig {
     pub start_pool: String,
     pub start_jigsaw_name: Option<String>,
     pub max_depth: i32,
-    /// Sampled absolute `start_height`.
-    pub start_height: i32,
+    pub start_height: StructureStartHeight,
     pub use_expansion_hack: bool,
     pub project_start_to_heightmap: Option<Heightmap>,
     pub max_distance_horizontal: i32,
@@ -493,16 +493,21 @@ pub struct JigsawConfig {
     pub dimension_padding_bottom: i32,
     pub dimension_padding_top: i32,
     pub liquid_settings: LiquidSettings,
+    pub pool_aliases: Vec<PoolAliasBinding>,
 }
 
 impl JigsawConfig {
     /// `JigsawStructure` defaults for the fields a structure JSON may omit.
-    pub fn new(start_pool: impl Into<String>, max_depth: i32, start_height: i32) -> Self {
+    pub fn new(
+        start_pool: impl Into<String>,
+        max_depth: i32,
+        start_height: impl Into<StructureStartHeight>,
+    ) -> Self {
         Self {
             start_pool: start_pool.into(),
             start_jigsaw_name: None,
             max_depth,
-            start_height,
+            start_height: start_height.into(),
             use_expansion_hack: false,
             project_start_to_heightmap: None,
             max_distance_horizontal: 80,
@@ -510,6 +515,7 @@ impl JigsawConfig {
             dimension_padding_bottom: 0,
             dimension_padding_top: 0,
             liquid_settings: LiquidSettings::ApplyWaterlogging,
+            pool_aliases: Vec::new(),
         }
     }
 }
@@ -549,6 +555,17 @@ impl<'a> JigsawPlacement<'a> {
             context.chunk_pos.z,
         );
 
+        let start_height = self.config.start_height.sample(&mut random);
+        let chunk_min = BlockPos::new(
+            context.chunk_pos.x << 4,
+            start_height,
+            context.chunk_pos.z << 4,
+        );
+        let aliases = PoolAliasLookup::create(&self.config.pool_aliases, chunk_min, context.seed)
+            .map_err(|error| StructureError::Pool {
+            message: error.to_string(),
+        })?;
+
         // `JigsawPlacement.addPieces`: rotation, then weighted start element.
         let rotation = Rotation::ALL[random.next_int_bound(4) as usize];
         let start_pool_name = normalized_id(&self.config.start_pool);
@@ -569,11 +586,6 @@ impl<'a> JigsawPlacement<'a> {
             return Ok(None);
         }
 
-        let chunk_min = BlockPos::new(
-            context.chunk_pos.x << 4,
-            self.config.start_height,
-            context.chunk_pos.z << 4,
-        );
         let (start_position, jigsaw_offset) = if let Some(name) =
             self.config.start_jigsaw_name.as_deref()
         {
@@ -658,6 +670,7 @@ impl<'a> JigsawPlacement<'a> {
             let mut placer = Placer {
                 pools: self.pools,
                 templates: self.templates,
+                aliases: &aliases,
                 config: &self.config,
                 level,
                 random: &mut random,
@@ -698,6 +711,7 @@ impl<'a> JigsawPlacement<'a> {
 struct Placer<'a> {
     pools: &'a PoolCatalog,
     templates: &'a dyn TemplateProvider,
+    aliases: &'a PoolAliasLookup,
     config: &'a JigsawConfig,
     level: &'a dyn FeatureLevel,
     random: &'a mut LegacyRandomSource,
@@ -741,7 +755,7 @@ impl Placer<'_> {
             let front_pos = connector.offset(front.step_x(), front.step_y(), front.step_z());
             let connector_y = connector.y() - parent_min_y;
 
-            let pool_name = normalized_id(&parent_jigsaw.pool);
+            let pool_name = self.aliases.lookup(&parent_jigsaw.pool);
             if is_builtin_empty_pool(&pool_name) {
                 continue;
             }
@@ -812,6 +826,7 @@ impl Placer<'_> {
                                 &child_zero_box,
                                 front_facing,
                                 self.pools,
+                                self.aliases,
                                 self.templates,
                             )?
                         } else {
@@ -1177,6 +1192,7 @@ fn expansion_hack_size(
     child_zero_box: &BoundingBox,
     front_facing: fn(&BlockState) -> Direction,
     pools: &PoolCatalog,
+    aliases: &PoolAliasLookup,
     templates: &dyn TemplateProvider,
 ) -> Result<i32, StructureError> {
     let mut max = 0;
@@ -1188,7 +1204,7 @@ fn expansion_hack_size(
         if !child_zero_box.is_inside(front_pos) {
             continue;
         }
-        let pool_name = normalized_id(&jigsaw.pool);
+        let pool_name = aliases.lookup(&jigsaw.pool);
         if is_builtin_empty_pool(&pool_name) {
             continue;
         }

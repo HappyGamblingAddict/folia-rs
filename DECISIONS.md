@@ -3483,3 +3483,30 @@ Format:
   absent from the local 58-template catalog; the catalog test records this exact
   gap and generation still fails loudly if that candidate is selected rather
   than fabricating a replacement.
+
+## 2026-11-25 — Trial Chamber jigsaw start wiring
+- Context: the Trial Chamber set, biome/dimension rule, 191 templates, 47 pools,
+  and copper-bulb degradation processor list shipped, but no structure definition
+  enabled the jigsaw pipeline. The shipped definition also requires a uniform
+  absolute start height and per-structure spawner pool aliases.
+- Decision: add the full shipped `minecraft:trial_chambers` jigsaw definition
+  (`chamber/end`, size 20, max distance 116, dimension padding 10,
+  `underground_structures`, `encapsulate`, ignore waterlogging), enable it in the
+  shipped catalog manager, sample the -40..=-20 height before jigsaw rotation,
+  and use the same sampled height for biome selection. Direct, random, and
+  random-group pool aliases resolve through Java's positional legacy RNG order
+  before connector pools are expanded.
+- Why: selection must test the biome at the actual underground stub height, and
+  spawner contents must use one coherent per-structure variant rather than the
+  unaliased placeholder pools.
+- Consequences: fixed seed 12345 pins region-0 selection at chunk (0,14), a
+  206-piece start with raw bounds (-30,-51,145)..(95,-5,271), exact poison-
+  skeleton/spider/silverfish aliases, underground-only placement, and a generated
+  chunk at (-30,-19) containing 320 tuff-brick blocks. All 191 trial templates,
+  47 pool documents, and the trial processor list resolve. The shipped
+  copper-bulb `random_block_match` rules and `protected_blocks` processor run;
+  jigsaw `final_state` replacement remains supported. Template block-entity NBT
+  (including spawners/vaults/chests) is returned by placement but is not yet
+  persisted or instantiated by `WorldGenerator`, `spawn_overrides` are not
+  modeled, and `encapsulate` still only inflates bounds rather than reshaping
+  terrain. Exact Java block/RNG differential fixtures remain open.

@@ -12,7 +12,7 @@ use folia_core::worldgen::structure::set::{
 };
 use folia_core::worldgen::structure::start::{
     StructureDefinition, StructureGenerationContext, StructureGenerator, StructureKind,
-    TerrainAdjustment,
+    StructureStartHeight, TerrainAdjustment,
 };
 use std::collections::HashMap;
 
@@ -163,7 +163,7 @@ fn ancient_city_definition_uses_the_shipped_jigsaw_settings() {
     assert_eq!(start_pool, "minecraft:ancient_city/city_center");
     assert_eq!(start_jigsaw_name.as_deref(), Some("minecraft:city_anchor"));
     assert_eq!(*size, 1);
-    assert_eq!(*start_height, -27);
+    assert_eq!(*start_height, StructureStartHeight::Absolute(-27));
     assert!(!*use_expansion_hack);
     assert_eq!(*project_start_to_heightmap, None);
     assert_eq!(

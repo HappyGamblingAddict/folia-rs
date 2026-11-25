@@ -42,7 +42,7 @@ use crate::worldgen::structure::template::{
     transform_state, transform_vec3,
 };
 use folia_math::BlockPos;
-use folia_random::RandomSource;
+use folia_random::{LegacyRandomSource, RandomSource, get_seed};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -110,6 +110,223 @@ impl LiquidSettings {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolAliasBinding {
+    Direct {
+        alias: String,
+        target: String,
+    },
+    Random {
+        alias: String,
+        targets: Vec<(String, i32)>,
+    },
+    RandomGroup {
+        groups: Vec<(Vec<PoolAliasBinding>, i32)>,
+    },
+}
+
+impl PoolAliasBinding {
+    pub fn from_json(value: &Value) -> Result<Self, PoolError> {
+        let object = value.as_object().ok_or_else(|| {
+            PoolError::InvalidDefinition("pool alias must be an object".to_owned())
+        })?;
+        let type_name = normalized_id(required_str(object, "type", "pool alias")?);
+        match type_name.as_str() {
+            "minecraft:direct" => Ok(Self::Direct {
+                alias: normalized_id(required_str(object, "alias", "direct pool alias")?),
+                target: normalized_id(required_str(object, "target", "direct pool alias")?),
+            }),
+            "minecraft:random" => {
+                let targets = required_array(object, "targets", "random pool alias")?
+                    .iter()
+                    .map(|value| {
+                        let target = value.as_object().ok_or_else(|| {
+                            PoolError::InvalidDefinition(
+                                "random pool alias target must be an object".to_owned(),
+                            )
+                        })?;
+                        Ok((
+                            normalized_id(required_str(
+                                target,
+                                "data",
+                                "random pool alias target",
+                            )?),
+                            alias_weight(target, "random pool alias target")?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, PoolError>>()?;
+                if targets.is_empty() {
+                    return Err(PoolError::InvalidDefinition(
+                        "random pool alias targets must not be empty".to_owned(),
+                    ));
+                }
+                Ok(Self::Random {
+                    alias: normalized_id(required_str(object, "alias", "random pool alias")?),
+                    targets,
+                })
+            }
+            "minecraft:random_group" => {
+                let groups = required_array(object, "groups", "random_group pool alias")?
+                    .iter()
+                    .map(|value| {
+                        let group = value.as_object().ok_or_else(|| {
+                            PoolError::InvalidDefinition(
+                                "random_group pool alias group must be an object".to_owned(),
+                            )
+                        })?;
+                        let bindings =
+                            required_array(group, "data", "random_group pool alias group")?
+                                .iter()
+                                .map(Self::from_json)
+                                .collect::<Result<Vec<_>, PoolError>>()?;
+                        Ok((
+                            bindings,
+                            alias_weight(group, "random_group pool alias group")?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, PoolError>>()?;
+                if groups.is_empty() {
+                    return Err(PoolError::InvalidDefinition(
+                        "random_group pool alias groups must not be empty".to_owned(),
+                    ));
+                }
+                Ok(Self::RandomGroup { groups })
+            }
+            other => Err(PoolError::InvalidDefinition(format!(
+                "unknown pool alias type `{other}`"
+            ))),
+        }
+    }
+
+    pub fn from_json_list(value: Option<&Value>) -> Result<Vec<Self>, PoolError> {
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        let entries = value.as_array().ok_or_else(|| {
+            PoolError::InvalidDefinition("pool_aliases must be an array".to_owned())
+        })?;
+        entries.iter().map(Self::from_json).collect()
+    }
+
+    fn resolve_into(
+        &self,
+        random: &mut impl RandomSource,
+        mappings: &mut BTreeMap<String, String>,
+    ) -> Result<(), PoolError> {
+        match self {
+            Self::Direct { alias, target } => insert_alias(mappings, alias.clone(), target.clone()),
+            Self::Random { alias, targets } => {
+                let index = weighted_index(targets, random)?;
+                insert_alias(mappings, alias.clone(), targets[index].0.clone())
+            }
+            Self::RandomGroup { groups } => {
+                let index = weighted_index(groups, random)?;
+                for binding in &groups[index].0 {
+                    binding.resolve_into(random, mappings)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolAliasLookup {
+    mappings: BTreeMap<String, String>,
+}
+
+impl PoolAliasLookup {
+    pub fn create(
+        bindings: &[PoolAliasBinding],
+        pos: BlockPos,
+        seed: i64,
+    ) -> Result<Self, PoolError> {
+        if bindings.is_empty() {
+            return Ok(Self::default());
+        }
+        let positional_seed = LegacyRandomSource::new(seed).next_long();
+        let mut random =
+            LegacyRandomSource::new(get_seed(pos.x(), pos.y(), pos.z()) ^ positional_seed);
+        let mut mappings = BTreeMap::new();
+        for binding in bindings {
+            binding.resolve_into(&mut random, &mut mappings)?;
+        }
+        Ok(Self { mappings })
+    }
+
+    pub fn lookup(&self, pool: &str) -> String {
+        let pool = normalized_id(pool);
+        self.mappings.get(&pool).cloned().unwrap_or(pool)
+    }
+}
+
+fn insert_alias(
+    mappings: &mut BTreeMap<String, String>,
+    alias: String,
+    target: String,
+) -> Result<(), PoolError> {
+    if mappings.insert(alias.clone(), target).is_some() {
+        return Err(PoolError::InvalidDefinition(format!(
+            "pool alias `{alias}` was mapped more than once"
+        )));
+    }
+    Ok(())
+}
+
+fn alias_weight(object: &Map<String, Value>, context: &str) -> Result<i32, PoolError> {
+    let weight = match object.get("weight") {
+        Some(value) => value.as_i64().ok_or_else(|| {
+            PoolError::InvalidDefinition(format!("{context} weight must be an integer"))
+        })?,
+        None => 1,
+    };
+    let weight = i32::try_from(weight).map_err(|_| {
+        PoolError::InvalidDefinition(format!("{context} weight is outside the int range"))
+    })?;
+    if weight <= 0 {
+        return Err(PoolError::InvalidDefinition(format!(
+            "{context} weight must be positive"
+        )));
+    }
+    Ok(weight)
+}
+
+fn weighted_index<T>(
+    entries: &[(T, i32)],
+    random: &mut impl RandomSource,
+) -> Result<usize, PoolError> {
+    let total = entries.iter().try_fold(0i64, |total, (_, weight)| {
+        total.checked_add(i64::from(*weight)).ok_or_else(|| {
+            PoolError::InvalidDefinition("weighted pool alias total overflows".to_owned())
+        })
+    })?;
+    let total = i32::try_from(total).map_err(|_| {
+        PoolError::InvalidDefinition(
+            "weighted pool alias total is outside the int range".to_owned(),
+        )
+    })?;
+    let mut selection = random.next_int_bound(total);
+    for (index, (_, weight)) in entries.iter().enumerate() {
+        selection -= weight;
+        if selection < 0 {
+            return Ok(index);
+        }
+    }
+    Err(PoolError::InvalidDefinition(
+        "weighted pool alias selection exceeded its total weight".to_owned(),
+    ))
+}
+
+fn required_array<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<&'a Vec<Value>, PoolError> {
+    required(object, key, context)?.as_array().ok_or_else(|| {
+        PoolError::InvalidDefinition(format!("{context} field `{key}` must be an array"))
+    })
 }
 
 /// A pool element's processor field: a registry reference or an inline list.

@@ -3570,7 +3570,28 @@ Format:
 - Approximations: no local Java oracle is available for a block/RNG differential.
   Starts are still regenerated per target chunk, the 16-chunk search window is
   conservative rather than derived from a cached vanilla structure reference,
-  End terrain/noise remains the pre-existing approximation, platform/spikes are
-  still placed before the structure pass, `spawn_overrides` remain unmodeled,
-  and returned shulker/item-frame/block-entity descriptors are not yet persisted
-  or spawned by chunk generation.
+   End terrain/noise remains the pre-existing approximation, platform/spikes are
+   still placed before the structure pass, `spawn_overrides` remain unmodeled,
+   and returned shulker/item-frame/block-entity descriptors are not yet persisted
+   or spawned by chunk generation.
+
+## 2026-11-25 — Ore targets resolve once while placement keeps vanilla RNG order
+- Context: every ore candidate re-ran ordered block/tag predicates, cloned the
+  current state, cloned the selected output state, and scanned from the world
+  ceiling to the bottom when only an ocean-floor threshold comparison was needed.
+- Decision: resolve target block names to their first matching rule index when
+  parsing an ore config. Placement borrows the current and selected states and
+  uses `FeatureLevel::set_block_ref`; `WorldGenRegion` forwards it to the
+  palette-aware borrowed chunk setter, while other levels retain the owned
+  setter through a cloning default. The column precheck now scans only from the
+  threshold upward and returns true immediately at or below world minimum Y,
+  exactly preserving the old `threshold <= ocean_floor` predicate.
+- Why: target membership is immutable for a parsed config, and first-rule
+  insertion order preserves overlapping block/tag behavior. Borrowed writes
+  allocate only when a new palette entry is needed. RNG draws remain after the
+  same successful target match and air-exposure check.
+- Consequences: parsing allocates a small target-name index per ore config.
+  Pinned RNG traces, first-rule tests, column-predicate equivalence, the Java
+  fixture, and block/diagnostics digests are unchanged. Cross-placement column
+   height caching, per-feature scratch-buffer reuse, and light invalidation remain
+   separate hotspots.

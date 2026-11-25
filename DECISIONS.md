@@ -3595,3 +3595,28 @@ Format:
   fixture, and block/diagnostics digests are unchanged. Cross-placement column
    height caching, per-feature scratch-buffer reuse, and light invalidation remain
    separate hotspots.
+
+## 2026-11-25 — Cached ocean-floor column heights for ore placement
+- Context: the ore precheck repeated a top-down column scan for every column it
+  visited, even though only `top >= threshold` was needed. The generator creates
+  a fresh `WorldGenRegion` per placed-feature position, so a cache has to live on
+  the region and be invalidated by its own writes.
+- Decision: add `FeatureLevel::motion_blocking_top(x, z)` with an uncached
+  top-down default and a `RefCell` per-column cache on `WorldGenRegion`.
+  `has_motion_blocking_at_or_above` derives the threshold check from the cached
+  top; `y <= min_y` stays unconditionally true and empty columns stay `None`.
+  `set_block_ref` removes only the written `(x, z)` entry, so later placements
+  see that column's new terrain while untouched columns keep their cached top.
+  The motion-blocking predicate was moved unchanged into the feature module and
+  shared by ore placement and the scan.
+- Why: the predicate and threshold semantics are part of the pinned Java
+  fixture, so only the lookup strategy changes. A per-column write invalidation
+  is the smallest correct coherence rule; clearing the whole cache would discard
+  valid work, and no invalidation would return stale terrain after ore writes.
+- Consequences: ore RNG draws, generated blocks, diagnostics digests, and Java
+  parity are unchanged. Release microbenchmark: 8,192 repeated threshold queries
+  on a generated chunk improved from 1,639 ns/query (uncached scan) to 58 ns/query
+  (cached); end-to-end chunk generation remains host-noisy because the generator
+  still constructs one region per placed feature. Per-feature scratch reuse,
+  light invalidation, and reusing a region across a whole chunk are separate
+  hotspots.

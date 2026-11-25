@@ -28,7 +28,9 @@ use folia_core::math::{BlockPos, Vec3};
 use folia_core::tick;
 use folia_core::world::WorldStorage;
 use folia_core::worldgen::diagnostics::chunk_digest;
-use folia_core::worldgen::feature::{FeatureData, FeatureLevel, WorldGenRegion};
+use folia_core::worldgen::feature::{
+    FeatureData, FeatureLevel, WorldGenRegion, scan_motion_blocking_top,
+};
 use folia_core::worldgen::generator::WorldGenerator;
 use folia_random::LegacyRandomSource;
 use std::hint::black_box;
@@ -245,6 +247,56 @@ fn ore_placement_smoke() {
         "benchmark must execute successful ore placements"
     );
     assert_eq!(digest, 0x3a73_cac7_98af_d1c2);
+}
+
+#[test]
+fn ore_height_cache_smoke() {
+    const ROUNDS: usize = 32;
+    const THRESHOLD: i32 = 0;
+
+    let generator = WorldGenerator::overworld(12_345).expect("overworld generator");
+    let mut chunk = generator
+        .generate_chunk_with_steps(0, 0, &[])
+        .expect("terrain-only chunk");
+    let region = WorldGenRegion::new(&mut chunk, generator.min_y(), generator.height());
+    let queries = ROUNDS * 16 * 16;
+
+    let mut uncached_digest = 0u64;
+    let start = Instant::now();
+    for _ in 0..ROUNDS {
+        for x in 0..16 {
+            for z in 0..16 {
+                let top = black_box(scan_motion_blocking_top(&region, x, z));
+                let hit = THRESHOLD <= generator.min_y() || top.is_some_and(|top| top >= THRESHOLD);
+                uncached_digest =
+                    uncached_digest.wrapping_mul(0x0000_0100_0000_01b3) ^ u64::from(hit);
+            }
+        }
+    }
+    let uncached = start.elapsed();
+
+    let mut cached_digest = 0u64;
+    let start = Instant::now();
+    for _ in 0..ROUNDS {
+        for x in 0..16 {
+            for z in 0..16 {
+                let hit = black_box(region.has_motion_blocking_at_or_above(x, z, THRESHOLD));
+                cached_digest = cached_digest.wrapping_mul(0x0000_0100_0000_01b3) ^ u64::from(hit);
+            }
+        }
+    }
+    let cached = start.elapsed();
+
+    eprintln!(
+        "ore_height_cache_smoke: {queries} threshold queries, cached {cached:?} ({:.2} ns/query), uncached scan {uncached:?} ({:.2} ns/query), {} cached columns",
+        cached.as_nanos() as f64 / queries as f64,
+        uncached.as_nanos() as f64 / queries as f64,
+        region.motion_blocking_cache_len()
+    );
+    guard("ore_height_cache_smoke cached", cached);
+    guard("ore_height_cache_smoke uncached", uncached);
+    assert_eq!(cached_digest, uncached_digest, "cache must be transparent");
+    assert_eq!(region.motion_blocking_cache_len(), 16 * 16);
 }
 
 #[test]

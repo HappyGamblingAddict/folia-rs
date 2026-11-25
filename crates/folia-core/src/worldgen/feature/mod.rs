@@ -24,6 +24,7 @@ use crate::worldgen::structure::template::StructureTemplate;
 use folia_math::BlockPos;
 use folia_random::RandomSource;
 use serde_json::{Map, Value};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::io;
@@ -268,6 +269,63 @@ pub trait FeatureLevel {
         }
         Some(self.min_y())
     }
+
+    /// Highest Y in column `(x, z)` whose state blocks motion under the
+    /// ocean-floor predicate used by ore placement. `None` means the column
+    /// has no motion-blocking state at all.
+    ///
+    /// The default implementation scans top down. [`WorldGenRegion`] caches one
+    /// result per column and invalidates it when that column is written, so
+    /// repeated threshold checks do not re-scan the same column.
+    fn motion_blocking_top(&self, x: i32, z: i32) -> Option<i32> {
+        scan_motion_blocking_top(self, x, z)
+    }
+
+    /// Whether a motion-blocking state exists at or above `y` in `(x, z)`.
+    ///
+    /// This is the ocean-floor threshold used by ore placement. `y <= min_y`
+    /// is always true, an empty column is false above `min_y`, and every other
+    /// case is exactly `motion_blocking_top(x, z) >= y`.
+    fn has_motion_blocking_at_or_above(&self, x: i32, z: i32, y: i32) -> bool {
+        y <= self.min_y() || self.motion_blocking_top(x, z).is_some_and(|top| top >= y)
+    }
+}
+
+/// Ocean-floor motion-blocking predicate shared by ore placement and the
+/// cached column-height API. Air, fluids, replaceable vegetation, and leaves
+/// do not block motion; every other state does.
+pub fn is_motion_blocking(state: &BlockState) -> bool {
+    !is_air_name(&state.name)
+        && !matches!(
+            state.name.as_str(),
+            "minecraft:water"
+                | "minecraft:lava"
+                | "minecraft:short_grass"
+                | "minecraft:tall_grass"
+                | "minecraft:fern"
+                | "minecraft:large_fern"
+                | "minecraft:vine"
+                | "minecraft:glow_lichen"
+        )
+        && !state.name.ends_with("_leaves")
+}
+
+/// Uncached top-down scan implementing [`FeatureLevel::motion_blocking_top`].
+///
+/// Public so callers and benchmarks can use it as the reference path when
+/// comparing against a cached level.
+pub fn scan_motion_blocking_top<L: FeatureLevel + ?Sized>(
+    level: &L,
+    x: i32,
+    z: i32,
+) -> Option<i32> {
+    let min_y = level.min_y();
+    let max_y = min_y.checked_add(level.height().checked_sub(1)?)?;
+    (min_y..=max_y).rev().find(|&y| {
+        level
+            .get_block(BlockPos::new(x, y, z))
+            .is_some_and(is_motion_blocking)
+    })
 }
 
 fn heightmap_is_fluid(state: &BlockState) -> bool {
@@ -358,6 +416,7 @@ pub struct WorldGenRegion<'a> {
     entities: Vec<FeatureEntity>,
     record_writes: bool,
     written_blocks: BTreeSet<(i32, i32, i32)>,
+    motion_blocking_cache: RefCell<HashMap<(i32, i32), Option<i32>>>,
 }
 
 impl<'a> WorldGenRegion<'a> {
@@ -372,6 +431,7 @@ impl<'a> WorldGenRegion<'a> {
             entities: Vec::new(),
             record_writes: false,
             written_blocks: BTreeSet::new(),
+            motion_blocking_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -385,6 +445,12 @@ impl<'a> WorldGenRegion<'a> {
             .into_iter()
             .map(|(x, y, z)| BlockPos::new(x, y, z))
             .collect()
+    }
+
+    /// Number of columns with a cached motion-blocking top. Useful for
+    /// checking cache population, hits, and per-column invalidation.
+    pub fn motion_blocking_cache_len(&self) -> usize {
+        self.motion_blocking_cache.borrow().len()
     }
 
     /// Pins `Level.getSeed()` for features that build seed-derived noise or
@@ -463,6 +529,15 @@ impl FeatureLevel for WorldGenRegion<'_> {
         }
     }
 
+    fn motion_blocking_top(&self, x: i32, z: i32) -> Option<i32> {
+        if let Some(top) = self.motion_blocking_cache.borrow().get(&(x, z)).copied() {
+            return top;
+        }
+        let top = scan_motion_blocking_top(self, x, z);
+        self.motion_blocking_cache.borrow_mut().insert((x, z), top);
+        top
+    }
+
     fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
         self.set_block_ref(pos, &state)
     }
@@ -472,6 +547,9 @@ impl FeatureLevel for WorldGenRegion<'_> {
             return false;
         };
         self.chunk.set_block_state_ref(x, y, z, state);
+        self.motion_blocking_cache
+            .borrow_mut()
+            .remove(&(pos.x(), pos.z()));
         if self.record_writes {
             self.written_blocks.insert((pos.x(), pos.y(), pos.z()));
         }

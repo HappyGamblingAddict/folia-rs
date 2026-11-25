@@ -195,7 +195,7 @@ impl OreFeature {
 
         for i in x..=x + width {
             for j in z..=z + width {
-                if has_motion_blocking_at_or_above(level, i, j, y) {
+                if level.has_motion_blocking_at_or_above(i, j, y) {
                     return self
                         .do_place(level, random, d, d1, d2, d3, d4, d5, x, y, z, width, height);
                 }
@@ -386,38 +386,6 @@ fn is_adjacent_to_air(level: &dyn FeatureLevel, pos: BlockPos) -> bool {
     })
 }
 
-fn has_motion_blocking_at_or_above(level: &dyn FeatureLevel, x: i32, z: i32, y: i32) -> bool {
-    if y <= level.min_y() {
-        return true;
-    }
-    let max_y = level.min_y() + level.height() - 1;
-    for scan_y in (y..=max_y).rev() {
-        if level
-            .get_block(BlockPos::new(x, scan_y, z))
-            .is_some_and(is_motion_blocking)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_motion_blocking(state: &BlockState) -> bool {
-    !is_air_name(&state.name)
-        && !matches!(
-            state.name.as_str(),
-            "minecraft:water"
-                | "minecraft:lava"
-                | "minecraft:short_grass"
-                | "minecraft:tall_grass"
-                | "minecraft:fern"
-                | "minecraft:large_fern"
-                | "minecraft:vine"
-                | "minecraft:glow_lichen"
-        )
-        && !state.name.ends_with("_leaves")
-}
-
 fn mth_floor(value: f64) -> i32 {
     value.floor() as i32
 }
@@ -452,7 +420,7 @@ mod tests {
     use super::*;
     use crate::chunk::Chunk;
     use crate::worldgen::diagnostics::chunk_digest;
-    use crate::worldgen::feature::WorldGenRegion;
+    use crate::worldgen::feature::{WorldGenRegion, is_motion_blocking, scan_motion_blocking_top};
     use folia_random::LegacyRandomSource;
     use serde_json::Value;
 
@@ -774,7 +742,7 @@ mod tests {
                 .unwrap_or(MIN_Y);
             for y in MIN_Y - 2..=max_y + 2 {
                 assert_eq!(
-                    has_motion_blocking_at_or_above(&level, x, z, y),
+                    level.has_motion_blocking_at_or_above(x, z, y),
                     y <= floor,
                     "column ({x},{z}), threshold {y}"
                 );
@@ -832,5 +800,165 @@ mod tests {
         assert_eq!(scattered_draws, 0x1ea5_d17c_0d96_0d19);
         assert_eq!(scattered_next, 0xbe1a_4791_b54b_1905u64.cast_signed());
         assert_eq!(chunk_digest(&scattered_chunk), 0x480b_a613_4c04_5826);
+    }
+
+    fn column_chunk() -> Chunk {
+        let mut chunk = Chunk {
+            x: 0,
+            z: 0,
+            sections: Vec::new(),
+        };
+        for (x, z, y) in [(0, 0, 0), (1, 0, 5)] {
+            chunk.set_block_state(
+                x,
+                y,
+                z,
+                BlockState {
+                    name: "minecraft:stone".into(),
+                    properties: Vec::new(),
+                },
+            );
+        }
+        chunk
+    }
+
+    #[test]
+    fn cached_height_populates_hits_and_invalidates_only_the_written_column() {
+        let mut chunk = column_chunk();
+        {
+            let mut level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+            assert_eq!(level.motion_blocking_cache_len(), 0);
+
+            assert!(level.has_motion_blocking_at_or_above(0, 0, 0));
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+
+            assert!(!level.has_motion_blocking_at_or_above(0, 0, 1));
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+
+            assert!(level.has_motion_blocking_at_or_above(1, 0, 5));
+            assert_eq!(level.motion_blocking_cache_len(), 2);
+
+            assert!(level.set_block(
+                BlockPos::new(0, 100, 0),
+                BlockState {
+                    name: "minecraft:stone".into(),
+                    properties: Vec::new(),
+                }
+            ));
+            assert_eq!(level.motion_blocking_cache_len(), 1);
+
+            assert!(level.has_motion_blocking_at_or_above(0, 0, 100));
+            assert_eq!(level.motion_blocking_cache_len(), 2);
+            assert!(level.has_motion_blocking_at_or_above(1, 0, 5));
+            assert!(!level.has_motion_blocking_at_or_above(1, 0, 6));
+            assert_eq!(level.motion_blocking_cache_len(), 2);
+        }
+    }
+
+    #[test]
+    fn empty_column_has_no_top_and_keeps_the_min_y_threshold() {
+        let mut chunk = Chunk {
+            x: 0,
+            z: 0,
+            sections: Vec::new(),
+        };
+        let level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+        assert_eq!(level.motion_blocking_top(3, 3), None);
+        assert_eq!(scan_motion_blocking_top(&level, 3, 3), None);
+        assert!(level.has_motion_blocking_at_or_above(3, 3, MIN_Y - 2));
+        assert!(level.has_motion_blocking_at_or_above(3, 3, MIN_Y));
+        assert!(!level.has_motion_blocking_at_or_above(3, 3, MIN_Y + 1));
+        assert_eq!(level.motion_blocking_cache_len(), 1);
+    }
+
+    #[test]
+    fn cached_top_matches_uncached_scan_for_every_column_and_threshold() {
+        let mut chunk = column_chunk();
+        let level = WorldGenRegion::new(&mut chunk, MIN_Y, HEIGHT);
+        for x in 0..16 {
+            for z in 0..16 {
+                let expected = scan_motion_blocking_top(&level, x, z);
+                assert_eq!(level.motion_blocking_top(x, z), expected, "({x},{z})");
+                for y in [MIN_Y - 2, MIN_Y, 0, 1, 5, 6, 100, MIN_Y + HEIGHT + 1] {
+                    let scanned = y <= MIN_Y || expected.is_some_and(|top| top >= y);
+                    assert_eq!(
+                        level.has_motion_blocking_at_or_above(x, z, y),
+                        scanned,
+                        "({x},{z}) threshold {y}"
+                    );
+                }
+            }
+        }
+        assert_eq!(level.motion_blocking_cache_len(), 16 * 16);
+    }
+
+    /// A level that deliberately keeps the trait's uncached default so the
+    /// cached path can be compared against it byte for byte.
+    struct UncachedLevel<'a> {
+        inner: WorldGenRegion<'a>,
+    }
+
+    impl FeatureLevel for UncachedLevel<'_> {
+        fn min_y(&self) -> i32 {
+            self.inner.min_y()
+        }
+
+        fn height(&self) -> i32 {
+            self.inner.height()
+        }
+
+        fn get_block(&self, pos: BlockPos) -> Option<&BlockState> {
+            self.inner.get_block(pos)
+        }
+
+        fn set_block(&mut self, pos: BlockPos, state: BlockState) -> bool {
+            self.inner.set_block(pos, state)
+        }
+
+        fn set_block_ref(&mut self, pos: BlockPos, state: &BlockState) -> bool {
+            self.inner.set_block_ref(pos, state)
+        }
+
+        fn motion_blocking_top(&self, x: i32, z: i32) -> Option<i32> {
+            scan_motion_blocking_top(self, x, z)
+        }
+    }
+
+    #[test]
+    fn cached_ore_placement_keeps_rng_and_block_digests() {
+        let diamond = ore("ore_diamond_medium");
+        let mut cached_chunk = flat_stone();
+        let mut scanned_chunk = flat_stone();
+        for chunk in [&mut cached_chunk, &mut scanned_chunk] {
+            chunk.set_block_state(
+                8,
+                0,
+                8,
+                BlockState {
+                    name: "minecraft:air".into(),
+                    properties: Vec::new(),
+                },
+            );
+        }
+
+        let mut cached_random = RecordingRandom::new(7);
+        let cached_success = {
+            let mut level = WorldGenRegion::new(&mut cached_chunk, MIN_Y, HEIGHT);
+            diamond.place(&mut level, &mut cached_random, BlockPos::new(8, 0, 8))
+        };
+        let mut scanned_random = RecordingRandom::new(7);
+        let scanned_success = {
+            let mut level = UncachedLevel {
+                inner: WorldGenRegion::new(&mut scanned_chunk, MIN_Y, HEIGHT),
+            };
+            diamond.place(&mut level, &mut scanned_random, BlockPos::new(8, 0, 8))
+        };
+
+        assert_eq!(cached_success, scanned_success);
+        assert_eq!(cached_random.digest(), 0xd03e_48eb_3aa1_8891);
+        assert_eq!(cached_random.digest(), scanned_random.digest());
+        assert_eq!(cached_random.next_long(), scanned_random.next_long());
+        assert_eq!(chunk_digest(&cached_chunk), chunk_digest(&scanned_chunk));
+        assert_eq!(chunk_digest(&cached_chunk), 0xf7e5_3335_07f3_ea9c);
     }
 }

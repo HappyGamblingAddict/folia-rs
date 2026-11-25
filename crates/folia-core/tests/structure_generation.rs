@@ -18,6 +18,7 @@ use folia_core::worldgen::structure::set::{
 };
 use folia_core::worldgen::structure::start::{IglooStructure, StructureGenerationContext};
 use folia_core::worldgen::structure::template::{Rotation, StructureTemplate};
+use folia_random::{LegacyRandomSource, RandomSource};
 use std::collections::HashMap;
 
 const STARTS_SOURCE: &str = include_str!("structure_starts.rs");
@@ -110,22 +111,80 @@ fn structured_generator(seed: i64) -> WorldGenerator {
         .with_structure_generator(structures)
 }
 
-fn find_igloo_chunk(generator: &WorldGenerator, seed: i64) -> (i32, i32, String) {
+fn find_igloo_lab_chunk(generator: &WorldGenerator, seed: i64) -> (i32, i32, String) {
     let biomes = GenBiomes { generator };
     let structures = generator.structures().expect("structures");
-    for x in -64..=64 {
-        for z in -64..=64 {
+    for x in -128..=128 {
+        for z in -128..=128 {
             if let Some(selection) = structures
                 .structure_at_chunk(x, z, seed, StructureDimension::Overworld, 63, &biomes)
                 .expect("selection")
                 && selection.structure == "minecraft:igloo"
             {
-                let biome = generator.biome_at((x << 4) + 8, 63, (z << 4) + 8);
-                return (x, z, biome.to_owned());
+                let definition = structures
+                    .definitions()
+                    .get("minecraft:igloo")
+                    .expect("igloo definition");
+                let context = StructureGenerationContext::new(
+                    seed,
+                    ChunkPos::new(x, z),
+                    0,
+                    structures.templates(),
+                );
+                let start = definition.generate_start(&context).expect("igloo start");
+                if start.pieces().iter().any(|piece| {
+                    piece.as_template().is_some_and(|template| {
+                        template.template_name == IglooStructure::BOTTOM_TEMPLATE
+                    })
+                }) {
+                    let biome = generator.biome_at((x << 4) + 8, 63, (z << 4) + 8);
+                    return (x, z, biome.to_owned());
+                }
             }
         }
     }
-    panic!("no snow-biome igloo chunk near origin");
+    panic!("no snowy-biome igloo laboratory near origin");
+}
+
+fn igloo_chest_marker_position(
+    structures: &StructureGenerator,
+    seed: i64,
+    chunk: ChunkPos,
+) -> BlockPos {
+    let definition = structures
+        .definitions()
+        .get("minecraft:igloo")
+        .expect("igloo definition");
+    let context = StructureGenerationContext::new(seed, chunk, 0, structures.templates());
+    let start = definition.generate_start(&context).expect("igloo start");
+    let bottom = start
+        .pieces()
+        .iter()
+        .find_map(|piece| {
+            let template = piece.as_template()?;
+            (template.template_name == IglooStructure::BOTTOM_TEMPLATE).then_some(template)
+        })
+        .expect("igloo laboratory template");
+    let marker = bottom
+        .template
+        .blocks()
+        .iter()
+        .find(|block| {
+            block
+                .nbt
+                .as_ref()
+                .and_then(|nbt| nbt.get("metadata"))
+                .and_then(folia_core::nbt::Tag::as_str)
+                == Some("chest")
+        })
+        .expect("igloo chest marker");
+    let offset = folia_core::worldgen::structure::template::transform(
+        marker.pos,
+        bottom.place_settings.mirror(),
+        bottom.place_settings.rotation(),
+        bottom.place_settings.rotation_pivot(),
+    );
+    bottom.template_position.offset_by(offset)
 }
 
 fn find_buried_treasure_chunk(generator: &WorldGenerator, seed: i64) -> (i32, i32, String) {
@@ -353,10 +412,11 @@ fn generated_jungle_chunk_contains_temple_chests_dispensers_and_stairs() {
 }
 
 #[test]
-fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
+fn generated_snowy_chunk_contains_igloo_surface_and_laboratory() {
     let seed = 12_345;
     let generator = structured_generator(seed);
-    let (x, z, biome) = find_igloo_chunk(&generator, seed);
+    let (x, z, biome) = find_igloo_lab_chunk(&generator, seed);
+    assert_eq!((x, z), (20, 72));
     assert_eq!(biome, "minecraft:snowy_taiga");
 
     let plain = WorldGenerator::overworld(seed)
@@ -366,6 +426,9 @@ fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
     let structured = generator.generate_chunk(x, z).expect("structured chunk");
 
     let mut differences = 0;
+    let mut torches = Vec::new();
+    let mut crafting_tables = Vec::new();
+    let mut white_carpets = Vec::new();
     for local_x in 0..16 {
         for local_z in 0..16 {
             for y in generator.min_y()..generator.min_y() + generator.height() {
@@ -374,6 +437,17 @@ fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
                 {
                     differences += 1;
                 }
+                match structured
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:redstone_torch" => torches.push((local_x, y, local_z)),
+                    "minecraft:crafting_table" => crafting_tables.push((local_x, y, local_z)),
+                    "minecraft:white_carpet" => white_carpets.push((local_x, y, local_z)),
+                    _ => {}
+                }
             }
         }
     }
@@ -381,55 +455,109 @@ fn generated_chunk_contains_igloo_blocks_at_pinned_positions() {
         differences > 0,
         "structure pass did not change chunk {x},{z}"
     );
+    assert_eq!(torches, vec![(1, 75, 4)]);
+    assert_eq!(crafting_tables, vec![(1, 75, 5)]);
+    assert_eq!(
+        white_carpets,
+        vec![
+            (2, 75, 3),
+            (2, 75, 4),
+            (2, 75, 5),
+            (3, 75, 3),
+            (3, 75, 4),
+            (3, 75, 5),
+            (4, 75, 3),
+            (4, 75, 4),
+            (4, 75, 5),
+        ]
+    );
 
-    // The igloo top template places its furniture/lab markers at these
-    // positions for seed 12345 and chunk (36, 41). They are stable because the
-    // structure RNG is `setLargeFeatureSeed(seed, chunkX, chunkZ)`.
-    assert_eq!(
-        structured
-            .block_state(1, 86, 4)
-            .expect("pinned redstone torch")
-            .name,
-        "minecraft:redstone_torch"
+    let marker = igloo_chest_marker_position(
+        generator.structures().expect("structures"),
+        seed,
+        ChunkPos::new(x, z),
     );
+    let lab_chunk = ChunkPos::new(marker.x() >> 4, marker.z() >> 4);
+    assert!(matches!(
+        generator.biome_at((lab_chunk.x << 4) + 8, 63, (lab_chunk.z << 4) + 8),
+        "minecraft:snowy_plains" | "minecraft:snowy_slopes" | "minecraft:snowy_taiga"
+    ));
+    let plain_lab = WorldGenerator::overworld(seed)
+        .expect("plain generator")
+        .generate_chunk(lab_chunk.x, lab_chunk.z)
+        .expect("plain laboratory chunk");
+    let structured_lab = generator
+        .generate_chunk(lab_chunk.x, lab_chunk.z)
+        .expect("structured laboratory chunk");
+    let mut chests = Vec::new();
+    let mut brewing_stands = 0;
+    let mut water_cauldrons = 0;
+    for local_x in 0..16 {
+        for local_z in 0..16 {
+            for y in generator.min_y()..generator.min_y() + generator.height() {
+                match structured_lab
+                    .block_state(local_x, y, local_z)
+                    .expect("block")
+                    .name
+                    .as_str()
+                {
+                    "minecraft:chest" => chests.push((local_x, y, local_z)),
+                    "minecraft:brewing_stand" => brewing_stands += 1,
+                    "minecraft:water_cauldron" => water_cauldrons += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert_eq!(chests.len(), 1, "igloo chest in chunk {lab_chunk:?}");
     assert_eq!(
-        structured
-            .block_state(1, 86, 5)
-            .expect("pinned crafting table")
-            .name,
-        "minecraft:crafting_table"
+        (chests[0].0, chests[0].2),
+        ((marker.x() & 15) as usize, (marker.z() & 15) as usize)
     );
-    assert_eq!(
-        structured
-            .block_state(2, 86, 3)
-            .expect("pinned white carpet")
-            .name,
-        "minecraft:white_carpet"
-    );
+    assert!(chests[0].1 < 63);
+    assert_eq!(brewing_stands, 1);
+    assert_eq!(water_cauldrons, 1);
+    assert!((0..16).all(|local_x| (0..16).all(|local_z| {
+        (generator.min_y()..generator.min_y() + generator.height()).all(|y| {
+            plain_lab
+                .block_state(local_x, y, local_z)
+                .expect("plain laboratory block")
+                .name
+                != "minecraft:chest"
+        })
+    })));
 }
 
 #[test]
-fn template_structure_wiring_places_blocks_in_a_generated_chunk() {
+fn igloo_template_wiring_uses_the_height_source_for_the_laboratory_chest() {
     let seed = 12_345;
     let generator = structured_generator(seed);
-    let (x, z, _) = find_igloo_chunk(&generator, seed);
+    let (x, z, _) = find_igloo_lab_chunk(&generator, seed);
     let structures = generator.structures().expect("structures");
+    let marker = igloo_chest_marker_position(structures, seed, ChunkPos::new(x, z));
+    let lab_chunk = ChunkPos::new(marker.x() >> 4, marker.z() >> 4);
+    let marker_y = marker.y() + 64 - IglooStructure::GENERATION_HEIGHT - 1;
+    let marker_pos = BlockPos::new(marker.x(), marker_y, marker.z());
+    let expected_seed =
+        LegacyRandomSource::new((i64::from(lab_chunk.x) << 32) ^ i64::from(lab_chunk.z))
+            .next_long();
 
     // Generate terrain/surface/carvers without decoration, then run the
     // structure pass directly. This isolates the wiring from later features
     // and pins both the placement count and a concrete block.
     let mut chunk = WorldGenerator::overworld(seed)
         .expect("plain generator")
-        .generate_chunk_with_steps(x, z, &[])
+        .generate_chunk_with_steps(lab_chunk.x, lab_chunk.z, &[])
         .expect("terrain chunk");
     let biomes = GenBiomes {
         generator: &generator,
     };
     let mut region = WorldGenRegion::new(&mut chunk, generator.min_y(), generator.height());
     let placement = structures
-        .place_for_chunk(
+        .place_for_chunk_with_height_source(
             &mut region,
-            ChunkPos::new(x, z),
+            &FixedHeightSource,
+            lab_chunk,
             seed,
             StructureDimension::Overworld,
             63,
@@ -441,13 +569,44 @@ fn template_structure_wiring_places_blocks_in_a_generated_chunk() {
     assert!(placement.generated_starts > 0);
     assert!(placement.placed_pieces > 0);
     assert!(placement.written > 0);
+    assert_eq!(placement.data_markers.len(), 1);
+    assert_eq!(placement.data_markers[0].name, "chest");
+    assert_eq!(placement.data_markers[0].pos, marker_pos);
+    let chest = placement
+        .block_entities
+        .iter()
+        .find(|block| block.pos == marker_pos.below())
+        .expect("igloo loot chest");
+    assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+        nbt.get("id").and_then(folia_core::nbt::Tag::as_str) == Some("minecraft:chest")
+            && nbt.get("LootTable").and_then(folia_core::nbt::Tag::as_str)
+                == Some("minecraft:chests/igloo_chest")
+            && nbt
+                .get("LootTableSeed")
+                .and_then(folia_core::nbt::Tag::as_long)
+                == Some(expected_seed)
+    }));
     assert_eq!(
-        chunk.block_state(1, 86, 4).expect("torch").name,
-        "minecraft:redstone_torch"
+        chunk
+            .block_state(
+                (marker_pos.x() & 15) as usize,
+                marker_pos.y(),
+                (marker_pos.z() & 15) as usize,
+            )
+            .expect("cleared chest marker")
+            .name,
+        "minecraft:air"
     );
     assert_eq!(
-        chunk.block_state(1, 86, 5).expect("table").name,
-        "minecraft:crafting_table"
+        chunk
+            .block_state(
+                (marker_pos.x() & 15) as usize,
+                marker_pos.y() - 1,
+                (marker_pos.z() & 15) as usize,
+            )
+            .expect("laboratory chest")
+            .name,
+        "minecraft:chest"
     );
 }
 

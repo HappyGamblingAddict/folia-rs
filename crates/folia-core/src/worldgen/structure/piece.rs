@@ -362,7 +362,25 @@ impl TemplateStructurePiece {
     /// `StructureTemplate.placeInWorld` with
     /// `StructurePlaceSettings.setBoundingBox(chunkBox)`.
     pub fn place(&self, level: &mut dyn FeatureLevel, chunk_box: BoundingBox) -> PiecePlacement {
-        let origin = self.effective_position(level);
+        self.place_with_optional_height_source(level, None, chunk_box)
+    }
+
+    pub fn place_with_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: &dyn FeatureLevel,
+        chunk_box: BoundingBox,
+    ) -> PiecePlacement {
+        self.place_with_optional_height_source(level, Some(height_source), chunk_box)
+    }
+
+    fn place_with_optional_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: Option<&dyn FeatureLevel>,
+        chunk_box: BoundingBox,
+    ) -> PiecePlacement {
+        let origin = self.effective_position(height_source.unwrap_or(&*level));
         let mut placement = PiecePlacement::default();
         let origin_vec = Vec3::new(
             f64::from(origin.x()),
@@ -621,11 +639,32 @@ impl StructurePiece {
         level: &mut dyn FeatureLevel,
         chunk_box: BoundingBox,
     ) -> Result<Option<PiecePlacement>, StructureError> {
+        self.place_with_optional_height_source(level, None, chunk_box)
+    }
+
+    pub fn place_with_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: &dyn FeatureLevel,
+        chunk_box: BoundingBox,
+    ) -> Result<Option<PiecePlacement>, StructureError> {
+        self.place_with_optional_height_source(level, Some(height_source), chunk_box)
+    }
+
+    fn place_with_optional_height_source(
+        &self,
+        level: &mut dyn FeatureLevel,
+        height_source: Option<&dyn FeatureLevel>,
+        chunk_box: BoundingBox,
+    ) -> Result<Option<PiecePlacement>, StructureError> {
         if !self.bounding_box.intersects(chunk_box) {
             return Ok(None);
         }
         match &self.kind {
-            StructurePieceKind::Template(piece) => Ok(Some(piece.place(level, chunk_box))),
+            StructurePieceKind::Template(piece) => Ok(Some(match height_source {
+                Some(source) => piece.place_with_height_source(level, source, chunk_box),
+                None => piece.place(level, chunk_box),
+            })),
             StructurePieceKind::Unsupported { type_name } => {
                 Err(StructureError::UnsupportedPiece {
                     piece_type: type_name.clone(),

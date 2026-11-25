@@ -20,8 +20,8 @@ use crate::worldgen::structure::mineshaft::{MineshaftPiece, MineshaftStart};
 use crate::worldgen::structure::ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 use crate::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use crate::worldgen::structure::piece::{
-    BoundingBox, IglooPart, StructureDataMarker, StructurePiece, TemplateBlockFilter,
-    TemplatePostProcess, TemplateStructurePiece,
+    BoundingBox, IglooPart, PiecePlacement, StructureDataMarker, StructurePiece,
+    TemplateBlockFilter, TemplatePostProcess, TemplateStructurePiece,
 };
 use crate::worldgen::structure::pool::{LiquidSettings, PoolCatalog};
 use crate::worldgen::structure::processor::StructureProcessorCatalog;
@@ -1195,8 +1195,18 @@ impl StructureStart {
     ) -> Result<StartPlacement, StructureError> {
         let mut result = StartPlacement::default();
         for piece in &self.pieces {
-            match piece.place(level, chunk_box)? {
-                Some(placement) => {
+            let placed = match height_source {
+                Some(source) => piece.place_with_height_source(level, source, chunk_box)?,
+                None => piece.place(level, chunk_box)?,
+            };
+            match placed {
+                Some(mut placement) => {
+                    if self.structure_id == "minecraft:igloo" {
+                        for index in 0..placement.data_markers.len() {
+                            let marker = placement.data_markers[index].clone();
+                            handle_igloo_data_marker(level, &mut placement, &marker, random);
+                        }
+                    }
                     result.placed_pieces += 1;
                     result.written += placement.written;
                     result.rejected += placement.rejected;
@@ -2254,6 +2264,73 @@ fn is_replaceable_by_structures(state: &BlockState) -> bool {
             | "minecraft:seagrass"
             | "minecraft:tall_seagrass"
     )
+}
+
+fn handle_igloo_data_marker(
+    level: &mut dyn FeatureLevel,
+    placement: &mut PiecePlacement,
+    marker: &StructureDataMarker,
+    random: &mut dyn RandomSource,
+) {
+    if marker.name != "chest" {
+        return;
+    }
+    if level.set_block(marker.pos, state("minecraft:air")) {
+        placement.written += 1;
+        placement.written_blocks.push(marker.pos);
+    } else {
+        placement.rejected += 1;
+    }
+
+    let chest_pos = marker.pos.below();
+    let Some(chest_state) = level
+        .get_block(chest_pos)
+        .filter(|block| block.name == "minecraft:chest")
+        .cloned()
+    else {
+        return;
+    };
+    let seed = random.next_long();
+    if let Some(chest) = placement
+        .block_entities
+        .iter_mut()
+        .find(|block| block.pos == chest_pos && block.state.name == "minecraft:chest")
+    {
+        set_nbt_field(
+            &mut chest.nbt,
+            "id",
+            Tag::String("minecraft:chest".to_owned()),
+        );
+        set_nbt_field(
+            &mut chest.nbt,
+            "LootTable",
+            Tag::String("minecraft:chests/igloo_chest".to_owned()),
+        );
+        set_nbt_field(&mut chest.nbt, "LootTableSeed", Tag::Long(seed));
+    } else {
+        placement.block_entities.push(PlacedBlock {
+            pos: chest_pos,
+            state: chest_state,
+            nbt: Some(Tag::Compound(vec![
+                ("id".to_owned(), Tag::String("minecraft:chest".to_owned())),
+                (
+                    "LootTable".to_owned(),
+                    Tag::String("minecraft:chests/igloo_chest".to_owned()),
+                ),
+                ("LootTableSeed".to_owned(), Tag::Long(seed)),
+            ])),
+        });
+    }
+}
+
+fn set_nbt_field(nbt: &mut Option<Tag>, key: &str, value: Tag) {
+    let mut entries = match nbt.take() {
+        Some(Tag::Compound(entries)) => entries,
+        _ => Vec::new(),
+    };
+    entries.retain(|(name, _)| name != key);
+    entries.push((key.to_owned(), value));
+    *nbt = Some(Tag::Compound(entries));
 }
 
 /// `IglooStructure` plus `IglooPieces`.

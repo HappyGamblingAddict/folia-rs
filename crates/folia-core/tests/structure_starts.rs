@@ -8,7 +8,9 @@ use folia_core::worldgen::structure::assets::StructureTemplateCatalog;
 use folia_core::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
 use folia_core::worldgen::structure::ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 use folia_core::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
-use folia_core::worldgen::structure::piece::{BoundingBox, StructurePiece, TemplateStructurePiece};
+use folia_core::worldgen::structure::piece::{
+    BoundingBox, IglooPart, StructurePiece, TemplatePostProcess, TemplateStructurePiece,
+};
 use folia_core::worldgen::structure::ruined_portal::{
     RuinedPortalPlacement, RuinedPortalStart, RuinedPortalVariant,
 };
@@ -26,6 +28,7 @@ use folia_core::worldgen::structure::template::{
 };
 use folia_core::worldgen::structure::witch_hut::WitchHutStart;
 use folia_math::Direction;
+use folia_random::{LegacyRandomSource, RandomSource};
 use std::collections::HashMap;
 
 // Byte-for-byte gzip copies of shipped 1.21.11 templates. They are embedded so
@@ -483,6 +486,178 @@ impl StructureBiomeLookup for StaticBiomes {
     fn biome_at(&self, _x: i32, _y: i32, _z: i32) -> &str {
         self.0
     }
+}
+
+#[test]
+fn igloo_set_pipeline_filters_snowy_biomes_and_places_a_loot_chest() {
+    let seed = 12_345;
+    let structures = StructureGenerator::from_catalog(StructureTemplateCatalog::shipped().clone())
+        .expect("igloo generator")
+        .with_enabled_structures(["minecraft:igloo"]);
+    let set = structures.sets().get("igloos").expect("igloo set");
+    let StructurePlacement::RandomSpread(spread) = &set.placement else {
+        panic!("igloos must use random spread");
+    };
+    assert_eq!(
+        (spread.spacing, spread.separation, spread.salt),
+        (32, 8, 14_357_618)
+    );
+    let chunk = spread.get_potential_structure_chunk(seed, 0, 0);
+    assert_eq!(chunk, ChunkPos::new(3, 13));
+
+    for biome in [
+        "minecraft:snowy_plains",
+        "minecraft:snowy_slopes",
+        "minecraft:snowy_taiga",
+    ] {
+        let selection = structures
+            .structure_at_chunk(
+                chunk.x,
+                chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &StaticBiomes(biome),
+            )
+            .expect("igloo biome selection")
+            .expect("snowy igloo selection");
+        assert_eq!(selection.structure, "minecraft:igloo");
+        assert_eq!(selection.set, "minecraft:igloos");
+        assert_eq!(selection.chunk, chunk);
+    }
+    for biome in ["minecraft:plains", "minecraft:taiga", "minecraft:desert"] {
+        assert!(
+            structures
+                .structure_at_chunk(
+                    chunk.x,
+                    chunk.z,
+                    seed,
+                    StructureDimension::Overworld,
+                    63,
+                    &StaticBiomes(biome),
+                )
+                .expect("non-snowy biome selection")
+                .is_none()
+        );
+    }
+    for dimension in [StructureDimension::Nether, StructureDimension::End] {
+        assert!(
+            structures
+                .structure_at_chunk(
+                    chunk.x,
+                    chunk.z,
+                    seed,
+                    dimension,
+                    63,
+                    &StaticBiomes("minecraft:snowy_taiga"),
+                )
+                .expect("dimension selection")
+                .is_none()
+        );
+    }
+
+    let definition = structures
+        .definitions()
+        .get("minecraft:igloo")
+        .expect("shipped igloo definition");
+    assert_eq!(definition.kind, StructureKind::Igloo);
+    assert_eq!(definition.step(), Decoration::SurfaceStructures);
+    assert_eq!(
+        definition.biomes,
+        BiomeSet::Tag("#minecraft:has_structure/igloo".to_owned())
+    );
+
+    let mut height_source = MockLevel::new(-64, 384);
+    height_source.fixed_height = Some(64);
+    let context = StructureGenerationContext::new(
+        seed,
+        chunk,
+        0,
+        structures.template_catalog().expect("template catalog"),
+    )
+    .with_level(&height_source);
+    let start = definition
+        .generate_start(&context)
+        .expect("igloo laboratory start");
+    let bottom = start.pieces()[0]
+        .as_template()
+        .expect("igloo laboratory template");
+    let marker_block = bottom
+        .template
+        .blocks()
+        .iter()
+        .find(|block| {
+            block
+                .nbt
+                .as_ref()
+                .and_then(|nbt| nbt.get("metadata"))
+                .and_then(Tag::as_str)
+                == Some("chest")
+        })
+        .expect("bottom-template chest marker");
+    let marker_offset = folia_core::worldgen::structure::template::transform(
+        marker_block.pos,
+        bottom.place_settings.mirror(),
+        bottom.place_settings.rotation(),
+        bottom.place_settings.rotation_pivot(),
+    );
+    let marker_world = bottom.template_position.offset_by(marker_offset);
+    let chest_chunk = ChunkPos::new(marker_world.x() >> 4, marker_world.z() >> 4);
+    let expected_seed =
+        LegacyRandomSource::new((i64::from(chest_chunk.x) << 32) ^ i64::from(chest_chunk.z))
+            .next_long();
+
+    let mut level = MockLevel::new(-64, 384);
+    let snowy = StaticBiomes("minecraft:snowy_taiga");
+    let placement = structures
+        .place_for_chunk_with_height_source(
+            &mut level,
+            &height_source,
+            chest_chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &snowy,
+            8,
+            Decoration::SurfaceStructures,
+        )
+        .expect("igloo structure pass");
+    assert_eq!(placement.generated_starts, 1);
+    assert!(placement.placed_pieces > 0);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert_eq!(placement.data_markers.len(), 1);
+    assert_eq!(placement.data_markers[0].name, "chest");
+    let marker_pos = placement.data_markers[0].pos;
+    assert_eq!(marker_pos.x() >> 4, chest_chunk.x);
+    assert_eq!(marker_pos.z() >> 4, chest_chunk.z);
+    let chest = placement
+        .block_entities
+        .iter()
+        .find(|block| block.pos == marker_pos.below())
+        .expect("generator-created igloo chest");
+    assert!(chest.nbt.as_ref().is_some_and(|nbt| {
+        nbt.get("id").and_then(Tag::as_str) == Some("minecraft:chest")
+            && nbt.get("LootTable").and_then(Tag::as_str) == Some("minecraft:chests/igloo_chest")
+            && nbt.get("LootTableSeed").and_then(Tag::as_long) == Some(expected_seed)
+    }));
+
+    let mut wrong_step_level = MockLevel::new(-64, 384);
+    let wrong_step = structures
+        .place_for_chunk_with_height_source(
+            &mut wrong_step_level,
+            &height_source,
+            chest_chunk,
+            seed,
+            StructureDimension::Overworld,
+            63,
+            &snowy,
+            8,
+            Decoration::UndergroundStructures,
+        )
+        .expect("wrong structure step");
+    assert_eq!(wrong_step.generated_starts, 0);
+    assert!(wrong_step_level.blocks.is_empty());
 }
 
 #[test]
@@ -1284,6 +1459,57 @@ fn igloo_generation_is_deterministic_with_expected_pieces_and_bounds() {
             IglooStructure::TOP_TEMPLATE,
         ]
     );
+    assert_eq!(
+        start
+            .pieces()
+            .iter()
+            .map(|piece| {
+                let template = piece.as_template().expect("template piece");
+                (
+                    template.template.size(),
+                    template.post_process,
+                    template.template_position,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                [7, 6, 9],
+                TemplatePostProcess::Igloo(IglooPart::Bottom),
+                BlockPos::new(-320, 69, -322)
+            ),
+            (
+                [3, 3, 3],
+                TemplatePostProcess::Igloo(IglooPart::Middle),
+                BlockPos::new(-318, 87, -316)
+            ),
+            (
+                [3, 3, 3],
+                TemplatePostProcess::Igloo(IglooPart::Middle),
+                BlockPos::new(-318, 84, -316)
+            ),
+            (
+                [3, 3, 3],
+                TemplatePostProcess::Igloo(IglooPart::Middle),
+                BlockPos::new(-318, 81, -316)
+            ),
+            (
+                [3, 3, 3],
+                TemplatePostProcess::Igloo(IglooPart::Middle),
+                BlockPos::new(-318, 78, -316)
+            ),
+            (
+                [3, 3, 3],
+                TemplatePostProcess::Igloo(IglooPart::Middle),
+                BlockPos::new(-318, 75, -316)
+            ),
+            (
+                [7, 5, 8],
+                TemplatePostProcess::Igloo(IglooPart::Top),
+                BlockPos::new(-320, 90, -320)
+            ),
+        ]
+    );
     for piece in start.pieces() {
         assert_eq!(piece.rotation(), Rotation::None);
         assert_eq!(
@@ -1320,6 +1546,173 @@ fn igloo_rotation_and_bounds_match_java_for_a_single_piece() {
         start.bounding_box(),
         Some(BoundingBox::new(1, 90, 2, 8, 94, 8))
     );
+}
+
+#[test]
+fn igloo_top_middle_and_bottom_snap_to_the_same_entrance_height() {
+    let (_definition, _templates, start) = generate_igloo(-20, -20);
+    let mut level = MockLevel::new(-64, 384);
+    level.heights.insert((-317, -320), 70);
+
+    assert_eq!(
+        start
+            .pieces()
+            .iter()
+            .map(|piece| {
+                piece
+                    .as_template()
+                    .expect("template piece")
+                    .effective_position(&level)
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            BlockPos::new(-320, 48, -322),
+            BlockPos::new(-318, 66, -316),
+            BlockPos::new(-318, 63, -316),
+            BlockPos::new(-318, 60, -316),
+            BlockPos::new(-318, 57, -316),
+            BlockPos::new(-318, 54, -316),
+            BlockPos::new(-320, 69, -320),
+        ]
+    );
+    assert_eq!(
+        start.bounding_box(),
+        Some(BoundingBox::new(-320, 69, -322, -314, 94, -313))
+    );
+}
+
+#[test]
+fn igloo_laboratory_places_residents_and_a_seeded_loot_chest() {
+    let (_definition, _templates, start) = generate_igloo(-20, -20);
+    let mut level = MockLevel::new(-64, 384);
+    level.fixed_height = Some(64);
+    let marker_pos = BlockPos::new(-319, 44, -316);
+    let chest_pos = marker_pos.below();
+    level.set_block(
+        marker_pos,
+        BlockState {
+            name: "minecraft:stone".to_owned(),
+            properties: Vec::new(),
+        },
+    );
+
+    let placement = start
+        .place_in_box_with_random(
+            &mut level,
+            BoundingBox::new(-320, -64, -322, -305, 319, -305),
+            &mut LegacyRandomSource::new((i64::from(-20) << 32) ^ i64::from(-20)),
+        )
+        .expect("igloo laboratory places");
+    assert_eq!(placement.placed_pieces, 7);
+    assert_eq!(placement.skipped_pieces, 0);
+    assert_eq!(placement.rejected, 0);
+    assert_eq!(placement.data_markers.len(), 1);
+    let marker = &placement.data_markers[0];
+    assert_eq!(marker.name, "chest");
+    assert_eq!(marker.pos, marker_pos);
+    assert!(marker.nbt.as_ref().is_some_and(|nbt| {
+        nbt.get("id").and_then(Tag::as_str) == Some("minecraft:structure_block")
+            && nbt.get("metadata").and_then(Tag::as_str) == Some("chest")
+    }));
+    assert_eq!(
+        level.get_block(marker_pos).expect("cleared marker").name,
+        "minecraft:air"
+    );
+    assert_eq!(
+        level.get_block(chest_pos).expect("laboratory chest").name,
+        "minecraft:chest"
+    );
+    assert!(
+        level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:brewing_stand")
+    );
+    assert!(
+        level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:water_cauldron")
+    );
+    assert!(
+        level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:ladder")
+    );
+    assert!(
+        !level
+            .blocks
+            .values()
+            .any(|block| block.name == "minecraft:structure_block")
+    );
+
+    let chest = placement
+        .block_entities
+        .iter()
+        .find(|block| block.pos == chest_pos && block.state.name == "minecraft:chest")
+        .expect("igloo chest block entity");
+    let chest_nbt = chest.nbt.as_ref().expect("chest nbt");
+    assert_eq!(
+        chest_nbt.get("id").and_then(Tag::as_str),
+        Some("minecraft:chest")
+    );
+    assert_eq!(
+        chest_nbt.get("LootTable").and_then(Tag::as_str),
+        Some("minecraft:chests/igloo_chest")
+    );
+    assert_eq!(
+        chest_nbt.get("LootTableSeed").and_then(Tag::as_long),
+        Some(8_674_389_141_638_031_458)
+    );
+
+    let mut entity_ids: Vec<_> = placement
+        .entities
+        .iter()
+        .filter_map(|entity| entity.nbt.as_ref()?.get("id").and_then(Tag::as_str))
+        .collect();
+    entity_ids.sort_unstable();
+    assert_eq!(
+        entity_ids,
+        vec!["minecraft:villager", "minecraft:zombie_villager"]
+    );
+}
+
+#[test]
+fn igloo_without_laboratory_replaces_the_trapdoor_with_snow() {
+    let (_definition, _templates, start) = generate_igloo(0, 0);
+    assert_eq!(start.pieces().len(), 1);
+    let trapdoor_pos = BlockPos::new(3, 63, 5);
+
+    for (support, expected) in [
+        ("minecraft:stone", "minecraft:snow_block"),
+        ("minecraft:ladder", "minecraft:oak_trapdoor"),
+    ] {
+        let mut level = MockLevel::new(-64, 384);
+        level.fixed_height = Some(64);
+        level.set_block(
+            trapdoor_pos.below(),
+            BlockState {
+                name: support.to_owned(),
+                properties: Vec::new(),
+            },
+        );
+        let placement = start
+            .place_in_chunk(&mut level, ChunkPos::new(0, 0))
+            .expect("surface igloo places");
+        assert!(placement.data_markers.is_empty());
+        assert!(
+            placement
+                .block_entities
+                .iter()
+                .all(|block| block.state.name != "minecraft:chest")
+        );
+        assert!(placement.entities.is_empty());
+        assert_eq!(
+            level.get_block(trapdoor_pos).expect("trapdoor fixup").name,
+            expected
+        );
+    }
 }
 
 #[test]

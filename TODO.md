@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,652
+> Test status: **1,611 passing** at the 35b7cbe gate (0 failed, 1 ignored benchmark); desert pyramid, buried treasure, witch hut, jungle temple, and shipwreck should bring the gate to 1,656
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1390,12 +1390,13 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   markers, fixed-seed fixtures, and a real generated-ocean-chunk test. Java
   differential fixtures, weighted/degraded variants, exact ChunkRandom, live
   chest block entities, and waterlogging remain open.
-- [~] Igloos (structure start, top/middle/bottom template pieces, laboratory
-  branch, rotation, bounds, and surface snap done; loot-table block entities,
-  biome filtering, and generator wiring remain).
+- [~] **Igloos generated**. Existing template/branch/rotation/surface wiring is
+  covered by fixtures; generic template pieces now use the separate generator
+  height source, and chest markers materialize loot-table block-entity NBT.
+  Java RNG/block differential and live descriptor persistence remain open.
 - [~] Desert temples, witch huts, and jungle temples done (procedural pieces,
   height-source placement, fixed-seed and real generated-chunk fixtures);
-  ruined portals remain. Vanilla vertical jitter/rotation, witch/cat spawning,
+  ruined portals are also done. Vanilla vertical jitter/rotation, witch/cat spawning,
   potion contents, exact cross-chunk RNG continuity, and Java differential
   fixtures are still open.
 - [~] Ancient cities, trial chambers (59 template NBTs shipped across both

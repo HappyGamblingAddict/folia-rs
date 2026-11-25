@@ -3434,3 +3434,27 @@ Format:
   fill in. A slow batch still briefly blocks the loop, but the movement
   catch-up policy keeps the client resynced. Tune `INITIAL_STREAM_BATCH` and
   `STREAM_TOPUP_BATCH` in `join.rs` if join latency/fill time needs changing.
+
+## 2026-11-25 — Igloo chest markers and cross-chunk height sampling
+- Context: the shipped igloo definition, `igloos` set, snowy biome tag,
+  top/middle/bottom pieces, rotation, bounds, and Y=90 surface re-seating were
+  already wired. The remaining gaps were the bottom template's `chest` data
+  marker and generic template pieces ignoring the generator's separate height
+  source when a piece's entrance reference lay outside the writable chunk.
+- Decision: materialize the igloo chest marker exactly at piece placement:
+  clear the marker to air, require a chest below it, and attach `id`,
+  `LootTable: minecraft:chests/igloo_chest`, and the next placement-RNG
+  `LootTableSeed` to the returned block-entity NBT. Add
+  `TemplateStructurePiece::place_with_height_source` and the matching
+  `StructurePiece` path so `WORLD_SURFACE_WG` re-seating reads the generator's
+  region-wide height source rather than the writable chunk.
+- Why: Java's `IglooPieces.IglooPiece.handleDataMarker` performs the same air
+  clear and loot assignment, and every piece must sample the same entrance
+  column even when only the basement intersects the chunk being generated.
+- Consequences: generated snowy igloos now place their laboratory chest,
+  brewing stand, water cauldron, and resident descriptors using the same
+  region-wide entrance height as the surface piece. Waterlogging remains
+  intentionally ignored, matching vanilla's igloo `IGNORE_WATERLOGGING`
+  setting. Returned block-entity/entity descriptors are not yet persisted or
+  spawned by `WorldGenerator`, and exact Java chest RNG / block-for-block
+  differential fixtures remain open.

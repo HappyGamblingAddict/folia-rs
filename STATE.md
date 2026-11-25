@@ -15,9 +15,9 @@ Last updated: 2026-11-24
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
   P11.4 perf smoke, and P11.6-P11.8 docs/packaging/security are done. Desert
   pyramid, buried-treasure, witch-hut, jungle-temple, and shipwreck generator
-  wiring/fixtures are complete locally; expected next gate is 1,640.
+  wiring/fixtures are complete locally; expected next gate is 1,645.
 - Tests: **1,611 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); next gate expected 1,640. Parity is **98.75% block-class /
+  benchmark); next gate expected 1,645. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -99,6 +99,9 @@ Last updated: 2026-11-24
 - [~] P10 region ownership (driver exists; global lock and splitting remain).
 
 ## Recently completed
+- 2026-11-24: P2.10 mineshafts — normal/mesa branching corridors,
+  supports/rails/torches/cobwebs/chests, density-based cave Y, weighted biome
+  candidate fallback, and five fixtures; Java RNG/minecarts remain open.
 - 2026-11-24: P2.10 ocean monuments — 35×28×26 prismarine procedural
   monument with core/wings/entrance/dome/finials, guardian/sponge rooms, floor
   support, rotation clipping, and deep-ocean fixtures; Java layouts remain open.
@@ -850,6 +853,9 @@ Last updated: 2026-11-24
   and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 mineshafts — normal/mesa branching corridors,
+  supports/rails/torches/cobwebs/chests, density-based cave Y, weighted biome
+  candidate fallback, and five fixtures; Java RNG/minecarts remain open.
 - 2026-11-24: P2.10 ocean monuments — 35×28×26 prismarine procedural
   monument with core/wings/entrance/dome/finials, guardian/sponge rooms, floor
   support, rotation clipping, and deep-ocean fixtures; Java layouts remain open.
@@ -1225,6 +1231,9 @@ Last updated: 2026-11-24
   `can_destroy`, and a Java fixture remain)
 
 ## Recently completed
+- 2026-11-24: P2.10 mineshafts — normal/mesa branching corridors,
+  supports/rails/torches/cobwebs/chests, density-based cave Y, weighted biome
+  candidate fallback, and five fixtures; Java RNG/minecarts remain open.
 - 2026-11-24: P2.10 ocean monuments — 35×28×26 prismarine procedural
   monument with core/wings/entrance/dome/finials, guardian/sponge rooms, floor
   support, rotation clipping, and deep-ocean fixtures; Java layouts remain open.

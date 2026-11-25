@@ -1573,7 +1573,12 @@ fn ocean_ruin_definitions_and_selection_cover_cold_and_warm_biomes() {
         assert_eq!(selection.structure, expected);
         assert_eq!(selection.set, "minecraft:ocean_ruins");
         assert_eq!(selection.chunk, chunk);
-        assert!(
+        let alternate = if expected == "minecraft:ocean_ruin_cold" {
+            "minecraft:ocean_ruin_warm"
+        } else {
+            "minecraft:ocean_ruin_cold"
+        };
+        assert_eq!(
             structures
                 .structure_at_chunk(
                     chunk.x,
@@ -1583,8 +1588,10 @@ fn ocean_ruin_definitions_and_selection_cover_cold_and_warm_biomes() {
                     63,
                     &StaticBiomes(wrong_biome),
                 )
-                .expect("mismatched ocean ruin biome")
-                .is_none()
+                .expect("alternate ocean ruin biome")
+                .expect("weighted fallback variant")
+                .structure,
+            alternate
         );
         assert!(
             structures
@@ -2725,9 +2732,23 @@ fn ruined_portal_set_pipeline_selects_each_biome_and_rejects_other_dimensions() 
 
     let standard_chunk = find_chunk("minecraft:ruined_portal");
     assert_eq!(standard_chunk, ChunkPos::new(-96, 62));
+    assert_eq!(
+        structures
+            .structure_at_chunk(
+                standard_chunk.x,
+                standard_chunk.z,
+                seed,
+                StructureDimension::Overworld,
+                63,
+                &StaticBiomes("minecraft:desert"),
+            )
+            .expect("desert portal fallback")
+            .expect("weighted fallback variant")
+            .structure,
+        "minecraft:ruined_portal_desert"
+    );
     for (biome, dimension) in [
         ("minecraft:deep_dark", StructureDimension::Overworld),
-        ("minecraft:desert", StructureDimension::Overworld),
         ("minecraft:nether_wastes", StructureDimension::Overworld),
         ("minecraft:plains", StructureDimension::Nether),
     ] {

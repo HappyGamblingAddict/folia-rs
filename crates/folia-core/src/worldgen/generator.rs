@@ -606,6 +606,7 @@ impl WorldGenerator {
         let height_source = GeneratorHeightLevel {
             generator: self,
             cache: RefCell::new(HashMap::new()),
+            densities: RefCell::new(HashMap::new()),
         };
         let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
         structures
@@ -749,6 +750,7 @@ impl WorldGenerator {
 struct GeneratorHeightLevel<'a> {
     generator: &'a WorldGenerator,
     cache: RefCell<HashMap<(u8, i32, i32), i32>>,
+    densities: RefCell<HashMap<(i32, i32, i32), f64>>,
 }
 
 impl FeatureLevel for GeneratorHeightLevel<'_> {
@@ -781,6 +783,16 @@ impl FeatureLevel for GeneratorHeightLevel<'_> {
         };
         self.cache.borrow_mut().insert(key, height);
         Some(height)
+    }
+
+    fn terrain_density_at(&self, x: i32, y: i32, z: i32) -> Option<f64> {
+        let key = (x, y, z);
+        if let Some(density) = self.densities.borrow().get(&key) {
+            return Some(*density);
+        }
+        let density = self.generator.router.final_density().compute(x, y, z);
+        self.densities.borrow_mut().insert(key, density);
+        Some(density)
     }
 }
 

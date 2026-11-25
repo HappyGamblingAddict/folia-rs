@@ -444,6 +444,39 @@ impl StructureSet {
         })
     }
 
+    /// `ChunkGenerator.createStructures` weighted candidate order. Invalid
+    /// biome candidates are removed and the next weighted draw is used.
+    pub fn selection_order(
+        &self,
+        seed: i64,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> Vec<&StructureSelectionEntry> {
+        if self.structures.len() == 1 {
+            return self.structures.iter().collect();
+        }
+
+        let mut random = LegacyRandomSource::new(0);
+        set_large_feature_seed(&mut random, seed, chunk_x, chunk_z);
+        let mut total: i32 = self.structures.iter().map(|entry| entry.weight).sum();
+        let mut remaining: Vec<&StructureSelectionEntry> = self.structures.iter().collect();
+        let mut order = Vec::with_capacity(remaining.len());
+        while !remaining.is_empty() && total > 0 {
+            let mut draw = random.next_int_bound(total);
+            let index = remaining
+                .iter()
+                .position(|entry| {
+                    draw -= entry.weight;
+                    draw < 0
+                })
+                .unwrap_or(remaining.len() - 1);
+            let entry = remaining.remove(index);
+            total -= entry.weight;
+            order.push(entry);
+        }
+        order
+    }
+
     /// `ChunkGenerator.createStructures` weighted selection. A single-entry set
     /// consumes no random values.
     pub fn select_structure(
@@ -452,24 +485,9 @@ impl StructureSet {
         chunk_x: i32,
         chunk_z: i32,
     ) -> Option<&StructureSelectionEntry> {
-        if self.structures.len() == 1 {
-            return self.structures.first();
-        }
-
-        let mut random = LegacyRandomSource::new(0);
-        set_large_feature_seed(&mut random, seed, chunk_x, chunk_z);
-        let total: i32 = self.structures.iter().map(|entry| entry.weight).sum();
-        if total <= 0 {
-            return None;
-        }
-        let mut draw = random.next_int_bound(total);
-        for entry in &self.structures {
-            draw -= entry.weight;
-            if draw < 0 {
-                return Some(entry);
-            }
-        }
-        self.structures.last()
+        self.selection_order(seed, chunk_x, chunk_z)
+            .into_iter()
+            .next()
     }
 }
 
@@ -669,31 +687,30 @@ impl StructureSetRegistry {
                 &mut stack,
             ) {
                 Ok(true) => {
-                    let Some(selection) = set.select_structure(seed, chunk_x, chunk_z) else {
-                        continue;
-                    };
-                    if !accept(&selection.structure) {
-                        continue;
-                    }
-                    let rule = structure_biome_rule(&selection.structure).ok_or_else(|| {
-                        StructureSetError::MissingBiomeRule {
-                            structure: selection.structure.clone(),
+                    for selection in set.selection_order(seed, chunk_x, chunk_z) {
+                        if !accept(&selection.structure) {
+                            continue;
                         }
-                    })?;
-                    if rule.dimension != dimension {
-                        continue;
+                        let rule = structure_biome_rule(&selection.structure).ok_or_else(|| {
+                            StructureSetError::MissingBiomeRule {
+                                structure: selection.structure.clone(),
+                            }
+                        })?;
+                        if rule.dimension != dimension {
+                            continue;
+                        }
+                        let center_x = (chunk_x << 4) + 8;
+                        let center_z = (chunk_z << 4) + 8;
+                        let biome = biomes.biome_at(center_x, biome_y, center_z);
+                        if !biome_matches(rule.biomes, biome) {
+                            continue;
+                        }
+                        return Ok(Some(SelectedStructure {
+                            set: set.name.clone(),
+                            structure: selection.structure.clone(),
+                            chunk: ChunkPos::new(chunk_x, chunk_z),
+                        }));
                     }
-                    let center_x = (chunk_x << 4) + 8;
-                    let center_z = (chunk_z << 4) + 8;
-                    let biome = biomes.biome_at(center_x, biome_y, center_z);
-                    if !biome_matches(rule.biomes, biome) {
-                        continue;
-                    }
-                    return Ok(Some(SelectedStructure {
-                        set: set.name.clone(),
-                        structure: selection.structure.clone(),
-                        chunk: ChunkPos::new(chunk_x, chunk_z),
-                    }));
                 }
                 Ok(false) => {}
                 Err(StructureSetError::Placement {

@@ -203,6 +203,15 @@ pub trait FeatureLevel {
         None
     }
 
+    /// Initial terrain density before surface rules and carvers.
+    ///
+    /// Noise-backed levels can expose their final-density router here. A
+    /// non-positive value denotes cave/void space; block-only levels return
+    /// `None` rather than guessing from heightmaps.
+    fn terrain_density_at(&self, _x: i32, _y: i32, _z: i32) -> Option<f64> {
+        None
+    }
+
     /// `ChunkGenerator.getSeaLevel()`.
     ///
     /// The region is dimension-agnostic here and has no generator handle, so

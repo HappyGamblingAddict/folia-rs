@@ -16,6 +16,7 @@ use crate::worldgen::structure::end_city::EndCityStart;
 use crate::worldgen::structure::fortress::FortressStart;
 use crate::worldgen::structure::jigsaw::{JigsawConfig, JigsawPlacement, JigsawStart};
 use crate::worldgen::structure::jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+use crate::worldgen::structure::mineshaft::{MineshaftPiece, MineshaftStart};
 use crate::worldgen::structure::ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 use crate::worldgen::structure::ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 use crate::worldgen::structure::piece::{
@@ -96,6 +97,9 @@ pub enum StructureKind {
     BuriedTreasure,
     DesertPyramid,
     JunglePyramid,
+    Mineshaft {
+        mesa: bool,
+    },
     OceanMonument,
     OceanRuin {
         warm: bool,
@@ -170,6 +174,9 @@ impl StructureDefinition {
             "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
             "minecraft:desert_pyramid" => StructureKind::DesertPyramid,
             "minecraft:jungle_pyramid" => StructureKind::JunglePyramid,
+            "minecraft:mineshaft" => StructureKind::Mineshaft {
+                mesa: name == "minecraft:mineshaft_mesa",
+            },
             "minecraft:ocean_monument" => StructureKind::OceanMonument,
             "minecraft:ocean_ruin" => StructureKind::OceanRuin {
                 warm: name == "minecraft:ocean_ruin_warm",
@@ -346,6 +353,14 @@ impl StructureDefinition {
             StructureKind::JunglePyramid => {
                 JunglePyramidStart::generate(&self.name, context, self.terrain_adaptation)
             }
+            StructureKind::Mineshaft { mesa } => {
+                let structure_id = if *mesa {
+                    "minecraft:mineshaft_mesa"
+                } else {
+                    "minecraft:mineshaft"
+                };
+                MineshaftStart::generate(structure_id, context, self.terrain_adaptation)
+            }
             StructureKind::OceanMonument => {
                 OceanMonumentStart::generate(&self.name, context, self.terrain_adaptation)
             }
@@ -449,6 +464,7 @@ pub struct StructureStart {
     buried_treasure: Option<BuriedTreasurePiece>,
     desert_pyramid: Option<DesertPyramidPiece>,
     jungle_pyramid: Option<JunglePyramidPiece>,
+    mineshaft: Option<MineshaftPiece>,
     ocean_monument: Option<OceanMonumentPiece>,
     ocean_ruin: Option<OceanRuinPiece>,
     witch_hut: Option<WitchHutPiece>,
@@ -478,6 +494,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -505,6 +522,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -532,6 +550,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -559,6 +578,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -586,6 +606,35 @@ impl StructureStart {
             jungle_pyramid: Some(piece),
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
+            witch_hut: None,
+            fortress: None,
+            end_city: None,
+            shipwreck: None,
+            ruined_portal: None,
+            terrain_adaptation,
+        }
+    }
+
+    pub fn new_mineshaft(
+        structure_id: impl Into<String>,
+        chunk_pos: ChunkPos,
+        references: i32,
+        piece: MineshaftPiece,
+        terrain_adaptation: TerrainAdjustment,
+    ) -> Self {
+        Self {
+            structure_id: structure_id.into(),
+            chunk_pos,
+            references,
+            pieces: Vec::new(),
+            jigsaw: None,
+            buried_treasure: None,
+            desert_pyramid: None,
+            jungle_pyramid: None,
+            ocean_monument: None,
+            ocean_ruin: None,
+            mineshaft: Some(piece),
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -613,6 +662,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: Some(piece),
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -640,6 +690,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: Some(piece),
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -667,6 +718,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: Some(piece),
             fortress: None,
             end_city: None,
@@ -694,6 +746,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -721,6 +774,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -748,6 +802,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: Some(fortress),
             end_city: None,
@@ -775,6 +830,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: Some(end_city),
@@ -797,6 +853,7 @@ impl StructureStart {
             jungle_pyramid: None,
             ocean_monument: None,
             ocean_ruin: None,
+            mineshaft: None,
             witch_hut: None,
             fortress: None,
             end_city: None,
@@ -833,6 +890,10 @@ impl StructureStart {
 
     pub fn jungle_pyramid(&self) -> Option<&JunglePyramidPiece> {
         self.jungle_pyramid.as_ref()
+    }
+
+    pub fn mineshaft(&self) -> Option<&MineshaftPiece> {
+        self.mineshaft.as_ref()
     }
 
     pub fn ocean_monument(&self) -> Option<&OceanMonumentPiece> {
@@ -897,6 +958,7 @@ impl StructureStart {
             || self.buried_treasure.is_some()
             || self.desert_pyramid.is_some()
             || self.jungle_pyramid.is_some()
+            || self.mineshaft.is_some()
             || self.ocean_monument.is_some()
             || self.ocean_ruin.is_some()
             || self.witch_hut.is_some()
@@ -932,6 +994,9 @@ impl StructureStart {
         }
         if let Some(temple) = &self.jungle_pyramid {
             boxes.push(temple.bounding_box());
+        }
+        if let Some(mineshaft) = &self.mineshaft {
+            boxes.push(mineshaft.bounding_box());
         }
         if let Some(monument) = &self.ocean_monument {
             boxes.push(monument.bounding_box());
@@ -1118,6 +1183,14 @@ impl StructureStart {
                 Some(source) => temple.place_with_height_source(level, source, chunk_box)?,
                 None => temple.place(level, chunk_box)?,
             };
+            if placement.placed_pieces > 0 {
+                merge_placement(&mut result, placement);
+            } else {
+                result.skipped_pieces += 1;
+            }
+        }
+        if let Some(mineshaft) = &self.mineshaft {
+            let placement = mineshaft.place(level, chunk_box)?;
             if placement.placed_pieces > 0 {
                 merge_placement(&mut result, placement);
             } else {
@@ -2396,10 +2469,10 @@ fn required_str<'a>(
 
 /// The shipped structure definitions this slice can generate end to end.
 ///
-/// Villages, igloos and desert pyramids are complete vertical slices; other
-/// structure types stay parsed-but-unsupported and are skipped explicitly by
-/// [`StructureGenerator`]. The JSON is the 1.21.11 data-pack document with
-/// insignificant whitespace removed.
+/// Villages, igloos, desert pyramids, jungle temples, and mineshafts are
+/// complete vertical slices; other structure types stay parsed-but-unsupported
+/// and are skipped explicitly by [`StructureGenerator`]. The JSON is the 1.21.11
+/// data-pack document with insignificant whitespace removed.
 pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:igloo",
@@ -2416,6 +2489,14 @@ pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
         "minecraft:jungle_pyramid",
         r##"{ "type": "minecraft:jungle_pyramid", "biomes": "#minecraft:has_structure/jungle_temple", "spawn_overrides": {}, "step": "surface_structures" }"##,
+    ),
+    (
+        "minecraft:mineshaft",
+        r##"{ "type": "minecraft:mineshaft", "biomes": "#minecraft:has_structure/mineshaft", "spawn_overrides": {}, "step": "underground_structures" }"##,
+    ),
+    (
+        "minecraft:mineshaft_mesa",
+        r##"{ "type": "minecraft:mineshaft", "biomes": "#minecraft:has_structure/mineshaft_mesa", "spawn_overrides": {}, "step": "underground_structures" }"##,
     ),
     (
         "minecraft:monument",

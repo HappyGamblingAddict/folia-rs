@@ -39,6 +39,7 @@ pub mod end_city;
 pub mod fortress;
 pub mod jigsaw;
 pub mod jungle_pyramid;
+pub mod mineshaft;
 pub mod ocean_monument;
 pub mod ocean_ruin;
 pub mod piece;
@@ -211,6 +212,9 @@ pub use jigsaw::{
     shuffle, top_facing,
 };
 pub use jungle_pyramid::{JunglePyramidPiece, JunglePyramidStart};
+pub use mineshaft::{
+    MineshaftPiece, MineshaftRailKind, MineshaftSection, MineshaftSectionKind, MineshaftStart,
+};
 pub use ocean_monument::{OceanMonumentPiece, OceanMonumentStart};
 pub use ocean_ruin::{OceanRuinPiece, OceanRuinStart};
 pub use piece::{

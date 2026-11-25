@@ -27,7 +27,9 @@ use folia_core::light;
 use folia_core::math::{BlockPos, Vec3};
 use folia_core::tick;
 use folia_core::world::WorldStorage;
+use folia_core::worldgen::feature::{FeatureLevel, WorldGenRegion};
 use folia_core::worldgen::generator::WorldGenerator;
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -99,6 +101,71 @@ fn chunk_generation_smoke() {
         sections >= coords.len(),
         "every generated chunk has sections"
     );
+}
+
+#[test]
+fn feature_block_lookup_smoke() {
+    let generator = WorldGenerator::overworld(12_345).expect("overworld generator");
+    let mut chunk = generator
+        .generate_chunk_with_steps(0, 0, &[])
+        .expect("terrain-only chunk");
+    let region = WorldGenRegion::new(&mut chunk, generator.min_y(), generator.height());
+
+    let reads = 2_000_000usize;
+    let start = Instant::now();
+    let mut found = 0usize;
+    for index in 0..reads {
+        let x = ((index * 7) & 15) as i32;
+        let z = ((index * 11) & 15) as i32;
+        let y = generator.min_y() + ((index * 37) % generator.height() as usize) as i32;
+        found += usize::from(black_box(region.get_block(BlockPos::new(x, y, z))).is_some());
+    }
+    let elapsed = start.elapsed();
+    drop(region);
+
+    fn linear_block_state(
+        chunk: &folia_core::chunk::Chunk,
+        x: usize,
+        y: i32,
+        z: usize,
+    ) -> Option<&folia_core::chunk::BlockState> {
+        if x >= 16 || z >= 16 {
+            return None;
+        }
+        let section_y = y.div_euclid(16);
+        if !(i8::MIN as i32..=i8::MAX as i32).contains(&section_y) {
+            return None;
+        }
+        let section = chunk
+            .sections
+            .iter()
+            .find(|section| section.y == section_y as i8)?;
+        let index = (y.rem_euclid(16) as usize * 16 + z) * 16 + x;
+        section.block_states.get(index)
+    }
+
+    let start = Instant::now();
+    let mut linear_found = 0usize;
+    for index in 0..reads {
+        let x = (index * 7) & 15;
+        let z = (index * 11) & 15;
+        let y = generator.min_y() + ((index * 37) % generator.height() as usize) as i32;
+        linear_found += usize::from(black_box(linear_block_state(&chunk, x, y, z)).is_some());
+    }
+    let linear_elapsed = start.elapsed();
+
+    eprintln!(
+        "feature_block_lookup_smoke: {reads} generated-chunk reads in {elapsed:?} ({:.2} ns/read), linear-section reference {linear_elapsed:?} ({:.2} ns/read)",
+        elapsed.as_nanos() as f64 / reads as f64,
+        linear_elapsed.as_nanos() as f64 / reads as f64
+    );
+    guard("feature_block_lookup_smoke", elapsed);
+    guard(
+        "feature_block_lookup_smoke linear reference",
+        linear_elapsed,
+    );
+    assert_eq!(found, reads, "every generated-chunk read resolves a state");
+    assert_eq!(linear_found, found, "lookup paths resolve identical states");
 }
 
 #[test]

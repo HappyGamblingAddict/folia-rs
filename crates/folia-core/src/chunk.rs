@@ -49,12 +49,34 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn section(&self, y: i8) -> Option<&ChunkSection> {
-        self.sections.iter().find(|section| section.y == y)
+    #[inline]
+    fn section_index(&self, section_y: i8) -> Option<usize> {
+        let first = self.sections.first()?;
+        let offset = i32::from(section_y) - i32::from(first.y);
+        if offset >= 0 {
+            let index = offset as usize;
+            if self
+                .sections
+                .get(index)
+                .is_some_and(|section| section.y == section_y)
+            {
+                return Some(index);
+            }
+        }
+        self.sections
+            .iter()
+            .position(|section| section.y == section_y)
     }
 
+    #[inline]
+    pub fn section(&self, y: i8) -> Option<&ChunkSection> {
+        self.sections.get(self.section_index(y)?)
+    }
+
+    #[inline]
     fn section_mut(&mut self, y: i8) -> Option<&mut ChunkSection> {
-        self.sections.iter_mut().find(|section| section.y == y)
+        let index = self.section_index(y)?;
+        self.sections.get_mut(index)
     }
 
     /// Set a block state at absolute world coordinates. Creates an air section
@@ -844,6 +866,77 @@ mod tests {
         assert_eq!(chunk.block_state(0, 16, 0).unwrap().name, "minecraft:sand");
         assert_eq!(chunk.block_state(0, 32, 0), None);
         assert_eq!(chunk.block_state(16, 0, 0), None);
+    }
+
+    #[test]
+    fn section_lookup_uses_offsets_with_linear_fallback() {
+        fn test_section(y: i8, name: &str) -> ChunkSection {
+            ChunkSection {
+                y,
+                block_states: PalettedContainer {
+                    palette: vec![BlockState {
+                        name: name.into(),
+                        properties: Vec::new(),
+                    }],
+                    indices: vec![0; 4096],
+                },
+                biomes: None,
+                light: SectionLight::default(),
+            }
+        }
+
+        let contiguous = Chunk {
+            x: 0,
+            z: 0,
+            sections: (-4..=19)
+                .map(|y| test_section(y, "minecraft:air"))
+                .collect(),
+        };
+        for (index, section) in contiguous.sections.iter().enumerate() {
+            assert_eq!(contiguous.section_index(section.y), Some(index));
+        }
+        assert_eq!(contiguous.section_index(-5), None);
+        assert_eq!(contiguous.section_index(20), None);
+
+        let mut sparse = Chunk {
+            x: 0,
+            z: 0,
+            sections: vec![
+                test_section(2, "minecraft:stone"),
+                test_section(-1, "minecraft:dirt"),
+                test_section(0, "minecraft:grass_block"),
+            ],
+        };
+        for y in i8::MIN..=i8::MAX {
+            let expected = sparse.sections.iter().position(|section| section.y == y);
+            assert_eq!(sparse.section_index(y), expected);
+            assert_eq!(
+                sparse.section(y).map(|section| section.y),
+                expected.map(|index| sparse.sections[index].y)
+            );
+        }
+
+        let replacement = BlockState {
+            name: "minecraft:sand".into(),
+            properties: Vec::new(),
+        };
+        for y in [-1, 0, 2] {
+            assert!(sparse.set_block_state_ref(0, i32::from(y) * 16 + 15, 15, &replacement));
+            let index = sparse
+                .sections
+                .iter()
+                .position(|section| section.y == y)
+                .unwrap();
+            assert_eq!(
+                sparse.sections[index].block_states.get((15 * 16 + 15) * 16),
+                Some(&replacement)
+            );
+        }
+
+        assert!(sparse.set_block_state_ref(0, 64, 0, &replacement));
+        assert_eq!(sparse.section_index(4), Some(3));
+        assert_eq!(sparse.block_state(0, 64, 0), Some(&replacement));
+        assert!(sparse.sections.windows(2).all(|pair| pair[0].y < pair[1].y));
     }
 
     #[test]

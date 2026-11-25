@@ -335,6 +335,24 @@ fn rust_only_four_seed_four_chunk_matrix_has_stable_complete_columns() {
 }
 
 #[test]
+fn feature_placement_diagnostics_and_blocks_are_stable() {
+    let seed = 12_345;
+    let generator = WorldGenerator::overworld(seed).unwrap();
+    let generated = generator.generate_chunk_with_diagnostics(0, -1).unwrap();
+    assert_eq!(chunk_digest(&generated.chunk), 0x9976_5447_f433_a939);
+    assert!(!generated.diagnostics.features.is_empty());
+    let digest = feature_diagnostics_digest(&generated.diagnostics.features);
+    println!(
+        "seed={seed} chunk=(0,-1): {} feature placements, diagnostics digest={digest:#018x}",
+        generated.diagnostics.features.len()
+    );
+    assert_eq!(
+        digest, 0x7ea2_39c7_cd23_9e69,
+        "feature placement diagnostics changed"
+    );
+}
+
+#[test]
 fn structured_dump_is_deterministic_and_samples_real_starts() {
     let seed = 12_345;
     let generator = WorldGenerator::overworld(seed)
@@ -519,6 +537,46 @@ fn empty_oracle_categories_are_not_reported_as_parity() {
     assert!(rendered.contains("structure oracle: unavailable"));
     assert!(!report.has_named_mismatches());
     assert_eq!(report.observed_features["minecraft:test:observed"], 1);
+}
+
+fn feature_diagnostics_digest(features: &[FeaturePlacement]) -> u64 {
+    fn feed_bytes(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn feed_str(hash: &mut u64, value: &str) {
+        feed_bytes(hash, &(value.len() as u64).to_le_bytes());
+        feed_bytes(hash, value.as_bytes());
+    }
+
+    fn feed_i32(hash: &mut u64, value: i32) {
+        feed_bytes(hash, &value.to_le_bytes());
+    }
+
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    feed_bytes(&mut hash, &(features.len() as u64).to_le_bytes());
+    for feature in features {
+        feed_str(&mut hash, &feature.placed_feature);
+        feed_str(&mut hash, &feature.configured_feature);
+        feed_str(&mut hash, &feature.decoration);
+        for coordinate in feature.origin {
+            feed_i32(&mut hash, coordinate);
+        }
+        feed_bytes(&mut hash, &[u8::from(feature.success)]);
+        feed_bytes(
+            &mut hash,
+            &(feature.written_blocks.len() as u64).to_le_bytes(),
+        );
+        for position in &feature.written_blocks {
+            for coordinate in position {
+                feed_i32(&mut hash, *coordinate);
+            }
+        }
+    }
+    hash
 }
 
 #[test]

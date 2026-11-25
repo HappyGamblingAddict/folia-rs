@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,684 passing** at the e889793 gate (0 failed, 1 ignored benchmark); parity harness next expected 1,690
+> Test status: **1,684 passing** at the e889793 gate (0 failed, 1 ignored benchmark); parity harness next expected 1,690; section-lookup slice next expected 1,693
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1470,15 +1470,22 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   call `generator::configure` still use the chunk-local quart fallback because
   the surface system does not receive the raw seed; the server path does.
 
-### P2.13 Feature generation performance `[ ]` `M`
+### P2.13 Feature generation performance `[~]` `M`
 
 - **What:** Profile and optimize feature placement: avoid per-block
   allocation, cache tag/state lookups, batch chunk-local writes, and parallelize
   independent feature steps where safe.
 - **Why:** Current debug generation is ~15.7 s for 49 chunks before features.
   Adding features without optimization would make login far too slow.
+- **Progress (2026-11-25):** Added indexed chunk-section lookup with sparse/
+  unsorted linear fallback, removing the 24-section scan from feature reads.
+  Paired release benchmark: 2M reads improved from 25.57 ms (12.78 ns) to
+  12.47 ms (6.24 ns); indexed-vs-linear median 16.72 ms vs 26.50 ms. Generated
+  blocks and all 450 placement records remain digest-stable. End-to-end chunk
+  timing varied too much on the single-vCPU host to claim a stable gain.
 - **Done when:** Release-mode chunk generation has a measured budget and a
-  regression benchmark.
+  regression benchmark; remaining hotspots are ore scans/state clones,
+  whole-chunk light invalidation, and biome/noise sampling.
 
 ### P2.14 Custom worldgen/datapack loading `[ ]` `L` optional
 

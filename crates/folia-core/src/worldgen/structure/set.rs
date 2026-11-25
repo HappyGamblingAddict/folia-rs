@@ -743,6 +743,28 @@ impl StructureSetRegistry {
         biomes: &dyn StructureBiomeLookup,
         accept: impl Fn(&str) -> bool,
     ) -> Result<Option<SelectedStructure>, StructureSetError> {
+        self.structure_at_chunk_filtered_matching_with_height(
+            chunk_x,
+            chunk_z,
+            seed,
+            dimension,
+            |_| biome_y,
+            biomes,
+            accept,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn structure_at_chunk_filtered_matching_with_height(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        seed: i64,
+        dimension: StructureDimension,
+        biome_y: impl Fn(&str) -> i32,
+        biomes: &dyn StructureBiomeLookup,
+        accept: impl Fn(&str) -> bool,
+    ) -> Result<Option<SelectedStructure>, StructureSetError> {
         for set in &self.sets {
             if !set_supports_dimension(&set.name, dimension) {
                 continue;
@@ -771,7 +793,8 @@ impl StructureSetRegistry {
                         }
                         let center_x = (chunk_x << 4) + 8;
                         let center_z = (chunk_z << 4) + 8;
-                        let biome = biomes.biome_at(center_x, biome_y, center_z);
+                        let biome =
+                            biomes.biome_at(center_x, biome_y(&selection.structure), center_z);
                         if !biome_matches(rule.biomes, biome) {
                             continue;
                         }

@@ -2618,6 +2618,10 @@ fn required_str<'a>(
 /// data-pack document with insignificant whitespace removed.
 pub const SHIPPED_STRUCTURE_JSON: &[(&str, &str)] = &[
     (
+        "minecraft:ancient_city",
+        r##"{ "type": "minecraft:jigsaw", "biomes": "#minecraft:has_structure/ancient_city", "dimension_padding": 1, "liquid_settings": "apply_waterlogging", "max_distance_from_center": 80, "size": 1, "spawn_overrides": {}, "start_height": { "absolute": -27 }, "start_jigsaw_name": "minecraft:city_anchor", "start_pool": "minecraft:ancient_city/city_center", "step": "underground_structures", "terrain_adaptation": "encapsulate", "use_expansion_hack": false }"##,
+    ),
+    (
         "minecraft:igloo",
         r##"{ "type": "minecraft:igloo", "biomes": "#minecraft:has_structure/igloo", "spawn_overrides": {}, "step": "surface_structures" }"##,
     ),
@@ -2826,6 +2830,7 @@ impl StructureGenerator {
         Ok(
             Self::from_catalog(StructureTemplateCatalog::shipped().clone())?
                 .with_enabled_structures([
+                    "minecraft:ancient_city",
                     "minecraft:village_plains",
                     "minecraft:village_desert",
                     "minecraft:village_savanna",
@@ -2878,18 +2883,33 @@ impl StructureGenerator {
         biomes: &dyn StructureBiomeLookup,
     ) -> Result<Option<SelectedStructure>, StructureError> {
         self.sets
-            .structure_at_chunk_filtered_matching(
+            .structure_at_chunk_filtered_matching_with_height(
                 chunk_x,
                 chunk_z,
                 seed,
                 dimension,
-                biome_y,
+                |structure| self.structure_biome_y(structure, biome_y),
                 biomes,
                 |structure| self.enabled.contains(structure),
             )
             .map_err(|error| StructureError::StructureSet {
                 message: error.to_string(),
             })
+    }
+
+    fn structure_biome_y(&self, structure: &str, fallback: i32) -> i32 {
+        match self
+            .definitions
+            .get(structure)
+            .map(|definition| &definition.kind)
+        {
+            Some(StructureKind::Jigsaw {
+                start_height,
+                project_start_to_heightmap: None,
+                ..
+            }) => *start_height,
+            _ => fallback,
+        }
     }
 
     /// Places every enabled structure start whose pieces intersect one chunk.

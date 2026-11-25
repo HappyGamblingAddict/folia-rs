@@ -3458,3 +3458,28 @@ Format:
   setting. Returned block-entity/entity descriptors are not yet persisted or
   spawned by `WorldGenerator`, and exact Java chest RNG / block-for-block
   differential fixtures remain open.
+
+## 2026-11-25 — Ancient City jigsaw start and start-height biome sampling
+- Context: the Ancient City set, biome/dimension rule, 58 templates, template
+  pools, and all three degradation processor lists already shipped, but no
+  structure definition enabled the jigsaw pipeline. The generic selector also
+  sampled every structure biome at sea level, which cannot reliably find the
+  Deep Dark at the Ancient City's absolute Y=-27 start height.
+- Decision: add the shipped Ancient City jigsaw definition (`city_center`,
+  `minecraft:city_anchor`, size 1, max distance 80, dimension padding 1,
+  `underground_structures`, `encapsulate`, waterlogging enabled) and enable it
+  in the catalog-backed manager. Non-heightmap-projected jigsaw definitions now
+  supply their absolute start height to biome selection; projected villages and
+  other structure kinds retain the caller's fallback height.
+- Why: selection must test the biome at the generated stub height, while start
+  placement remains the existing deterministic jigsaw expander.
+- Consequences: fixed-seed tests pin region-0 selection at chunk (11,15), the
+  five-piece seed-12345 layout and bounds, underground placement, and a generated
+  Deep Dark chunk at (-71,-47). `encapsulate` currently provides the existing
+  12-block bounding-box inflation only; terrain encapsulation itself remains an
+  explicit P2.8 gap. All Ancient City processor lists are present. The shipped
+  pool `minecraft:ancient_city/walls/no_corners` references
+  `minecraft:ancient_city/walls/intact_horizontal_wall_stairs_5`, but that NBT is
+  absent from the local 58-template catalog; the catalog test records this exact
+  gap and generation still fails loudly if that candidate is selected rather
+  than fabricating a replacement.

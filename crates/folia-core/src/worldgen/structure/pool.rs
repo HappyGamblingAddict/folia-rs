@@ -25,8 +25,8 @@
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
 use crate::worldgen::feature::{
-    ConfiguredFeature, FeatureData, FeatureLevel, PlacedFeature, PlacementModifierKind,
-    PlacementWorld,
+    ConfiguredFeature, FeatureData, FeatureLevel, FeaturePlacement, PlacedFeature,
+    PlacementModifierKind, PlacementWorld,
 };
 use crate::worldgen::structure::piece::{
     BoundingBox, PiecePlacement, StructureDataMarker, StructurePiece, TemplateStructurePiece,
@@ -850,6 +850,7 @@ pub struct PoolPlacement {
     pub feature_rejected: usize,
     /// Blocks written by feature-pool elements, in write order.
     pub feature_blocks: Vec<BlockPos>,
+    pub feature_placement_records: Vec<FeaturePlacement>,
 }
 
 impl PoolExpansion {
@@ -1038,6 +1039,7 @@ impl PoolExpansion {
             random,
             self.position,
             0,
+            result,
         )?;
         result.feature_written += feature_level.written;
         result.feature_rejected += feature_level.rejected;
@@ -1060,15 +1062,32 @@ impl PoolExpansion {
         random: &mut dyn RandomSource,
         pos: BlockPos,
         index: usize,
+        result: &mut PoolPlacement,
     ) -> Result<bool, PoolError> {
         let Some(modifier) = placed.placement_modifiers().get(index) else {
-            return configured.place(level, random, pos).map_err(|error| {
+            let before = level.written_blocks.len();
+            let success = configured.place(level, random, pos).map_err(|error| {
                 PoolError::UnsupportedFeatureElement {
                     pool: self.pool.clone(),
                     feature: placed.id().to_owned(),
                     reason: error.to_string(),
                 }
+            })?;
+            let mut written_blocks = level.written_blocks[before..].to_vec();
+            written_blocks.sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+            written_blocks.dedup();
+            result.feature_placement_records.push(FeaturePlacement {
+                placed_feature: placed.id().to_owned(),
+                configured_feature: configured.id().to_owned(),
+                decoration: "structure_feature_pool".to_owned(),
+                origin: [pos.x(), pos.y(), pos.z()],
+                success,
+                written_blocks: written_blocks
+                    .iter()
+                    .map(|pos| [pos.x(), pos.y(), pos.z()])
+                    .collect(),
             });
+            return Ok(success);
         };
         let positions = {
             let world = FeatureLevelPlacementWorld { level: &*level };
@@ -1089,7 +1108,7 @@ impl PoolExpansion {
         };
         let mut any = false;
         for next in positions {
-            if self.place_feature_at(placed, configured, level, random, next, index + 1)? {
+            if self.place_feature_at(placed, configured, level, random, next, index + 1, result)? {
                 any = true;
             }
         }

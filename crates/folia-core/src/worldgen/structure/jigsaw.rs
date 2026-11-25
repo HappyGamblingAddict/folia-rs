@@ -19,7 +19,7 @@
 
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
-use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
+use crate::worldgen::feature::{Decoration, FeatureLevel, FeaturePlacement, Heightmap};
 use crate::worldgen::structure::StructureError;
 use crate::worldgen::structure::piece::{
     BoundingBox, PiecePlacement, StructureDataMarker, template_bounding_box,
@@ -265,6 +265,7 @@ impl JigsawPiece {
             feature_written: placement.feature_written,
             feature_rejected: placement.feature_rejected,
             feature_blocks: placement.feature_blocks,
+            feature_placement_records: placement.feature_placement_records,
             written_blocks: recording.written_blocks,
         })
     }
@@ -280,6 +281,7 @@ pub struct JigsawPiecePlacement {
     pub feature_rejected: usize,
     /// Blocks written by feature-pool elements, in write order.
     pub feature_blocks: Vec<BlockPos>,
+    pub feature_placement_records: Vec<FeaturePlacement>,
     /// Every block this piece wrote, template and feature alike.
     pub written_blocks: Vec<BlockPos>,
 }
@@ -453,6 +455,9 @@ impl JigsawStart {
             result.feature_rejected += placement.feature_rejected;
             result.written_blocks.extend(placement.written_blocks);
             result.feature_blocks.extend(placement.feature_blocks);
+            result
+                .feature_placement_records
+                .extend(placement.feature_placement_records);
             result
                 .block_entities
                 .extend(placement.placement.block_entities);

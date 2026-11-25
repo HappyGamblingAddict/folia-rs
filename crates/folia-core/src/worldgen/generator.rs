@@ -14,6 +14,9 @@ use crate::worldgen::aquifer::{Aquifer, AquiferSubstance};
 use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
 use crate::worldgen::density::{NoiseRouter, WorldgenData};
+use crate::worldgen::diagnostics::{
+    DiagnosedChunk, FeaturePlacement, GenerationDiagnostics, position_value,
+};
 use crate::worldgen::feature::{
     ConfiguredFeature, Decoration, FeatureBiomeRegion, FeatureData, FeatureLevel, Heightmap,
     PlacedFeature, PlacementWorld, WorldGenRegion,
@@ -331,6 +334,32 @@ impl WorldGenerator {
         chunk_z: i32,
         steps: &[Decoration],
     ) -> io::Result<Chunk> {
+        let mut diagnostics = GenerationDiagnostics::default();
+        self.generate_chunk_with_steps_inner(chunk_x, chunk_z, steps, &mut diagnostics)
+            .map(|generated| generated.chunk)
+    }
+
+    pub fn generate_chunk_with_diagnostics(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<DiagnosedChunk> {
+        let mut diagnostics = GenerationDiagnostics::capturing();
+        self.generate_chunk_with_steps_inner(
+            chunk_x,
+            chunk_z,
+            &Self::DEFAULT_DECORATION_STEPS,
+            &mut diagnostics,
+        )
+    }
+
+    fn generate_chunk_with_steps_inner(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        steps: &[Decoration],
+        diagnostics: &mut GenerationDiagnostics,
+    ) -> io::Result<DiagnosedChunk> {
         let cells_x = (16 / CELL_WIDTH + 1) as usize;
         let cells_z = cells_x;
         let cells_y = (self.height / CELL_HEIGHT + 1) as usize;
@@ -503,9 +532,12 @@ impl WorldGenerator {
 
         // Biomes are now stored in the chunk, which the biome placement filter
         // reads through `FeaturePlacementWorld`.
-        self.apply_decorations(&mut chunk, &biome_region, steps)?;
+        self.apply_decorations(&mut chunk, &biome_region, steps, diagnostics)?;
 
-        Ok(chunk)
+        Ok(DiagnosedChunk {
+            chunk,
+            diagnostics: std::mem::take(diagnostics),
+        })
     }
 
     /// Runs the decoration steps this port implements for every biome in the
@@ -520,6 +552,7 @@ impl WorldGenerator {
         chunk: &mut Chunk,
         biome_region: &FeatureBiomeRegion,
         steps: &[Decoration],
+        diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
         let data = FeatureData::vanilla();
         let step_order = data.step_feature_order();
@@ -546,7 +579,7 @@ impl WorldGenerator {
                 )
                 && placed_structure_steps.insert(step)
             {
-                self.apply_structures(chunk, step)?;
+                self.apply_structures(chunk, step, diagnostics)?;
             }
             let active = biome_region.active_feature_indices(data, step, &step_order[step.index()]);
             if active.is_empty() {
@@ -589,6 +622,8 @@ impl WorldGenerator {
                     biome_region,
                     &mut worldgen_random,
                     origin,
+                    step,
+                    diagnostics,
                 )?;
             }
         }
@@ -598,7 +633,12 @@ impl WorldGenerator {
     /// Places structure starts whose pieces intersect the chunk currently
     /// being generated. Selection is biome-filtered through the generator's
     /// own sampler at sea level and restricted to the Overworld.
-    fn apply_structures(&self, chunk: &mut Chunk, step: Decoration) -> io::Result<()> {
+    fn apply_structures(
+        &self,
+        chunk: &mut Chunk,
+        step: Decoration,
+        diagnostics: &mut GenerationDiagnostics,
+    ) -> io::Result<()> {
         let Some(structures) = &self.structures else {
             return Ok(());
         };
@@ -612,7 +652,7 @@ impl WorldGenerator {
             densities: RefCell::new(HashMap::new()),
         };
         let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
-        structures
+        let placement = structures
             .place_for_chunk_with_height_source(
                 &mut region,
                 &height_source,
@@ -624,8 +664,14 @@ impl WorldGenerator {
                 8,
                 step,
             )
-            .map(|_| ())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+        if diagnostics.is_capturing() {
+            diagnostics
+                .features
+                .extend(placement.feature_placement_records);
+            diagnostics.structures.extend(placement.starts);
+        }
+        Ok(())
     }
 
     /// Runs one placed feature with vanilla's lazy modifier stream.
@@ -645,8 +691,20 @@ impl WorldGenerator {
         biome_region: &FeatureBiomeRegion,
         random: &mut WorldgenRandom,
         origin: BlockPos,
+        step: Decoration,
+        diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
-        self.place_modifier_step(placed, configured, chunk, biome_region, random, origin, 0)
+        self.place_modifier_step(
+            placed,
+            configured,
+            chunk,
+            biome_region,
+            random,
+            origin,
+            0,
+            step,
+            diagnostics,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -659,15 +717,34 @@ impl WorldGenerator {
         random: &mut WorldgenRandom,
         pos: BlockPos,
         index: usize,
+        step: Decoration,
+        diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
         let Some(modifier) = placed.placement_modifiers().get(index) else {
             let mut region = WorldGenRegion::new(chunk, self.min_y, self.height);
-            return configured
+            if diagnostics.is_capturing() {
+                region = region.record_writes();
+            }
+            let success = configured
                 .place(&mut region, random, pos)
-                .map(|_| ())
                 .map_err(|feature| {
                     io::Error::new(io::ErrorKind::InvalidData, feature.to_string())
+                })?;
+            if diagnostics.is_capturing() {
+                diagnostics.features.push(FeaturePlacement {
+                    placed_feature: placed.id().to_owned(),
+                    configured_feature: configured.id().to_owned(),
+                    decoration: step.name().to_owned(),
+                    origin: position_value(pos),
+                    success,
+                    written_blocks: region
+                        .take_written_blocks()
+                        .iter()
+                        .map(|position| position_value(*position))
+                        .collect(),
                 });
+            }
+            return Ok(());
         };
         let positions = {
             let world = FeaturePlacementWorld {
@@ -693,6 +770,8 @@ impl WorldGenerator {
                 random,
                 next,
                 index + 1,
+                step,
+                diagnostics,
             )?;
         }
         Ok(())

@@ -243,8 +243,8 @@ pub use shipwreck::{ShipwreckPiece, ShipwreckStart};
 pub use start::{
     BiomeSet, DesertPyramidPiece, DesertPyramidStart, IglooStructure, SHIPPED_STRUCTURE_JSON,
     StartPlacement, StructureChunkPlacement, StructureDefinition, StructureGenerationContext,
-    StructureGenerator, StructureKind, StructureStart, StructureStartHeight, TemplateProvider,
-    TerrainAdjustment,
+    StructureGenerator, StructureKind, StructureStart, StructureStartHeight, StructureStartSummary,
+    TemplateProvider, TerrainAdjustment,
 };
 pub use stronghold::{StrongholdPiece, StrongholdRoom, StrongholdRoomKind, StrongholdStart};
 pub use template::{

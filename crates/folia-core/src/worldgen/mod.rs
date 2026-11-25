@@ -6,6 +6,7 @@ pub mod biome_climate;
 pub mod biome_zoom;
 pub mod carver;
 pub mod density;
+pub mod diagnostics;
 pub mod end;
 pub mod feature;
 pub mod generator;

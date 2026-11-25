@@ -8,7 +8,7 @@
 use crate::chunk::BlockState;
 use crate::nbt::Tag;
 use crate::region::ChunkPos;
-use crate::worldgen::feature::{Decoration, FeatureLevel, Heightmap};
+use crate::worldgen::feature::{Decoration, FeatureLevel, FeaturePlacement, Heightmap};
 use crate::worldgen::structure::StructureError;
 use crate::worldgen::structure::assets::StructureTemplateCatalog;
 use crate::worldgen::structure::buried_treasure::{BuriedTreasurePiece, BuriedTreasureStart};
@@ -492,6 +492,7 @@ pub struct StartPlacement {
     pub written_blocks: Vec<BlockPos>,
     /// Blocks written by feature-pool elements, sorted and deduplicated.
     pub feature_blocks: Vec<BlockPos>,
+    pub feature_placement_records: Vec<FeaturePlacement>,
     pub block_entities: Vec<PlacedBlock>,
     pub entities: Vec<PlacedEntity>,
     pub data_markers: Vec<StructureDataMarker>,
@@ -1431,6 +1432,9 @@ fn merge_placement(result: &mut StartPlacement, placement: StartPlacement) {
     result.feature_written += placement.feature_written;
     result.feature_rejected += placement.feature_rejected;
     result.feature_blocks.extend(placement.feature_blocks);
+    result
+        .feature_placement_records
+        .extend(placement.feature_placement_records);
     result.block_entities.extend(placement.block_entities);
     result.entities.extend(placement.entities);
     result.data_markers.extend(placement.data_markers);
@@ -3187,6 +3191,17 @@ impl StructureGenerator {
                 } else {
                     start.place_in_chunk(level, chunk_pos)?
                 };
+                result.starts.push(StructureStartSummary {
+                    structure_id: start.structure_id().to_owned(),
+                    chunk_pos: start.chunk_pos(),
+                    bounding_box: start.bounding_box(),
+                    placed_pieces: placement.placed_pieces,
+                    skipped_pieces: placement.skipped_pieces,
+                    written: placement.written,
+                    rejected: placement.rejected,
+                    feature_elements: placement.feature_elements,
+                    feature_placements: placement.feature_placements,
+                });
                 result.placed_pieces += placement.placed_pieces;
                 result.skipped_pieces += placement.skipped_pieces;
                 result.written += placement.written;
@@ -3197,6 +3212,9 @@ impl StructureGenerator {
                 result.feature_rejected += placement.feature_rejected;
                 result.written_blocks.extend(placement.written_blocks);
                 result.feature_blocks.extend(placement.feature_blocks);
+                result
+                    .feature_placement_records
+                    .extend(placement.feature_placement_records);
                 result.block_entities.extend(placement.block_entities);
                 result.entities.extend(placement.entities);
                 result.data_markers.extend(placement.data_markers);
@@ -3229,10 +3247,24 @@ impl StructureGenerator {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructureStartSummary {
+    pub structure_id: String,
+    pub chunk_pos: ChunkPos,
+    pub bounding_box: Option<BoundingBox>,
+    pub placed_pieces: usize,
+    pub skipped_pieces: usize,
+    pub written: usize,
+    pub rejected: usize,
+    pub feature_elements: usize,
+    pub feature_placements: usize,
+}
+
 /// Result of one chunk's structure pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StructureChunkPlacement {
     pub generated_starts: usize,
+    pub starts: Vec<StructureStartSummary>,
     pub placed_pieces: usize,
     pub skipped_pieces: usize,
     pub written: usize,
@@ -3243,6 +3275,7 @@ pub struct StructureChunkPlacement {
     pub feature_rejected: usize,
     pub written_blocks: Vec<BlockPos>,
     pub feature_blocks: Vec<BlockPos>,
+    pub feature_placement_records: Vec<FeaturePlacement>,
     pub skipped_unsupported: Vec<String>,
     pub block_entities: Vec<PlacedBlock>,
     pub entities: Vec<PlacedEntity>,

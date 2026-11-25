@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,684 passing** at the e889793 gate (0 failed, 1 ignored benchmark)
+> Test status: **1,684 passing** at the e889793 gate (0 failed, 1 ignored benchmark); parity harness next expected 1,690
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1428,15 +1428,20 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   rotation/mirror, center-chunk clipping, Overworld/Nether selection, and
   fixed-seed/generated-chunk fixtures. Java height/processors/decor remain open.
 
-### P2.11 Feature/structure parity harness `[ ]` `M`
+### P2.11 Feature/structure parity harness `[~]` `M`
 
 - **What:** Expand `worldgen_parity.rs` from 16 columns to all 256 columns, add
   multiple chunks and seeds, report per-feature and per-structure differences,
   and add a Java dump mode for feature/structure starts.
 - **Why:** The current fixture is good for terrain but too sparse to validate
   features and structures.
-- **Done when:** CI runs at least 4 seeds × 4 chunks and fails on unexplained
-  regressions.
+- **Progress (2026-11-25):** Added reusable `ParityReport` diagnostics,
+  per-feature/per-structure mismatch classification, feature-pool placement
+  records, stable JSON dumps, and `dump_worldgen`. CI now runs a deterministic
+  4-seed × 4-chunk Rust matrix, but real Java coverage remains 1/16 seed-chunk
+  pairs and 16/4096 target columns; no Java feature/structure fixtures exist.
+- **Done when:** CI runs at least 4 seeds × 4 chunks against real Java data and
+  fails on unexplained regressions.
 
 ### P2.12 Exact surface fixes `[~]` `M`
 

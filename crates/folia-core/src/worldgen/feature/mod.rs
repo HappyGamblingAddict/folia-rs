@@ -322,6 +322,27 @@ pub struct FeatureEntity {
     pub nbt: Option<Tag>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeaturePlacement {
+    pub placed_feature: String,
+    pub configured_feature: String,
+    pub decoration: String,
+    pub origin: [i32; 3],
+    pub success: bool,
+    pub written_blocks: Vec<[i32; 3]>,
+}
+
+impl FeaturePlacement {
+    pub fn match_key(&self) -> (&str, &str, &str, [i32; 3]) {
+        (
+            &self.placed_feature,
+            &self.configured_feature,
+            &self.decoration,
+            self.origin,
+        )
+    }
+}
+
 /// Chunk-bounded `WorldGenLevel` passed to features.
 #[derive(Debug)]
 pub struct WorldGenRegion<'a> {
@@ -332,6 +353,8 @@ pub struct WorldGenRegion<'a> {
     scheduled_ticks: ScheduledTickQueue,
     block_entities: Vec<FeatureBlockEntity>,
     entities: Vec<FeatureEntity>,
+    record_writes: bool,
+    written_blocks: BTreeSet<(i32, i32, i32)>,
 }
 
 impl<'a> WorldGenRegion<'a> {
@@ -344,7 +367,21 @@ impl<'a> WorldGenRegion<'a> {
             scheduled_ticks: ScheduledTickQueue::new(),
             block_entities: Vec::new(),
             entities: Vec::new(),
+            record_writes: false,
+            written_blocks: BTreeSet::new(),
         }
+    }
+
+    pub fn record_writes(mut self) -> Self {
+        self.record_writes = true;
+        self
+    }
+
+    pub fn take_written_blocks(&mut self) -> Vec<BlockPos> {
+        std::mem::take(&mut self.written_blocks)
+            .into_iter()
+            .map(|(x, y, z)| BlockPos::new(x, y, z))
+            .collect()
     }
 
     /// Pins `Level.getSeed()` for features that build seed-derived noise or
@@ -428,6 +465,9 @@ impl FeatureLevel for WorldGenRegion<'_> {
             return false;
         };
         self.chunk.set_block_state(x, y, z, state);
+        if self.record_writes {
+            self.written_blocks.insert((pos.x(), pos.y(), pos.z()));
+        }
         true
     }
 

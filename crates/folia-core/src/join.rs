@@ -28,6 +28,9 @@ use crate::entity::{
     BlockCollider, Entity, SessionEntityTracker, WorldCollider, add_entity_packet,
     entity_position_sync_packet, remove_entities_packet,
 };
+use crate::generation_scheduler::{
+    GenerationError, GenerationKey, GenerationRequest, GenerationScheduler, RequestPriority,
+};
 use crate::inventory;
 use crate::item_components::{ComponentValue, ItemStack};
 use crate::item_entity::{DropEntityStore, PickupTarget};
@@ -58,7 +61,7 @@ use std::net::{IpAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The login/configuration/play connection. Encryption is enabled in place
@@ -6768,6 +6771,41 @@ fn generation_workers(pending: usize) -> usize {
         .min(pending)
 }
 
+/// Generated terrain plus its encoded chunk packet, shared by every waiter of
+/// one in-flight request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedColumn {
+    pub chunk: Chunk,
+    pub packet: Vec<u8>,
+}
+
+pub fn generate_join_column(key: GenerationKey) -> Result<GeneratedColumn, String> {
+    if shutdown_requested() {
+        return Err("shutdown requested".into());
+    }
+    let chunk = crate::worldgen::generator::generate_dimension(
+        dimension::generator_dimension(key.dimension),
+        key.x,
+        key.z,
+        key.seed,
+    )
+    .map_err(|error| error.to_string())?;
+    let packet = ChunkPacketTemplate::build_dynamic(&chunk).map_err(|error| error.to_string())?;
+    Ok(GeneratedColumn { chunk, packet })
+}
+
+static JOIN_GENERATION: LazyLock<GenerationScheduler<GeneratedColumn>> = LazyLock::new(|| {
+    GenerationScheduler::new(
+        generate_join_column,
+        generation_workers(MAX_GENERATION_WORKERS),
+        GENERATION_QUEUE,
+    )
+});
+
+pub fn join_generation_scheduler() -> &'static GenerationScheduler<GeneratedColumn> {
+    &JOIN_GENERATION
+}
+
 /// Send a batch's columns in order while worker threads generate the missing
 /// ones, so the first columns reach the client before the whole batch exists.
 /// Stored columns keep their place in the same order.
@@ -6775,9 +6813,10 @@ fn generation_workers(pending: usize) -> usize {
 fn send_columns(
     stream: &mut LoginStream,
     storage: &mut WorldStorage,
-    generator: Option<Arc<crate::worldgen::generator::WorldGenerator>>,
     dimension: crate::world::Dimension,
     seed: i64,
+    center_x: i32,
+    center_z: i32,
     pending: &[(usize, i32, i32)],
     loaded: &mut [Option<(Chunk, ChunkSource)>],
     batch: &mut ChunkBatch,
@@ -6785,12 +6824,9 @@ fn send_columns(
     if shutdown_requested() {
         return Ok(());
     }
-    let overworld_generator = if dimension == crate::world::Dimension::Overworld {
-        generator
-    } else {
-        None
-    };
-    if dimension == crate::world::Dimension::Overworld && overworld_generator.is_none() {
+    if dimension == crate::world::Dimension::Overworld
+        && crate::worldgen::generator::configured().is_none()
+    {
         for &(index, chunk_x, chunk_z) in pending {
             loaded[index] = Some((
                 crate::chunk_packet::flat_chunk(chunk_x, chunk_z),
@@ -6814,96 +6850,82 @@ fn send_columns(
         return Ok(());
     }
 
-    let pending: Arc<Vec<(usize, i32, i32)>> = Arc::new(pending.to_vec());
-    let next = Arc::new(AtomicUsize::new(0));
-    let workers = generation_workers(pending.len());
-    let generation: Option<Arc<crate::worldgen::generator::WorldGenerator>> = overworld_generator;
-    // Generation is detached: a chunk that is already being generated cannot
-    // be cancelled, and shutdown must not wait for it. The bounded channel
-    // still applies backpressure, and a dropped receiver wakes every worker.
-    let (sender, receiver) = mpsc::sync_channel(GENERATION_QUEUE);
-    for _ in 0..workers {
-        let sender = sender.clone();
-        let pending = Arc::clone(&pending);
-        let next = Arc::clone(&next);
-        let generator = generation.clone();
-        std::thread::spawn(move || {
-            loop {
-                if shutdown_requested() {
-                    break;
-                }
-                let position = next.fetch_add(1, Ordering::Relaxed);
-                let Some(&(index, chunk_x, chunk_z)) = pending.get(position) else {
-                    break;
-                };
-                let result = match generator.as_deref() {
-                    Some(generator) => {
-                        generator
-                            .generate_chunk(chunk_x, chunk_z)
-                            .and_then(|chunk| {
-                                let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
-                                Ok((index, chunk, packet))
-                            })
-                    }
-                    None => crate::worldgen::generator::generate_dimension(
-                        dimension::generator_dimension(dimension),
-                        chunk_x,
-                        chunk_z,
-                        seed,
-                    )
-                    .and_then(|chunk| {
-                        let packet = ChunkPacketTemplate::build_dynamic(&chunk)?;
-                        Ok((index, chunk, packet))
-                    }),
-                };
-                if sender.send(result).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-    drop(sender);
+    let scheduler = join_generation_scheduler();
+    let mut requests: HashMap<usize, GenerationRequest<GeneratedColumn>> = HashMap::new();
+    let mut submitted = 0usize;
+    submit_join_columns(
+        scheduler,
+        pending,
+        dimension,
+        seed,
+        center_x,
+        center_z,
+        &mut submitted,
+        &mut requests,
+    )?;
 
-    let mut finished: HashMap<usize, (Chunk, Vec<u8>)> = HashMap::new();
     for (index, column) in loaded.iter_mut().enumerate() {
-        // The player already has a position, so a shutdown can arrive while
-        // this first batch is still generating. Do not make shutdown wait
-        // for hundreds of columns nobody will receive.
         if shutdown_requested() {
             return Ok(());
         }
         let (packet, source) = match column.take() {
             Some((chunk, source)) => (ChunkPacketTemplate::build_dynamic(&chunk)?, source),
             None => {
-                let (chunk, packet) = loop {
-                    if let Some(ready) = finished.remove(&index) {
-                        break ready;
-                    }
-                    match receiver.recv_timeout(SESSION_TICK_INTERVAL) {
-                        Ok(Ok((produced, chunk, packet))) => {
-                            finished.insert(produced, (chunk, packet));
-                        }
-                        Ok(Err(error)) => return Err(error),
-                        Err(mpsc::RecvTimeoutError::Timeout) if shutdown_requested() => {
-                            return Ok(());
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) if shutdown_requested() => {
-                            return Ok(());
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                "chunk generation workers stopped before the batch finished",
-                            ));
-                        }
+                let request = requests.remove(&index).ok_or_else(|| {
+                    io::Error::other(format!("no generation request for column {index}"))
+                })?;
+                let generated = match request.wait() {
+                    Ok(generated) => generated,
+                    Err(_) if shutdown_requested() => return Ok(()),
+                    Err(error) => {
+                        return Err(io::Error::other(format!("chunk generation: {error}")));
                     }
                 };
-                storage.save_chunk(&chunk, Compression::Zlib)?;
-                (packet, ChunkSource::Generated)
+                storage.save_chunk(&generated.chunk, Compression::Zlib)?;
+                (generated.packet.clone(), ChunkSource::Generated)
             }
         };
         record_and_send(stream, batch, source, &packet)?;
+        submit_join_columns(
+            scheduler,
+            pending,
+            dimension,
+            seed,
+            center_x,
+            center_z,
+            &mut submitted,
+            &mut requests,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_join_columns(
+    scheduler: &GenerationScheduler<GeneratedColumn>,
+    pending: &[(usize, i32, i32)],
+    dimension: crate::world::Dimension,
+    seed: i64,
+    center_x: i32,
+    center_z: i32,
+    submitted: &mut usize,
+    requests: &mut HashMap<usize, GenerationRequest<GeneratedColumn>>,
+) -> io::Result<()> {
+    while *submitted < pending.len() {
+        if shutdown_requested() {
+            return Ok(());
+        }
+        let (index, chunk_x, chunk_z) = pending[*submitted];
+        let key = GenerationKey::new(dimension, seed, chunk_x, chunk_z);
+        let priority = RequestPriority::from_center(chunk_x, chunk_z, center_x, center_z);
+        match scheduler.try_request(key, priority) {
+            Ok(request) => {
+                requests.insert(index, request);
+                *submitted += 1;
+            }
+            Err(GenerationError::QueueFull) => break,
+            Err(error) => return Err(io::Error::other(format!("chunk generation: {error}"))),
+        }
     }
     Ok(())
 }
@@ -7357,13 +7379,13 @@ fn stream_chunks_around(
         loaded.push(None);
         pending.push((index, chunk_x, chunk_z));
     }
-    let generator = crate::worldgen::generator::configured().cloned();
     send_columns(
         stream,
         storage,
-        generator,
         dimension,
         seed,
+        center_x,
+        center_z,
         &pending,
         &mut loaded,
         &mut batch,

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,697 passing** at the a2d5bc1 gate (0 failed, 1 ignored benchmark); ore column-cache slice next expected 1,702; region-reuse slice next expected 1,705; light fast path next expected 1,715
+> Test status: **1,705 passing** at the 3e36fa0 gate (0 failed, 1 ignored benchmark); light fast path next expected 1,715
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 

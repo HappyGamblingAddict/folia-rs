@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `3e36fa0` with 1,705 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `c6f6bf4` with 1,715 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,705 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); light fast path next expected 1,715. Parity is **98.75% block-class /
+- Tests: **1,715 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); datapack slice next expected 1,721. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -51,6 +51,9 @@ Last updated: 2026-11-24
 - P2.11 parity diagnostics/dump and a 4×4 Rust matrix are landed; real Java
   coverage is still only seed 12345/chunk (0,-1), 16 columns, with no Java
   feature/structure fixtures.
+- P2.14 local datapack loading is landed for Overworld configured/placed
+  features, biomes/climate, and block tags; structure/dimension packs, replace
+  overlays, pack priority, zipped packs, and full biome codecs remain unsupported.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

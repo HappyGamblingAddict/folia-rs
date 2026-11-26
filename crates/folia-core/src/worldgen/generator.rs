@@ -168,6 +168,9 @@ type BiomeCellCache = Mutex<HashMap<(i32, i32), Arc<[u16]>>>;
 pub struct WorldGenerator {
     router: NoiseRouter,
     biomes: BiomeSampler,
+    /// Feature catalog used by decoration. Defaults to the process-wide
+    /// datapack-merged catalog; tests and callers can install an explicit one.
+    feature_data: Arc<FeatureData>,
     surface: SurfaceSystem,
     surface_rules: RuleSource,
     carvers: CarverSet,
@@ -193,7 +196,11 @@ impl WorldGenerator {
             .seed()
             .from_hash_of("minecraft:aquifer")
             .fork_positional();
-        let biomes = BiomeSampler::from_data(&data)?;
+        let mut biomes = BiomeSampler::from_data(&data)?;
+        let custom_biomes = crate::worldgen::datapack::installed_custom_biomes();
+        if !custom_biomes.is_empty() {
+            biomes = biomes.with_custom_biomes(custom_biomes.to_vec())?;
+        }
         let surface = SurfaceSystem::new(
             &data,
             min_y,
@@ -211,6 +218,7 @@ impl WorldGenerator {
         Ok(Self {
             router,
             biomes,
+            feature_data: Arc::new(FeatureData::active().clone()),
             surface,
             surface_rules,
             carvers: CarverSet::overworld(min_y),
@@ -252,6 +260,25 @@ impl WorldGenerator {
 
     pub fn structures(&self) -> Option<&StructureGenerator> {
         self.structures.as_ref()
+    }
+
+    /// Uses an explicit feature catalog (for example one merged from a
+    /// datapack) instead of the process-wide active catalog.
+    pub fn with_feature_data(mut self, data: FeatureData) -> Self {
+        self.feature_data = Arc::new(data);
+        self
+    }
+
+    /// Uses an explicit biome sampler, for example one extended with custom
+    /// climate entries from a datapack.
+    pub fn with_biome_sampler(mut self, biomes: BiomeSampler) -> Self {
+        self.biomes = biomes;
+        self
+    }
+
+    /// Feature catalog this generator places decorations from.
+    pub fn feature_data(&self) -> &FeatureData {
+        &self.feature_data
     }
 
     pub fn min_y(&self) -> i32 {
@@ -555,7 +582,7 @@ impl WorldGenerator {
         steps: &[Decoration],
         diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<()> {
-        let data = FeatureData::vanilla();
+        let data = &*self.feature_data;
         let step_order = data.step_feature_order();
         let mut worldgen_random = WorldgenRandom::new(0);
         let decoration_seed = worldgen_random.set_decoration_seed(
@@ -755,7 +782,7 @@ impl WorldGenerator {
         let positions = {
             let world = FeaturePlacementWorld {
                 chunk: region.chunk(),
-                data: FeatureData::vanilla(),
+                data: &self.feature_data,
                 biome_region,
                 biomes: &self.biomes,
                 min_y: self.min_y,

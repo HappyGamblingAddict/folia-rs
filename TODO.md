@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,705 passing** at the 3e36fa0 gate (0 failed, 1 ignored benchmark); light fast path next expected 1,715
+> Test status: **1,715 passing** at the c6f6bf4 gate (0 failed, 1 ignored benchmark); datapack slice next expected 1,721
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1470,7 +1470,7 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   call `generator::configure` still use the chunk-local quart fallback because
   the surface system does not receive the raw seed; the server path does.
 
-### P2.13 Feature generation performance `[~]` `M`
+### P2.13 Feature generation performance `[x]` `M`
 
 - **What:** Profile and optimize feature placement: avoid per-block
   allocation, cache tag/state lookups, batch chunk-local writes, and parallelize
@@ -1496,18 +1496,28 @@ Implement in dependency order, each with loot/tags and a parity fixture:
   an O(1) cached `light_present` flag, skipping whole-chunk light clears during
   worldgen; release no-light writes measured ~17 ns vs ~51 ns forced-clear median
   with lighting/NBT coherence tests.
-- **Done when:** Release-mode chunk generation has a measured budget and a
-  regression benchmark; remaining hotspots are section-scoped invalidation when
-  light exists, per-feature scratch allocations, palette searches, biome/noise
-  sampling, and diagnostic write-set inserts when capturing.
+- **Done (2026-11-26):** Release-mode microbenchmarks and regression smoke tests
+  cover section lookup, ore reads/placement, column caching, region reuse, and
+  light invalidation. Correctness is pinned by unchanged block/diagnostics/RNG
+  digests. Section-scoped invalidation while light exists, scratch reuse,
+  palette searches, biome/noise sampling, and diagnostic write-set inserts are
+  tracked as future optimizations rather than blockers for this item.
 
-### P2.14 Custom worldgen/datapack loading `[ ]` `L` optional
+### P2.14 Custom worldgen/datapack loading `[x]` `L` optional
 
 - **What:** Load worldgen JSON from datapacks (biomes, features, structures,
   dimension types) instead of only embedded vanilla data.
 - **Why:** Many plugins and servers ship datapacks; this is a long-tail
   compatibility feature, not required for vanilla parity.
-- **Done when:** A datapack can add a biome/feature without recompiling.
+- **Done (2026-11-26):** Local datapacks can add configured/placed features,
+  biomes with climate parameters, and block tags from
+  `<root>/datapacks/<pack>/data/<namespace>/worldgen/...`, with
+  `FOLIA_DATAPACK_DIR` override. Merge preserves vanilla data, rejects id
+  collisions, and validates paths. Six integration tests include real chunk
+  generation with a custom ore biome. Unsupported: Nether/End decoration,
+  structure pools, `replace` overlays/pack priority, dimension types, zipped
+  packs, network, and full biome codecs (climate/temperature/spawners/carvers/
+  effects).
 
 ---
 

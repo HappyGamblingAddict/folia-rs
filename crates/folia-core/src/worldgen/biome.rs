@@ -5,6 +5,7 @@
 //! noise router, and finds the biome with the minimum parameter fitness.
 
 use crate::worldgen::density::{DensityFunction, WorldgenData};
+use serde_json::Value;
 use std::io;
 use std::sync::Arc;
 
@@ -36,8 +37,92 @@ pub struct BiomeEntry {
     pub offset: i64,
 }
 
+/// Climate parameters for a biome added by a datapack.
+///
+/// Values are the quantized `Climate.Parameter` integers used by
+/// `assets/biome_params.txt` (Java's `quantize()` scales the raw density by
+/// 10,000). Custom entries are placed before the vanilla entries so an exact
+/// match wins the `ParameterList.search` tie-break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomBiomeClimate {
+    pub temperature: [i64; 2],
+    pub humidity: [i64; 2],
+    pub continentalness: [i64; 2],
+    pub erosion: [i64; 2],
+    pub depth: [i64; 2],
+    pub weirdness: [i64; 2],
+    pub offset: i64,
+}
+
+impl CustomBiomeClimate {
+    /// Parses the supported `climate` object from a datapack biome document.
+    pub fn parse(value: &Value) -> io::Result<Self> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| invalid("biome `climate` must be an object"))?;
+        let pair = |key: &str| -> io::Result<[i64; 2]> {
+            let array = object
+                .get(key)
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid(format!("biome `climate` is missing `{key}`")))?;
+            if array.len() != 2 {
+                return Err(invalid(format!(
+                    "biome `climate.{key}` must hold exactly two integers"
+                )));
+            }
+            let min = array[0]
+                .as_i64()
+                .ok_or_else(|| invalid(format!("biome `climate.{key}` min is not an integer")))?;
+            let max = array[1]
+                .as_i64()
+                .ok_or_else(|| invalid(format!("biome `climate.{key}` max is not an integer")))?;
+            if min > max {
+                return Err(invalid(format!(
+                    "biome `climate.{key}` has min {min} greater than max {max}"
+                )));
+            }
+            Ok([min, max])
+        };
+        let offset = object
+            .get("offset")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| invalid("biome `climate` is missing `offset`"))?;
+        Ok(Self {
+            temperature: pair("temperature")?,
+            humidity: pair("humidity")?,
+            continentalness: pair("continentalness")?,
+            erosion: pair("erosion")?,
+            depth: pair("depth")?,
+            weirdness: pair("weirdness")?,
+            offset,
+        })
+    }
+
+    /// Converts to a parameter-list entry with the datapack biome id.
+    pub fn entry(&self, id: &str) -> BiomeEntry {
+        let parameter = |range: [i64; 2]| Parameter {
+            min: range[0],
+            max: range[1],
+        };
+        BiomeEntry {
+            biome: id.to_owned(),
+            temperature: parameter(self.temperature),
+            humidity: parameter(self.humidity),
+            continentalness: parameter(self.continentalness),
+            erosion: parameter(self.erosion),
+            depth: parameter(self.depth),
+            weirdness: parameter(self.weirdness),
+            offset: self.offset,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct BiomeSampler {
     entries: Vec<BiomeEntry>,
+    /// Number of leading entries added by datapacks. Their exact parameter
+    /// ranges take precedence over the vanilla parameter-list search.
+    custom_count: usize,
     root: Node,
     temperature: Arc<DensityFunction>,
     humidity: Arc<DensityFunction>,
@@ -59,6 +144,7 @@ impl BiomeSampler {
         let root = build_tree(&entries);
         Ok(Self {
             entries,
+            custom_count: 0,
             root,
             temperature: router.function("temperature")?.clone(),
             humidity: router.function("vegetation")?.clone(),
@@ -67,6 +153,74 @@ impl BiomeSampler {
             depth: router.function("depth")?.clone(),
             weirdness: router.function("ridges")?.clone(),
         })
+    }
+
+    /// Extends the climate parameter list with datapack biomes.
+    ///
+    /// Custom entries are prepended so an exact parameter match wins
+    /// `ParameterList.search`'s strict `<` tie-break over a vanilla entry with
+    /// an overlapping range. The parameter tree is rebuilt from the combined
+    /// list; all vanilla entries are kept, so unmodified samples are unchanged.
+    pub fn with_custom_biomes(
+        mut self,
+        extras: Vec<(String, CustomBiomeClimate)>,
+    ) -> io::Result<Self> {
+        if extras.is_empty() {
+            return Ok(self);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut custom = Vec::with_capacity(extras.len());
+        for (id, climate) in extras {
+            if !seen.insert(id.clone()) {
+                return Err(invalid(format!("duplicate custom biome `{id}`")));
+            }
+            if self.entries.iter().any(|entry| entry.biome == id) {
+                return Err(invalid(format!(
+                    "custom biome `{id}` collides with a vanilla biome; only new ids can be added \
+                     to the climate parameter list"
+                )));
+            }
+            custom.push(climate.entry(&id));
+        }
+        self.custom_count = custom.len();
+        custom.extend(std::mem::take(&mut self.entries));
+        self.entries = custom;
+        self.root = build_tree(&self.entries);
+        Ok(self)
+    }
+
+    /// Exact-match override for datapack biomes, checked before the vanilla
+    /// parameter tree. Without custom entries this always returns `None`, so
+    /// vanilla sampling is byte-for-byte unchanged.
+    fn exact_custom(&self, target: &[i64; 7]) -> Option<usize> {
+        self.entries
+            .iter()
+            .take(self.custom_count)
+            .position(|entry| {
+                entry
+                    .parameter_space()
+                    .iter()
+                    .zip(target)
+                    .all(|(parameter, point)| parameter.distance(*point) == 0)
+            })
+    }
+
+    /// Quantized climate point sampled at a quart, in the order used by
+    /// `Parameter.distance`: temperature, humidity, continentalness, erosion,
+    /// depth, weirdness, offset.
+    pub fn climate_at(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> [i64; 7] {
+        let x = quart_x << 2;
+        let y = quart_y << 2;
+        let z = quart_z << 2;
+        [
+            quantize(self.temperature.compute(x, y, z) as f32),
+            quantize(self.humidity.compute(x, y, z) as f32),
+            quantize(self.continentalness.compute(x, y, z) as f32),
+            quantize(self.erosion.compute(x, y, z) as f32),
+            quantize(self.depth.compute(x, y, z) as f32),
+            quantize(self.weirdness.compute(x, y, z) as f32),
+            0,
+        ]
     }
 
     /// Biome names in the parameter list's first-encounter order.
@@ -101,7 +255,8 @@ impl BiomeSampler {
             quantize(self.weirdness.compute(x, y, z) as f32),
             0,
         ];
-        self.root.search(&target, &self.entries)
+        self.exact_custom(&target)
+            .unwrap_or_else(|| self.root.search(&target, &self.entries))
     }
 
     /// Samples a whole vertical quart column.
@@ -139,7 +294,10 @@ impl BiomeSampler {
                 weirdness,
                 0,
             ];
-            result.push(self.root.search(&target, &self.entries));
+            result.push(
+                self.exact_custom(&target)
+                    .unwrap_or_else(|| self.root.search(&target, &self.entries)),
+            );
         }
         result
     }

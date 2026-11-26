@@ -20,6 +20,7 @@ use crate::nbt::Tag;
 use crate::tick::{ScheduledTickQueue, TickPriority};
 use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::biome_zoom::BiomeZoomer;
+use crate::worldgen::datapack::DatapackOverlay;
 use crate::worldgen::structure::template::StructureTemplate;
 use folia_math::BlockPos;
 use folia_random::RandomSource;
@@ -78,6 +79,8 @@ pub use placement::{
 pub use tree::{FallenTreeFeature, RootSystemFeature, TreeFeature};
 
 const FEATURE_DATA: &str = include_str!("../../../assets/feature_data.json");
+
+static ACTIVE_FEATURE_DATA: OnceLock<FeatureData> = OnceLock::new();
 
 /// Number of `GenerationStep.Decoration` values. `BiomeGenerationSettings`
 /// stores one placed-feature list per step in this order.
@@ -1381,13 +1384,19 @@ impl PlacementWorld for BiomePlacementWorld<'_> {
     }
 }
 
-/// All vanilla feature definitions needed to execute generation steps.
-#[derive(Debug)]
+/// All feature definitions needed to execute generation steps.
+///
+/// The embedded vanilla catalog is the fallback; a validated datapack overlay
+/// can be merged into a copy without dropping vanilla entries.
+#[derive(Debug, Clone)]
 pub struct FeatureData {
     configured: HashMap<String, ConfiguredFeature>,
     placed: HashMap<String, PlacedFeature>,
     biome_features: HashMap<String, Vec<Vec<String>>>,
     tags: HashMap<String, Vec<String>>,
+    /// Biome ids introduced or overridden by a datapack overlay.
+    custom_biomes: BTreeSet<String>,
+    raw: Value,
 }
 
 impl FeatureData {
@@ -1403,6 +1412,10 @@ impl FeatureData {
     pub fn parse(json: &str) -> io::Result<Self> {
         let value: Value = serde_json::from_str(json)
             .map_err(|error| invalid(format!("feature data is not valid JSON: {error}")))?;
+        Self::parse_value(&value)
+    }
+
+    fn parse_value(value: &Value) -> io::Result<Self> {
         let object = value
             .as_object()
             .ok_or_else(|| invalid("feature data must be a JSON object"))?;
@@ -1427,7 +1440,115 @@ impl FeatureData {
             placed,
             biome_features,
             tags,
+            custom_biomes: BTreeSet::new(),
+            raw: value.clone(),
         })
+    }
+
+    /// Returns a new catalog with a validated datapack overlay merged in.
+    ///
+    /// Configured/placed ids must not collide with existing ids. Biome step
+    /// lists and tag values are appended, retaining every vanilla entry. The
+    /// combined document is fully re-validated, so cross-references from
+    /// custom features to vanilla ids (and vice versa) must resolve.
+    pub fn merge(&self, overlay: &DatapackOverlay) -> io::Result<Self> {
+        let mut combined = self.raw.clone();
+        let sections = combined
+            .as_object_mut()
+            .ok_or_else(|| invalid("feature data must be a JSON object"))?;
+        // The dump writes bare names for `minecraft:` ids and the parser adds
+        // the namespace; normalize raw keys first so overlay ids collide with
+        // the right vanilla entries instead of shadowing them at parse time.
+        for key in ["configured", "placed", "biomes", "tags"] {
+            let normalized = normalize_section(section(sections, key)?);
+            sections.insert(key.to_owned(), Value::Object(normalized));
+        }
+        let sections = combined
+            .as_object_mut()
+            .ok_or_else(|| invalid("feature data must be a JSON object"))?;
+
+        for (key, entries) in [
+            ("configured", &overlay.configured),
+            ("placed", &overlay.placed),
+        ] {
+            let target = section_mut(sections, key)?;
+            for (id, value) in entries {
+                if target.contains_key(id) {
+                    return Err(invalid(format!(
+                        "datapack {key} feature `{id}` collides with an existing id"
+                    )));
+                }
+                target.insert(id.clone(), value.clone());
+            }
+        }
+
+        let tag_target = section_mut(sections, "tags")?;
+        for (id, value) in &overlay.tags {
+            let overlay_values = value
+                .get("values")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid(format!("tag `{id}` has no `values`")))?;
+            match tag_target.get_mut(id) {
+                Some(existing) => {
+                    let values = existing
+                        .as_object_mut()
+                        .and_then(|object| object.get_mut("values"))
+                        .and_then(Value::as_array_mut)
+                        .ok_or_else(|| invalid(format!("existing tag `{id}` has no `values`")))?;
+                    let mut seen = values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<BTreeSet<_>>();
+                    for entry in overlay_values {
+                        let entry = entry
+                            .as_str()
+                            .ok_or_else(|| invalid(format!("tag `{id}` has a non-string value")))?;
+                        if seen.insert(entry.to_owned()) {
+                            values.push(Value::String(entry.to_owned()));
+                        }
+                    }
+                }
+                None => {
+                    tag_target.insert(id.clone(), value.clone());
+                }
+            }
+        }
+
+        let biome_target = section_mut(sections, "biomes")?;
+        for (id, steps) in &overlay.biomes {
+            match biome_target.get_mut(id) {
+                Some(existing) => {
+                    append_biome_steps(existing, steps)
+                        .map_err(|error| invalid(format!("datapack biome `{id}`: {error}")))?;
+                }
+                None => {
+                    biome_target.insert(id.clone(), steps.clone());
+                }
+            }
+        }
+
+        let mut merged = Self::parse_value(&combined)?;
+        merged.custom_biomes = overlay
+            .biomes
+            .keys()
+            .map(|key| resource_location(key))
+            .collect();
+        Ok(merged)
+    }
+
+    /// Installs the active catalog once for the process.
+    ///
+    /// Returns the data back to the caller when another catalog was already
+    /// installed, so startup can report the collision explicitly.
+    pub fn install_active(data: FeatureData) -> Result<(), Box<FeatureData>> {
+        ACTIVE_FEATURE_DATA.set(data).map_err(Box::new)
+    }
+
+    /// The process-wide catalog: datapack-merged data when installed, otherwise
+    /// the embedded vanilla catalog.
+    pub fn active() -> &'static FeatureData {
+        ACTIVE_FEATURE_DATA.get().unwrap_or_else(Self::vanilla)
     }
 
     pub fn configured(&self, id: &str) -> Option<&ConfiguredFeature> {
@@ -1454,7 +1575,6 @@ impl FeatureData {
         let mut feature_indices: HashMap<String, usize> = HashMap::new();
         let mut features: Vec<String> = Vec::new();
         let mut graph: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
-
         // `FeatureSorter.buildFeaturesPerStep` iterates
         // `MultiNoiseBiomeSource.possibleBiomes()`, i.e. the biome parameter
         // list order, and that order seeds the feature-index part of
@@ -1480,6 +1600,14 @@ impl FeatureData {
                 for pair in nodes.windows(2) {
                     graph.entry(pair[0]).or_default().insert(pair[1]);
                 }
+                // A datapack biome can list a single feature in a step. Register
+                // it as its own root so it still gets a feature index; vanilla
+                // biomes keep the exact shipped edge graph and ordering.
+                if self.custom_biomes.contains(biome) {
+                    for node in &nodes {
+                        graph.entry(*node).or_default();
+                    }
+                }
             }
         }
 
@@ -1503,19 +1631,24 @@ impl FeatureData {
     }
 
     fn biome_parameter_order(&self) -> Vec<&str> {
-        const BIOME_PARAMS: &str = include_str!("../../../assets/biome_params.txt");
         let mut seen = std::collections::HashSet::new();
-        BIOME_PARAMS
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split('\t');
-                (fields.next() == Some("param"))
-                    .then(|| fields.next())
-                    .flatten()
-            })
+        let mut order: Vec<&str> = vanilla_biome_names()
+            .into_iter()
             .filter(|name| self.biome_features.contains_key(*name))
             .filter(|name| seen.insert(*name))
-            .collect()
+            .collect();
+        // Datapack biomes are not in the embedded parameter list. Append their
+        // ids in sorted order so they still participate in FeatureSorter's
+        // global per-step order and get a stable feature seed.
+        let mut custom: Vec<&str> = self
+            .custom_biomes
+            .iter()
+            .map(String::as_str)
+            .filter(|name| seen.insert(*name))
+            .collect();
+        custom.sort_unstable();
+        order.extend(custom);
+        order
     }
 
     /// Values of one extracted block tag, e.g. `stone_ore_replaceables`.
@@ -1813,11 +1946,82 @@ fn depth_first_search(
     ordered.push(node);
 }
 
+fn normalize_section(section: &Map<String, Value>) -> Map<String, Value> {
+    section
+        .iter()
+        .map(|(key, value)| (resource_location(key), value.clone()))
+        .collect()
+}
+
+/// Biome ids in the embedded multi-noise parameter list, in parameter order.
+fn vanilla_biome_names() -> Vec<&'static str> {
+    const BIOME_PARAMS: &str = include_str!("../../../assets/biome_params.txt");
+    BIOME_PARAMS
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            (fields.next() == Some("param"))
+                .then(|| fields.next())
+                .flatten()
+        })
+        .collect()
+}
+
 fn section<'a>(object: &'a Map<String, Value>, key: &str) -> io::Result<&'a Map<String, Value>> {
     object
         .get(key)
         .and_then(Value::as_object)
         .ok_or_else(|| invalid(format!("feature data is missing the `{key}` object")))
+}
+
+fn section_mut<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+) -> io::Result<&'a mut Map<String, Value>> {
+    object
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid(format!("feature data is missing the `{key}` object")))
+}
+
+/// Appends a datapack biome's step lists to an existing biome, keeping every
+/// vanilla entry in the order it had before the overlay.
+fn append_biome_steps(existing: &mut Value, overlay: &Value) -> io::Result<()> {
+    let existing = existing
+        .as_array_mut()
+        .ok_or_else(|| invalid("existing biome feature list must be a list"))?;
+    let overlay = overlay
+        .as_array()
+        .ok_or_else(|| invalid("datapack biome feature list must be a list"))?;
+    if existing.len() != DECORATION_STEPS || overlay.len() != DECORATION_STEPS {
+        return Err(invalid(format!(
+            "biome feature lists must have {DECORATION_STEPS} steps"
+        )));
+    }
+    for (index, (vanilla, added)) in existing.iter_mut().zip(overlay).enumerate() {
+        let vanilla = vanilla
+            .as_array_mut()
+            .ok_or_else(|| invalid(format!("existing biome step {index} must be a list")))?;
+        let added = added
+            .as_array()
+            .ok_or_else(|| invalid(format!("datapack biome step {index} must be a list")))?;
+        let mut seen = vanilla
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for entry in added {
+            let entry = entry.as_str().ok_or_else(|| {
+                invalid(format!(
+                    "datapack biome step {index} has a non-string entry"
+                ))
+            })?;
+            if seen.insert(entry.to_owned()) {
+                vanilla.push(Value::String(entry.to_owned()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_configured(

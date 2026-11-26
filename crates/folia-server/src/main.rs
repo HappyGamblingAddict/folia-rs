@@ -55,6 +55,12 @@ fn main() -> Result<()> {
     );
     folia_core::entity::configure_world(root.join(&level_name));
     let seed = log_level_data(&root, &level_name);
+    match folia_core::worldgen::datapack::install_from(&root) {
+        Ok(summary) => println!("[rust] worldgen datapacks: {summary}"),
+        Err(error) => {
+            return Err(error).context("invalid worldgen datapack under the server root");
+        }
+    }
     match folia_core::worldgen::generator::configure(seed.unwrap_or(0)) {
         Ok(()) => println!(
             "[rust] noise world generator ready (seed={})",

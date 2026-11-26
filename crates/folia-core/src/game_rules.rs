@@ -5,6 +5,8 @@
 //! camelCase name and a snake_case alias are accepted on input so console and
 //! command callers can use either form.
 
+use crate::nbt::Tag;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 /// The game rules the Rust server currently reads. Defaults match a vanilla
@@ -57,6 +59,58 @@ impl GameRules {
             _ => {}
         }
     }
+
+    /// Read the modeled rules from a vanilla `GameRules` NBT compound. Rules
+    /// this port does not model are ignored, and missing or mistyped values
+    /// keep their vanilla defaults.
+    ///
+    /// 1.21.11 stores boolean values as strings (`"true"`/`"false"`); byte and
+    /// other numeric tags from older writers are accepted as well.
+    pub fn from_nbt(tag: &Tag) -> Self {
+        let mut rules = Self::default();
+        let Some(entries) = tag.as_compound() else {
+            return rules;
+        };
+        for (name, tag) in entries {
+            let value = match tag {
+                Tag::String(text) => match text.to_ascii_lowercase().as_str() {
+                    "true" => true,
+                    "false" => false,
+                    _ => continue,
+                },
+                Tag::Byte(value) => *value != 0,
+                Tag::Short(value) => *value != 0,
+                Tag::Int(value) => *value != 0,
+                Tag::Long(value) => *value != 0,
+                _ => continue,
+            };
+            match name.as_str() {
+                "doDaylightCycle" => rules.do_daylight_cycle = value,
+                "keepInventory" => rules.keep_inventory = value,
+                "mobGriefing" => rules.mob_griefing = value,
+                "doTileDrops" => rules.do_tile_drops = value,
+                _ => {}
+            }
+        }
+        rules
+    }
+
+    /// Encode the modeled rules as a vanilla 1.21.11 `GameRules` compound.
+    /// Boolean values are strings, matching `BooleanGameRuleValue#write`.
+    pub fn to_nbt(&self) -> Tag {
+        let entry = |name: &str, value: bool| {
+            (
+                name.to_owned(),
+                Tag::String(if value { "true" } else { "false" }.to_owned()),
+            )
+        };
+        Tag::Compound(vec![
+            entry("doDaylightCycle", self.do_daylight_cycle),
+            entry("keepInventory", self.keep_inventory),
+            entry("mobGriefing", self.mob_griefing),
+            entry("doTileDrops", self.do_tile_drops),
+        ])
+    }
 }
 
 impl Default for GameRules {
@@ -96,6 +150,39 @@ pub fn set_rule(name: &str, value: bool) -> bool {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     rules.set(canonical, value);
+    true
+}
+
+/// Replace the in-memory rule set with the rules read from `level.dat`.
+/// Called when a level is opened so a restart observes rules saved by a run
+/// that never shut down cleanly.
+pub fn replace_globals(rules: &GameRules) {
+    let mut current = global()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *current = rules.clone();
+}
+
+/// Set a rule in memory and write it through to `level.dat` immediately, so a
+/// `/gamerule` change survives a crash without a clean shutdown.
+///
+/// Returns `false` when `name` is not a modeled rule. The lock is held across
+/// the write so concurrent changes cannot be persisted out of order; a failed
+/// write is logged but does not undo the in-memory change.
+pub fn set_rule_persistent(name: &str, value: bool, level_path: &Path) -> bool {
+    let Some(canonical) = GameRules::parse_name(name) else {
+        return false;
+    };
+    let mut rules = global()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    rules.set(canonical, value);
+    if let Err(error) = crate::level::persist_game_rules(level_path, &rules) {
+        eprintln!(
+            "[game_rules] could not persist {canonical} to {}: {error}",
+            level_path.display()
+        );
+    }
     true
 }
 
@@ -161,6 +248,46 @@ mod tests {
         let mut rules = GameRules::default();
         rules.set("fallingBlocks", true);
         assert_eq!(rules, GameRules::default());
+    }
+
+    #[test]
+    fn nbt_round_trip_uses_vanilla_string_values() {
+        let rules = GameRules {
+            do_daylight_cycle: false,
+            keep_inventory: true,
+            ..GameRules::default()
+        };
+        let tag = rules.to_nbt();
+        let entries = tag.as_compound().expect("GameRules compound");
+        assert_eq!(
+            entries.iter().find(|(key, _)| key == "keepInventory"),
+            Some(&("keepInventory".to_owned(), Tag::String("true".into())))
+        );
+        assert_eq!(
+            entries.iter().find(|(key, _)| key == "doDaylightCycle"),
+            Some(&("doDaylightCycle".to_owned(), Tag::String("false".into())))
+        );
+        assert_eq!(GameRules::from_nbt(&tag), rules);
+    }
+
+    #[test]
+    fn nbt_read_accepts_legacy_bytes_and_ignores_unknown_rules() {
+        let tag = Tag::Compound(vec![
+            ("keepInventory".into(), Tag::Byte(1)),
+            ("doTileDrops".into(), Tag::Byte(0)),
+            ("fallingBlocks".into(), Tag::String("true".into())),
+            ("mobGriefing".into(), Tag::Int(7)),
+            ("doDaylightCycle".into(), Tag::String("nonsense".into())),
+        ]);
+        let rules = GameRules::from_nbt(&tag);
+        assert!(rules.keep_inventory);
+        assert!(!rules.do_tile_drops);
+        assert!(rules.mob_griefing);
+        assert!(rules.do_daylight_cycle, "mistyped values keep the default");
+        assert_eq!(
+            GameRules::from_nbt(&Tag::String("bad".into())),
+            GameRules::default()
+        );
     }
 
     #[test]

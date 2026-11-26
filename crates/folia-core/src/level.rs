@@ -5,6 +5,7 @@
 //! tolerant: absent or mistyped fields fall back to vanilla's defaults rather
 //! than failing the whole world load.
 
+use crate::game_rules::GameRules;
 use crate::nbt::{self, Tag};
 use std::fs;
 use std::io;
@@ -49,6 +50,8 @@ pub struct LevelData {
     pub hardcore: bool,
     /// `allowCommands`; defaults to `true` for creative worlds, like vanilla.
     pub allow_commands: bool,
+    /// The modeled rules from `Data.GameRules`.
+    pub game_rules: GameRules,
     /// Whether this server created the level (see [`OWN_LEVEL_MARKER`]).
     pub own_level: bool,
 }
@@ -102,6 +105,9 @@ pub fn parse_root(root: &Tag) -> io::Result<LevelData> {
         .map(is_truthy)
         .unwrap_or(game_type == CREATIVE_GAME_TYPE);
     let own_level = field(data, OWN_LEVEL_MARKER).is_some_and(is_truthy);
+    let game_rules = field(data, "GameRules")
+        .map(GameRules::from_nbt)
+        .unwrap_or_default();
 
     Ok(LevelData {
         data_version,
@@ -115,6 +121,7 @@ pub fn parse_root(root: &Tag) -> io::Result<LevelData> {
         seed,
         hardcore,
         allow_commands,
+        game_rules,
         own_level,
     })
 }
@@ -190,6 +197,7 @@ pub fn new_world_root(level_name: &str, seed: i64, spawn: (i32, i32, i32)) -> Ta
         ("DifficultyLocked".into(), Tag::Byte(0)),
         ("hardcore".into(), Tag::Byte(0)),
         ("allowCommands".into(), Tag::Byte(0)),
+        ("GameRules".into(), GameRules::default().to_nbt()),
         ("initialized".into(), Tag::Byte(1)),
         ("Time".into(), Tag::Long(0)),
         ("DayTime".into(), Tag::Long(0)),
@@ -275,19 +283,7 @@ pub fn record_session(
     let path = path.as_ref();
     let bytes = fs::read(path)?;
     let mut root = nbt::read_gzip_root(&bytes)?;
-    let data = match &mut root {
-        Tag::Compound(entries) => {
-            entries
-                .iter_mut()
-                .find(|(key, _)| key == "Data")
-                .and_then(|(_, tag)| match tag {
-                    Tag::Compound(data) => Some(data),
-                    _ => None,
-                })
-        }
-        _ => None,
-    }
-    .ok_or_else(|| invalid("level.dat is missing the Data compound"))?;
+    let data = data_mut(&mut root)?;
 
     let ticks = i64::try_from(elapsed_ticks).unwrap_or(i64::MAX);
     let time = data
@@ -320,11 +316,139 @@ pub fn record_session(
     Ok(level)
 }
 
-fn set_long(entries: &mut Vec<(String, Tag)>, name: &str, value: i64) {
-    match entries.iter_mut().find(|(key, _)| key == name) {
-        Some((_, tag)) => *tag = Tag::Long(value),
-        None => entries.push((name.to_owned(), Tag::Long(value))),
+/// Runtime state a running server writes back to `level.dat` without waiting
+/// for a clean shutdown.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeChange {
+    /// Replace `spawn.pos` with this block position.
+    pub spawn: Option<(i32, i32, i32)>,
+    /// Merge the modeled rules into `Data.GameRules`.
+    pub game_rules: Option<GameRules>,
+}
+
+/// Atomically apply runtime changes to `level.dat` and return the new state.
+///
+/// The whole root is read back from disk and rewritten, so fields this port
+/// does not model (including game rules it does not implement) survive, and
+/// the previous file is kept as `level.dat_old`. The temp-file rename in
+/// [`write_root`] means a crash cannot leave a half-written level behind.
+pub fn persist_runtime_state(
+    path: impl AsRef<Path>,
+    change: RuntimeChange,
+) -> io::Result<LevelData> {
+    let path = path.as_ref();
+    let bytes = fs::read(path)?;
+    let mut root = nbt::read_gzip_root(&bytes)?;
+    {
+        let data = data_mut(&mut root)?;
+        if let Some(rules) = &change.game_rules {
+            apply_game_rules(data, rules);
+        }
+        if let Some(spawn) = change.spawn {
+            apply_spawn(data, spawn);
+        }
     }
+    let level = parse_root(&root)?;
+    write_root(path, &root)?;
+    Ok(level)
+}
+
+/// Persist the current in-memory rule set to `level.dat`.
+pub fn persist_game_rules(path: impl AsRef<Path>, rules: &GameRules) -> io::Result<LevelData> {
+    persist_runtime_state(
+        path,
+        RuntimeChange {
+            game_rules: Some(rules.clone()),
+            ..RuntimeChange::default()
+        },
+    )
+}
+
+/// Persist a changed world spawn to `level.dat`.
+pub fn set_spawn(path: impl AsRef<Path>, spawn: (i32, i32, i32)) -> io::Result<LevelData> {
+    persist_runtime_state(
+        path,
+        RuntimeChange {
+            spawn: Some(spawn),
+            ..RuntimeChange::default()
+        },
+    )
+}
+
+fn data_mut(root: &mut Tag) -> io::Result<&mut Vec<(String, Tag)>> {
+    let Tag::Compound(entries) = root else {
+        return Err(invalid("level.dat root is not a compound"));
+    };
+    entries
+        .iter_mut()
+        .find(|(key, _)| key == "Data")
+        .and_then(|(_, tag)| match tag {
+            Tag::Compound(data) => Some(data),
+            _ => None,
+        })
+        .ok_or_else(|| invalid("level.dat is missing the Data compound"))
+}
+
+/// Merge only the modeled rules, leaving rules this port does not implement
+/// untouched inside the `GameRules` compound.
+fn apply_game_rules(data: &mut Vec<(String, Tag)>, rules: &GameRules) {
+    let encoded = rules.to_nbt();
+    let Some(new_entries) = encoded.as_compound() else {
+        return;
+    };
+    let existing = data
+        .iter()
+        .position(|(key, _)| key == "GameRules")
+        .map(|index| std::mem::replace(&mut data[index].1, Tag::End))
+        .unwrap_or(Tag::Compound(Vec::new()));
+    let mut merged = match existing {
+        Tag::Compound(entries) => entries,
+        _ => Vec::new(),
+    };
+    for (name, value) in new_entries {
+        set_entry(&mut merged, name, value.clone());
+    }
+    set_entry(data, "GameRules", Tag::Compound(merged));
+}
+
+/// Replace `spawn.pos` in place, creating the spawn compound when a level does
+/// not have one (legacy worlds only carry `SpawnX`/`SpawnY`/`SpawnZ`).
+fn apply_spawn(data: &mut Vec<(String, Tag)>, (x, y, z): (i32, i32, i32)) {
+    let index = data
+        .iter()
+        .position(|(key, _)| key == "spawn")
+        .unwrap_or_else(|| {
+            data.push(("spawn".into(), Tag::End));
+            data.len() - 1
+        });
+    let existing = std::mem::replace(&mut data[index].1, Tag::End);
+    let mut spawn = match existing {
+        Tag::Compound(entries) => entries,
+        _ => Vec::new(),
+    };
+    set_entry(&mut spawn, "pos", Tag::IntArray(vec![x, y, z]));
+    if !spawn.iter().any(|(key, _)| key == "dimension") {
+        set_entry(
+            &mut spawn,
+            "dimension",
+            Tag::String("minecraft:overworld".into()),
+        );
+    }
+    if !spawn.iter().any(|(key, _)| key == "angle") {
+        set_entry(&mut spawn, "angle", Tag::Float(0.0));
+    }
+    data[index].1 = Tag::Compound(spawn);
+}
+
+fn set_entry(entries: &mut Vec<(String, Tag)>, name: &str, value: Tag) {
+    match entries.iter_mut().find(|(key, _)| key == name) {
+        Some((_, tag)) => *tag = value,
+        None => entries.push((name.to_owned(), value)),
+    }
+}
+
+fn set_long(entries: &mut Vec<(String, Tag)>, name: &str, value: i64) {
+    set_entry(entries, name, Tag::Long(value));
 }
 
 fn write_root(path: &Path, root: &Tag) -> io::Result<()> {
@@ -618,6 +742,140 @@ mod tests {
             1_200,
             "the backup holds the previous session's time"
         );
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn runtime_change_persists_rules_and_spawn_without_a_shutdown() {
+        let directory = std::env::temp_dir().join(format!(
+            "folia-rs-level-runtime-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("level.dat");
+        write_new_world(&path, "Runtime", 11, (0, 64, 0)).unwrap();
+
+        let rules = GameRules {
+            keep_inventory: true,
+            do_daylight_cycle: false,
+            ..GameRules::default()
+        };
+        let changed = persist_runtime_state(
+            &path,
+            RuntimeChange {
+                spawn: Some((-12, 71, 34)),
+                game_rules: Some(rules.clone()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(changed.spawn, Some((-12, 71, 34)));
+        assert_eq!(changed.game_rules, rules);
+
+        let reloaded = read(&path).unwrap();
+        assert_eq!(reloaded.spawn, Some((-12, 71, 34)));
+        assert_eq!(
+            reloaded.game_rules, rules,
+            "rules survive a reload from disk"
+        );
+        assert_eq!(
+            read(directory.join("level.dat_old")).unwrap().spawn,
+            Some((0, 64, 0)),
+            "the previous file is kept as level.dat_old"
+        );
+        assert!(!directory.join("level.dat.tmp").exists());
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn runtime_change_merges_unmodeled_rules_and_unknown_fields() {
+        let directory = std::env::temp_dir().join(format!(
+            "folia-rs-level-runtime-merge-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("level.dat");
+        let mut root = new_world_root("Merge", 3, (0, 64, 0));
+        if let Tag::Compound(entries) = &mut root
+            && let Some((_, Tag::Compound(data))) =
+                entries.iter_mut().find(|(key, _)| key == "Data")
+        {
+            set_entry(
+                data,
+                "GameRules",
+                Tag::Compound(vec![
+                    ("fallingBlocks".into(), Tag::String("true".into())),
+                    ("keepInventory".into(), Tag::String("false".into())),
+                ]),
+            );
+            set_entry(data, "DataPacks", Tag::String("keep me".into()));
+        }
+        write_root(&path, &root).unwrap();
+
+        let rules = GameRules {
+            keep_inventory: true,
+            ..GameRules::default()
+        };
+        persist_game_rules(&path, &rules).unwrap();
+
+        let on_disk = nbt::read_gzip_root(&fs::read(&path).unwrap()).unwrap();
+        let data = on_disk.get("Data").expect("Data compound");
+        assert_eq!(
+            data.get("DataPacks"),
+            Some(&Tag::String("keep me".into())),
+            "unknown fields survive"
+        );
+        let game_rules = data.get("GameRules").expect("GameRules compound");
+        assert_eq!(
+            game_rules.get("fallingBlocks"),
+            Some(&Tag::String("true".into())),
+            "rules this port does not model survive"
+        );
+        assert_eq!(
+            game_rules.get("keepInventory"),
+            Some(&Tag::String("true".into())),
+            "the modeled rule is replaced with its vanilla string form"
+        );
+        assert_eq!(read(&path).unwrap().game_rules, rules);
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn set_spawn_creates_a_spawn_compound_for_legacy_levels() {
+        let directory = std::env::temp_dir().join(format!(
+            "folia-rs-level-legacy-spawn-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("level.dat");
+        let mut root = new_world_root("Legacy", 1, (0, 64, 0));
+        if let Tag::Compound(entries) = &mut root
+            && let Some((_, Tag::Compound(data))) =
+                entries.iter_mut().find(|(key, _)| key == "Data")
+        {
+            data.retain(|(key, _)| key != "spawn");
+        }
+        write_root(&path, &root).unwrap();
+
+        let changed = set_spawn(&path, (7, 80, -9)).unwrap();
+        assert_eq!(changed.spawn, Some((7, 80, -9)));
+        let on_disk = nbt::read_gzip_root(&fs::read(&path).unwrap()).unwrap();
+        let spawn = on_disk
+            .get("Data")
+            .and_then(|data| data.get("spawn"))
+            .expect("spawn compound");
+        assert_eq!(spawn.get("pos"), Some(&Tag::IntArray(vec![7, 80, -9])));
+        assert_eq!(
+            spawn.get("dimension").and_then(Tag::as_str),
+            Some("minecraft:overworld")
+        );
+        assert_eq!(read(&path).unwrap().game_rules, GameRules::default());
 
         fs::remove_dir_all(directory).ok();
     }

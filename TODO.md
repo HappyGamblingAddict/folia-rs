@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,755 passing** at the 51a088c gate (0 failed, 1 ignored benchmark); generation-scheduler slice next expected 1,765
+> Test status: **1,765 passing** at the d91f3c0 gate (0 failed, 1 ignored benchmark); runtime persistence slice next expected 1,775
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1642,9 +1642,9 @@ section-only light packets are still open.
   spawn. On shutdown `level::record_session` adds the run's ticks to `Time`
   and `DayTime`, stamps `LastPlayed`, and can replace `spawn.pos`, rewriting the
   whole root atomically so fields this port does not model survive. Still
-  missing: game-rule and spawn changes while running, entity/POI/block-entity
-  sections, light persistence, per-chunk (rather than per-region) dirty
-  batching, and corruption recovery. Level rewrites keep the previous file as
+  Runtime game-rule and spawn changes now persist immediately to `level.dat` with
+  atomic rewrite, unknown-field preservation, and `level.dat_old`. Entity/POI
+  sections, per-chunk dirty batching, and broad corruption recovery remain. Level rewrites keep the previous file as
   `level.dat_old`, and shutdown flushes the shared overworld storage before
   writing `level.dat`, so cached terrain reaches disk on an orderly stop. Block edits save through
   `WorldStorage::update_chunk`, which keeps top-level chunk fields the model

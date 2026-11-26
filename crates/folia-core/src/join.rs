@@ -5980,7 +5980,11 @@ fn handle_command(
                 return Ok(());
             };
             if let Some(value) = value {
-                crate::game_rules::set_rule(canonical, value);
+                crate::game_rules::set_rule_persistent(
+                    canonical,
+                    value,
+                    &world_dir().join("level.dat"),
+                );
                 println!(
                     "[join] {} set game rule {} to {}",
                     session.name, canonical, value
@@ -7168,6 +7172,9 @@ fn open_world() -> WorldContext {
     let level_path = directory.join("level.dat");
     if forced {
         let level = crate::level::read(&level_path).ok();
+        if let Some(level) = &level {
+            crate::game_rules::replace_globals(&level.game_rules);
+        }
         let seed = generator_seed
             .or_else(|| level.as_ref().and_then(|level| level.seed))
             .unwrap_or(0);
@@ -7182,6 +7189,7 @@ fn open_world() -> WorldContext {
     }
     match crate::level::read(&level_path) {
         Ok(level) => {
+            crate::game_rules::replace_globals(&level.game_rules);
             if level.own_level {
                 println!(
                     "[join] level {} was created by this server; serving stored chunks stamped \

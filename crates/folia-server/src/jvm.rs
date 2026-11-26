@@ -682,6 +682,13 @@ fn world_set_spawn(state: &mut BridgeState, x: f64, y: f64, z: f64) -> bool {
     }
     state.world_state.spawn = (x, y, z);
     state.save_world_state();
+    // `world_state.txt` is the plugin-facing cache; level.dat is the durable
+    // record a fresh process reads. Spawn positions are stored as block ints,
+    // so recover the block coordinate from the half-block centre used here.
+    let pos = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
+    if let Err(error) = folia_core::level::set_spawn(state.world_root.join("level.dat"), pos) {
+        eprintln!("[bridge] could not persist spawn to level.dat: {error}");
+    }
     true
 }
 
@@ -2866,6 +2873,32 @@ mod tests {
         assert_eq!(reloaded.world_state.clear_weather_duration, 40);
         let mut invalid = BridgeState::new(&root);
         assert!(!world_set_spawn(&mut invalid, f64::NAN, 0.0, 0.0));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn world_set_spawn_reaches_level_dat_without_a_shutdown() {
+        let root = temp_dir("spawn-level");
+        let world_root = root.join("world");
+        let level_path = world_root.join("level.dat");
+        std::fs::create_dir_all(&world_root).expect("world directory");
+        folia_core::level::write_new_world(&level_path, "Bridge", 42, (0, 64, 0)).unwrap();
+
+        let mut state = BridgeState::new(&root);
+        assert!(world_set_spawn(&mut state, 12.5, 70.0, -4.5));
+        let level = folia_core::level::read(&level_path).unwrap();
+        assert_eq!(level.spawn, Some((12, 70, -5)));
+        assert!(
+            world_root.join("level.dat_old").exists(),
+            "the previous level is kept as level.dat_old"
+        );
+        assert_eq!(state.world_state.spawn, (12.5, 70.0, -4.5));
+        assert!(!world_set_spawn(&mut state, f64::NAN, 0.0, 0.0));
+        assert_eq!(
+            folia_core::level::read(&level_path).unwrap().spawn,
+            level.spawn
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

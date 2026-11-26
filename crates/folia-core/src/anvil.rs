@@ -1,4 +1,6 @@
+use crate::math::BlockPos;
 use crate::nbt::{self, Tag};
+use crate::tick::{ScheduledTick, TickPriority};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -380,6 +382,179 @@ fn now_unix() -> u32 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as u32)
         .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled tick NBT
+// ---------------------------------------------------------------------------
+//
+// Folia 1.21 stores block ticks in a chunk's `block_ticks` list of `SavedTick`
+// compounds (fluids use a separate `fluid_ticks` list). A `SavedTick` carries
+// the block id (`i`), absolute position (`x`/`y`/`z`), a *relative* delay (`t`)
+// and the priority (`p`). The FIFO sub-tick order is not written by vanilla: it
+// is reconstructed from the list order on load. This port writes that order as
+// an extra `o` field so an already-running queue reloads identically; vanilla
+// readers ignore unknown fields. Pre-1.20.5 `TileTicks` lists are also read.
+
+/// Modern chunk key for scheduled block ticks.
+pub const BLOCK_TICKS_KEY: &str = "block_ticks";
+/// Legacy pre-1.20.5 chunk key for tile ticks.
+pub const LEGACY_TILE_TICKS_KEY: &str = "TileTicks";
+
+const TICK_ID: &str = "i";
+const TICK_X: &str = "x";
+const TICK_Y: &str = "y";
+const TICK_Z: &str = "z";
+const TICK_DELAY: &str = "t";
+const TICK_PRIORITY: &str = "p";
+const TICK_SUB_ORDER: &str = "o";
+
+const TICK_FIELDS: [&str; 7] = [
+    TICK_ID,
+    TICK_X,
+    TICK_Y,
+    TICK_Z,
+    TICK_DELAY,
+    TICK_PRIORITY,
+    TICK_SUB_ORDER,
+];
+
+/// Relative delay of `tick` against a save-time game tick, clamped to the
+/// `int` vanilla writes. Negative values mean the tick is already overdue.
+pub fn scheduled_tick_delay(tick: &ScheduledTick, reference_tick: u64) -> i32 {
+    let delta = tick.trigger_tick as i128 - reference_tick as i128;
+    delta.clamp(i32::MIN as i128, i32::MAX as i128) as i32
+}
+
+/// Encode one scheduled tick as a vanilla `SavedTick` compound plus `o`.
+pub fn encode_scheduled_tick(tick: &ScheduledTick, reference_tick: u64) -> Tag {
+    let mut fields = Vec::with_capacity(TICK_FIELDS.len() + tick.unknown.len());
+    fields.push((TICK_ID.into(), Tag::String(tick.block.clone())));
+    fields.push((TICK_X.into(), Tag::Int(tick.pos.x())));
+    fields.push((TICK_Y.into(), Tag::Int(tick.pos.y())));
+    fields.push((TICK_Z.into(), Tag::Int(tick.pos.z())));
+    fields.push((
+        TICK_DELAY.into(),
+        Tag::Int(scheduled_tick_delay(tick, reference_tick)),
+    ));
+    fields.push((TICK_PRIORITY.into(), Tag::Int(tick.priority.value())));
+    fields.push((TICK_SUB_ORDER.into(), Tag::Long(tick.sub_tick_order)));
+    fields.extend(tick.unknown.iter().cloned());
+    Tag::Compound(fields)
+}
+
+/// Decode one `SavedTick` compound. `fill_sub_order` is vanilla's
+/// list-position fallback for entries without a persisted `o` field.
+pub fn decode_scheduled_tick(
+    tag: &Tag,
+    load_tick: u64,
+    fill_sub_order: i64,
+) -> io::Result<ScheduledTick> {
+    let fields = tag
+        .as_compound()
+        .ok_or_else(|| invalid("scheduled tick must be a compound tag"))?;
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    };
+
+    let block = field(TICK_ID)
+        .and_then(Tag::as_str)
+        .ok_or_else(|| invalid("scheduled tick is missing its `i` block id"))?
+        .to_owned();
+    let x = field(TICK_X)
+        .and_then(Tag::as_int)
+        .ok_or_else(|| invalid("scheduled tick is missing `x`"))?;
+    let y = field(TICK_Y)
+        .and_then(Tag::as_int)
+        .ok_or_else(|| invalid("scheduled tick is missing `y`"))?;
+    let z = field(TICK_Z)
+        .and_then(Tag::as_int)
+        .ok_or_else(|| invalid("scheduled tick is missing `z`"))?;
+    let delay = field(TICK_DELAY)
+        .and_then(Tag::as_int)
+        .ok_or_else(|| invalid("scheduled tick is missing `t` delay"))?;
+    let priority = field(TICK_PRIORITY)
+        .and_then(Tag::as_int)
+        .map(TickPriority::by_value)
+        .unwrap_or_default();
+    let sub_tick_order = field(TICK_SUB_ORDER)
+        .and_then(Tag::as_long)
+        .unwrap_or(fill_sub_order);
+    let unknown = fields
+        .iter()
+        .filter(|(key, _)| !TICK_FIELDS.contains(&key.as_str()))
+        .cloned()
+        .collect();
+
+    Ok(ScheduledTick {
+        pos: BlockPos::new(x, y, z),
+        block,
+        trigger_tick: load_tick.saturating_add_signed(i64::from(delay)),
+        priority,
+        sub_tick_order,
+        unknown,
+    })
+}
+
+fn decode_scheduled_tick_list(
+    tag: &Tag,
+    load_tick: u64,
+    ticks: &mut Vec<ScheduledTick>,
+) -> io::Result<()> {
+    let list = tag
+        .as_list()
+        .ok_or_else(|| invalid("chunk scheduled ticks must be a list tag"))?;
+    for (index, entry) in list.iter().enumerate() {
+        // Vanilla numbers restored ticks from `-len` up to `-1`; use the same
+        // scheme when an entry has no explicit `o` field.
+        let fill = index as i64 - list.len() as i64;
+        let tick = decode_scheduled_tick(entry, load_tick, fill)
+            .map_err(|error| invalid(format!("block_ticks[{index}]: {error}")))?;
+        if !ticks
+            .iter()
+            .any(|stored| stored.pos == tick.pos && stored.block == tick.block)
+        {
+            ticks.push(tick);
+        }
+    }
+    Ok(())
+}
+
+/// Decode a chunk root's scheduled block ticks. Both the modern
+/// `block_ticks` list and the legacy `TileTicks` list are read; the modern list
+/// wins for a duplicate `(position, block)`.
+pub fn decode_scheduled_ticks(root: &Tag, load_tick: u64) -> io::Result<Vec<ScheduledTick>> {
+    let mut ticks = Vec::new();
+    if let Some(tag) = root.get(BLOCK_TICKS_KEY) {
+        decode_scheduled_tick_list(tag, load_tick, &mut ticks)?;
+    }
+    if let Some(tag) = root.get(LEGACY_TILE_TICKS_KEY) {
+        decode_scheduled_tick_list(tag, load_tick, &mut ticks)?;
+    }
+    Ok(ticks)
+}
+
+/// Install a chunk's scheduled ticks as a `block_ticks` list, removing any
+/// legacy key so a chunk cannot carry two competing tick lists. An empty slice
+/// still writes an empty list, matching `SerializableChunkData`.
+pub fn store_scheduled_ticks(
+    root: &mut Tag,
+    ticks: &[ScheduledTick],
+    reference_tick: u64,
+) -> io::Result<()> {
+    let Tag::Compound(fields) = root else {
+        return Err(invalid("chunk root must be a compound tag"));
+    };
+    fields.retain(|(key, _)| key != BLOCK_TICKS_KEY && key != LEGACY_TILE_TICKS_KEY);
+    let list = ticks
+        .iter()
+        .map(|tick| encode_scheduled_tick(tick, reference_tick))
+        .collect();
+    fields.push((BLOCK_TICKS_KEY.into(), Tag::List(list)));
+    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {

@@ -24,6 +24,7 @@
 use crate::block_update::{BlockChange, perform_block_change};
 use crate::chunk::{BlockState, Chunk, is_air_state};
 use crate::math::{BlockPos, Direction};
+use crate::nbt::Tag;
 use crate::random::{RandomSource, XoroshiroRandomSource};
 use crate::tags;
 use crate::world::WorldStorage;
@@ -182,7 +183,7 @@ impl TickPriority {
 }
 
 /// A scheduled block tick, mirroring `ScheduledTick<Block>`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScheduledTick {
     /// Absolute block position.
     pub pos: BlockPos,
@@ -195,6 +196,10 @@ pub struct ScheduledTick {
     pub priority: TickPriority,
     /// Insertion order within one `(trigger_tick, priority)` bucket.
     pub sub_tick_order: i64,
+    /// Fields the tick NBT carried that this port does not decode. They are
+    /// written back verbatim so a save never silently drops modded data, just
+    /// like `ChunkEntity.payload` for the `Entities` list.
+    pub unknown: Vec<(String, Tag)>,
 }
 
 impl ScheduledTick {
@@ -265,7 +270,31 @@ impl ScheduledTickQueue {
             trigger_tick: current_tick.saturating_add(delay),
             priority,
             sub_tick_order,
+            unknown: Vec::new(),
         })
+    }
+
+    /// All queued ticks in deterministic `LevelTicks` drain order.
+    ///
+    /// The backing `BTreeMap` is keyed by `(trigger_tick, priority,
+    /// sub_tick_order)`, so value iteration is already vanilla's collection
+    /// order without a second sort. Persistence uses this to write a chunk's
+    /// ticks in the order vanilla's `LevelChunkTicks.pack` writes them.
+    pub fn scheduled(&self) -> impl Iterator<Item = &ScheduledTick> {
+        self.pending.values()
+    }
+
+    /// Keeps the next insertion-order counter ahead of a restored tick.
+    ///
+    /// Vanilla assigns loaded ticks negative sub-orders and starts its counter
+    /// at zero, so a tick booked after a reload always sorts behind one that
+    /// came from disk. This port restores the stored sub-order verbatim, so
+    /// the counter has to move past it instead.
+    pub fn note_sub_tick_order(&mut self, order: i64) {
+        let next = order.saturating_add(1);
+        if next > self.next_sub_tick_order {
+            self.next_sub_tick_order = next;
+        }
     }
 
     /// Returns whether `(pos, block)` is currently queued.

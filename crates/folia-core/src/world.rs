@@ -9,7 +9,7 @@ use crate::item_components::ItemStack;
 use crate::nbt::Tag;
 use crate::poi::{PoiRecord, PoiStorage, poi_dir_from_region_dir};
 use crate::region::{ChunkPos, RegionKey, RegionMap};
-use crate::tick::{BehaviorTable, TickReport, TickState};
+use crate::tick::{BehaviorTable, ScheduledTick, TickReport, TickState};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -923,6 +923,7 @@ impl WorldStorage {
         let chunk = decode_chunk(&tag)?;
         let block_entities = decode_block_entities(&tag)?;
         let entities = decode_entities(&tag)?;
+        let scheduled = crate::anvil::decode_scheduled_ticks(&tag, self.tick.current_tick)?;
         if chunk.x != chunk_x || chunk.z != chunk_z {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -937,6 +938,19 @@ impl WorldStorage {
             .entry((chunk_x, chunk_z))
             .or_insert(block_entities);
         self.entities.entry((chunk_x, chunk_z)).or_insert(entities);
+        // Scheduled ticks live in this storage's global queue rather than a
+        // per-chunk cache, so loading a column unpacks its saved ticks into
+        // that queue. `schedule` deduplicates by `(position, block)`, which
+        // makes a reload of an already-loaded column harmless.
+        for tick in scheduled {
+            // Vanilla discards a saved tick whose position is outside the chunk
+            // being loaded, so a malformed root cannot schedule work elsewhere.
+            if tick.pos.x().div_euclid(16) != chunk_x || tick.pos.z().div_euclid(16) != chunk_z {
+                continue;
+            }
+            self.tick.scheduled.note_sub_tick_order(tick.sub_tick_order);
+            self.tick.scheduled.schedule(tick);
+        }
         // POIs live in a sibling directory, so loading a column makes its
         // region's records available through `pois`/`poi_at` immediately.
         self.poi
@@ -944,14 +958,32 @@ impl WorldStorage {
         Ok(Some(chunk))
     }
 
+    /// Pending scheduled ticks whose position lies in `chunk`, in deterministic
+    /// drain order. This is the slice written into the chunk's `block_ticks`
+    /// list by [`save_chunk_with_entities`](Self::save_chunk_with_entities) and
+    /// [`update_chunk`](Self::update_chunk).
+    pub fn scheduled_ticks_in_chunk(&self, chunk_x: i32, chunk_z: i32) -> Vec<ScheduledTick> {
+        self.tick
+            .scheduled
+            .scheduled()
+            .filter(|tick| {
+                tick.pos.x().div_euclid(16) == chunk_x && tick.pos.z().div_euclid(16) == chunk_z
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn save_chunk(&mut self, chunk: &Chunk, compression: Compression) -> io::Result<()> {
         // A generated column replaces the stored one, so it must not inherit
-        // block entities or entities from whatever was there before.
+        // block entities, entities, or scheduled ticks from whatever was there
+        // before. Worldgen-feature ticks are not routed into the live queue
+        // yet, so generated columns start with an empty `block_ticks` list.
         self.write_chunk_with_entities(
             chunk,
             compression,
             &BlockEntityMap::new(),
             &ChunkEntities::new(),
+            &[],
         )
     }
 
@@ -979,7 +1011,8 @@ impl WorldStorage {
         let key = (chunk.x, chunk.z);
         let block_entities = self.block_entities.get(&key).cloned().unwrap_or_default();
         let entities = self.entities.get(&key).cloned().unwrap_or_default();
-        self.write_chunk_with_entities(chunk, compression, &block_entities, &entities)
+        let scheduled = self.scheduled_ticks_in_chunk(chunk.x, chunk.z);
+        self.write_chunk_with_entities(chunk, compression, &block_entities, &entities, &scheduled)
     }
 
     fn write_chunk_with_entities(
@@ -988,6 +1021,7 @@ impl WorldStorage {
         compression: Compression,
         block_entities: &BlockEntityMap,
         entities: &ChunkEntities,
+        scheduled: &[ScheduledTick],
     ) -> io::Result<()> {
         // Opening the region at stage time keeps the region file and its loaded
         // handle visible to callers; only the chunk record waits for the flush.
@@ -996,6 +1030,7 @@ impl WorldStorage {
         let mut tag = encode_chunk(chunk)?;
         store_block_entities(&mut tag, block_entities)?;
         store_entities(&mut tag, entities)?;
+        crate::anvil::store_scheduled_ticks(&mut tag, scheduled, self.tick.current_tick)?;
         let tag = stamp_chunk(tag, chunk);
         self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
@@ -1059,12 +1094,33 @@ impl WorldStorage {
                 None => Vec::new(),
             },
         };
+        let mut scheduled = self.scheduled_ticks_in_chunk(chunk.x, chunk.z);
+        // A caller that edits a stored column without loading it first has not
+        // unpacked its ticks into the queue. Recover them from the root being
+        // rewritten so the edit cannot silently erase them. A loaded chunk has
+        // already consumed those ticks (or they fired), so it is never
+        // resurrected here.
+        if scheduled.is_empty()
+            && !self.is_cached(chunk.x, chunk.z)
+            && let Some(existing) = &existing
+        {
+            scheduled = crate::anvil::decode_scheduled_ticks(existing, self.tick.current_tick)?;
+            scheduled.retain(|tick| {
+                tick.pos.x().div_euclid(16) == chunk.x && tick.pos.z().div_euclid(16) == chunk.z
+            });
+            for tick in &scheduled {
+                self.tick.scheduled.note_sub_tick_order(tick.sub_tick_order);
+                self.tick.scheduled.schedule(tick.clone());
+            }
+        }
+        scheduled.sort_by(ScheduledTick::drain_cmp);
         let mut tag = encode_chunk(chunk)?;
         if let Some(existing) = &existing {
             preserve_unknown_fields(existing, &mut tag);
         }
         store_block_entities(&mut tag, &block_entities)?;
         store_entities(&mut tag, &entities)?;
+        crate::anvil::store_scheduled_ticks(&mut tag, &scheduled, self.tick.current_tick)?;
         let tag = stamp_chunk(tag, chunk);
         self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
@@ -1268,6 +1324,8 @@ fn preserve_unknown_fields(existing: &Tag, target: &mut Tag) {
             || key == crate::block_entity::LEGACY_BLOCK_ENTITIES_KEY
             || key == crate::chunk_entity::ENTITIES_KEY
             || key == crate::chunk_entity::LEGACY_ENTITIES_KEY
+            || key == crate::anvil::BLOCK_TICKS_KEY
+            || key == crate::anvil::LEGACY_TILE_TICKS_KEY
         {
             continue;
         }

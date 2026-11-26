@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,810 passing** at the 0f86ee4 gate (0 failed, 1 ignored benchmark); lifecycle harness slice next expected 1,818
+> Test status: **1,818 passing** at the 64ceca7 gate (0 failed, 1 ignored benchmark); scheduled-tick slice next expected 1,830
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1811,11 +1811,14 @@ section-only light packets are still open.
   behaviours. Focused tests: 8 fluid + 7 redstone + 1 block-update unit tests
   and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
   drain, waterlogging, source conversion, determinism).
+- **Progress (2026-11-26):** Scheduled block ticks now persist in vanilla-style
+  `block_ticks` NBT (legacy `TileTicks` read), with 12 tests for negative delays,
+  unknown fields, reload ordering, multi-chunk batches, and region unload.
 - **Still open:** leaf distance/decay updates, crop/sapling growth, doors,
   rails, regular torch support, lava fire spread/quenching, redstone
   lamps/target blocks/tripwire hooks, and analog block inputs. Falling blocks
   move one block per scheduled tick instead of using a
-  `FallingBlockEntity`; scheduled ticks are not persisted to chunk NBT; the
+  `FallingBlockEntity`; fluid ticks and worldgen-feature tick queues are not persisted; the
   random-tick RNG is a deterministic hash of seed/chunk/tick rather than
   Java's `Level.random` sequence; `tick_world` runs over the storage cache
   rather than a ticket/loaded-chunk set; cancellation during a running tick

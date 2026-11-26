@@ -19,6 +19,9 @@
 //! * comparators: compare/subtract mode, rear and side inputs, container signal
 //!   strength through [`ContainerSignalSource`], strong output power, and
 //!   scheduled re-evaluation;
+//! * analog inputs: item-frame rotation, lectern page ratio, and daylight
+//!   detector power, including the conductor-delayed input path and
+//!   comparator-update notifications;
 //! * observers: front-neighbour change detection, a two-tick pulse, and
 //!   scheduled ticks;
 //! * redstone torches: lit/unlit inversion, floor/wall attachment, and vanilla's
@@ -39,18 +42,24 @@
 //!   the container in front. Entity-producing behaviors stay explicit
 //!   [`io::ErrorKind::Unsupported`] errors.
 //!
-//! Not implemented: pistons, analog block outputs
-//! other than registered containers (item frames, lecterns, ...), dispenser
+//! The analog inputs are resolved from registered [`AnalogSource`] records and
+//! the daylight detector's `power` property; registering a source also runs the
+//! normal comparator-update notification so the two-tick refresh queue is the
+//! only update path. No plugin API or networking behavior is claimed here.
+//!
+//! Not implemented: pistons, analog outputs of sculk sensors/composters/
+//! cauldrons and other blocks not listed above, dispenser
 //! item-entity/boat/minecart/bucket spawning, shears on entities, and NBT
-//! persistence for comparator outputs or scheduled ticks. Those stay explicit
-//! gaps in `BLOCKERS.md`.
+//! persistence for comparator outputs, analog sources, or scheduled ticks.
+//! Those stay explicit gaps in `BLOCKERS.md`.
 
 use crate::block_behaviour;
 use crate::block_entity::{BlockEntityPos, DispenserBlockEntity};
 use crate::block_update;
 use crate::chunk::BlockState;
-use crate::item_components::ItemStack;
+use crate::item_components::{ComponentValue, ItemStack, item_stack_from_nbt};
 use crate::math::{BlockPos, Direction};
+use crate::nbt::Tag;
 use crate::tick::{BlockBehavior, TickPriority, TickWorld, UpdateFlags};
 use crate::world::WorldStorage;
 use folia_random::RandomSource;
@@ -121,6 +130,169 @@ pub enum PlateSensitivity {
     Everything,
     /// Stone and polished-blackstone plates.
     Mobs,
+}
+
+/// Vanilla `ItemFrame.NUM_ROTATIONS`.
+pub const ITEM_FRAME_ROTATIONS: i32 = 8;
+
+/// A non-container analog source a comparator can read.
+///
+/// The entity and menu layers own the source data; this record is the bridge
+/// into the existing `SignalReader`/scheduled-refresh path. Item frames are
+/// attached entities rather than blocks, so their `facing` is checked against
+/// the comparator's input side exactly as `ComparatorBlock.getItemFrame`
+/// does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnalogSource {
+    /// An item frame occupying the block cell behind a conductor.
+    ItemFrame {
+        facing: Direction,
+        item: ItemStack,
+        rotation: i32,
+    },
+    /// A lectern with (or without) a written/writable book.
+    Lectern {
+        has_book: bool,
+        page: i32,
+        page_count: i32,
+    },
+}
+
+impl AnalogSource {
+    /// Constructs an item-frame source. Rotation is reduced modulo eight.
+    pub fn item_frame(facing: Direction, item: ItemStack, rotation: i32) -> Self {
+        Self::ItemFrame {
+            facing,
+            item,
+            rotation: rotation.rem_euclid(ITEM_FRAME_ROTATIONS),
+        }
+    }
+
+    /// Constructs a lectern source from a page index and page count.
+    pub fn lectern(has_book: bool, page: i32, page_count: i32) -> Self {
+        Self::Lectern {
+            has_book,
+            page,
+            page_count,
+        }
+    }
+
+    /// Builds a lectern source from its persisted `Book`/`Page` fields.
+    pub fn from_lectern_nbt(tag: &Tag) -> Option<Self> {
+        let book = match tag.get("Book") {
+            Some(book_tag) => item_stack_from_nbt(book_tag).ok()?,
+            None => ItemStack::empty(),
+        };
+        let page = tag.get("Page").and_then(Tag::as_int).unwrap_or(0).max(0);
+        Some(Self::lectern(
+            lectern_has_book(&book),
+            page,
+            lectern_page_count(&book),
+        ))
+    }
+
+    /// Builds an item-frame source from its entity NBT (`Item`,
+    /// `ItemRotation`, `Facing`).
+    pub fn from_item_frame_nbt(tag: &Tag) -> Option<Self> {
+        let facing = match tag.get("Facing")?.as_str()? {
+            "down" => Direction::Down,
+            "up" => Direction::Up,
+            "north" => Direction::North,
+            "south" => Direction::South,
+            "west" => Direction::West,
+            "east" => Direction::East,
+            _ => return None,
+        };
+        let rotation = tag
+            .get("ItemRotation")
+            .and_then(Tag::as_byte)
+            .map(i32::from)
+            .unwrap_or(0);
+        let item = match tag.get("Item") {
+            Some(item_tag) => item_stack_from_nbt(item_tag).ok()?,
+            None => ItemStack::empty(),
+        };
+        Some(Self::item_frame(facing, item, rotation))
+    }
+
+    /// `true` for item-frame sources; other analog sources are block outputs.
+    pub fn is_item_frame(&self) -> bool {
+        matches!(self, Self::ItemFrame { .. })
+    }
+
+    /// `ItemFrame.getAnalogOutput`, or the lectern's page-strength formula.
+    /// `direction` is the comparator's input side; `None` is used for
+    /// direction-agnostic reads and treats any facing as facing the reader.
+    pub fn analog_output_signal(&self, direction: Option<Direction>) -> i32 {
+        match self {
+            Self::ItemFrame {
+                facing,
+                item,
+                rotation,
+            } => {
+                if direction.is_some_and(|side| side != *facing) {
+                    return 0;
+                }
+                item_frame_analog_output(item, *rotation)
+            }
+            Self::Lectern {
+                has_book,
+                page,
+                page_count,
+            } => lectern_analog_output(*has_book, *page, *page_count),
+        }
+    }
+}
+
+/// `ItemFrame.getAnalogOutput`: rotation 0..7 maps to strength 1..8 while an
+/// empty frame reports zero. The framed item's id does not affect the result
+/// in modern Java (the old id-based formula was removed).
+pub fn item_frame_analog_output(item: &ItemStack, rotation: i32) -> i32 {
+    if item.is_empty() {
+        0
+    } else {
+        rotation.rem_euclid(ITEM_FRAME_ROTATIONS) + 1
+    }
+}
+
+/// `LecternBlockEntity.getRedstoneSignal`, using Java's float page progress.
+pub fn lectern_analog_output(has_book: bool, page: i32, page_count: i32) -> i32 {
+    if !has_book {
+        return 0;
+    }
+    let progress = if page_count > 1 {
+        page.max(0) as f32 / (page_count - 1) as f32
+    } else {
+        1.0
+    };
+    (progress * 14.0_f32).floor() as i32 + 1
+}
+
+/// Whether a book carries the writable/written book content component.
+pub fn lectern_has_book(book: &ItemStack) -> bool {
+    book.get_component("minecraft:written_book_content")
+        .is_some()
+        || book
+            .get_component("minecraft:writable_book_content")
+            .is_some()
+}
+
+/// Page count from the locally shipped opaque book-content component.
+pub fn lectern_page_count(book: &ItemStack) -> i32 {
+    for component in [
+        "minecraft:written_book_content",
+        "minecraft:writable_book_content",
+    ] {
+        if let Some(ComponentValue::Opaque(Tag::Compound(fields))) = book.get_component(component)
+            && let Some(pages) = fields
+                .iter()
+                .find(|(name, _)| name == "pages")
+                .and_then(|(_, tag)| tag.as_list())
+        {
+            return pages.len() as i32;
+        }
+    }
+    0
 }
 
 /// A read-only `SignalGetter` over the decoded-chunk cache.
@@ -241,13 +413,73 @@ impl<'a> SignalReader<'a> {
         best
     }
 
-    /// `BlockState.hasAnalogOutputSignal`/`getAnalogOutputSignal` for the
-    /// registered container sources.
+    /// Block analog output (`BlockState.hasAnalogOutputSignal`) at `pos`.
     ///
-    /// `Some(0)` means the block is a container but currently empty, which the
-    /// comparator must distinguish from "no analog output".
+    /// `Some(0)` means the block is an analog source but currently empty, which
+    /// the comparator must distinguish from "no analog output". `direction` is
+    /// the side the reader looks from; registered sources that are not item
+    /// frames ignore it, matching vanilla's direction-independent containers.
+    fn block_analog_signal(&self, pos: BlockPos, direction: Direction) -> Option<i32> {
+        if let Some(signal) = self.storage.tick_state().containers.signal(pos) {
+            return Some(signal);
+        }
+        if let Some(source) = self.storage.tick_state().analog_sources.get(&pos)
+            && !source.is_item_frame()
+        {
+            return Some(source.analog_output_signal(Some(direction)).clamp(0, 15));
+        }
+        let state = self.block_state(pos)?;
+        if is_daylight_detector(&state) {
+            return Some(
+                property(&state, "power")
+                    .and_then(|value| value.parse::<i32>().ok())
+                    .unwrap_or(0)
+                    .clamp(0, 15),
+            );
+        }
+        if is_lectern(&state) {
+            return Some(0);
+        }
+        None
+    }
+
+    /// The item-frame entity at `pos`, if its facing matches the reader.
+    fn item_frame_signal(&self, pos: BlockPos, direction: Option<Direction>) -> Option<i32> {
+        self.storage
+            .tick_state()
+            .analog_sources
+            .get(&pos)
+            .filter(|source| source.is_item_frame())
+            .map(|source| source.analog_output_signal(direction).clamp(0, 15))
+    }
+
+    /// `true` when `pos` supplies any analog output (block or item frame).
+    pub fn has_analog_output_signal(&self, pos: BlockPos) -> bool {
+        self.block_analog_signal(pos, Direction::North).is_some()
+            || self.item_frame_signal(pos, None).is_some()
+    }
+
+    /// Direction-aware analog read: the maximum of the block and item-frame
+    /// outputs at `pos`, as vanilla does for the conductor-delayed input.
+    pub fn analog_output_signal_from(
+        &self,
+        pos: BlockPos,
+        direction: Option<Direction>,
+    ) -> Option<i32> {
+        let block = self.block_analog_signal(pos, direction.unwrap_or(Direction::North));
+        let frame = self.item_frame_signal(pos, direction);
+        match (block, frame) {
+            (Some(block), Some(frame)) => Some(block.max(frame)),
+            (Some(block), None) => Some(block),
+            (None, Some(frame)) => Some(frame),
+            (None, None) => None,
+        }
+    }
+
+    /// Direction-agnostic analog read. `Some(0)` means a registered empty
+    /// source, not the absence of a source.
     pub fn analog_output_signal(&self, pos: BlockPos) -> Option<i32> {
-        self.storage.tick_state().containers.signal(pos)
+        self.analog_output_signal_from(pos, None)
     }
 
     /// The stored `ComparatorBlockEntity.outputSignal` at `pos`.
@@ -865,7 +1097,8 @@ pub fn comparator_input_signal(
     let mut signal = diode_input_signal(reader, pos, state);
     let direction = facing(state);
     let front = pos.relative(direction);
-    if let Some(analog) = reader.analog_output_signal(front) {
+    let opposite = direction.opposite();
+    if let Some(analog) = reader.block_analog_signal(front, opposite) {
         signal = analog;
     } else if signal < 15
         && reader
@@ -873,8 +1106,10 @@ pub fn comparator_input_signal(
             .is_some_and(|front| is_redstone_conductor(&front))
     {
         let beyond = front.relative(direction);
-        if let Some(analog) = reader.analog_output_signal(beyond) {
-            signal = analog;
+        let block = reader.block_analog_signal(beyond, opposite);
+        let frame = reader.item_frame_signal(beyond, Some(direction));
+        if let Some(best) = block.into_iter().chain(frame).max() {
+            signal = best;
         }
     }
     signal.clamp(0, 15)
@@ -1193,27 +1428,107 @@ fn check_tripwire(
     Ok(changed)
 }
 
-/// Notifies comparators around a container that its analog output changed.
-///
-/// Vanilla `Level.updateNeighbourForOutputSignal` reaches the comparator through
-/// `neighborChanged`, which schedules its normal two-tick re-evaluation.
-pub fn notify_container_changed(storage: &mut WorldStorage, pos: BlockPos) {
-    let tick = storage.tick_state().current_tick;
+/// Comparators that read `pos` directly or through one conductor, in vanilla
+/// `Level.updateNeighbourForOutputSignal` order.
+fn analog_refresh_targets(storage: &WorldStorage, pos: BlockPos) -> Vec<(BlockPos, String)> {
+    let mut targets = Vec::new();
     for direction in Direction::ALL {
         let neighbor = pos.relative(direction);
         let Some(state) = storage.block_state_at(neighbor.x(), neighbor.y(), neighbor.z()) else {
             continue;
         };
         if is_comparator(&state) {
-            storage.tick_state_mut().scheduled.schedule_after(
-                tick,
-                neighbor,
-                state.name,
-                comparator_delay(),
-                TickPriority::Normal,
-            );
+            targets.push((neighbor, state.name));
+        } else if is_redstone_conductor(&state) {
+            let beyond = neighbor.relative(direction);
+            if let Some(beyond_state) = storage.block_state_at(beyond.x(), beyond.y(), beyond.z())
+                && is_comparator(&beyond_state)
+            {
+                targets.push((beyond, beyond_state.name));
+            }
         }
     }
+    targets
+}
+
+/// Schedules the normal two-tick comparator refresh for every comparator that
+/// reads `pos`, including the one-conductor-delayed path.
+pub fn notify_container_changed(storage: &mut WorldStorage, pos: BlockPos) {
+    let tick = storage.tick_state().current_tick;
+    for (target, name) in analog_refresh_targets(storage, pos) {
+        storage.tick_state_mut().scheduled.schedule_after(
+            tick,
+            target,
+            name,
+            comparator_delay(),
+            TickPriority::Normal,
+        );
+    }
+}
+
+/// Analog-source alias of [`notify_container_changed`]. Item frames, lecterns,
+/// and daylight detectors use the same comparator-update queue as containers.
+pub fn notify_analog_source_changed(storage: &mut WorldStorage, pos: BlockPos) {
+    notify_container_changed(storage, pos);
+}
+
+/// Registers (or replaces) a non-container analog source and schedules the
+/// comparators that read it.
+pub fn set_analog_source(storage: &mut WorldStorage, pos: BlockPos, source: AnalogSource) {
+    storage.tick_state_mut().analog_sources.insert(pos, source);
+    notify_analog_source_changed(storage, pos);
+}
+
+/// Registers an item frame at the block cell it occupies. `facing` is the
+/// direction the frame points, which must match the comparator's input side.
+pub fn set_item_frame_source(
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+    facing: Direction,
+    item: ItemStack,
+    rotation: i32,
+) {
+    set_analog_source(
+        storage,
+        pos,
+        AnalogSource::item_frame(facing, item, rotation),
+    );
+}
+
+/// Registers a lectern source from persisted `Book`/`Page` NBT fields.
+pub fn set_lectern_source_from_nbt(storage: &mut WorldStorage, pos: BlockPos, tag: &Tag) -> bool {
+    let Some(source) = AnalogSource::from_lectern_nbt(tag) else {
+        return false;
+    };
+    set_analog_source(storage, pos, source);
+    true
+}
+
+/// Registers an item-frame source from its entity NBT.
+pub fn set_item_frame_source_from_nbt(
+    storage: &mut WorldStorage,
+    pos: BlockPos,
+    tag: &Tag,
+) -> bool {
+    let Some(source) = AnalogSource::from_item_frame_nbt(tag) else {
+        return false;
+    };
+    set_analog_source(storage, pos, source);
+    true
+}
+
+/// Removes an analog source and refreshes any comparators reading it. Returns
+/// whether a source was present.
+pub fn remove_analog_source(storage: &mut WorldStorage, pos: BlockPos) -> bool {
+    let removed = storage
+        .tick_state_mut()
+        .analog_sources
+        .remove(&pos)
+        .is_some();
+    if removed {
+        notify_analog_source_changed(storage, pos);
+    }
+    removed
 }
 
 /// Dispatches `useWithoutItem` for the ported interactive blocks.
@@ -2054,6 +2369,12 @@ pub fn is_daylight_detector(state: &BlockState) -> bool {
     state.name == "minecraft:daylight_detector"
 }
 
+/// `true` for a lectern, which always exposes an analog output (zero while no
+/// book is present).
+pub fn is_lectern(state: &BlockState) -> bool {
+    state.name == "minecraft:lectern"
+}
+
 fn update_daylight(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> io::Result<()> {
     if !is_daylight_detector(state) {
         return Ok(());
@@ -2067,6 +2388,9 @@ fn update_daylight(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState)
     let current = property(state, "power").and_then(|value| value.parse::<i32>().ok());
     if current != Some(power) {
         world.set_block(pos, with_property(state, "power", &power.to_string()))?;
+        for (target, name) in analog_refresh_targets(world.storage(), pos) {
+            world.schedule_with_priority(target, name, comparator_delay(), TickPriority::Normal);
+        }
     }
     world.schedule(pos, state.name.clone(), DAYLIGHT_RECHECK_TICKS);
     Ok(())

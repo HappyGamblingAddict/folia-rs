@@ -3803,3 +3803,38 @@ Format:
   (16), `fluids` (8), `ticks` (13), block-behaviour (4), support-break (9),
   door-redstone (7), lib (707), `cargo check --workspace`, `cargo fmt --all`,
   and clippy `-D warnings` are green.
+
+## 2026-11-26 - P3.10 comparator analog inputs use modern vanilla formulas
+
+- Context: comparators only read registered `ContainerSignalSource` records,
+  so item frames, lecterns, and daylight detectors were invisible to them. The
+  local decompiled tree is unavailable on this host; the formulas were checked
+  against verbatim modern Java `ComparatorBlock.getInputSignal`,
+  `ItemFrame.getAnalogOutput`, and `LecternBlockEntity.getRedstoneSignal`
+  reference dumps instead of the 1.21.11 tree. This is a documented
+  approximation until the Windows oracle is available for a differential test.
+- Decision: an item frame reports `rotation % 8 + 1` while holding an item and
+  zero when empty; the old item-id-based formula does not apply in modern Java.
+  A frame only counts when its facing equals the comparator's input side, and
+  only on the conductor-delayed path. A lectern reports
+  `floor(page / (pageCount - 1) * 14) + 1` with Java `f32` arithmetic, or 15
+  for a single-page/no-page-count book, and zero with no book. Daylight
+  detectors expose the existing `power` property (inverted states carry the
+  complemented power), so no extra detector state was registered.
+- Wiring: `TickState::analog_sources` holds explicitly registered frames and
+  lecterns; NBT helpers parse the locally shipped `Item`/`ItemRotation`/
+  `Facing` and `Book`/`Page` fields, including opaque written-book page lists.
+  Source setters/removers run `notify_analog_source_changed`, which schedules
+  the same two-tick comparator refresh and now follows one redstone conductor
+  as vanilla's `Level.updateNeighbourForOutputSignal` does. Replacing a source
+  block clears its record in `on_block_change`.
+- Gaps: live item-frame and lectern menu/entity wiring, plugin API events,
+  networking, sculk sensor/composter/cauldron analog outputs, comparator and
+  source NBT persistence, and a Java differential redstone trace are absent.
+  The conductor hop deliberately uses all six directions (the existing queue
+  behavior) rather than vanilla's horizontal-only list; extra refreshes are
+  deduplicated by the scheduled-tick queue and do not change output strength.
+- Verification: 11 new `tests/analog_comparator.rs` tests plus `redstone2`
+  (10), `redstone_extra` (15), `ticks` (13), `block_entity` (9),
+  `tripwire_hooks` (6), lib (707), check, fmt, and clippy `-D warnings` are
+  green.

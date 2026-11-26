@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `83a6d8e` with 1,882 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `ebb9b0d` with 1,889 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,882 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); tripwire-hook slice next expected 1,889. Parity is **98.75% block-class /
+- Tests: **1,889 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); analog-comparator slice next expected 1,900. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -95,6 +95,8 @@ Last updated: 2026-11-24
   fluid/fire behavior registration; rain and `Level.random` remain approximate.
 - P3.10 tripwire hooks now emit only while connected and clear on break, with
   deterministic packet-order tests; analog sources and pistons remain.
+- P3.10 analog comparator inputs landed for item frames, lecterns, and daylight
+  detectors; source NBT persistence and other analog blocks remain open.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

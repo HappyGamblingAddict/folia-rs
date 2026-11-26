@@ -770,6 +770,11 @@ pub struct TickState {
     pub random: RandomTickQueue,
     /// Block-entity containers that expose a comparator signal.
     pub containers: ContainerSignals,
+    /// Non-container analog sources (item frames and lecterns) keyed by the
+    /// block cell they occupy. Comparators read these through the same
+    /// [`ContainerSignals`] path; the entity/menu layer registers and removes
+    /// them when the source item or page changes.
+    pub analog_sources: HashMap<BlockPos, crate::redstone::AnalogSource>,
     /// Comparator output strength learned by the last scheduled refresh.
     ///
     /// Vanilla stores this in `ComparatorBlockEntity`. The port keeps it on the
@@ -1753,6 +1758,7 @@ pub(crate) fn on_block_change(
     }
     if old.is_some_and(|old| old.name != new_state.name) {
         storage.tick_state_mut().containers.remove(pos);
+        storage.tick_state_mut().analog_sources.remove(&pos);
     }
     let behavior = behavior_for(new_state);
     if flags & crate::tick::UPDATE_SKIP_ON_PLACE == 0 {

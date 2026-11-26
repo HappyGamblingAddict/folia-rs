@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,882 passing** at the 83a6d8e gate (0 failed, 1 ignored benchmark); tripwire-hook slice next expected 1,889
+> Test status: **1,889 passing** at the ebb9b0d gate (0 failed, 1 ignored benchmark); analog-comparator slice next expected 1,900
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1811,6 +1811,10 @@ section-only light packets are still open.
   behaviours. Focused tests: 8 fluid + 7 redstone + 1 block-update unit tests
   and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
   drain, waterlogging, source conversion, determinism).
+- **Progress (2026-11-26h):** Comparators now read item-frame rotation,
+  lectern page ratio, and daylight-detector power through the vanilla
+  conductor-delayed path with 11 analog tests; persisting those sources and
+  other analog blocks remain open.
 - **Progress (2026-11-26g):** Tripwire hooks now clear signal when disconnected,
   with 7 connection/signal/packet-order tests. Analog comparator sources,
   pistons, `disarmed`/shears, and Java traces remain.

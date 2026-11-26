@@ -35,6 +35,7 @@ pub mod item_prototypes;
 pub mod join;
 pub mod leaves;
 pub mod level;
+pub mod lifecycle_diagnostics;
 pub mod light;
 pub mod loot;
 pub mod nbt;

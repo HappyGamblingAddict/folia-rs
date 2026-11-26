@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `846cac6` with 1,795 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `0f86ee4` with 1,810 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,795 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); POI slice next expected 1,810. Parity is **98.75% block-class /
+- Tests: **1,810 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); lifecycle harness slice next expected 1,818. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -76,6 +76,8 @@ Last updated: 2026-11-24
   session-to-store wiring remain.
 - P3.4 POI storage landed in a documented local binary format, staged with chunk
   flushes; vanilla Anvil POI byte parity and ticket consumption remain open.
+- P3.12 lighting/chunk lifecycle harness landed with Rust-only golden scenarios
+  and explicit "Java unavailable" coverage; six Java capture files are missing.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

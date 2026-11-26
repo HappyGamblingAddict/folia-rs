@@ -1,0 +1,410 @@
+{
+  "data_version": 4788,
+  "format_version": 1,
+  "scenarios": {
+    "block_edit_incremental": {
+      "bulk_light_digest": "ce6eeb5e697aa9ca",
+      "bulk_light_nibbles": "3ae960c046504079",
+      "final_light_digest": "ce6eeb5e697aa9ca",
+      "final_light_nibbles": "3ae960c046504079",
+      "incremental_matches_bulk": true,
+      "steps": [
+        {
+          "block_update_body": {
+            "digest": "50007cb636a111e4",
+            "len": 11,
+            "prefix_hex": "080000020000008008e118"
+          },
+          "changed": true,
+          "dirty_sections": [
+            {
+              "chunk_x": 0,
+              "chunk_z": 0,
+              "section_y": 0
+            },
+            {
+              "chunk_x": 0,
+              "chunk_z": 0,
+              "section_y": 1
+            }
+          ],
+          "light_body": {
+            "digest": "182574ee40bb11f9",
+            "len": 8222,
+            "prefix_hex": "01000000000000006001000000000000"
+          },
+          "light_digest": "8d2030f98c21b4ba",
+          "name": "place_torch"
+        },
+        {
+          "block_update_body": {
+            "digest": "f92fc7d60be6c934",
+            "len": 10,
+            "prefix_hex": "08000002000000800801"
+          },
+          "changed": true,
+          "dirty_sections": [
+            {
+              "chunk_x": 0,
+              "chunk_z": 0,
+              "section_y": 0
+            },
+            {
+              "chunk_x": 0,
+              "chunk_z": 0,
+              "section_y": 1
+            }
+          ],
+          "light_body": {
+            "digest": "df97e1becc07ad49",
+            "len": 4122,
+            "prefix_hex": "01000000000000006000000100000000"
+          },
+          "light_digest": "c4858a8f77dd71f8",
+          "name": "replace_with_stone"
+        },
+        {
+          "block_update_body": {
+            "digest": "f92fc8d60be6cae7",
+            "len": 10,
+            "prefix_hex": "08000002000000800800"
+          },
+          "changed": true,
+          "dirty_sections": [
+            {
+              "chunk_x": 0,
+              "chunk_z": 0,
+              "section_y": 0
+            }
+          ],
+          "light_body": {
+            "digest": "933cb9fb56c3072c",
+            "len": 2072,
+            "prefix_hex": "01000000000000002000000100000000"
+          },
+          "light_digest": "ce6eeb5e697aa9ca",
+          "name": "clear_to_air"
+        }
+      ]
+    },
+    "chunk_status_persistence": {
+      "checkpoint_count": 8,
+      "completed": [
+        "noise",
+        "surface",
+        "carvers",
+        "features",
+        "initialize_light",
+        "light",
+        "spawn",
+        "full"
+      ],
+      "decoded_status": "full",
+      "from": "biomes",
+      "nbt_status": "minecraft:full",
+      "reached": "full",
+      "status_persisted": true,
+      "target": "full"
+    },
+    "chunk_ticket_footprint": {
+      "initial_added": [
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          -1
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          1
+        ]
+      ],
+      "initial_loaded": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          -1
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          5,
+          0
+        ]
+      ],
+      "initial_ticking": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          -1
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          5,
+          0
+        ]
+      ],
+      "materialized": 10,
+      "move_added": [
+        [
+          4,
+          -1
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          4,
+          1
+        ]
+      ],
+      "move_removed": [
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "pending_unloads_after_move": 3,
+      "persistent": [
+        [
+          0,
+          0
+        ],
+        [
+          5,
+          0
+        ]
+      ],
+      "unloaded_after_delay": [
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    "cross_chunk_propagation": {
+      "center_light_body": {
+        "digest": "8c4259d3e74b7b61",
+        "len": 8222,
+        "prefix_hex": "01000000000000006001000000000000"
+      },
+      "center_light_digest": "93d18aed684e1222",
+      "dirty_sections": [
+        {
+          "chunk_x": 0,
+          "chunk_z": 0,
+          "section_y": 0
+        },
+        {
+          "chunk_x": 0,
+          "chunk_z": 0,
+          "section_y": 1
+        },
+        {
+          "chunk_x": 1,
+          "chunk_z": 0,
+          "section_y": 0
+        },
+        {
+          "chunk_x": 1,
+          "chunk_z": 0,
+          "section_y": 1
+        }
+      ],
+      "neighbour_border_block": 13,
+      "neighbour_border_sky": 15,
+      "neighbour_light_body": {
+        "digest": "72e74885fe2f4e24",
+        "len": 8222,
+        "prefix_hex": "01000000000000006001000000000000"
+      },
+      "neighbour_light_digest": "64ce15bb2f97d224"
+    },
+    "deterministic_recompute": {
+      "block_digest": "b6867558978d5205",
+      "digest": "e7aec45e179a529c",
+      "heightmap_digest": "d92884277328c3fc",
+      "layers": [
+        {
+          "block": {
+            "digest": "28c31cf8df2ec325",
+            "empty": true,
+            "present": true
+          },
+          "sky": {
+            "digest": "7a029eb2cb1649ef",
+            "empty": false,
+            "present": true
+          },
+          "y": 0
+        },
+        {
+          "block": {
+            "digest": "28c31cf8df2ec325",
+            "empty": true,
+            "present": true
+          },
+          "sky": {
+            "digest": "f024277fb3c50b25",
+            "empty": false,
+            "present": true
+          },
+          "y": 1
+        },
+        {
+          "block": {
+            "digest": null,
+            "empty": true,
+            "present": false
+          },
+          "sky": {
+            "digest": null,
+            "empty": true,
+            "present": false
+          },
+          "y": 2
+        },
+        {
+          "block": {
+            "digest": null,
+            "empty": true,
+            "present": false
+          },
+          "sky": {
+            "digest": null,
+            "empty": true,
+            "present": false
+          },
+          "y": 3
+        }
+      ],
+      "light_digest": "325c3471ce9c7aa2",
+      "stable_across_runs": true
+    },
+    "save_reload_equality": {
+      "after": {
+        "block_digest": "b6867558978d5205",
+        "heightmap_digest": "d92884277328c3fc",
+        "light_digest": "325c3471ce9c7aa2",
+        "status": "features"
+      },
+      "before": {
+        "block_digest": "b6867558978d5205",
+        "heightmap_digest": "d92884277328c3fc",
+        "light_digest": "325c3471ce9c7aa2",
+        "status": "features"
+      },
+      "equal": true
+    }
+  }
+}

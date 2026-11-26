@@ -10,12 +10,15 @@
 //! `Entity.moveRelative`, `Entity.checkFallDamage`, and `Player.travel` for
 //! 1.21.11: gravity `0.08`, drag `0.98`, ground friction, speed and jump
 //! factors from the generated [`crate::block_behaviour`] table and collision
-//! boxes from the generated [`crate::block_shapes`] table. Features that need
-//! movement metadata this port does not carry yet (ladders, cobwebs, slime
-//! bounce, elytra, water/lava currents, bubbles, powder snow, scaffolding) are
-//! intentionally not simulated; see `DECISIONS.md` for the exact remaining
-//! gaps.
+//! boxes from the generated [`crate::block_shapes`] table. Ladder/vine/
+//! scaffolding climbing, cobweb slowdown, and slime bounce follow
+//! `LivingEntity.handleOnClimbable`, `WebBlock.entityInside`, and
+//! `SlimeBlock.fallOn`/`bounceUp`; climbable and fall-damage-resetting blocks
+//! come from the shipped block tags. Elytra, water/lava currents, bubbles,
+//! and powder snow are still intentionally not simulated; see
+//! `DECISIONS.md` for the exact remaining gaps.
 
+use crate::block_behaviour::MovementTraits;
 use crate::chunk::{BlockState, Chunk};
 use crate::world::WorldStorage;
 use std::cmp::Ordering;
@@ -73,6 +76,18 @@ pub const MAX_SETTLE_LIFT: f64 = 8.0;
 /// Candidate lift spacing for burst moves.
 const SETTLE_STEP: f64 = 0.25;
 const EPSILON: f64 = 1.0e-7;
+/// `LivingEntity.handleRelativeFrictionAndCalculateMovement` climb impulse
+/// when a climber is pressing into a wall or holding jump.
+pub const CLIMB_SPEED: f64 = 0.2;
+/// `LivingEntity.handleOnClimbable` clamps horizontal speed and slide-down
+/// speed to `0.15` blocks per tick.
+pub const CLIMB_MOVE_LIMIT: f64 = 0.15;
+/// `WebBlock.entityInside` motion multiplier `(0.25, 0.05, 0.25)`.
+pub const COBWEB_MOVE_MULTIPLIER: (f64, f64, f64) = (0.25, 0.05, 0.25);
+/// `SlimeBlock.stepOn` multiplies horizontal motion by `0.4 + |dy| * 0.2`
+/// for a player who is not stepping carefully.
+pub const SLIME_STEP_BASE: f64 = 0.4;
+pub const SLIME_STEP_FACTOR: f64 = 0.2;
 
 /// World queries player physics needs. Implemented by the shared world storage
 /// and by the flat/test worlds used in focused tests.
@@ -108,6 +123,29 @@ pub trait PhysicsWorld {
     /// Whether the block's behaviour reports `isSolid()`.
     fn is_solid(&mut self, x: i32, y: i32, z: i32) -> bool {
         self.collision_box(x, y, z).is_some()
+    }
+    /// Special movement properties of the block at this position. Defaulting
+    /// to none keeps simple and flat test worlds on generic air/ground physics.
+    fn movement_traits(&mut self, _x: i32, _y: i32, _z: i32) -> MovementTraits {
+        MovementTraits::NONE
+    }
+    /// `LivingEntity.onClimbable` for a player: a climbable block at the feet
+    /// (open trapdoors above ladders are not modeled).
+    fn is_climbable(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).climbable
+    }
+    /// Scaffolding is climbable but ignores the sneaking slide-down suppression.
+    fn is_scaffolding(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).scaffolding
+    }
+    fn is_cobweb(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).cobweb
+    }
+    fn is_slime(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).slime
+    }
+    fn resets_fall_damage(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).resets_fall_damage
     }
 }
 
@@ -227,6 +265,13 @@ impl PhysicsWorld for StoragePhysicsWorld<'_> {
         self.block_state(x, y, z)
             .is_some_and(crate::block_behaviour::is_solid)
     }
+
+    fn movement_traits(&mut self, x: i32, y: i32, z: i32) -> MovementTraits {
+        self.block_state(x, y, z).map_or(
+            MovementTraits::NONE,
+            crate::block_behaviour::movement_traits,
+        )
+    }
 }
 
 /// Player movement input for one tick. Vanilla's server reads this from
@@ -319,6 +364,9 @@ pub struct PlayerPhysics {
     pub flying: bool,
     pub swimming: bool,
     pub fall_distance: f64,
+    /// One-shot motion multiplier set when the player is inside a cobweb
+    /// (`Entity.stuckSpeedMultiplier`) and consumed by the next move.
+    pub cobweb_stuck: bool,
     /// Last position reported by the client. Deltas are measured from here,
     /// matching how the server tracks a session's last accepted position.
     reported_x: f64,
@@ -343,6 +391,7 @@ impl PlayerPhysics {
             flying: false,
             swimming: false,
             fall_distance: 0.0,
+            cobweb_stuck: false,
             reported_x: x,
             reported_y: y,
             reported_z: z,
@@ -381,6 +430,7 @@ impl PlayerPhysics {
         self.velocity_y = 0.0;
         self.velocity_z = 0.0;
         self.fall_distance = 0.0;
+        self.cobweb_stuck = false;
         self.on_ground = false;
         self.reported_x = x;
         self.reported_y = y;
@@ -467,6 +517,37 @@ impl PlayerPhysics {
         }
     }
 
+    /// The block column at the player's feet (`Entity.blockPosition`).
+    fn feet(&self) -> (i32, i32, i32) {
+        (
+            self.x.floor() as i32,
+            self.y.floor() as i32,
+            self.z.floor() as i32,
+        )
+    }
+
+    /// Whether the player is on a climbable block. Flying players never climb
+    /// (`Player.onClimbable`).
+    fn on_climbable(&mut self, world: &mut impl PhysicsWorld) -> bool {
+        if self.flying {
+            return false;
+        }
+        let (x, y, z) = self.feet();
+        world.is_climbable(x, y, z)
+    }
+
+    /// Whether the block directly under the player's feet is slime.
+    fn standing_on_slime(&mut self, world: &mut impl PhysicsWorld) -> bool {
+        let (x, _, z) = self.feet();
+        world.is_slime(x, (self.y - 1.0e-3).floor() as i32, z)
+    }
+
+    /// Fall-damage exemptions vanilla applies when landing in a climbable
+    /// block or on a slime block.
+    fn fall_damage_suppressed(&mut self, world: &mut impl PhysicsWorld) -> bool {
+        self.on_climbable(world) || (!self.sneaking && self.standing_on_slime(world))
+    }
+
     /// `Entity.moveRelative`: rotate the local input by yaw and add it to the
     /// current velocity.
     fn move_relative(&mut self, speed: f64, input: MovementInput) {
@@ -536,13 +617,80 @@ impl PlayerPhysics {
         };
         let speed = self.friction_influenced_speed(friction);
         self.move_relative(speed, input);
-        let moved = self.move_by(world, self.velocity_x, self.velocity_y, self.velocity_z);
+
+        // `LivingEntity.handleOnClimbable`: a climber is held to 0.15 blocks
+        // per tick horizontally and downwards, stops sliding when sneaking,
+        // and resets fall distance every tick. Scaffolding is the exception
+        // to the sneaking rule.
+        let climbable = self.on_climbable(world);
+        let scaffolding = climbable && {
+            let (x, y, z) = self.feet();
+            world.is_scaffolding(x, y, z)
+        };
+        if climbable {
+            self.fall_distance = 0.0;
+            self.velocity_x = self.velocity_x.clamp(-CLIMB_MOVE_LIMIT, CLIMB_MOVE_LIMIT);
+            self.velocity_z = self.velocity_z.clamp(-CLIMB_MOVE_LIMIT, CLIMB_MOVE_LIMIT);
+            self.velocity_y = self.velocity_y.max(-CLIMB_MOVE_LIMIT);
+            if self.velocity_y < 0.0 && !scaffolding && self.sneaking {
+                self.velocity_y = 0.0;
+            }
+        }
+
+        // `WebBlock.entityInside` arms the multiplier at the end of the tick
+        // in which the player enters the web; the following move consumes it
+        // and `Entity.move` zeroes delta movement.
+        let stuck = std::mem::replace(&mut self.cobweb_stuck, false);
+        let (mut move_x, mut move_y, mut move_z) =
+            (self.velocity_x, self.velocity_y, self.velocity_z);
+        if stuck {
+            move_x *= COBWEB_MOVE_MULTIPLIER.0;
+            move_y *= COBWEB_MOVE_MULTIPLIER.1;
+            move_z *= COBWEB_MOVE_MULTIPLIER.2;
+        }
+        let moved = self.move_by(world, move_x, move_y, move_z);
+        if stuck {
+            self.velocity_x = 0.0;
+            self.velocity_y = 0.0;
+            self.velocity_z = 0.0;
+        }
+        let climb_lift = climbable && (moved.horizontal_collision || input.jumping);
+        if climb_lift {
+            // `handleRelativeFrictionAndCalculateMovement` returns a 0.2 y
+            // velocity for a climber pressing into a wall or holding jump.
+            // `travelInAir` then subtracts gravity and applies drag to that
+            // returned velocity, not to the displacement just made.
+            self.velocity_y = CLIMB_SPEED;
+        }
+
         // `Entity.move` scales horizontal delta movement by the destination
-        // block's speed factor after the collision move.
+        // block's speed factor after the collision move. A slime landing
+        // reverses the pre-collision vertical velocity (`SlimeBlock.bounceUp`).
         let speed_factor = self.block_speed_factor(world);
-        self.velocity_x = moved.dx * friction * AIR_FRICTION * speed_factor;
-        self.velocity_y = (moved.dy - GRAVITY) * DRAG;
-        self.velocity_z = moved.dz * friction * AIR_FRICTION * speed_factor;
+        if stuck {
+            self.velocity_x = 0.0;
+            self.velocity_y = -GRAVITY * DRAG;
+            self.velocity_z = 0.0;
+        } else {
+            self.velocity_x = moved.dx * friction * AIR_FRICTION * speed_factor;
+            self.velocity_y = match (moved.bounce_velocity, climb_lift) {
+                (Some(bounce), _) => (bounce - GRAVITY) * DRAG,
+                (None, true) => (CLIMB_SPEED - GRAVITY) * DRAG,
+                (None, false) => (moved.dy - GRAVITY) * DRAG,
+            };
+            self.velocity_z = moved.dz * friction * AIR_FRICTION * speed_factor;
+        }
+        // `Entity.applyEffectsFromBlocks` calls `SlimeBlock.stepOn` at the end
+        // of the tick, after `travelInAir` has applied gravity and drag.
+        if self.on_ground
+            && !self.sneaking
+            && self.velocity_y.abs() < 0.1
+            && self.standing_on_slime(world)
+        {
+            let factor = SLIME_STEP_BASE + self.velocity_y.abs() * SLIME_STEP_FACTOR;
+            self.velocity_x *= factor;
+            self.velocity_z *= factor;
+        }
 
         let mut landed = false;
         let mut fall_damage = 0.0;
@@ -553,9 +701,19 @@ impl PlayerPhysics {
                 self.fall_distance += -moved.dy;
             }
             if moved.on_ground && self.fall_distance > 0.0 {
-                fall_damage = fall_damage_for(self.fall_distance);
+                // `SlimeBlock.fallOn` calls `causeFallDamage(distance, 0.0)`.
+                if moved.bounce_velocity.is_none() {
+                    fall_damage = fall_damage_for(self.fall_distance);
+                }
                 self.fall_distance = 0.0;
                 landed = true;
+            }
+        }
+        if !self.flying {
+            let (x, y, z) = self.feet();
+            if world.is_cobweb(x, y, z) {
+                self.cobweb_stuck = true;
+                self.fall_distance = 0.0;
             }
         }
         TickOutcome {
@@ -633,7 +791,9 @@ impl PlayerPhysics {
             let grounded = movement.on_ground || (client.on_ground && self.is_supported(world));
             landed = grounded;
             if landed && self.fall_distance > 0.0 {
-                fall_damage = fall_damage_for(self.fall_distance);
+                if !self.fall_damage_suppressed(world) {
+                    fall_damage = fall_damage_for(self.fall_distance);
+                }
                 self.fall_distance = 0.0;
             }
             self.on_ground = grounded || client.on_ground;
@@ -697,7 +857,9 @@ impl PlayerPhysics {
             }
             landed = client.on_ground && self.is_supported(world);
             if landed && self.fall_distance > 0.0 {
-                fall_damage = fall_damage_for(self.fall_distance);
+                if !self.fall_damage_suppressed(world) {
+                    fall_damage = fall_damage_for(self.fall_distance);
+                }
                 self.fall_distance = 0.0;
             }
             self.on_ground = landed || client.on_ground;
@@ -816,11 +978,31 @@ impl PlayerPhysics {
             self.velocity_z = 0.0;
         }
         self.on_ground = on_ground;
+        let horizontal_collision = applied_x != dx || applied_z != dz;
+        let mut bounce_velocity = None;
+        if vertical_collision && !self.sneaking {
+            let below_y = (self.y - 1.0e-3).floor() as i32;
+            if world.is_slime(self.x.floor() as i32, below_y, self.z.floor() as i32) {
+                // `SlimeBlock.bounceUp` reverses downward motion for living
+                // entities (multiplier 1.0); sneaking suppresses the bounce.
+                bounce_velocity = Some(-dy);
+            }
+        }
+        // `Entity.move` clips the fall path against the
+        // `FALL_DAMAGE_RESETTING` tag once per movement of at least one block.
+        if self.fall_distance != 0.0
+            && applied_x * applied_x + applied_y * applied_y + applied_z * applied_z >= 1.0
+            && swept_has_fall_reset(world, start_box, applied_x, applied_y, applied_z)
+        {
+            self.fall_distance = 0.0;
+        }
         Moved {
             dx: applied_x,
             dy: applied_y,
             dz: applied_z,
             on_ground,
+            horizontal_collision,
+            bounce_velocity,
         }
     }
 }
@@ -831,6 +1013,8 @@ struct Moved {
     dy: f64,
     dz: f64,
     on_ground: bool,
+    horizontal_collision: bool,
+    bounce_velocity: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -871,6 +1055,34 @@ fn collision_boxes(world: &mut impl PhysicsWorld, area: Aabb) -> Vec<Aabb> {
         }
     }
     boxes
+}
+
+/// Whether the block positions covered by a swept player AABB contain a
+/// `fall_damage_resetting` block (cobwebs, ladders, vines, scaffolding, ...).
+fn swept_has_fall_reset(
+    world: &mut impl PhysicsWorld,
+    area: Aabb,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+) -> bool {
+    let end = area.offset(dx, dy, dz);
+    let x0 = area.min_x.min(end.min_x).floor() as i32;
+    let x1 = area.max_x.max(end.max_x).floor() as i32;
+    let y0 = area.min_y.min(end.min_y).floor() as i32;
+    let y1 = area.max_y.max(end.max_y).floor() as i32;
+    let z0 = area.min_z.min(end.min_z).floor() as i32;
+    let z1 = area.max_z.max(end.max_z).floor() as i32;
+    for x in x0..=x1 {
+        for y in y0..=y1 {
+            for z in z0..=z1 {
+                if world.resets_fall_damage(x, y, z) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn collide_axis(world: &mut impl PhysicsWorld, area: Aabb, amount: f64, axis: Axis) -> f64 {
@@ -1105,5 +1317,22 @@ mod tests {
             "jump height {}",
             physics.y
         );
+    }
+
+    #[test]
+    fn special_movement_defaults_are_inert_for_flat_worlds() {
+        let mut world = FlatPhysicsWorld::new(0);
+        assert!(!world.is_climbable(0, 0, 0));
+        assert!(!world.is_scaffolding(0, 0, 0));
+        assert!(!world.is_cobweb(0, 0, 0));
+        assert!(!world.is_slime(0, 0, 0));
+        assert!(!world.resets_fall_damage(0, 0, 0));
+
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        physics.on_ground = true;
+        let outcome = physics.tick(&mut world, MovementInput::default());
+        assert!(!outcome.moved);
+        assert!(!physics.cobweb_stuck);
+        assert_eq!(physics.velocity_y, -GRAVITY * DRAG);
     }
 }

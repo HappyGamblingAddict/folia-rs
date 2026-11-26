@@ -48,6 +48,55 @@ impl BlockBehaviour {
     }
 }
 
+/// Movement-relevant properties vanilla reads from `BlockTags.CLIMBABLE`,
+/// `BlockTags.FALL_DAMAGE_RESETTING`, or from the block class during
+/// `LivingEntity.travel` (`WebBlock`, `SlimeBlock`, `ScaffoldingBlock`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MovementTraits {
+    pub climbable: bool,
+    pub scaffolding: bool,
+    pub cobweb: bool,
+    pub slime: bool,
+    pub resets_fall_damage: bool,
+}
+
+impl MovementTraits {
+    pub const NONE: Self = Self {
+        climbable: false,
+        scaffolding: false,
+        cobweb: false,
+        slime: false,
+        resets_fall_damage: false,
+    };
+
+    /// Combine two traits, used when one movement crosses several blocks.
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            climbable: self.climbable || other.climbable,
+            scaffolding: self.scaffolding || other.scaffolding,
+            cobweb: self.cobweb || other.cobweb,
+            slime: self.slime || other.slime,
+            resets_fall_damage: self.resets_fall_damage || other.resets_fall_damage,
+        }
+    }
+}
+
+/// Resolve the shipped special-movement properties of a concrete block state.
+///
+/// Climbable and fall-damage-resetting membership come from the shipped block
+/// tags; there are no vanilla tags identifying cobwebs, slime blocks, or
+/// scaffolding alone, so those three are resolved by their registry names.
+pub fn movement_traits(state: &BlockState) -> MovementTraits {
+    let name = state.name.as_str();
+    MovementTraits {
+        climbable: crate::tags::block_has("climbable", name),
+        scaffolding: name == "minecraft:scaffolding",
+        cobweb: name == "minecraft:cobweb",
+        slime: name == "minecraft:slime_block",
+        resets_fall_damage: crate::tags::block_has("fall_damage_resetting", name),
+    }
+}
+
 struct BehaviourTable {
     states: Vec<BlockBehaviour>,
     defaults: HashMap<String, i32>,
@@ -344,5 +393,49 @@ mod tests {
         assert_eq!(fire_odds(&state("minecraft:stone", &[])), (0, 0));
         assert!(ignited_by_lava(&state("minecraft:oak_leaves", &[])));
         assert!(!ignited_by_lava(&state("minecraft:cobblestone", &[])));
+    }
+
+    #[test]
+    fn movement_traits_use_the_shipped_climbable_and_fall_reset_tags() {
+        for name in crate::tags::members(crate::tags::TagRegistryKind::Block, "climbable") {
+            let traits = movement_traits(&state(name, &[]));
+            assert!(traits.climbable, "{name} is in the shipped climbable tag");
+            assert!(
+                traits.resets_fall_damage,
+                "{name} is in the shipped fall_damage_resetting tag"
+            );
+        }
+        let stone = movement_traits(&state("minecraft:stone", &[]));
+        assert_eq!(stone, MovementTraits::NONE);
+    }
+
+    #[test]
+    fn scaffolding_cobweb_and_slime_are_resolved_without_extra_tags() {
+        let scaffolding = movement_traits(&state("minecraft:scaffolding", &[]));
+        assert!(scaffolding.climbable && scaffolding.scaffolding);
+
+        let cobweb = movement_traits(&state("minecraft:cobweb", &[]));
+        assert!(cobweb.cobweb && cobweb.resets_fall_damage);
+        assert!(!cobweb.climbable);
+
+        let slime = movement_traits(&state("minecraft:slime_block", &[]));
+        assert!(slime.slime);
+        assert_eq!(
+            slime,
+            MovementTraits {
+                slime: true,
+                ..MovementTraits::NONE
+            }
+        );
+
+        assert_eq!(
+            cobweb.or(slime),
+            MovementTraits {
+                cobweb: true,
+                slime: true,
+                resets_fall_damage: true,
+                ..MovementTraits::NONE
+            }
+        );
     }
 }

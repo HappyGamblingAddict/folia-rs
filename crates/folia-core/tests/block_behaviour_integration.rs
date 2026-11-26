@@ -262,3 +262,35 @@ fn player_physics_queries_the_generated_block_behaviour() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn storage_physics_resolves_special_movement_from_tags_and_metadata() {
+    let root = temp_dir("special-movement");
+    let region_dir = root.join("region");
+    let mut chunk = air_chunk(0, 0);
+    for (x, name) in [
+        (0, "minecraft:ladder"),
+        (1, "minecraft:vine"),
+        (2, "minecraft:scaffolding"),
+        (3, "minecraft:cobweb"),
+        (4, "minecraft:slime_block"),
+    ] {
+        assert!(chunk.set_block_state(x, TEST_Y, 0, state(name)));
+    }
+    {
+        let mut storage = WorldStorage::new(&region_dir);
+        storage
+            .save_chunk(&chunk, Compression::Zlib)
+            .expect("save special movement chunk");
+        let mut world = StoragePhysicsWorld::new(&mut storage);
+        assert!(world.is_climbable(0, TEST_Y, 0), "ladder is climbable");
+        assert!(world.is_climbable(1, TEST_Y, 0), "vine is climbable");
+        assert!(world.is_climbable(2, TEST_Y, 0), "scaffolding is climbable");
+        assert!(world.is_scaffolding(2, TEST_Y, 0));
+        assert!(world.is_cobweb(3, TEST_Y, 0));
+        assert!(world.resets_fall_damage(3, TEST_Y, 0));
+        assert!(world.is_slime(4, TEST_Y, 0));
+        assert!(!world.is_climbable(5, TEST_Y, 0), "air is not climbable");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

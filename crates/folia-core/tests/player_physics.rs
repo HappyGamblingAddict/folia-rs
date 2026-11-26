@@ -1,7 +1,8 @@
+use folia_core::block_behaviour::MovementTraits;
 use folia_core::player_physics::{
-    AIR_FRICTION, Aabb, ClientMove, DRAG, FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE,
-    MovementCorrection, MovementInput, PhysicsWorld, PlayerPhysics, SNEAKING_HEIGHT,
-    STANDING_HEIGHT, SWIMMING_HEIGHT, TERMINAL_VELOCITY, WIDTH,
+    AIR_FRICTION, Aabb, CLIMB_MOVE_LIMIT, CLIMB_SPEED, COBWEB_MOVE_MULTIPLIER, ClientMove, DRAG,
+    FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE, MovementCorrection, MovementInput, PhysicsWorld,
+    PlayerPhysics, SNEAKING_HEIGHT, STANDING_HEIGHT, SWIMMING_HEIGHT, TERMINAL_VELOCITY, WIDTH,
 };
 use std::collections::HashMap;
 
@@ -360,4 +361,314 @@ fn jump_impulse_and_air_friction_are_vanilla_constants() {
     assert_eq!(GRAVITY, 0.08);
     assert_eq!(DRAG, 0.98);
     assert_eq!(AIR_FRICTION, 0.91);
+}
+
+const LADDER: MovementTraits = MovementTraits {
+    climbable: true,
+    resets_fall_damage: true,
+    ..MovementTraits::NONE
+};
+const SCAFFOLDING: MovementTraits = MovementTraits {
+    climbable: true,
+    scaffolding: true,
+    resets_fall_damage: true,
+    ..MovementTraits::NONE
+};
+const COBWEB: MovementTraits = MovementTraits {
+    cobweb: true,
+    resets_fall_damage: true,
+    ..MovementTraits::NONE
+};
+const SLIME: MovementTraits = MovementTraits {
+    slime: true,
+    ..MovementTraits::NONE
+};
+
+/// A grid world that can tag blocks with the shipped movement traits. Blocks
+/// are full cubes only when explicitly marked collidable; ladders/vines/cobwebs
+/// are passable, matching their shipped collision metadata.
+struct SpecialWorld {
+    ground_y: i32,
+    blocks: HashMap<(i32, i32, i32), (Option<Aabb>, MovementTraits)>,
+}
+
+impl SpecialWorld {
+    fn new(ground_y: i32) -> Self {
+        Self {
+            ground_y,
+            blocks: HashMap::new(),
+        }
+    }
+
+    fn set(&mut self, x: i32, y: i32, z: i32, traits: MovementTraits, collision: bool) {
+        let boxed = collision.then(|| Aabb::block(x, y, z));
+        self.blocks.insert((x, y, z), (boxed, traits));
+    }
+
+    fn ladder_wall(&mut self) {
+        for y in 0..12 {
+            for z in -1..=1 {
+                self.set(3, y, z, MovementTraits::NONE, true);
+            }
+            self.set(2, y, 0, LADDER, false);
+        }
+    }
+
+    fn slime_floor(&mut self) {
+        for x in -1..=1 {
+            for z in -1..=1 {
+                self.set(x, -1, z, SLIME, true);
+            }
+        }
+    }
+}
+
+impl PhysicsWorld for SpecialWorld {
+    fn collision_box(&mut self, x: i32, y: i32, z: i32) -> Option<Aabb> {
+        self.blocks
+            .get(&(x, y, z))
+            .and_then(|(bounds, _)| *bounds)
+            .or_else(|| (y < self.ground_y).then(|| Aabb::block(x, y, z)))
+    }
+
+    fn movement_traits(&mut self, x: i32, y: i32, z: i32) -> MovementTraits {
+        self.blocks
+            .get(&(x, y, z))
+            .map(|(_, traits)| *traits)
+            .unwrap_or(MovementTraits::NONE)
+    }
+
+    fn friction(&mut self, x: i32, y: i32, z: i32) -> f64 {
+        if self.movement_traits(x, y, z).slime {
+            0.8
+        } else {
+            0.6
+        }
+    }
+}
+
+#[test]
+fn climbing_a_ladder_lifts_the_player_at_the_vanilla_climb_rate() {
+    let mut world = SpecialWorld::new(0);
+    world.ladder_wall();
+    let mut physics = PlayerPhysics::new(2.5, 0.0, 0.5);
+    physics.on_ground = true;
+    physics.yaw = -90.0;
+    let input = MovementInput {
+        forward: 1.0,
+        jumping: true,
+        ..MovementInput::default()
+    };
+
+    physics.fall_distance = 5.0;
+    for _ in 0..40 {
+        let outcome = physics.tick(&mut world, input);
+        assert_eq!(outcome.fall_damage, 0.0);
+    }
+    assert!(
+        physics.fall_distance < CLIMB_MOVE_LIMIT,
+        "climbing clears the fall distance it had on entry, got {}",
+        physics.fall_distance
+    );
+
+    assert!(
+        (physics.y - 5.006_4).abs() < 1.0e-3,
+        "climbed to y={} (0.42 then 39 ticks of 0.1176)",
+        physics.y
+    );
+    assert!(
+        (physics.velocity_y - (CLIMB_SPEED - GRAVITY) * DRAG).abs() < 1.0e-9,
+        "steady climb velocity {}",
+        physics.velocity_y
+    );
+}
+
+#[test]
+fn ladder_slide_down_is_clamped_and_sneaking_holds_still() {
+    let mut world = SpecialWorld::new(0);
+    world.ladder_wall();
+    let mut sliding = PlayerPhysics::new(2.5, 10.0, 0.5);
+    for _ in 0..30 {
+        let outcome = sliding.tick(&mut world, MovementInput::default());
+        assert_eq!(outcome.fall_damage, 0.0);
+    }
+    assert!(
+        (sliding.velocity_y - (-CLIMB_MOVE_LIMIT - GRAVITY) * DRAG).abs() < 1.0e-9,
+        "post-tick slide velocity {}",
+        sliding.velocity_y
+    );
+    assert!(sliding.y < 9.5, "the player slid down to y={}", sliding.y);
+    assert!(
+        sliding.fall_distance <= CLIMB_MOVE_LIMIT + 1.0e-9,
+        "a climber never accumulates a damaging fall, got {}",
+        sliding.fall_distance
+    );
+
+    let mut sneaking = PlayerPhysics::new(2.5, 10.0, 0.5);
+    sneaking.sneaking = true;
+    for _ in 0..30 {
+        sneaking.tick(&mut world, MovementInput::default());
+    }
+    assert!(
+        (sneaking.y - 10.0).abs() < 1.0e-9,
+        "sneaking on a ladder holds position, y={}",
+        sneaking.y
+    );
+}
+
+#[test]
+fn sneaking_on_scaffolding_still_slides_down() {
+    let mut world = SpecialWorld::new(0);
+    for y in 0..12 {
+        world.set(2, y, 0, SCAFFOLDING, false);
+    }
+    let mut physics = PlayerPhysics::new(2.5, 10.0, 0.5);
+    physics.sneaking = true;
+    for _ in 0..20 {
+        physics.tick(&mut world, MovementInput::default());
+    }
+    assert!(
+        (physics.velocity_y - (-CLIMB_MOVE_LIMIT - GRAVITY) * DRAG).abs() < 1.0e-9,
+        "post-tick scaffolding slide velocity {}",
+        physics.velocity_y
+    );
+    assert!(physics.y < 9.0, "scaffolding ignores sneak suppression");
+}
+
+#[test]
+fn cobweb_scales_horizontal_movement() {
+    let mut flat = FlatPhysicsWorld::new(0);
+    let mut web = SpecialWorld::new(0);
+    web.set(0, 0, 0, COBWEB, false);
+
+    let mut normal = PlayerPhysics::new(0.5, 0.0, 0.5);
+    let mut stuck = PlayerPhysics::new(0.5, 0.0, 0.5);
+    normal.on_ground = true;
+    stuck.on_ground = true;
+    normal.yaw = -90.0;
+    stuck.yaw = -90.0;
+    stuck.cobweb_stuck = true;
+
+    for _ in 0..20 {
+        normal.tick(&mut flat, MovementInput::walking_forward());
+        stuck.tick(&mut web, MovementInput::walking_forward());
+    }
+
+    assert!(
+        (normal.x - (0.5 + 4.140_388_435_264_874)).abs() < 1.0e-4,
+        "normal walk x={}",
+        normal.x
+    );
+    assert!(
+        (stuck.x - (0.5 + 20.0 * 0.1 * COBWEB_MOVE_MULTIPLIER.0)).abs() < 1.0e-6,
+        "cobweb walk x={}",
+        stuck.x
+    );
+    assert!(stuck.x < normal.x / 4.0);
+}
+
+#[test]
+fn cobweb_slows_a_fall_and_cancels_fall_damage() {
+    let mut world = SpecialWorld::new(-100);
+    for y in 0..10 {
+        world.set(0, y, 0, COBWEB, false);
+    }
+    let mut physics = PlayerPhysics::new(0.5, 9.0, 0.5);
+    physics.cobweb_stuck = true;
+    let mut damage = 0.0;
+    for _ in 0..20 {
+        damage += physics
+            .tick(&mut world, MovementInput::default())
+            .fall_damage;
+    }
+    assert!(
+        9.0 - physics.y < 0.2,
+        "the web holds the fall to y={}",
+        physics.y
+    );
+    assert_eq!(damage, 0.0);
+    assert_eq!(physics.fall_distance, 0.0);
+}
+
+#[test]
+fn slime_block_reverses_fall_velocity_and_cancels_fall_damage() {
+    let mut world = SpecialWorld::new(0);
+    world.slime_floor();
+    let mut physics = PlayerPhysics::new(0.5, 40.0, 0.5);
+    let mut bounced_velocity = 0.0;
+    let mut damage = 0.0;
+    let mut landed_at = f64::NAN;
+    for _ in 0..100 {
+        let outcome = physics.tick(&mut world, MovementInput::default());
+        damage += outcome.fall_damage;
+        if physics.velocity_y > 0.0 {
+            bounced_velocity = physics.velocity_y;
+            landed_at = physics.y;
+            break;
+        }
+    }
+    assert!(bounced_velocity > 1.0, "bounce velocity {bounced_velocity}");
+    assert!(
+        landed_at.abs() < 1.0e-9,
+        "the bounce happens on the slime surface, y={landed_at}"
+    );
+    assert_eq!(damage, 0.0);
+
+    let mut flat = FlatPhysicsWorld::new(0);
+    let mut normal = PlayerPhysics::new(0.5, 40.0, 0.5);
+    let mut normal_damage = 0.0;
+    for _ in 0..100 {
+        normal_damage += normal.tick(&mut flat, MovementInput::default()).fall_damage;
+    }
+    assert_eq!(
+        normal_damage, 37.0,
+        "the same fall hurts on ordinary ground"
+    );
+}
+
+#[test]
+fn slime_step_slows_horizontal_motion() {
+    let mut flat = FlatPhysicsWorld::new(0);
+    let mut slime = SpecialWorld::new(0);
+    slime.slime_floor();
+    let mut normal = PlayerPhysics::new(0.5, 0.0, 0.5);
+    let mut slowed = PlayerPhysics::new(0.5, 0.0, 0.5);
+    normal.on_ground = true;
+    slowed.on_ground = true;
+    normal.yaw = -90.0;
+    slowed.yaw = -90.0;
+
+    for _ in 0..20 {
+        normal.tick(&mut flat, MovementInput::walking_forward());
+        slowed.tick(&mut slime, MovementInput::walking_forward());
+    }
+    assert!(
+        slowed.x < normal.x * 0.8,
+        "slime step x={} vs normal x={}",
+        slowed.x,
+        normal.x
+    );
+}
+
+#[test]
+fn special_movement_is_deterministic() {
+    fn trace() -> Vec<(f64, f64, f64, f64)> {
+        let mut world = SpecialWorld::new(0);
+        world.ladder_wall();
+        let mut physics = PlayerPhysics::new(2.5, 0.0, 0.5);
+        physics.on_ground = true;
+        physics.yaw = -90.0;
+        let input = MovementInput {
+            forward: 1.0,
+            jumping: true,
+            ..MovementInput::default()
+        };
+        (0..30)
+            .map(|_| {
+                physics.tick(&mut world, input);
+                (physics.x, physics.y, physics.z, physics.velocity_y)
+            })
+            .collect()
+    }
+    assert_eq!(trace(), trace());
 }

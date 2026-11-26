@@ -3838,3 +3838,31 @@ Format:
   (10), `redstone_extra` (15), `ticks` (13), `block_entity` (9),
   `tripwire_hooks` (6), lib (707), check, fmt, and clippy `-D warnings` are
   green.
+
+## 2026-11-26 — P4.1 special block movement uses vanilla constants and shipped tags
+
+- Context: `player_physics.rs` only modeled generic air/ground travel; ladders,
+  vines, scaffolding, cobwebs, and slime blocks fell through as air or plain
+  ground. The local 1.21.11 decompiled tree and Java movement oracle are not
+  available on this host (see BLOCKERS.md).
+- Decision: port `LivingEntity.handleOnClimbable` (horizontal/slide clamp
+  `0.15`, wall/jump lift `0.2`, sneak suppression except on scaffolding, fall
+  reset), `WebBlock.entityInside`'s one-shot `(0.25, 0.05, 0.25)` motion
+  multiplier, and `SlimeBlock.bounceUp`/`stepOn` (living-entity velocity
+  reversal, fall damage multiplier `0`, horizontal factor `0.4 + 0.2*|dy|`).
+  Climbable and fall-damage-resetting membership comes from the shipped block
+  tag TSVs; vanilla has no tags isolating scaffolding, cobwebs, or slime
+  blocks, so those three resolve by registry name in
+  `block_behaviour::movement_traits`.
+- Why: the constants and call order were read from verbatim modern Java
+  `LivingEntity`, `Entity.move`, `WebBlock`, and `SlimeBlock` sources rather
+  than guessed; an exact 1.21.11 differential is still unavailable, so the
+  fixtures pin the modern formulas as Rust-only golden values.
+- Consequences: climbing up uses the existing `jumping` input as vertical
+  input; a separate `vertical` axis and open-trapdoor-as-ladder are still
+  unported. `PhysicsWorld::movement_traits` defaults to none, so flat and grid
+  fixture worlds keep generic physics. Water/lava swimming, powder snow,
+  levitation, and elytra remain explicitly unsupported. Focused tests: 8 new
+  `tests/player_physics.rs` cases, one new storage-tag case in
+  `tests/block_behaviour_integration.rs`, 2 `block_behaviour` lib tests, plus
+  player_physics/input/join suites, check, fmt, and clippy `-D warnings` green.

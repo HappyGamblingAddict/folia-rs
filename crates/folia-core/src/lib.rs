@@ -42,6 +42,7 @@ pub mod piston;
 pub mod player;
 pub mod player_info;
 pub mod player_physics;
+pub mod poi;
 pub mod projectile;
 pub mod protocol;
 pub mod rail;

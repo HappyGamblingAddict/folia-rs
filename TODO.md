@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,781 passing** at the 4e54e21 gate (0 failed, 1 ignored benchmark); entity-section slice next expected 1,795
+> Test status: **1,795 passing** at the 846cac6 gate (0 failed, 1 ignored benchmark); POI slice next expected 1,810
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 

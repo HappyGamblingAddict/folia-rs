@@ -3620,3 +3620,28 @@ Format:
   still constructs one region per placed feature. Per-feature scratch reuse,
   light invalidation, and reusing a region across a whole chunk are separate
   hotspots.
+
+## 2026-11-26 — POI persistence uses a deterministic local format, not vanilla Anvil POI bytes
+- Context: P3.4 needs per-chunk POIs (block position, type, optional free tickets)
+  to survive a flush/reload. Vanilla writes `poi/r.X.Z.mca` with Anvil sector
+  records, compressed per-section payloads and numeric POI-type registry ids;
+  no Java POI fixture or decoder is available locally.
+- Decision: store POIs in `<world>/poi/r.X.Z.poi`, a plain big-endian stream
+  prefixed by `FPOI` + version 1: magic[4], version:u8, chunk_count:u32, then
+  sorted chunks (`x:i32`, `z:i32`, `record_count:u32`) and sorted records
+  (`x/y/z:i32`, `kind_len:u16`, UTF-8 kind bytes, `ticket_flag:u8`,
+  optional `tickets:u32`). Records are keyed by block position, so the encoding
+  is a pure function of the record set. Unknown POI types are kept as strings.
+  A corrupt file is logged and treated as an empty region; filesystem errors
+  still fail. Files are written to a `.poi.tmp` sibling and renamed.
+- Why: a self-contained format is deterministic, easy to validate and test, and
+  avoids claiming byte parity that is not implemented or verified. POI edits
+  share `WorldStorage`'s flush/unload batch boundary, and regenerating a column
+  clears its POIs just like its entities.
+- Consequences: this is **not** vanilla Anvil POI byte-compatible; a vanilla
+  server ignores `.poi` files and this build ignores vanilla `.mca` POI files.
+  Numeric POI-type ids, vanilla section compression and the POI ticketing
+  behaviour that consumes free tickets remain unimplemented. 4 lib + 11 focused
+  integration tests cover ordering, per-region files, batching, corruption,
+  save/reload and determinism; world/anvil/entity/save/join suites, check and
+  clippy are green.

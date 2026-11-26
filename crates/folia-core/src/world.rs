@@ -7,6 +7,7 @@ use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
 use crate::chunk_entity::{ChunkEntities, ChunkEntity, decode_entities, store_entities};
 use crate::item_components::ItemStack;
 use crate::nbt::Tag;
+use crate::poi::{PoiRecord, PoiStorage, poi_dir_from_region_dir};
 use crate::region::{ChunkPos, RegionKey, RegionMap};
 use crate::tick::{BehaviorTable, TickReport, TickState};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -234,6 +235,10 @@ pub struct WorldStorage {
     /// Entities belonging to cached/loaded chunks, keyed by chunk. Kept even
     /// after a chunk is evicted so a staged entity edit cannot be lost.
     entities: HashMap<(i32, i32), ChunkEntities>,
+    /// Per-region POI records. Unlike entities these live in their own local
+    /// files under `<world>/poi`, but they are staged and flushed with the
+    /// dimension's chunk writes so a batch is coherent.
+    poi: PoiStorage,
     cache_order: VecDeque<(i32, i32)>,
     cache_hits: u64,
     cache_misses: u64,
@@ -251,12 +256,15 @@ pub struct WorldStorage {
 
 impl WorldStorage {
     pub fn new(region_dir: impl Into<PathBuf>) -> Self {
+        let region_dir = region_dir.into();
+        let poi_dir = poi_dir_from_region_dir(&region_dir);
         Self {
-            region_dir: region_dir.into(),
+            region_dir,
             regions: HashMap::new(),
             chunks: HashMap::new(),
             block_entities: HashMap::new(),
             entities: HashMap::new(),
+            poi: PoiStorage::new(poi_dir),
             cache_order: VecDeque::new(),
             cache_hits: 0,
             cache_misses: 0,
@@ -637,6 +645,59 @@ impl WorldStorage {
         self.entities.insert((chunk_x, chunk_z), Vec::new());
     }
 
+    /// This dimension's POI store. POIs are persistent per region rather than
+    /// part of a chunk root, but share the storage's staging lifecycle.
+    pub fn poi_storage(&self) -> &PoiStorage {
+        &self.poi
+    }
+
+    /// Mutable view of this dimension's POI store. Callers that edit records
+    /// directly should call [`flush`](Self::flush) to persist them.
+    pub fn poi_storage_mut(&mut self) -> &mut PoiStorage {
+        &mut self.poi
+    }
+
+    /// POI records of a chunk in deterministic position order.
+    pub fn pois(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<Vec<PoiRecord>> {
+        self.poi.chunk_records(chunk_x, chunk_z)
+    }
+
+    /// One POI at a block position, when present.
+    pub fn poi_at(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+        position: [i32; 3],
+    ) -> io::Result<Option<PoiRecord>> {
+        self.poi.at(chunk_x, chunk_z, position)
+    }
+
+    /// Insert or replace a POI, returning the value it replaced.
+    pub fn insert_poi(&mut self, record: PoiRecord) -> io::Result<Option<PoiRecord>> {
+        let (chunk_x, chunk_z) = record.chunk();
+        self.poi.insert(chunk_x, chunk_z, record)
+    }
+
+    /// Remove a POI at a block position, returning it when present.
+    pub fn remove_poi(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+        position: [i32; 3],
+    ) -> io::Result<Option<PoiRecord>> {
+        self.poi.remove(chunk_x, chunk_z, position)
+    }
+
+    /// Drop every POI of a chunk, returning how many were removed.
+    pub fn clear_pois(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<usize> {
+        self.poi.clear_chunk(chunk_x, chunk_z)
+    }
+
+    /// POI regions with edits staged for the next flush.
+    pub fn dirty_poi_regions(&self) -> Vec<RegionPos> {
+        self.poi.dirty_regions()
+    }
+
     fn ensure_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
         let key = (chunk_x, chunk_z);
         if self.entities.contains_key(&key) {
@@ -876,6 +937,10 @@ impl WorldStorage {
             .entry((chunk_x, chunk_z))
             .or_insert(block_entities);
         self.entities.entry((chunk_x, chunk_z)).or_insert(entities);
+        // POIs live in a sibling directory, so loading a column makes its
+        // region's records available through `pois`/`poi_at` immediately.
+        self.poi
+            .load_region(RegionPos::from_chunk(chunk_x, chunk_z))?;
         Ok(Some(chunk))
     }
 
@@ -937,6 +1002,10 @@ impl WorldStorage {
         self.block_entities
             .insert((chunk.x, chunk.z), block_entities.clone());
         self.entities.insert((chunk.x, chunk.z), entities.clone());
+        // A regenerated column replaces the terrain the old POIs referred to,
+        // so they are dropped just like its old entities. Block-entity edits
+        // use `update_chunk` instead, which keeps both stores intact.
+        self.poi.clear_chunk(chunk.x, chunk.z)?;
         Ok(())
     }
 
@@ -1039,6 +1108,7 @@ impl WorldStorage {
             )?;
             self.chunk_writes += 1;
         }
+        self.poi.unload_region(position)?;
         if let Some(mut region) = self.regions.remove(&position) {
             region.save_if_dirty()?;
         }
@@ -1121,6 +1191,9 @@ impl WorldStorage {
         for region in self.regions.values_mut() {
             region.save_if_dirty()?;
         }
+        // POI files use their own format but share this batch boundary: a
+        // flush persists both the staged chunk roots and staged POI edits.
+        self.poi.flush()?;
         Ok(())
     }
 

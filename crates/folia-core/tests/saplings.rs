@@ -4,7 +4,8 @@ use folia_core::anvil::Compression;
 use folia_core::block_update;
 use folia_core::chunk::{BlockState, Chunk};
 use folia_core::chunk_packet::flat_chunk;
-use folia_core::math::BlockPos;
+use folia_core::leaves;
+use folia_core::math::{BlockPos, Direction};
 use folia_core::registry::default_block_state;
 use folia_core::saplings;
 use folia_core::tick;
@@ -96,6 +97,41 @@ fn oak_sapling_advances_stage_then_grows_a_tree() {
         "oak tree wrote no logs"
     );
     assert!(tree_log_count(&storage, "minecraft:oak_leaves") > 0);
+}
+
+#[test]
+fn sapling_grown_tree_leaves_share_the_worldgen_distance_path() {
+    let mut storage = planted("leaf_distance", "minecraft:oak_sapling");
+    assert!(grow(&mut storage, sapling_pos(), 256));
+    let mut supported = 0;
+    for x in 0..16 {
+        for z in 0..16 {
+            for y in -61..=-45 {
+                let pos = BlockPos::new(x, y, z);
+                let Some(log) = storage.block_state_at(x, y, z) else {
+                    continue;
+                };
+                if log.name != "minecraft:oak_log" {
+                    continue;
+                }
+                for direction in Direction::ALL {
+                    let neighbor = pos.relative(direction);
+                    let Some(leaf) =
+                        storage.block_state_at(neighbor.x(), neighbor.y(), neighbor.z())
+                    else {
+                        continue;
+                    };
+                    if !leaves::is_leaves(&leaf) {
+                        continue;
+                    }
+                    supported += 1;
+                    assert_eq!(leaves::property(&leaf, "distance"), Some("1"));
+                    assert_eq!(leaves::with_distance(&leaf, 1), leaf);
+                }
+            }
+        }
+    }
+    assert!(supported > 0, "no leaf was grown next to a log");
 }
 
 #[test]

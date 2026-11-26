@@ -3702,3 +3702,36 @@ Format:
   doors, rails, and lava fire were not changed in this slice. Focused: 9 crop
   and 8 sapling integration tests, the tick suite, lib, vegetation, world,
   automation and region-tick suites, check and clippy are green.
+
+## 2026-11-26 - P3.10 leaf distance metadata and decay propagation
+
+- Context: the existing leaf slice kept `distance` but recomputed it with a
+  fresh BFS on every placement/update and never set it during worldgen. The
+  decompiled Java tree is absent from this Linux checkout, so no exact
+  `LeavesBlock.java` oracle was available locally (BLOCKERS.md).
+- Decision: implement the standard 1:1 Minecraft `LeavesBlock` algorithm:
+  `getDistanceAt` (leaf property / log 0 / anything else 7),
+  `updateDistance` (minimum neighbour distance plus one), random-tick decay
+  only when both the old and new distance are 7, and a one-tick scheduled
+  recompute on neighbour changes so decay propagates from the trunk outwards.
+  `on_place` sets the distance immediately. Worldgen tree foliage
+  (`FoliagePlacer.tryPlaceLeaf`) routes through the same
+  `leaves::feature_leaf_state` -> `leaves::with_distance` path, so sapling-grown
+  trees and generated trees use one distance-setting path.
+- Why: a new `registry::state_with_properties` resolves the edited leaf state
+  against the shipped `block_states.tsv`. Without it a partial property set
+  would silently fall back to the default state when encoded, dropping the
+  computed `distance` from the wire and from saved chunks.
+- Consequences: persistent leaves keep their stored `distance` and never
+  decay; `persistent` is preserved rather than forced on placement, matching
+  the shipped default state. Neighbour changes schedule a recompute for every
+  adjacent leaf (a superset of vanilla's dependency check), which converges to
+  the same distances at the cost of a few extra one-tick ticks. The exact Java
+  tick on which each leaf changes and the exact neighbour-update flags are a
+  documented fixture gap: only the resulting distances, air decay, and
+  determinism are differential-free but pinned by tests. The Rust-only
+  worldgen matrix and the chunk-status digests for seed 0 were updated because
+  generated leaves now carry their real distance in the block state; the Java
+  exact-name parity test is unchanged. Focused: leaves (10), saplings (9),
+  ticks (13), vegetation (18), worldgen parity (8), lib (701), check and
+  clippy are green.

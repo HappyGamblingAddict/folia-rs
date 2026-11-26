@@ -124,7 +124,34 @@ pub fn block_default_id(name: &str) -> Option<i32> {
 pub fn default_block_state(name: &str) -> Option<BlockState> {
     let registry = blocks();
     let id = *registry.defaults.get(name)?;
-    let (name, properties) = *registry.states_by_id.get(&id)?;
+    state_by_id(*registry.states_by_id.get(&id)?)
+}
+
+/// Resolves an exact property set to a full block state from the shipped
+/// `block_states.tsv`.
+///
+/// Unlike [`block_state_id`], this never silently falls back to the block's
+/// default: a caller that sets leaf `distance`/`persistent` must get back a
+/// state whose complete property set is one the real protocol registry knows,
+/// otherwise the edited properties would be lost when the state is encoded.
+pub fn state_with_properties(name: &str, properties: &[(&str, &str)]) -> Option<BlockState> {
+    let registry = blocks();
+    let mut sorted: Vec<(&str, &str)> = properties.to_vec();
+    sorted.sort_unstable();
+    let mut key = String::new();
+    for (index, (property, value)) in sorted.iter().enumerate() {
+        if index > 0 {
+            key.push(',');
+        }
+        key.push_str(property);
+        key.push('=');
+        key.push_str(value);
+    }
+    let id = *registry.exact.get(name)?.get(key.as_str())?;
+    state_by_id(*registry.states_by_id.get(&id)?)
+}
+
+fn state_by_id((name, properties): (&'static str, &'static str)) -> Option<BlockState> {
     let properties = if properties.is_empty() {
         Vec::new()
     } else {

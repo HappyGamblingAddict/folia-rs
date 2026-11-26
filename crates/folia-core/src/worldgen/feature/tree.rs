@@ -2040,6 +2040,7 @@ impl TreeFeature {
         let Some(state) = self.foliage_provider.sample(random) else {
             return false;
         };
+        let state = crate::leaves::feature_leaf_state(level, pos, state);
         level.set_block(pos, state)
     }
 

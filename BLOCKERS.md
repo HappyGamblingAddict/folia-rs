@@ -1306,3 +1306,15 @@ These are expected gaps, not reasons to stop:
   tree and `pwsh`, then confirm the printed SHA-256 manifest and Cargo guards.
   No fake regeneration or placeholder assets were written; do not claim P0.5
   regeneration parity until that run succeeds.
+
+## 2026-11-26 - Leaf distance propagation fixture gap
+
+- The decompiled Folia/Paper tree and `LeavesBlock.java` are not present in
+  this Linux checkout, so the exact Java leaf-distance propagation and
+  neighbour-update flag set are not differential-tested. The standard 1:1
+  algorithm is implemented from the known vanilla behaviour and pinned by
+  Rust tests for generated trees, placement, log-removal decay, and
+  determinism (DECISIONS.md).
+- Leaves do not drop saplings/sticks/apples on decay yet; they are removed to
+  air only. Decay item drops need the block-drop table wired into the tick
+  behaviour and a Java fixture.

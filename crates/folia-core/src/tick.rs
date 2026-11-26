@@ -10,9 +10,10 @@
 //! * `net/minecraft/world/level/block/{FallingBlock,VegetationBlock,GrassBlock}`
 //!
 //! This is deliberately a small vertical slice. Blocks that need the full
-//! `P1.5` behaviour table (doors, leaf distance updates, crop growth, …) keep
-//! their vanilla state in the world but their neighbor/random tick is an
-//! explicit no-op. Water/lava flow lives in [`crate::fluid`]; wire, lever,
+//! `P1.5` behaviour table (doors, rails, …) keep their vanilla state in the
+//! world but their neighbor/random tick is an explicit no-op. Leaf decay lives
+//! in [`crate::leaves`], crop/sapling growth in [`crate::crops`] and
+//! [`crate::saplings`]. Water/lava flow lives in [`crate::fluid`]; wire, lever,
 //! button, repeater, comparator, observer, redstone-torch, pressure-plate, and
 //! tripwire behaviour lives in [`crate::redstone`]; pistons and moving blocks
 //! live in [`crate::piston`].
@@ -1265,8 +1266,6 @@ pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str
     let name = state.name.as_str();
     if name == "minecraft:lava" {
         Some("lava random ticks spread fire, which needs ignition and flammability metadata")
-    } else if tags::block_has("leaves", name) {
-        Some("leaf decay needs distance/shape updates during generation and placement")
     } else if tags::block_has("crops", name) && !crate::crops::is_crop(state) {
         Some("melon/pumpkin/pitcher/torchflower crop growth is not ported")
     } else if tags::block_has("saplings", name) && !crate::saplings::is_growable_sapling(state) {
@@ -1280,9 +1279,7 @@ pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str
 /// `None` when the block has no known dynamic neighbour behaviour.
 pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     let name = state.name.as_str();
-    if tags::block_has("leaves", name) {
-        Some("leaf distance updates need P1.5 state/shape metadata")
-    } else if name == "minecraft:tripwire_hook" {
+    if name == "minecraft:tripwire_hook" {
         Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
         Some("hoppers, doors, rails, and non-redstone torch support are not ported")
@@ -2167,7 +2164,11 @@ mod tests {
         assert!(is_falling_block("minecraft:white_concrete_powder"));
         assert!(plant_soil(&state("minecraft:oak_sapling")).is_some());
         assert!(plant_soil(&state("minecraft:wheat")).is_some());
-        assert!(unsupported_random_tick_reason(&state("minecraft:oak_leaves")).is_some());
+        assert_eq!(
+            unsupported_random_tick_reason(&state("minecraft:oak_leaves")),
+            None,
+            "leaf decay is now a supported random tick"
+        );
         assert!(unsupported_random_tick_reason(&state("minecraft:lava")).is_some());
         assert_eq!(
             unsupported_neighbor_reason(&state("minecraft:redstone_wire")),
@@ -2202,7 +2203,11 @@ mod tests {
             unsupported_neighbor_reason(&state("minecraft:tripwire_hook")).is_some(),
             "the hook signal chain is still an explicit gap"
         );
-        assert!(unsupported_neighbor_reason(&state("minecraft:oak_leaves")).is_some());
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:oak_leaves")),
+            None,
+            "leaf distance updates are now supported"
+        );
         assert_eq!(
             unsupported_random_tick_reason(&state("minecraft:stone")),
             None

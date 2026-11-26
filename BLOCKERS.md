@@ -327,8 +327,10 @@ Format:
 - Implemented: repeater delay/facing/locking/strong output, comparator
   compare/subtract with container inputs, observer two-tick pulses, redstone
   torch inversion and burn-out, wooden/stone/weighted pressure plates, tripwire
-  occupancy and connection shape, and wire connection-shape updates. All of
-  them run through the existing neighbour and scheduled-tick queues.
+  occupancy and connection shape, two-hook tripwire chains (attachment and
+  powered state on both ends, `SignalReader` output, teardown on hook/wire
+  removal), and wire connection-shape updates. All of them run through the
+  existing neighbour and scheduled-tick queues.
 - Comparator output is stored in `TickState::comparator_outputs`; it is not a
   block entity and is not written to chunk NBT. A restart loses the learned
   output until the comparator's next scheduled refresh.
@@ -338,10 +340,11 @@ Format:
 - Pressure plates and tripwire never inspect entities themselves: the entity
   layer must call `set_pressure_plate_occupancy`/`set_tripwire_occupancy` with
   counts that already exclude spectators and trigger-ignoring entities.
-- Tripwire hooks are not implemented, so a pressed tripwire changes only its own
-  `powered` state. Tripwire source recalculation (`TripWireHookBlock`) and hook
-  signal output are explicit gaps, and hooks are reported through
-  `unsupported_neighbor_reason`.
+- Tripwire hooks now recalculate on placement, neighbour change, and their
+  scheduled tick; a hook only emits while both ends are connected, so breaking
+  a hook or wire clears the remaining hook's `attached`/`powered` state and
+  signal. The `disarmed` property (shears) and a Java differential trace are
+  still open.
 - Redstone-torch burn-out follows vanilla (`8` off toggles in `60` ticks, then a
   `160`-tick restart) rather than the task brief's shorthand of “60 toggles in
   60 ticks”. The toggle log lives on `TickState` and is not persisted.

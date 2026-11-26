@@ -25,6 +25,9 @@
 //!   8-toggles-in-60-ticks burn-out with a 160-tick restart delay;
 //! * pressure plates and tripwire: an entity-occupancy input API, pressed state,
 //!   and scheduled release; wooden, stone, and weighted pressure plates;
+//! * tripwire hooks: connection scans along the wire run, attached/powered
+//!   state on both ends, signal output through [`SignalReader`], and teardown
+//!   when a hook or wire is removed;
 //! * redstone lamps, two-block door open/power updates from either half,
 //!   single-block powered trapdoors/fence gates, daylight-detector signal math,
 //!   and note-block pitch math;
@@ -36,7 +39,7 @@
 //!   the container in front. Entity-producing behaviors stay explicit
 //!   [`io::ErrorKind::Unsupported`] errors.
 //!
-//! Not implemented: pistons, tripwire-hook signal chains, analog block outputs
+//! Not implemented: pistons, analog block outputs
 //! other than registered containers (item frames, lecterns, ...), dispenser
 //! item-entity/boat/minecart/bucket spawning, shears on entities, and NBT
 //! persistence for comparator outputs or scheduled ticks. Those stay explicit
@@ -2891,10 +2894,14 @@ fn recalculate_tripwire_hook(
         "attached",
         if chain.attached { "true" } else { "false" },
     );
+    // A hook only emits while both ends are connected: once the run is broken
+    // by a removed hook or wire, the remaining hook drops its signal even if a
+    // detached wire segment is still occupied.
+    let powered = chain.attached && chain.powered;
     set_property(
         &mut new_state,
         "powered",
-        if chain.powered { "true" } else { "false" },
+        if powered { "true" } else { "false" },
     );
     if &new_state != state {
         world.set_block(pos, new_state)?;

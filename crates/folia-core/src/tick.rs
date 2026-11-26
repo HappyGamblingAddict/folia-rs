@@ -1316,9 +1316,7 @@ pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str
 /// `None` when the block has no known dynamic neighbour behaviour.
 pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     let name = state.name.as_str();
-    if name == "minecraft:tripwire_hook" {
-        Some("tripwire-hook signal chains and hook shape updates are not ported")
-    } else if is_known_unsupported_neighbor(name) {
+    if is_known_unsupported_neighbor(name) {
         Some("hoppers are not ported")
     } else {
         None
@@ -2235,9 +2233,10 @@ mod tests {
             unsupported_neighbor_reason(&state("minecraft:tripwire")),
             None
         );
-        assert!(
-            unsupported_neighbor_reason(&state("minecraft:tripwire_hook")).is_some(),
-            "the hook signal chain is still an explicit gap"
+        assert_eq!(
+            unsupported_neighbor_reason(&state("minecraft:tripwire_hook")),
+            None,
+            "the hook signal chain is now supported"
         );
         assert_eq!(
             unsupported_neighbor_reason(&state("minecraft:oak_leaves")),
@@ -2294,6 +2293,10 @@ mod tests {
         assert!(std::ptr::addr_eq(
             behavior_for(&state("minecraft:tripwire")),
             &redstone::TRIPWIRE_BEHAVIOR as &dyn BlockBehavior
+        ));
+        assert!(std::ptr::addr_eq(
+            behavior_for(&state("minecraft:tripwire_hook")),
+            &redstone::TRIPWIRE_HOOK_BEHAVIOR as &dyn BlockBehavior
         ));
         assert!(std::ptr::addr_eq(
             behavior_for(&state("minecraft:fire")),

@@ -3669,3 +3669,36 @@ Format:
   (bulk recompute omits sky layers above its top section; `LightScene`
   materializes them as full sky). Java byte parity is unverified until the six
   named capture inputs are added; the tests fail loudly if the golden drifts.
+
+
+## 2026-11-26 — P3.10 crop and sapling random ticks route through the shipped tree features
+- Context: P3.10 needs deterministic random-tick growth for wheat/carrots/
+  potatoes/beetroots and for saplings. The decompiled Folia tree is not present
+  in this Linux checkout (BLOCKERS.md), so the Java probabilities were not
+  available locally.
+- Decision: use the matching upstream 1.21 `CropBlock`/`SaplingBlock`/
+  `TreeGrower` sources as the spec. Crops gate on brightness >= 9 at the block,
+  compute the vanilla 3x3 farmland/moisture growth speed with the two
+  same-crop-halving rules, and roll `nextInt((int)(25/f)+1) == 0`; a farmland
+  guard is added because a crop cannot survive on other soil. Saplings gate on
+  brightness >= 9 above and a 1-in-7 roll, advance `stage` 0 -> 1, then select
+  the `TreeGrower` configured feature id (including 2x2 mega detection and the
+  exact `nextFloat()` order) from `FeatureData::active()` and place it through
+  `WorldGenRegion` on a copy of the sapling's chunk, writing changed blocks back
+  with `set_block_quiet` so one tree cannot overflow the chained-update limit.
+  Both behaviours are registered through `BehaviorTable::with_growth()`, which
+  `tick_world` and the region driver use; `behavior_for` keeps the same wiring
+  for direct callbacks.
+- Why: routing by configured-feature id reuses the shipped 1.21.11 tree
+  configurations instead of inventing local tree shapes. A chunk copy gives the
+  worldgen feature a real `FeatureLevel` without a second storage lock, and
+  quiet writes match vanilla tree features writing with `UPDATE_INVISIBLE`.
+- Consequences: the RNG is the deterministic per-position `TickWorld` source,
+  not Java's `Level.random`, and canopies crossing a chunk border are clipped
+  instead of reaching the neighbour chunk; these are local approximations, not
+  claimed byte/RNG parity. No Java growth differential fixture is available.
+  Bone meal stays at the existing 2..=4 approximation. Melon/pumpkin/pitcher/
+  torchflower crops and azaleas remain explicitly unsupported. Leaf decay,
+  doors, rails, and lava fire were not changed in this slice. Focused: 9 crop
+  and 8 sapling integration tests, the tick suite, lib, vegetation, world,
+  automation and region-tick suites, check and clippy are green.

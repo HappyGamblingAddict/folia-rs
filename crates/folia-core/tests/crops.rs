@@ -108,3 +108,85 @@ fn covered_crops_stay_at_age_zero() {
     }
     assert_eq!(crops::age(&block(&storage, BlockPos::new(0, -59, 0))), 0);
 }
+
+fn crop_pos() -> BlockPos {
+    BlockPos::new(4, -59, 4)
+}
+
+fn planted(label: &str, block_name: &str) -> WorldStorage {
+    let mut storage = storage(label);
+    let pos = crop_pos();
+    place(&mut storage, pos.below(), state("minecraft:farmland"));
+    place(&mut storage, pos, state(block_name));
+    storage
+}
+
+#[test]
+fn every_vanilla_crop_advances_one_stage_on_random_ticks() {
+    for name in [
+        "minecraft:wheat",
+        "minecraft:carrots",
+        "minecraft:potatoes",
+        "minecraft:beetroots",
+    ] {
+        let mut storage = planted(name, name);
+        for tick_number in 1..=256 {
+            tick::random_tick_at(&mut storage, tick_number, crop_pos()).unwrap();
+        }
+        let grown = block(&storage, crop_pos());
+        assert_eq!(grown.name, name);
+        assert!(crops::age(&grown) > 0, "{name} never advanced an age");
+    }
+}
+
+#[test]
+fn mature_crops_are_not_randomly_ticking_and_never_change() {
+    let mut storage = planted("mature", "minecraft:wheat");
+    let pos = crop_pos();
+    place(&mut storage, pos, crops::grow(&state("minecraft:wheat"), 7));
+    let mature = block(&storage, pos);
+    assert!(crops::is_mature(&mature));
+    assert!(!tick::random_tick_at(&mut storage, 1, pos).unwrap());
+    for tick_number in 1..=128 {
+        tick::random_tick_at(&mut storage, tick_number, pos).unwrap();
+    }
+    assert_eq!(block(&storage, pos), mature);
+}
+
+#[test]
+fn crops_without_farmland_below_do_not_grow() {
+    let mut storage = storage("no-farmland");
+    let pos = crop_pos();
+    place(&mut storage, pos.below(), state("minecraft:stone"));
+    place(&mut storage, pos, state("minecraft:wheat"));
+    for tick_number in 1..=128 {
+        tick::random_tick_at(&mut storage, tick_number, pos).unwrap();
+    }
+    assert_eq!(crops::age(&block(&storage, pos)), 0);
+}
+
+#[test]
+fn crop_random_tick_growth_is_deterministic_for_a_seed() {
+    let mut first = planted("determinism-a", "minecraft:wheat");
+    let mut second = planted("determinism-b", "minecraft:wheat");
+    for tick_number in 1..=160 {
+        let left = tick::random_tick_at(&mut first, tick_number, crop_pos()).unwrap();
+        let right = tick::random_tick_at(&mut second, tick_number, crop_pos()).unwrap();
+        assert_eq!(left, right, "tick {tick_number} disagreed");
+        assert_eq!(
+            crops::age(&block(&first, crop_pos())),
+            crops::age(&block(&second, crop_pos())),
+            "age diverged at tick {tick_number}"
+        );
+    }
+}
+
+#[test]
+fn behavior_table_wires_crop_overrides() {
+    let table =
+        tick::BehaviorTable::vanilla().with("minecraft:wheat", &folia_core::crops::CROP_BEHAVIOR);
+    let crop = state("minecraft:wheat");
+    assert!(table.get(&crop).is_randomly_ticking(&crop));
+    let mature = crops::grow(&crop, 7);
+    assert!(!table.get(&mature).is_randomly_ticking(&mature));
+}

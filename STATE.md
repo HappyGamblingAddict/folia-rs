@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `64ceca7` with 1,818 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `7c6d742` with 1,830 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,818 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); scheduled-tick slice next expected 1,830. Parity is **98.75% block-class /
+- Tests: **1,830 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); random-tick growth slice next expected 1,847. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -80,6 +80,9 @@ Last updated: 2026-11-24
   and explicit "Java unavailable" coverage; six Java capture files are missing.
 - P3.10 scheduled block ticks persist in vanilla-style `block_ticks` NBT with
   stable reload ordering; fluid ticks and worldgen-feature queues remain open.
+- P3.10 random ticks now grow the four modeled crops and configured saplings with
+  vanilla-style growth math; leaf decay, doors, rails, lava fire, and special
+  crops remain.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

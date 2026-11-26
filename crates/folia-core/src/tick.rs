@@ -893,6 +893,22 @@ impl BehaviorTable {
             .copied()
             .unwrap_or_else(|| behavior_for(state))
     }
+
+    /// Installs every crop and sapling random-tick override with [`Self::with`].
+    ///
+    /// This is the production growth table: it makes the wired blocks explicit
+    /// instead of relying only on the [`behavior_for`] fallback, and it is the
+    /// table used by [`tick_world`] and the region tick driver.
+    pub fn with_growth() -> Self {
+        let mut table = Self::vanilla();
+        for (name, behavior) in crate::crops::BEHAVIORS {
+            table = table.with(*name, *behavior);
+        }
+        for (name, behavior) in crate::saplings::BEHAVIORS {
+            table = table.with(*name, *behavior);
+        }
+        table
+    }
 }
 
 /// Mutable world view handed to a block behaviour.
@@ -924,6 +940,24 @@ impl<'a> TickWorld<'a> {
     /// Read-only storage view for signal/fluid queries.
     pub fn storage(&self) -> &WorldStorage {
         self.storage
+    }
+
+    /// Owned copy of one cached/stored chunk.
+    ///
+    /// Feature placement needs a mutable `FeatureLevel`; a copy lets a
+    /// random-tick behaviour run the shipped worldgen feature without taking
+    /// the storage lock twice. The caller writes the resulting blocks back
+    /// through [`Self::set_block`] so updates and packets still flow.
+    pub fn chunk_copy(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<Option<Chunk>> {
+        self.storage.load_chunk(chunk_x, chunk_z)
+    }
+
+    /// Records a block whose vanilla random tick has no portable behavior.
+    pub fn record_unsupported_random_tick(&mut self, name: impl Into<String>) {
+        self.storage
+            .tick_state_mut()
+            .unsupported_random_ticks
+            .insert(name.into());
     }
 
     /// Clone the block entity at `pos`, if one is loaded.
@@ -961,6 +995,30 @@ impl<'a> TickWorld<'a> {
             pos,
             state,
             UpdateFlags::ALL | UpdateFlags::SHAPE,
+            false,
+            true,
+        )?;
+        if change.is_some() {
+            self.changed = true;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Applies a block change without queuing neighbour or shape updates.
+    ///
+    /// Used by features that write many blocks at once (tree saplings): the
+    /// enclosing tick still drains and broadcasts each change, but one bulk
+    /// edit cannot overflow the chained-update limit or re-enter behaviour
+    /// callbacks for every intermediate log/leaf.
+    pub fn set_block_quiet(&mut self, pos: BlockPos, state: BlockState) -> io::Result<bool> {
+        self.storage.tick_state_mut().current_tick = self.tick;
+        let change = perform_block_change(
+            self.storage,
+            pos,
+            state,
+            UpdateFlags::BLOCK_UPDATE | UpdateFlags::SKIP_ON_PLACE,
             false,
             true,
         )?;
@@ -1172,6 +1230,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::leaves::LEAVES_BEHAVIOR
     } else if crate::crops::is_crop(state) {
         &crate::crops::CROP_BEHAVIOR
+    } else if crate::saplings::is_growable_sapling(state) {
+        &crate::saplings::SAPLING_BEHAVIOR
     } else if crate::redstone::is_redstone_lamp(state) {
         &crate::redstone::REDSTONE_LAMP_BEHAVIOR
     } else if crate::redstone::is_daylight_detector(state) {
@@ -1207,10 +1267,10 @@ pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str
         Some("lava random ticks spread fire, which needs ignition and flammability metadata")
     } else if tags::block_has("leaves", name) {
         Some("leaf decay needs distance/shape updates during generation and placement")
-    } else if tags::block_has("crops", name) {
-        Some("crop growth needs age, light, and growth-speed metadata")
-    } else if tags::block_has("saplings", name) {
-        Some("sapling growth needs tree feature placement")
+    } else if tags::block_has("crops", name) && !crate::crops::is_crop(state) {
+        Some("melon/pumpkin/pitcher/torchflower crop growth is not ported")
+    } else if tags::block_has("saplings", name) && !crate::saplings::is_growable_sapling(state) {
+        Some("azalea/flowering-azalea tree growth is not ported")
     } else {
         None
     }
@@ -1394,7 +1454,7 @@ fn can_propagate(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<bool> {
 /// Stored/computed light wins. When a chunk has no light layers (generated
 /// chunks are streamed before the first relight), a column is considered fully
 /// sky-lit from `surface_y` upwards.
-fn light_at(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<u8> {
+pub(crate) fn light_at(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<u8> {
     let chunk_x = pos.x().div_euclid(16);
     let chunk_z = pos.z().div_euclid(16);
     let local_x = pos.x().rem_euclid(16) as usize;
@@ -1621,10 +1681,20 @@ impl BlockBehavior for GrowingPlantBehavior {
 /// focused tests that need to exercise a behaviour without waiting for the
 /// 1-in-4096 random position draw.
 pub fn random_tick_at(storage: &mut WorldStorage, tick: u64, pos: BlockPos) -> io::Result<bool> {
+    random_tick_at_with_table(storage, tick, pos, &BehaviorTable::with_growth())
+}
+
+/// [`random_tick_at`] with an explicit behaviour table.
+pub fn random_tick_at_with_table(
+    storage: &mut WorldStorage,
+    tick: u64,
+    pos: BlockPos,
+    table: &BehaviorTable,
+) -> io::Result<bool> {
     let Some(state) = storage.block_state_at(pos.x(), pos.y(), pos.z()) else {
         return Ok(false);
     };
-    let behavior = behavior_for(&state);
+    let behavior = table.get(&state);
     if !behavior.is_randomly_ticking(&state) {
         if let Some(_reason) = unsupported_random_tick_reason(&state) {
             storage
@@ -1664,7 +1734,7 @@ pub(crate) fn on_block_change(
         storage.tick_state_mut().containers.remove(pos);
     }
     let behavior = behavior_for(new_state);
-    {
+    if flags & crate::tick::UPDATE_SKIP_ON_PLACE == 0 {
         let mut world = TickWorld::new(storage, tick);
         behavior.on_place(&mut world, pos, new_state, old)?;
     }
@@ -1773,7 +1843,7 @@ fn direction_between(from: BlockPos, to: BlockPos) -> Direction {
 /// produced by a scheduled or random tick are drained after that callback,
 /// before the next callback runs.
 pub fn tick_world(storage: &mut WorldStorage, tick: u64) -> io::Result<TickReport> {
-    tick_world_with_table(storage, tick, &BehaviorTable::vanilla())
+    tick_world_with_table(storage, tick, &BehaviorTable::with_growth())
 }
 
 /// [`tick_world`] with an explicit behaviour table (the callback interface for

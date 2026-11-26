@@ -748,7 +748,7 @@ impl WorldStorage {
         region: RegionKey,
         tick: u64,
     ) -> io::Result<TickReport> {
-        self.tick_region_with_table(map, region, tick, &BehaviorTable::vanilla())
+        self.tick_region_with_table(map, region, tick, &BehaviorTable::with_growth())
     }
 
     /// [`tick_region`](Self::tick_region) with an explicit behaviour table.

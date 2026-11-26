@@ -52,6 +52,7 @@ pub mod region;
 pub mod registries;
 pub mod registry;
 pub mod registry_key;
+pub mod saplings;
 pub mod snbt;
 pub mod spawn;
 pub mod status;

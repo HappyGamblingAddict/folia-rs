@@ -1,13 +1,28 @@
 //! Crop growth for wheat, carrots, potatoes, and beetroots.
 //!
-//! This is the `CropBlock` random-tick subset: an age property 0..max, sky-light
-//! gate, deterministic per-position growth roll, and a bone-meal-style growth
-//! API. Hydration/farmland-neighbour growth speed is not modeled yet.
+//! This is the `CropBlock` random-tick subset: an age property 0..max, a
+//! brightness gate, the vanilla growth-speed probability, and a
+//! bone-meal-style growth API. Hydration comes from the shipped farmland
+//! `moisture` property; the farmland itself is not ticked here.
+//!
+//! The probability formula and neighbour layout follow the 1.21 Java
+//! `CropBlock.randomTick`/`getGrowthSpeed`. The local reference tree does not
+//! contain the decompiled Folia source, so the exact formula was recovered
+//! from the matching 1.21 server source and is documented in `DECISIONS.md`.
 
 use crate::chunk::BlockState;
+use crate::math::BlockPos;
 use crate::tick::{BlockBehavior, TickWorld};
 use folia_random::RandomSource;
 use std::io;
+
+/// One entry per crop block name, for `BehaviorTable::with` registration.
+pub static BEHAVIORS: &[(&str, &dyn BlockBehavior)] = &[
+    ("minecraft:wheat", &CROP_BEHAVIOR),
+    ("minecraft:carrots", &CROP_BEHAVIOR),
+    ("minecraft:potatoes", &CROP_BEHAVIOR),
+    ("minecraft:beetroots", &CROP_BEHAVIOR),
+];
 
 pub fn is_crop(state: &BlockState) -> bool {
     matches!(
@@ -38,6 +53,11 @@ pub fn age(state: &BlockState) -> u8 {
         .unwrap_or(0)
 }
 
+/// Vanilla `CropBlock.isMaxAge`: a mature crop no longer receives random ticks.
+pub fn is_mature(state: &BlockState) -> bool {
+    age(state) >= max_age(state)
+}
+
 fn with_age(state: &BlockState, value: u8) -> BlockState {
     let mut next = state.clone();
     if let Some((_, current)) = next.properties.iter_mut().find(|(name, _)| name == "age") {
@@ -54,7 +74,8 @@ pub fn grow(state: &BlockState, amount: u8) -> BlockState {
     with_age(state, age)
 }
 
-/// Bone-meal age increase (vanilla `CropBlock.getBonemealAgeIncrease`): 2..=4.
+/// Bone-meal age increase (vanilla `CropBlock.getBonemealAgeIncrease`): 2..=4
+/// in the portable approximation shipped by this slice.
 pub fn bone_meal_amount(random: &mut impl RandomSource) -> u8 {
     2 + random.next_int_bound(3) as u8
 }
@@ -64,30 +85,85 @@ pub fn bone_meal_amount(random: &mut impl RandomSource) -> u8 {
 /// Fully grown crops and non-crop blocks return `None`, matching vanilla where
 /// `CropBlock.isBonemealSuccess` fails and bone meal is not consumed.
 pub fn bone_meal_crop(state: &BlockState, amount: u8) -> Option<BlockState> {
-    if is_crop(state) && age(state) < max_age(state) {
+    if is_crop(state) && !is_mature(state) {
         Some(grow(state, amount))
     } else {
         None
     }
 }
 
-fn light_ok(world: &mut TickWorld<'_>, pos: crate::math::BlockPos) -> bool {
-    world
-        .storage()
-        .sky_light_at(pos.x(), pos.y() + 1, pos.z())
-        .is_some_and(|light| light >= 9)
+fn same_crop(world: &mut TickWorld<'_>, pos: BlockPos, name: &str) -> io::Result<bool> {
+    Ok(world
+        .block_state(pos)?
+        .is_some_and(|state| state.name == name))
 }
 
-fn random_tick(
-    world: &mut TickWorld<'_>,
-    pos: crate::math::BlockPos,
-    state: &BlockState,
-) -> io::Result<()> {
-    if age(state) >= max_age(state) || !light_ok(world, pos) {
+/// Vanilla `CropBlock.getGrowthSpeed`.
+///
+/// The 3x3 farmland patch under the crop contributes 1 per dry farmland block
+/// and 3 per hydrated one, with off-centre cells quartered. A same-crop
+/// neighbour on both horizontal axes, or any diagonal neighbour, halves the
+/// result. Returned value is at least 1/2, so the probability stays bounded.
+pub fn growth_speed(world: &mut TickWorld<'_>, pos: BlockPos, name: &str) -> io::Result<f32> {
+    let mut speed = 1.0_f32;
+    let below = pos.below();
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let mut contribution = 0.0_f32;
+            if let Some(state) = world.block_state(below.offset(dx, 0, dz))?
+                && state.name == "minecraft:farmland"
+            {
+                contribution = 1.0;
+                if property(&state, "moisture")
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .unwrap_or(0)
+                    > 0
+                {
+                    contribution = 3.0;
+                }
+            }
+            if dx != 0 || dz != 0 {
+                contribution /= 4.0;
+            }
+            speed += contribution;
+        }
+    }
+
+    let west = same_crop(world, pos.west(), name)?;
+    let east = same_crop(world, pos.east(), name)?;
+    let north = same_crop(world, pos.north(), name)?;
+    let south = same_crop(world, pos.south(), name)?;
+    if (west || east) && (north || south) {
+        speed /= 2.0;
+    } else {
+        let diagonal = same_crop(world, pos.north().west(), name)?
+            || same_crop(world, pos.north().east(), name)?
+            || same_crop(world, pos.south().east(), name)?
+            || same_crop(world, pos.south().west(), name)?;
+        if diagonal {
+            speed /= 2.0;
+        }
+    }
+    Ok(speed.max(0.5))
+}
+
+fn random_tick(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> io::Result<()> {
+    if is_mature(state) || crate::tick::light_at(world, pos)? < 9 {
         return Ok(());
     }
+    // `CropBlock.mayPlaceOn` allows farmland only. A crop cannot survive on
+    // anything else, so refuse growth there instead of growing a plant that a
+    // shape update would immediately remove.
+    if !world
+        .block_state(pos.below())?
+        .is_some_and(|below| below.name == "minecraft:farmland")
+    {
+        return Ok(());
+    }
+    let speed = growth_speed(world, pos, state.name.as_str())?;
+    let bound = (25.0_f32 / speed) as i32 + 1;
     let mut random = world.random(pos);
-    if random.next_int_bound(4) != 0 {
+    if random.next_int_bound(bound.max(1)) != 0 {
         return Ok(());
     }
     world.set_block(pos, grow(state, 1))?;
@@ -100,13 +176,13 @@ pub static CROP_BEHAVIOR: CropBehavior = CropBehavior;
 
 impl BlockBehavior for CropBehavior {
     fn is_randomly_ticking(&self, state: &BlockState) -> bool {
-        is_crop(state)
+        is_crop(state) && !is_mature(state)
     }
 
     fn random_tick(
         &self,
         world: &mut TickWorld<'_>,
-        pos: crate::math::BlockPos,
+        pos: BlockPos,
         state: &BlockState,
     ) -> io::Result<()> {
         random_tick(world, pos, state)

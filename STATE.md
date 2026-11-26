@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `d91f3c0` with 1,765 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `d834afa` with 1,775 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,765 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); runtime persistence slice next expected 1,775. Parity is **98.75% block-class /
+- Tests: **1,775 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); dirty-batching slice next expected 1,781. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -69,6 +69,8 @@ Last updated: 2026-11-24
 - P3.4 runtime game-rule/spawn persistence landed with atomic whole-root rewrite,
   unknown-field preservation, level.dat_old, and crash-style reload tests.
   Entity/POI sections and per-chunk dirty batching remain open.
+- P3.4 per-chunk dirty batching landed; encoded roots are staged and flushed by
+  chunk/region, with one write per chunk per batch. Entity/POI sections remain.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

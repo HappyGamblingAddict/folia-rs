@@ -8,7 +8,7 @@ use crate::item_components::ItemStack;
 use crate::nbt::Tag;
 use crate::region::{ChunkPos, RegionKey, RegionMap};
 use crate::tick::{BehaviorTable, TickReport, TickState};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -207,6 +207,18 @@ pub fn flush_shared() -> io::Result<()> {
     Ok(())
 }
 
+/// A fully prepared chunk root waiting for the next batched flush.
+///
+/// Keeping the encoded root (rather than a chunk reference) means an edit can
+/// never be lost to cache eviction before it reaches disk. Re-marking a chunk
+/// replaces its entry, so a batch applies only the chunk's latest state.
+#[derive(Clone)]
+struct PendingChunkWrite {
+    region: RegionPos,
+    tag: Tag,
+    compression: Compression,
+}
+
 /// Cached Anvil storage for one dimension.
 ///
 /// Region files stay open in memory until `flush` or `unload_region`. This
@@ -221,6 +233,14 @@ pub struct WorldStorage {
     cache_order: VecDeque<(i32, i32)>,
     cache_hits: u64,
     cache_misses: u64,
+    /// Chunk roots queued for the next batched flush, keyed by chunk coords.
+    /// Each storage owns one dimension, so this set is dimension-scoped. The
+    /// `BTreeMap` gives flushes a deterministic (chunk x, chunk z) order.
+    pending: BTreeMap<(i32, i32), PendingChunkWrite>,
+    /// Number of queued chunk roots applied to region files so far. A diagnostic
+    /// companion to `cache_hits`/`cache_misses`; it lets tests prove a batch
+    /// writes a chunk once even when it was edited repeatedly.
+    chunk_writes: u64,
     /// Neighbour/scheduled/random tick queues for this world.
     tick: TickState,
 }
@@ -235,6 +255,8 @@ impl WorldStorage {
             cache_order: VecDeque::new(),
             cache_hits: 0,
             cache_misses: 0,
+            pending: BTreeMap::new(),
+            chunk_writes: 0,
             tick: TickState::default(),
         }
     }
@@ -276,6 +298,47 @@ impl WorldStorage {
         let mut coords: Vec<(i32, i32)> = self.chunks.keys().copied().collect();
         coords.sort_unstable();
         coords
+    }
+
+    /// True when the chunk has a prepared write queued for the next flush.
+    pub fn is_chunk_dirty(&self, chunk_x: i32, chunk_z: i32) -> bool {
+        self.pending.contains_key(&(chunk_x, chunk_z))
+    }
+
+    /// Number of chunks with a write queued for the next flush.
+    pub fn dirty_chunk_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Chunk coordinates with queued writes, in the order a flush applies them.
+    pub fn dirty_chunk_coords(&self) -> Vec<(i32, i32)> {
+        self.pending.keys().copied().collect()
+    }
+
+    /// Total number of queued chunk roots applied to region files so far.
+    pub fn chunk_write_count(&self) -> u64 {
+        self.chunk_writes
+    }
+
+    /// Queue a prepared chunk root for the next batched flush. Re-marking the
+    /// same chunk replaces its queued root, so repeated edits in one batch write
+    /// that chunk once with its latest state.
+    pub fn mark_dirty(&mut self, chunk_x: i32, chunk_z: i32, tag: Tag, compression: Compression) {
+        let region = RegionPos::from_chunk(chunk_x, chunk_z);
+        self.pending.insert(
+            (chunk_x, chunk_z),
+            PendingChunkWrite {
+                region,
+                tag,
+                compression,
+            },
+        );
+    }
+
+    /// Drop every queued write without applying it. Callers that want the edits
+    /// on disk must use [`flush`](Self::flush) instead.
+    pub fn clear_dirty(&mut self) {
+        self.pending.clear();
     }
 
     /// True when a column is already decoded in this storage. The join
@@ -674,11 +737,20 @@ impl WorldStorage {
             return Ok(Some(cached.clone()));
         }
         self.cache_misses += 1;
-        let position = RegionPos::from_chunk(chunk_x, chunk_z);
-        let (local_x, local_z) = position.local_chunk(chunk_x, chunk_z);
-        let region = self.region_mut(position)?;
-
-        let Some(tag) = read_stored_chunk(region, local_x, local_z, chunk_x, chunk_z)? else {
+        let queued = self
+            .pending
+            .get(&(chunk_x, chunk_z))
+            .map(|write| write.tag.clone());
+        let tag = match queued {
+            Some(tag) => Some(tag),
+            None => {
+                let position = RegionPos::from_chunk(chunk_x, chunk_z);
+                let (local_x, local_z) = position.local_chunk(chunk_x, chunk_z);
+                let region = self.region_mut(position)?;
+                read_stored_chunk(region, local_x, local_z, chunk_x, chunk_z)?
+            }
+        };
+        let Some(tag) = tag else {
             return Ok(None);
         };
         let chunk = decode_chunk(&tag)?;
@@ -729,13 +801,14 @@ impl WorldStorage {
         compression: Compression,
         entities: &BlockEntityMap,
     ) -> io::Result<()> {
+        // Opening the region at stage time keeps the region file and its loaded
+        // handle visible to callers; only the chunk record waits for the flush.
         let position = RegionPos::from_chunk(chunk.x, chunk.z);
-        let (local_x, local_z) = position.local_chunk(chunk.x, chunk.z);
+        self.region_mut(position)?;
         let mut tag = encode_chunk(chunk)?;
         store_block_entities(&mut tag, entities)?;
         let tag = stamp_chunk(tag, chunk);
-        let region = self.region_mut(position)?;
-        region.write_chunk(local_x, local_z, &tag, compression)?;
+        self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
         self.block_entities
             .insert((chunk.x, chunk.z), entities.clone());
@@ -761,13 +834,20 @@ impl WorldStorage {
         compression: Compression,
         edited_blocks: &[(i32, i32, i32)],
     ) -> io::Result<()> {
-        let position = RegionPos::from_chunk(chunk.x, chunk.z);
-        let (local_x, local_z) = position.local_chunk(chunk.x, chunk.z);
-        let existing = {
-            let region = self.region_mut(position)?;
-            read_stored_chunk(region, local_x, local_z, chunk.x, chunk.z)?
-        };
         let key = (chunk.x, chunk.z);
+        // An earlier write in the same batch is the most recent stored root.
+        // Reading it instead of the region keeps unknown fields and block
+        // entities coherent across repeated edits before a flush.
+        let queued_root = self.pending.get(&key).map(|write| write.tag.clone());
+        let existing = match queued_root {
+            Some(root) => Some(root),
+            None => {
+                let position = RegionPos::from_chunk(chunk.x, chunk.z);
+                let (local_x, local_z) = position.local_chunk(chunk.x, chunk.z);
+                let region = self.region_mut(position)?;
+                read_stored_chunk(region, local_x, local_z, chunk.x, chunk.z)?
+            }
+        };
         let mut entities = match self.block_entities.get(&key) {
             Some(entities) => entities.clone(),
             None => match &existing {
@@ -784,8 +864,7 @@ impl WorldStorage {
         }
         store_block_entities(&mut tag, &entities)?;
         let tag = stamp_chunk(tag, chunk);
-        let region = self.region_mut(position)?;
-        region.write_chunk(local_x, local_z, &tag, compression)?;
+        self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
         self.block_entities.insert(key, entities);
         Ok(())
@@ -794,6 +873,9 @@ impl WorldStorage {
     /// True when the chunk on disk carries [`WRITTEN_MARKER`], meaning this
     /// server produced it rather than an earlier flat placeholder run.
     pub fn is_written_chunk(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
+        if self.is_chunk_dirty(chunk_x, chunk_z) {
+            return Ok(true);
+        }
         let position = RegionPos::from_chunk(chunk_x, chunk_z);
         let (local_x, local_z) = position.local_chunk(chunk_x, chunk_z);
         let region = self.region_mut(position)?;
@@ -804,6 +886,25 @@ impl WorldStorage {
     }
 
     pub fn unload_region(&mut self, position: RegionPos) -> io::Result<()> {
+        // Apply queued writes for this region before dropping it, so an unload
+        // never discards an edit that has not reached the region cache yet.
+        let queued: Vec<(i32, i32)> = self
+            .pending
+            .keys()
+            .copied()
+            .filter(|&(x, z)| RegionPos::from_chunk(x, z) == position)
+            .collect();
+        for key in queued {
+            let write = self.pending.remove(&key).expect("key came from pending");
+            let (local_x, local_z) = position.local_chunk(key.0, key.1);
+            self.region_mut(position)?.write_chunk(
+                local_x,
+                local_z,
+                &write.tag,
+                write.compression,
+            )?;
+            self.chunk_writes += 1;
+        }
         if let Some(mut region) = self.regions.remove(&position) {
             region.save_if_dirty()?;
         }
@@ -852,7 +953,35 @@ impl WorldStorage {
         self.cache_order = order;
     }
 
+    /// Apply every queued chunk write, then save each touched region once.
+    ///
+    /// Writes are applied in deterministic chunk-coordinate order and grouped by
+    /// region through the region cache, so a batch rewrites each `.mca` at most
+    /// once regardless of how many of its chunks changed. A failed write keeps
+    /// its entry (and all later entries) queued for the next flush.
     pub fn flush(&mut self) -> io::Result<()> {
+        let pending = std::mem::take(&mut self.pending);
+        let mut queued = pending.into_iter();
+        let mut result = Ok(());
+        for (key, write) in queued.by_ref() {
+            let (local_x, local_z) = write.region.local_chunk(key.0, key.1);
+            let applied = match self.region_mut(write.region) {
+                Ok(region) => region.write_chunk(local_x, local_z, &write.tag, write.compression),
+                Err(error) => Err(error),
+            };
+            match applied {
+                Ok(()) => self.chunk_writes += 1,
+                Err(error) => {
+                    result = Err(error);
+                    self.pending.insert(key, write);
+                    break;
+                }
+            }
+        }
+        for (key, write) in queued {
+            self.pending.insert(key, write);
+        }
+        result?;
         for region in self.regions.values_mut() {
             region.save_if_dirty()?;
         }

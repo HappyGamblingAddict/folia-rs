@@ -69,8 +69,8 @@ pub struct BlockChange {
     pub neighbour_light: Vec<ChunkLightUpdate>,
 }
 
-/// Mutate a block in the world, persist the chunk, queue the six neighbour
-/// updates, and process them before returning.
+/// Mutate a block in the world, stage the chunk for the next batched flush,
+/// queue the six neighbour updates, and process them before returning.
 ///
 /// Vanilla `Level.setBlock(..., 3)` sends the client update, calls
 /// `updateNeighborsAt` for the six neighbours, and then runs
@@ -194,7 +194,6 @@ pub(crate) fn perform_block_change(
     };
 
     storage.update_chunk(&chunk, Compression::Zlib, &[(x, y, z)])?;
-    storage.flush()?;
 
     if broadcast {
         broadcast_change(&change);

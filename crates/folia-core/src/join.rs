@@ -9017,6 +9017,11 @@ mod tests {
             Some("minecraft:air".to_owned()),
             "the broken block was solid"
         );
+        assert!(
+            storage.is_chunk_dirty(0, 0),
+            "the edit is staged for a batch"
+        );
+        storage.flush().unwrap();
 
         let mut reopened = WorldStorage::new(directory.clone());
         let (reloaded, source) = load_or_generate_chunk(

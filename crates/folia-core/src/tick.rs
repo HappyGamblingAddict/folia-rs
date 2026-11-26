@@ -908,6 +908,9 @@ impl BehaviorTable {
         for (name, behavior) in crate::saplings::BEHAVIORS {
             table = table.with(*name, *behavior);
         }
+        for (name, behavior) in crate::redstone::BEHAVIORS {
+            table = table.with(*name, *behavior);
+        }
         table
     }
 }
@@ -1237,6 +1240,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::REDSTONE_LAMP_BEHAVIOR
     } else if crate::redstone::is_daylight_detector(state) {
         &crate::redstone::DAYLIGHT_DETECTOR_BEHAVIOR
+    } else if crate::redstone::is_door(state) {
+        &crate::redstone::DOOR_BEHAVIOR
     } else if crate::redstone::is_powered_openable(state) {
         &crate::redstone::POWERED_OPENABLE_BEHAVIOR
     } else if crate::piston::is_piston(state) {
@@ -1282,7 +1287,7 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     if name == "minecraft:tripwire_hook" {
         Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
-        Some("hoppers, doors, rails, and non-redstone torch support are not ported")
+        Some("hoppers, rails, and non-redstone torch support are not ported")
     } else {
         None
     }

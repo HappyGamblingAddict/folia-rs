@@ -25,8 +25,9 @@
 //!   8-toggles-in-60-ticks burn-out with a 160-tick restart delay;
 //! * pressure plates and tripwire: an entity-occupancy input API, pressed state,
 //!   and scheduled release; wooden, stone, and weighted pressure plates;
-//! * redstone lamps, powered doors/trapdoors/fence gates, daylight-detector
-//!   signal math, and note-block pitch math;
+//! * redstone lamps, two-block door open/power updates from either half,
+//!   single-block powered trapdoors/fence gates, daylight-detector signal math,
+//!   and note-block pitch math;
 //! * target blocks: the vanilla hit-position strength (core 15, mid/outer
 //!   tiers), 8/20-tick scheduled reset, and signal output through
 //!   [`SignalReader`];
@@ -2157,8 +2158,8 @@ fn update_powered_openable(
     Ok(())
 }
 
-/// Doors, trapdoors, and fence gates open while powered. Double-door halves are
-/// updated independently until the shape-update slice links them.
+/// Trapdoors and fence gates open while powered. Two-block doors now use
+/// [`DoorBehavior`]; the trapdoor/fence-gate half of this slice remains open.
 pub struct PoweredOpenableBehavior;
 
 pub static POWERED_OPENABLE_BEHAVIOR: PoweredOpenableBehavior = PoweredOpenableBehavior;
@@ -2191,6 +2192,134 @@ impl BlockBehavior for PoweredOpenableBehavior {
         _old: Option<&BlockState>,
     ) -> io::Result<()> {
         update_powered_openable(world, pos, state)
+    }
+}
+
+/// `true` for a two-block door. Trapdoors and fence gates are deliberately
+/// excluded: their single-block open/power handling stays in
+/// [`PoweredOpenableBehavior`] for this slice.
+pub fn is_door(state: &BlockState) -> bool {
+    state.name.ends_with("_door")
+}
+
+/// The lower half of a door, given either half's position and state.
+fn door_lower_pos(pos: BlockPos, state: &BlockState) -> BlockPos {
+    if property(state, "half") == Some("upper") {
+        pos.below()
+    } else {
+        pos
+    }
+}
+
+/// Vanilla `DoorBlock` power input: weak signal at either half.
+///
+/// [`neighbor_power`] uses [`SignalReader`], whose weak queries already fold in
+/// strong power for conductors, so a source adjacent to either half counts.
+pub fn door_power(storage: &WorldStorage, lower_pos: BlockPos) -> i32 {
+    neighbor_power(storage, lower_pos).max(neighbor_power(storage, lower_pos.above()))
+}
+
+/// Applies a door's powered/open change to both halves in one behaviour pass.
+///
+/// Each half is read fresh from storage before writing, which preserves
+/// `facing`, `hinge`, and the other half's properties. The nested `on_place`
+/// callback is idempotent: once a half is written, the re-entrant call sees the
+/// new state and writes nothing, so there is no recursive neighbour storm.
+fn update_door(world: &mut TickWorld<'_>, pos: BlockPos, state: &BlockState) -> io::Result<()> {
+    if !is_door(state) {
+        return Ok(());
+    }
+    let lower_pos = door_lower_pos(pos, state);
+    let powered = door_power(world.storage(), lower_pos) > 0;
+    let powered_value = if powered { "true" } else { "false" };
+
+    for (half, expected_half) in [(lower_pos, "lower"), (lower_pos.above(), "upper")] {
+        let Some(current) = world.block_state(half)? else {
+            continue;
+        };
+        if !is_door(&current)
+            || current.name != state.name
+            || property(state, "half")
+                .is_some_and(|_| property(&current, "half") != Some(expected_half))
+        {
+            continue;
+        }
+        let open_matches = property(&current, "open")
+            .map(|value| value == powered_value)
+            .unwrap_or(true);
+        if is_powered(&current) == powered && open_matches {
+            continue;
+        }
+        let mut next = with_powered(&current, powered);
+        if property(&current, "open").is_some() {
+            next = with_property(&next, "open", powered_value);
+        }
+        world.set_block(half, next)?;
+    }
+    Ok(())
+}
+
+/// `DoorBlock`: a signal on either half opens and powers both halves; losing
+/// that signal closes and un-powers both halves.
+pub struct DoorBehavior;
+
+pub static DOOR_BEHAVIOR: DoorBehavior = DoorBehavior;
+
+/// Explicit [`crate::tick::BehaviorTable`] registration for the shipped doors.
+/// The built-in [`crate::tick::behavior_for`] also resolves every `_door` block
+/// name, so modded/unlisted doors get the same behaviour by fallback.
+pub static BEHAVIORS: &[(&str, &dyn BlockBehavior)] = &[
+    ("minecraft:acacia_door", &DOOR_BEHAVIOR),
+    ("minecraft:bamboo_door", &DOOR_BEHAVIOR),
+    ("minecraft:birch_door", &DOOR_BEHAVIOR),
+    ("minecraft:cherry_door", &DOOR_BEHAVIOR),
+    ("minecraft:copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:crimson_door", &DOOR_BEHAVIOR),
+    ("minecraft:dark_oak_door", &DOOR_BEHAVIOR),
+    ("minecraft:exposed_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:iron_door", &DOOR_BEHAVIOR),
+    ("minecraft:jungle_door", &DOOR_BEHAVIOR),
+    ("minecraft:mangrove_door", &DOOR_BEHAVIOR),
+    ("minecraft:oak_door", &DOOR_BEHAVIOR),
+    ("minecraft:oxidized_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:pale_oak_door", &DOOR_BEHAVIOR),
+    ("minecraft:spruce_door", &DOOR_BEHAVIOR),
+    ("minecraft:warped_door", &DOOR_BEHAVIOR),
+    ("minecraft:waxed_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:waxed_exposed_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:waxed_oxidized_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:waxed_weathered_copper_door", &DOOR_BEHAVIOR),
+    ("minecraft:weathered_copper_door", &DOOR_BEHAVIOR),
+];
+
+impl BlockBehavior for DoorBehavior {
+    fn neighbor_changed(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _source: BlockPos,
+    ) -> io::Result<()> {
+        update_door(world, pos, state)
+    }
+
+    fn on_place(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+        _old: Option<&BlockState>,
+    ) -> io::Result<()> {
+        update_door(world, pos, state)
+    }
+
+    fn scheduled_tick(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        state: &BlockState,
+    ) -> io::Result<()> {
+        update_door(world, pos, state)
     }
 }
 
@@ -3233,5 +3362,46 @@ mod tests {
             with_facing(&comparator, Direction::West),
             with_property(&comparator, "facing", "west")
         );
+    }
+
+    #[test]
+    fn door_helpers_only_match_doors_and_normalize_upper_half() {
+        let lower = default_block_state("minecraft:oak_door").unwrap();
+        assert!(is_door(&lower));
+        assert!(!is_door(
+            &default_block_state("minecraft:oak_trapdoor").unwrap()
+        ));
+        assert!(!is_door(
+            &default_block_state("minecraft:oak_fence_gate").unwrap()
+        ));
+        let upper = with_property(&lower, "half", "upper");
+        let pos = BlockPos::new(3, -60, 3);
+        assert_eq!(door_lower_pos(pos, &lower), pos);
+        assert_eq!(door_lower_pos(pos, &upper), pos.below());
+    }
+
+    #[test]
+    fn door_power_reads_both_halves_with_weak_and_lever_sources() {
+        let mut storage = flat_storage("door-power");
+        let lower = BlockPos::new(4, -60, 4);
+        assert_eq!(door_power(&storage, lower), 0);
+
+        place(
+            &mut storage,
+            lower.relative(Direction::East),
+            default_block_state(REDSTONE_BLOCK).unwrap(),
+        );
+        assert_eq!(door_power(&storage, lower), 15);
+
+        place(
+            &mut storage,
+            lower.relative(Direction::East),
+            default_block_state("minecraft:air").unwrap(),
+        );
+        assert_eq!(door_power(&storage, lower), 0);
+
+        let lever = with_powered(&default_block_state(LEVER).unwrap(), true);
+        place(&mut storage, lower.above().above(), lever);
+        assert!(door_power(&storage, lower) > 0);
     }
 }

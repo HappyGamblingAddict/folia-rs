@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `c952e87` with 1,847 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `f712e39` with 1,857 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,847 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); leaf-decay slice next expected 1,857. Parity is **98.75% block-class /
+- Tests: **1,857 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); door-redstone slice next expected 1,866. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -86,6 +86,9 @@ Last updated: 2026-11-24
 - P3.10 leaf distance/decay now uses the vanilla neighbour algorithm for
   worldgen, placement, and ticks; decay drops to air without item drops and no
   Java propagation fixture exists.
+- P3.10 two-block doors now respond to redstone from either half; trapdoors and
+  fence gates keep the earlier single-block behavior. Missing door half handling
+  and Java differential fixtures remain open.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

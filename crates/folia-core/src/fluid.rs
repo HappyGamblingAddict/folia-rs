@@ -20,10 +20,11 @@
 //!   horizontal face) becomes obsidian, flowing lava becomes cobblestone, and
 //!   lava flowing down into water becomes stone. Water below a lava source is
 //!   deliberately not one of `LiquidBlock`'s five checked faces.
-//! * Lava random ticks ignite flammable neighbours using the ported
-//!   `FireBlock.bootStrap` odds. [`FireBehavior`] ages fire, burns out
-//!   flammable neighbours, and re-places spreading fire; [`interaction_table`]
-//!   registers it for callers that run the tick loop with an explicit table.
+//! * Lava random ticks ignite flammable neighbours using the shipped
+//!   `fire_odds.tsv` metadata (and quench against water on the five liquid
+//!   contact faces). [`FireBehavior`] ages fire, burns out flammable
+//!   neighbours, and re-places spreading fire; [`interaction_table`] and
+//!   [`BEHAVIORS`] register them for callers that build an explicit table.
 //! * Water source blocks over soul sand or magma create bubble columns
 //!   (`drag=false`/up for soul sand, `drag=true`/down for magma) and the column
 //!   propagates through the water source column above. The per-tick velocity
@@ -795,7 +796,7 @@ impl BlockBehavior for FluidBehavior {
         state: &BlockState,
     ) -> io::Result<()> {
         if fluid_state(state).is_some_and(|fluid| fluid.kind == FluidKind::Lava) {
-            lava_random_tick(world, pos)?;
+            lava_random_tick(world, pos, state)?;
         }
         Ok(())
     }
@@ -945,233 +946,17 @@ impl BlockBehavior for FluidBehavior {
     }
 }
 
-/// `FireBlock.bootStrap` flammability table: `(block, ignite odds, burn odds)`.
-///
-/// The dumped per-state behaviour table does not carry `ignitedByLava`, so the
-/// same table doubles as the `ignitedByLava` predicate for lava ignition. This
-/// is the exact 1.21.11 `FireBlock` registration list.
-const FIRE_ODDS: &[(&str, u16, u16)] = &[
-    ("minecraft:acacia_fence", 5, 20),
-    ("minecraft:acacia_fence_gate", 5, 20),
-    ("minecraft:acacia_leaves", 30, 60),
-    ("minecraft:acacia_log", 5, 5),
-    ("minecraft:acacia_planks", 5, 20),
-    ("minecraft:acacia_shelf", 30, 20),
-    ("minecraft:acacia_slab", 5, 20),
-    ("minecraft:acacia_stairs", 5, 20),
-    ("minecraft:acacia_wood", 5, 5),
-    ("minecraft:allium", 60, 100),
-    ("minecraft:azalea", 30, 60),
-    ("minecraft:azalea_leaves", 30, 60),
-    ("minecraft:azure_bluet", 60, 100),
-    ("minecraft:bamboo", 60, 60),
-    ("minecraft:bamboo_block", 5, 5),
-    ("minecraft:bamboo_fence", 5, 20),
-    ("minecraft:bamboo_fence_gate", 5, 20),
-    ("minecraft:bamboo_mosaic", 5, 20),
-    ("minecraft:bamboo_mosaic_slab", 5, 20),
-    ("minecraft:bamboo_mosaic_stairs", 5, 20),
-    ("minecraft:bamboo_planks", 5, 20),
-    ("minecraft:bamboo_shelf", 30, 20),
-    ("minecraft:bamboo_slab", 5, 20),
-    ("minecraft:bamboo_stairs", 5, 20),
-    ("minecraft:bee_nest", 30, 20),
-    ("minecraft:beehive", 5, 20),
-    ("minecraft:big_dripleaf", 60, 100),
-    ("minecraft:big_dripleaf_stem", 60, 100),
-    ("minecraft:birch_fence", 5, 20),
-    ("minecraft:birch_fence_gate", 5, 20),
-    ("minecraft:birch_leaves", 30, 60),
-    ("minecraft:birch_log", 5, 5),
-    ("minecraft:birch_planks", 5, 20),
-    ("minecraft:birch_shelf", 30, 20),
-    ("minecraft:birch_slab", 5, 20),
-    ("minecraft:birch_stairs", 5, 20),
-    ("minecraft:birch_wood", 5, 5),
-    ("minecraft:black_carpet", 60, 20),
-    ("minecraft:black_wool", 30, 60),
-    ("minecraft:blue_carpet", 60, 20),
-    ("minecraft:blue_orchid", 60, 100),
-    ("minecraft:blue_wool", 30, 60),
-    ("minecraft:bookshelf", 30, 20),
-    ("minecraft:brown_carpet", 60, 20),
-    ("minecraft:brown_wool", 30, 60),
-    ("minecraft:bush", 60, 100),
-    ("minecraft:cactus_flower", 60, 100),
-    ("minecraft:cave_vines", 15, 60),
-    ("minecraft:cave_vines_plant", 15, 60),
-    ("minecraft:cherry_fence", 5, 20),
-    ("minecraft:cherry_fence_gate", 5, 20),
-    ("minecraft:cherry_leaves", 30, 60),
-    ("minecraft:cherry_log", 5, 5),
-    ("minecraft:cherry_planks", 5, 20),
-    ("minecraft:cherry_shelf", 30, 20),
-    ("minecraft:cherry_slab", 5, 20),
-    ("minecraft:cherry_stairs", 5, 20),
-    ("minecraft:cherry_wood", 5, 5),
-    ("minecraft:closed_eyeblossom", 60, 100),
-    ("minecraft:coal_block", 5, 5),
-    ("minecraft:composter", 5, 20),
-    ("minecraft:cornflower", 60, 100),
-    ("minecraft:cyan_carpet", 60, 20),
-    ("minecraft:cyan_wool", 30, 60),
-    ("minecraft:dandelion", 60, 100),
-    ("minecraft:dark_oak_fence", 5, 20),
-    ("minecraft:dark_oak_fence_gate", 5, 20),
-    ("minecraft:dark_oak_leaves", 30, 60),
-    ("minecraft:dark_oak_log", 5, 5),
-    ("minecraft:dark_oak_planks", 5, 20),
-    ("minecraft:dark_oak_shelf", 30, 20),
-    ("minecraft:dark_oak_slab", 5, 20),
-    ("minecraft:dark_oak_stairs", 5, 20),
-    ("minecraft:dark_oak_wood", 5, 5),
-    ("minecraft:dead_bush", 60, 100),
-    ("minecraft:dried_kelp_block", 30, 60),
-    ("minecraft:fern", 60, 100),
-    ("minecraft:firefly_bush", 60, 100),
-    ("minecraft:flowering_azalea", 30, 60),
-    ("minecraft:flowering_azalea_leaves", 30, 60),
-    ("minecraft:glow_lichen", 15, 100),
-    ("minecraft:gray_carpet", 60, 20),
-    ("minecraft:gray_wool", 30, 60),
-    ("minecraft:green_carpet", 60, 20),
-    ("minecraft:green_wool", 30, 60),
-    ("minecraft:hanging_roots", 30, 60),
-    ("minecraft:hay_block", 60, 20),
-    ("minecraft:jungle_fence", 5, 20),
-    ("minecraft:jungle_fence_gate", 5, 20),
-    ("minecraft:jungle_leaves", 30, 60),
-    ("minecraft:jungle_log", 5, 5),
-    ("minecraft:jungle_planks", 5, 20),
-    ("minecraft:jungle_shelf", 30, 20),
-    ("minecraft:jungle_slab", 5, 20),
-    ("minecraft:jungle_stairs", 5, 20),
-    ("minecraft:jungle_wood", 5, 5),
-    ("minecraft:large_fern", 60, 100),
-    ("minecraft:leaf_litter", 60, 100),
-    ("minecraft:lectern", 30, 20),
-    ("minecraft:light_blue_carpet", 60, 20),
-    ("minecraft:light_blue_wool", 30, 60),
-    ("minecraft:light_gray_carpet", 60, 20),
-    ("minecraft:light_gray_wool", 30, 60),
-    ("minecraft:lilac", 60, 100),
-    ("minecraft:lily_of_the_valley", 60, 100),
-    ("minecraft:lime_carpet", 60, 20),
-    ("minecraft:lime_wool", 30, 60),
-    ("minecraft:magenta_carpet", 60, 20),
-    ("minecraft:magenta_wool", 30, 60),
-    ("minecraft:mangrove_fence", 5, 20),
-    ("minecraft:mangrove_fence_gate", 5, 20),
-    ("minecraft:mangrove_leaves", 30, 60),
-    ("minecraft:mangrove_log", 5, 5),
-    ("minecraft:mangrove_planks", 5, 20),
-    ("minecraft:mangrove_roots", 5, 20),
-    ("minecraft:mangrove_shelf", 30, 20),
-    ("minecraft:mangrove_slab", 5, 20),
-    ("minecraft:mangrove_stairs", 5, 20),
-    ("minecraft:mangrove_wood", 5, 5),
-    ("minecraft:oak_fence", 5, 20),
-    ("minecraft:oak_fence_gate", 5, 20),
-    ("minecraft:oak_leaves", 30, 60),
-    ("minecraft:oak_log", 5, 5),
-    ("minecraft:oak_planks", 5, 20),
-    ("minecraft:oak_shelf", 30, 20),
-    ("minecraft:oak_slab", 5, 20),
-    ("minecraft:oak_stairs", 5, 20),
-    ("minecraft:oak_wood", 5, 5),
-    ("minecraft:open_eyeblossom", 60, 100),
-    ("minecraft:orange_carpet", 60, 20),
-    ("minecraft:orange_tulip", 60, 100),
-    ("minecraft:orange_wool", 30, 60),
-    ("minecraft:oxeye_daisy", 60, 100),
-    ("minecraft:pale_hanging_moss", 5, 100),
-    ("minecraft:pale_moss_block", 5, 100),
-    ("minecraft:pale_moss_carpet", 5, 100),
-    ("minecraft:pale_oak_fence", 5, 20),
-    ("minecraft:pale_oak_fence_gate", 5, 20),
-    ("minecraft:pale_oak_leaves", 30, 60),
-    ("minecraft:pale_oak_log", 5, 5),
-    ("minecraft:pale_oak_planks", 5, 20),
-    ("minecraft:pale_oak_shelf", 30, 20),
-    ("minecraft:pale_oak_slab", 5, 20),
-    ("minecraft:pale_oak_stairs", 5, 20),
-    ("minecraft:pale_oak_wood", 5, 5),
-    ("minecraft:peony", 60, 100),
-    ("minecraft:pink_carpet", 60, 20),
-    ("minecraft:pink_petals", 60, 100),
-    ("minecraft:pink_tulip", 60, 100),
-    ("minecraft:pink_wool", 30, 60),
-    ("minecraft:pitcher_plant", 60, 100),
-    ("minecraft:poppy", 60, 100),
-    ("minecraft:purple_carpet", 60, 20),
-    ("minecraft:purple_wool", 30, 60),
-    ("minecraft:red_carpet", 60, 20),
-    ("minecraft:red_tulip", 60, 100),
-    ("minecraft:red_wool", 30, 60),
-    ("minecraft:rose_bush", 60, 100),
-    ("minecraft:scaffolding", 60, 60),
-    ("minecraft:short_dry_grass", 60, 100),
-    ("minecraft:short_grass", 60, 100),
-    ("minecraft:small_dripleaf", 60, 100),
-    ("minecraft:spore_blossom", 60, 100),
-    ("minecraft:spruce_fence", 5, 20),
-    ("minecraft:spruce_fence_gate", 5, 20),
-    ("minecraft:spruce_leaves", 30, 60),
-    ("minecraft:spruce_log", 5, 5),
-    ("minecraft:spruce_planks", 5, 20),
-    ("minecraft:spruce_shelf", 30, 20),
-    ("minecraft:spruce_slab", 5, 20),
-    ("minecraft:spruce_stairs", 5, 20),
-    ("minecraft:spruce_wood", 5, 5),
-    ("minecraft:stripped_acacia_log", 5, 5),
-    ("minecraft:stripped_acacia_wood", 5, 5),
-    ("minecraft:stripped_bamboo_block", 5, 5),
-    ("minecraft:stripped_birch_log", 5, 5),
-    ("minecraft:stripped_birch_wood", 5, 5),
-    ("minecraft:stripped_cherry_log", 5, 5),
-    ("minecraft:stripped_cherry_wood", 5, 5),
-    ("minecraft:stripped_dark_oak_log", 5, 5),
-    ("minecraft:stripped_dark_oak_wood", 5, 5),
-    ("minecraft:stripped_jungle_log", 5, 5),
-    ("minecraft:stripped_jungle_wood", 5, 5),
-    ("minecraft:stripped_mangrove_log", 5, 5),
-    ("minecraft:stripped_mangrove_wood", 5, 5),
-    ("minecraft:stripped_oak_log", 5, 5),
-    ("minecraft:stripped_oak_wood", 5, 5),
-    ("minecraft:stripped_pale_oak_log", 5, 5),
-    ("minecraft:stripped_pale_oak_wood", 5, 5),
-    ("minecraft:stripped_spruce_log", 5, 5),
-    ("minecraft:stripped_spruce_wood", 5, 5),
-    ("minecraft:sunflower", 60, 100),
-    ("minecraft:sweet_berry_bush", 60, 100),
-    ("minecraft:tall_dry_grass", 60, 100),
-    ("minecraft:tall_grass", 60, 100),
-    ("minecraft:target", 15, 20),
-    ("minecraft:tnt", 15, 100),
-    ("minecraft:torchflower", 60, 100),
-    ("minecraft:vine", 15, 100),
-    ("minecraft:white_carpet", 60, 20),
-    ("minecraft:white_tulip", 60, 100),
-    ("minecraft:white_wool", 30, 60),
-    ("minecraft:wildflowers", 60, 100),
-    ("minecraft:wither_rose", 60, 100),
-    ("minecraft:yellow_carpet", 60, 20),
-    ("minecraft:yellow_wool", 30, 60),
-];
-
+/// `(ignite odds, burn odds)` from the shipped flammability metadata. A
+/// waterlogged block cannot burn even when its base block is flammable.
 fn fire_odds(state: &BlockState) -> (u16, u16) {
     if property(state, "waterlogged") == Some("true") {
         return (0, 0);
     }
-    FIRE_ODDS
-        .iter()
-        .find(|(name, _, _)| *name == state.name)
-        .map_or((0, 0), |(_, ignite, burn)| (*ignite, *burn))
+    block_behaviour::fire_odds(state)
 }
 
-/// `BlockBehaviour.BlockStateBase.ignitedByLava` approximation. The dumped
-/// per-state table has no `ignitedByLava` column, so the exact `FireBlock`
-/// registration list is used instead.
+/// `BlockBehaviour.BlockStateBase.ignitedByLava`: whether lava may light this
+/// state, according to the shipped `FireBlock.bootStrap` odds.
 pub fn ignited_by_lava(state: &BlockState) -> bool {
     fire_odds(state).0 > 0
 }
@@ -1327,9 +1112,25 @@ fn is_flammable(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<bool> {
         .is_some_and(ignited_by_lava))
 }
 
-/// `LavaFluid.randomTick`: search up to two blocks upward for an air pocket
-/// with a flammable neighbour, or place fire above a flammable floor block.
-fn lava_random_tick(world: &mut TickWorld<'_>, pos: BlockPos) -> io::Result<()> {
+/// `LavaFluid.randomTick`: quench against water, then search up to two blocks
+/// upward for an air pocket with a flammable neighbour, or place fire above a
+/// flammable floor block.
+fn lava_random_tick(
+    world: &mut TickWorld<'_>,
+    pos: BlockPos,
+    state: &BlockState,
+) -> io::Result<()> {
+    // `LiquidBlock.shouldSpreadLiquid` quenches lava from the five
+    // `POSSIBLE_FLOW_DIRECTIONS` faces. The scheduled fluid tick normally does
+    // this; checking it here too means a loaded lava/water pair that missed its
+    // fluid tick cannot ignite before it is replaced.
+    if let Some(fluid) = fluid_state(state)
+        && let Some(replacement) = lava_water_replacement(world, pos, fluid)?
+    {
+        world.set_block(pos, replacement)?;
+        return Ok(());
+    }
+
     // `ServerLevel.canSpreadFireAround` needs player tracking; this slice has no
     // loaded-player set in `TickWorld`, so the `-1` (unlimited) game rule result
     // is used.
@@ -1570,6 +1371,16 @@ impl BlockBehavior for FireBehavior {
         Ok(Some(fire_state_with_age(world, pos, fire_age_of(state))?))
     }
 }
+
+/// Explicit fluid/fire overrides installed by
+/// [`crate::tick::BehaviorTable::with_growth`]. They reuse the same objects as
+/// the `behavior_for` fallback, so an explicit table cannot silently lose fluid
+/// flow or fire ticks.
+pub static BEHAVIORS: &[(&str, &'static dyn BlockBehavior)] = &[
+    ("minecraft:water", &FLUID),
+    ("minecraft:lava", &FLUID),
+    ("minecraft:fire", &FIRE),
+];
 
 /// A behaviour table that adds [`FIRE`] on top of the built-in fluid/redstone/
 /// falling/plant/grass table.

@@ -15,7 +15,8 @@
 //! support loss is handled by [`crate::block_update::support_still_valid`],
 //! which reuses the placement support predicates. Leaf decay lives
 //! in [`crate::leaves`], crop/sapling growth in [`crate::crops`] and
-//! [`crate::saplings`]. Water/lava flow lives in [`crate::fluid`]; wire, lever,
+//! [`crate::saplings`]. Water/lava flow, lava ignition/quenching, and fire
+//! ageing live in [`crate::fluid`]; wire, lever,
 //! button, repeater, comparator, observer, redstone-torch, pressure-plate, and
 //! tripwire behaviour lives in [`crate::redstone`]; pistons and moving blocks
 //! live in [`crate::piston`].
@@ -904,6 +905,9 @@ impl BehaviorTable {
     /// table used by [`tick_world`] and the region tick driver.
     pub fn with_growth() -> Self {
         let mut table = Self::vanilla();
+        for (name, behavior) in crate::fluid::BEHAVIORS {
+            table = table.with(*name, *behavior);
+        }
         for (name, behavior) in crate::crops::BEHAVIORS {
             table = table.with(*name, *behavior);
         }
@@ -1299,9 +1303,7 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
 /// when no randomised behaviour is known for it.
 pub fn unsupported_random_tick_reason(state: &BlockState) -> Option<&'static str> {
     let name = state.name.as_str();
-    if name == "minecraft:lava" {
-        Some("lava random ticks spread fire, which needs ignition and flammability metadata")
-    } else if tags::block_has("crops", name) && !crate::crops::is_crop(state) {
+    if tags::block_has("crops", name) && !crate::crops::is_crop(state) {
         Some("melon/pumpkin/pitcher/torchflower crop growth is not ported")
     } else if tags::block_has("saplings", name) && !crate::saplings::is_growable_sapling(state) {
         Some("azalea/flowering-azalea tree growth is not ported")
@@ -2193,7 +2195,17 @@ mod tests {
             None,
             "leaf decay is now a supported random tick"
         );
-        assert!(unsupported_random_tick_reason(&state("minecraft:lava")).is_some());
+        assert_eq!(
+            unsupported_random_tick_reason(&state("minecraft:lava")),
+            None,
+            "lava ignition/quenching is now a supported random tick"
+        );
+        let lava = state("minecraft:lava");
+        assert!(
+            BehaviorTable::with_growth()
+                .get(&lava)
+                .is_randomly_ticking(&lava)
+        );
         assert_eq!(
             unsupported_neighbor_reason(&state("minecraft:redstone_wire")),
             None

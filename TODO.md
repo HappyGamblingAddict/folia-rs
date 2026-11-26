@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,866 passing** at the 22a03ea gate (0 failed, 1 ignored benchmark); support-loss slice next expected 1,878
+> Test status: **1,878 passing** at the a928e7c gate (0 failed, 1 ignored benchmark); lava-fire slice next expected 1,882
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1811,6 +1811,10 @@ section-only light packets are still open.
   behaviours. Focused tests: 8 fluid + 7 redstone + 1 block-update unit tests
   and 7 `tests/fluids.rs` integration tests (hole flow, 7 levels, lava delay,
   drain, waterlogging, source conversion, determinism).
+- **Progress (2026-11-26f):** Lava ignition now uses shipped `fire_odds.tsv`
+  metadata, quenches against water on the five liquid faces, and registers
+  fluid/fire behaviors explicitly; 4 tests cover odds, ignition, quench, and
+  enclosed no-op.
 - **Progress (2026-11-26e):** Torch/rail/wire support loss now reuses the
   placement support predicates; 3 unit + 9 integration tests cover floor/wall
   orientations, partial faces, rail types, and deterministic packet output.

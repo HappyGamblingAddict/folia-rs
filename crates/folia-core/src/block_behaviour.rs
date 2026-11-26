@@ -14,6 +14,11 @@ use std::sync::OnceLock;
 
 const BLOCK_STATE_BEHAVIOUR: &[u8] = include_bytes!("../assets/block_state_behaviour.tsv.gz");
 
+/// Shipped `FireBlock.bootStrap` flammability data: `(ignite odds, burn odds)`
+/// per block name. The per-state behaviour dump has no `ignitedByLava` column,
+/// so this is a separate small table rather than a hard-coded list in Rust.
+const FIRE_ODDS: &str = include_str!("../assets/fire_odds.tsv");
+
 /// The per-state properties this port currently consumes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockBehaviour {
@@ -228,6 +233,54 @@ pub fn state_count() -> usize {
     table().map_or(0, |table| table.states.len())
 }
 
+struct FireOddsTable {
+    by_block: HashMap<String, (u16, u16)>,
+}
+
+static FIRE_ODDS_TABLE: OnceLock<FireOddsTable> = OnceLock::new();
+
+fn parse_fire_odds() -> FireOddsTable {
+    let mut by_block = HashMap::new();
+    for line in FIRE_ODDS.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        let Ok(ignite_odds) = fields[1].parse::<u16>() else {
+            continue;
+        };
+        let Ok(burn_odds) = fields[2].parse::<u16>() else {
+            continue;
+        };
+        by_block.insert(fields[0].to_owned(), (ignite_odds, burn_odds));
+    }
+    FireOddsTable { by_block }
+}
+
+fn fire_odds_table() -> &'static FireOddsTable {
+    FIRE_ODDS_TABLE.get_or_init(parse_fire_odds)
+}
+
+/// `(ignite odds, burn odds)` shipped for a block state, or `(0, 0)` for a
+/// block the table does not mark as flammable.
+pub fn fire_odds(state: &BlockState) -> (u16, u16) {
+    fire_odds_table()
+        .by_block
+        .get(state.name.as_str())
+        .copied()
+        .unwrap_or((0, 0))
+}
+
+/// Whether the shipped flammability data lets lava ignite this state.
+pub fn ignited_by_lava(state: &BlockState) -> bool {
+    fire_odds(state).0 > 0
+}
+
+/// Number of shipped flammability rows, for asset-integrity tests.
+pub fn fire_odds_count() -> usize {
+    fire_odds_table().by_block.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +334,15 @@ mod tests {
 
         let lit_furnace = state("minecraft:furnace", &[("lit", "true"), ("facing", "north")]);
         assert_eq!(light_emission(&lit_furnace), 13);
+    }
+
+    #[test]
+    fn shipped_fire_odds_drive_ignition_and_burnout() {
+        assert_eq!(fire_odds_count(), 206);
+        assert_eq!(fire_odds(&state("minecraft:oak_planks", &[])), (5, 20));
+        assert_eq!(fire_odds(&state("minecraft:short_grass", &[])), (60, 100));
+        assert_eq!(fire_odds(&state("minecraft:stone", &[])), (0, 0));
+        assert!(ignited_by_lava(&state("minecraft:oak_leaves", &[])));
+        assert!(!ignited_by_lava(&state("minecraft:cobblestone", &[])));
     }
 }

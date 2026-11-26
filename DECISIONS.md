@@ -3764,3 +3764,42 @@ Format:
   differential support fixture exists. Focused: 3 lib + 8 support-break + 1
   packet-determinism new tests, the placement/rails/ticks/crop/sapling/leaf/
   redstone suites, lib, check, fmt and clippy are green.
+
+## 2026-11-26 - P3.10 lava fire odds move to shipped metadata; five-face quench
+
+- Context: `fluid.rs` already contained a `LavaFluid.randomTick` port and a
+  206-entry in-source `FIRE_ODDS` flammability list, but the odds were
+  hard-coded in game logic, the lava/water quench was only reachable through a
+  scheduled fluid tick, and `tick::unsupported_random_tick_reason` still
+  reported lava as unsupported. The decompiled Java tree is not present in
+  this Linux checkout (AGENTS.md names a Windows-only path; BLOCKERS.md), so
+  no fresh `FireBlock`/`LavaFluid` oracle dump could be generated.
+- Decision: ship the audited 1.21.11 `FireBlock.bootStrap` odds as
+  `assets/fire_odds.tsv` (206 rows: `block`, `ignite_odds`, `burn_odds`), parse
+  it once in `block_behaviour.rs`, and keep only the waterlogged veto in
+  `fluid.rs`. The new TSV was mechanically generated from the previously
+  audited in-source table, not from a new Java dump; regenerate it from the
+  Java toolchain when that tree is available. The random tick now also
+  rechecks the five `LiquidBlock.shouldSpreadLiquid` contact faces (up, north,
+  south, west, east) before igniting, so a loaded lava/water pair that missed
+  a scheduled fluid tick quenches first (source -> obsidian, flowing ->
+  cobblestone, water unchanged). Water below lava remains excluded here; that
+  contact is still handled by `LavaFluid.spreadTo` as stone.
+- Wiring: `fluid::BEHAVIORS` registers the same `FLUID`/`FIRE` objects used by
+  `behavior_for` into `BehaviorTable::with_growth()`, so an explicit table no
+  longer silently drops fluid flow or fire ticks. The stale lava unsupported
+  reason was removed; a tick that reaches lava is now a supported behavior.
+- Approximations/gaps: fire ignition still checks all six vanilla
+  `Direction.values()` neighbours (the five faces apply to liquid quench, not
+  ignition). Weather, difficulty, fire-spread game rules, and player
+  proximity are not available in `TickWorld`, so rain gating stays absent and
+  the existing easy-difficulty constant is unchanged. Ignition/fire RNG is the
+  deterministic per-position `sample_seed`, not Java's `Level.random`. No Java
+  differential fixture exists for lava ignition or quench; tests pin shipped
+  odds, five-face behavior, determinism, and the enclosed-lava no-op instead.
+  Scheduled water/lava flow and `FireBlock.tick` physics are unchanged.
+- Verification: 4 new `tests/lava_fire.rs` integration tests, 1 new lib
+  metadata test, the updated tick-table assertion, `fluid_interactions`
+  (16), `fluids` (8), `ticks` (13), block-behaviour (4), support-break (9),
+  door-redstone (7), lib (707), `cargo check --workspace`, `cargo fmt --all`,
+  and clippy `-D warnings` are green.

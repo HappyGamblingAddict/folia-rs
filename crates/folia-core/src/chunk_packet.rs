@@ -64,6 +64,13 @@ impl ChunkPacketTemplate {
         Err(invalid("captured play stream contains no chunk packet"))
     }
 
+    /// Capture coordinates and bodies of every chunk packet in the embedded
+    /// Java play stream. The stream is a flat world; these captures do not
+    /// cover generated chunks or the synthetic edge fixture.
+    pub fn captured() -> Vec<(i32, i32, Vec<u8>)> {
+        captured_chunk_packets()
+    }
+
     pub fn captured_heightmaps(&self) -> &[u8] {
         &self.heightmaps
     }
@@ -482,7 +489,10 @@ fn is_leaves(state: &BlockState) -> bool {
     state.name.ends_with("_leaves") || state.name.contains("leaves")
 }
 
-fn pack_heightmap(values: &[u16]) -> Vec<i64> {
+/// Packs 9-bit relative heights into the long array carried by the packet and
+/// by stored-chunk heightmap NBT. Public so Rust-only fixtures can digest the
+/// exact wire representation without a second packing implementation.
+pub fn pack_heightmap(values: &[u16]) -> Vec<i64> {
     const BITS: usize = 9;
     const PER_LONG: usize = 64 / BITS;
     let mut longs = vec![0u64; values.len().div_ceil(PER_LONG)];
@@ -602,6 +612,23 @@ fn ceil_log2(value: usize) -> u8 {
     } else {
         (usize::BITS - (value - 1).leading_zeros()) as u8
     }
+}
+
+/// Every captured chunk packet in the embedded Java play stream, as
+/// `(chunk_x, chunk_z, packet_bytes)`. The stream covers a flat world only;
+/// generated chunks have no captured Java packet fixtures.
+pub fn captured_chunk_packets() -> Vec<(i32, i32, Vec<u8>)> {
+    crate::join::play_packets()
+        .iter()
+        .filter(|packet| packet_id(packet).is_ok_and(|id| id == CLIENTBOUND_LEVEL_CHUNK_WITH_LIGHT))
+        .filter_map(|packet| {
+            let mut reader = PacketReader::new(packet);
+            let _id = reader.read_varint().ok()?;
+            let x = reader.read_i32().ok()?;
+            let z = reader.read_i32().ok()?;
+            Some((x, z, packet.clone()))
+        })
+        .collect()
 }
 
 fn packet_id(packet: &[u8]) -> io::Result<i32> {

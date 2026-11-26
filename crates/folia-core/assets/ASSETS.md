@@ -144,6 +144,26 @@ absent: `java-light-sky.bin`, `java-light-block.bin`, `java-heightmap.txt`,
 `java-chunk-lifecycle.txt`. `dump_lifecycle` must be re-run (and the hash in the
 test updated) whenever a scenario's behavior intentionally changes.
 
+### P3.11 heightmap/chunk-packet golden (Rust-only)
+
+`chunk_packet_golden.json` is a deterministic **Rust-only** golden produced by
+`cargo run -q -p folia-core --example dump_chunk_packet`. It records four
+generated seed/chunk fixtures plus a synthetic edge chunk with negative Y,
+three sections, fluids, leaves, snowy grass properties, and per-section biome
+palettes. For every fixture it pins all six exported `Heightmap.Types` column
+arrays in packed long form, plus the byte lengths, FNV-1a-64 digests and 16-byte
+prefixes of the packet heightmaps, chunk body, light payload and whole packet.
+`cargo test -p folia-core --test chunk_packet_diagnostics` verifies the golden
+hash, rebuild determinism and body byte stability.
+
+Java byte parity is **not** claimed for these fixtures. `join_play.bin` has 48
+captured flat-world chunk packets (all parsed by `ChunkPacketTemplate` in the
+test); they do not cover generated chunks. `ChunkPacketCoverage::audit()`
+classifies every fixture as `rust-golden` and the Java differential as
+`unavailable` until `java-chunk-packet-fixture-0.bin` .. `fixture-3.bin` exist —
+one captured `ClientboundLevelChunkWithLight` body per generated seed/chunk.
+The exact missing file names and purposes are printed by the coverage report.
+
 ## How these files are produced
 
 - Registry tables and `feature_data.json`: `cargo run -p folia-core --example

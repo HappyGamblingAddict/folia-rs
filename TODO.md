@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,889 passing** at the ebb9b0d gate (0 failed, 1 ignored benchmark); analog-comparator slice next expected 1,900
+> Test status: **1,900 passing** at the b9cd0bc gate (0 failed, 1 ignored benchmark); heightmap/chunk-packet slice next expected 1,907
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1856,6 +1856,10 @@ section-only light packets are still open.
   block-state palette encoding, and light masks against Java packets.
 - **Why:** The existing byte-identical test covers one real chunk; features,
   negative Y, and multiple sections need broader coverage.
+- **Progress (2026-11-26):** Added a deterministic Rust-only heightmap/chunk-packet
+  golden over four generated seed/chunk pairs plus a negative-Y edge chunk, with
+  7 tests for all six heightmap types, palettes, and byte stability. Java captured
+  packets remain flat-world only; four generated-chunk packet fixtures are missing.
 - **Done when:** Captured Java packets for several chunks (including generated
   chunks) match byte-for-byte.
 

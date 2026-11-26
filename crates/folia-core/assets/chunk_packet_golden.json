@@ -1,0 +1,1173 @@
+{
+  "chunks": [
+    {
+      "chunk": [
+        0,
+        -1
+      ],
+      "chunk_data": {
+        "digest": "dd096494d9c3ab05",
+        "len": 18115,
+        "prefix_hex": "0f98040b55cad801d2b501d934669b34"
+      },
+      "heightmaps": {
+        "MOTION_BLOCKING": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "MOTION_BLOCKING_NO_LEAVES": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR": {
+          "max_y": 52,
+          "min_y": 46,
+          "negative_columns": 0,
+          "packed_digest": "e0086fc2fc582bb3",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR_WG": {
+          "max_y": 52,
+          "min_y": 46,
+          "negative_columns": 0,
+          "packed_digest": "e0086fc2fc582bb3",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE_WG": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        }
+      },
+      "light": {
+        "digest": "101ade2c6cdba190",
+        "len": 4130,
+        "prefix_hex": "01000000000000030000010000000000"
+      },
+      "name": "seed=12345 chunk=(0,-1)",
+      "packet": {
+        "digest": "6429358dfddd97e0",
+        "len": 23153,
+        "prefix_hex": "2c00000000ffffffff0304251fcfe7f3"
+      },
+      "packet_heightmaps": {
+        "digest": "507b8a15aad1c696",
+        "len": 895,
+        "prefix_hex": "0304251fcfe7f3f9fcfe7f1fcfe7f3f9"
+      },
+      "sections": [
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "435c96ee6c596756",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            85,
+            102,
+            23250,
+            132,
+            130
+          ],
+          "block_palette_len": 12,
+          "y": -4
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "15eb4f2609dae9c9",
+          "block_palette_first": [
+            0,
+            1,
+            23250,
+            132,
+            29375,
+            27722,
+            124,
+            130
+          ],
+          "block_palette_len": 11,
+          "y": -3
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "2e741cd85cd9920b",
+          "block_palette_first": [
+            0,
+            1,
+            132,
+            23250,
+            27722,
+            124,
+            6683,
+            5107
+          ],
+          "block_palette_len": 18,
+          "y": -2
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "4891ec01b91db4b7",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            27722,
+            124,
+            132,
+            130,
+            564
+          ],
+          "block_palette_len": 23,
+          "y": -1
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "23e19ed454f4b632",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            27722,
+            10,
+            124,
+            2,
+            4
+          ],
+          "block_palette_len": 17,
+          "y": 0
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves"
+          ],
+          "block_palette_digest": "4910f2744a0f0f79",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            10,
+            124,
+            2,
+            4,
+            6
+          ],
+          "block_palette_len": 13,
+          "y": 1
+        },
+        {
+          "biome_palette": [
+            "minecraft:lush_caves",
+            "minecraft:ocean"
+          ],
+          "block_palette_digest": "2638294ef1dcb403",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            124,
+            2,
+            4,
+            133,
+            131
+          ],
+          "block_palette_len": 10,
+          "y": 2
+        },
+        {
+          "biome_palette": [
+            "minecraft:ocean"
+          ],
+          "block_palette_digest": "25c110d312daef8f",
+          "block_palette_first": [
+            0,
+            86,
+            1,
+            124,
+            2054,
+            2056,
+            2055
+          ],
+          "block_palette_len": 7,
+          "y": 3
+        }
+      ],
+      "seed": 12345
+    },
+    {
+      "chunk": [
+        0,
+        0
+      ],
+      "chunk_data": {
+        "digest": "09d6eb1c60fa1298",
+        "len": 19677,
+        "prefix_hex": "1000040655cad8018201f3278401d2b5"
+      },
+      "heightmaps": {
+        "MOTION_BLOCKING": {
+          "max_y": 68,
+          "min_y": 61,
+          "negative_columns": 0,
+          "packed_digest": "9e24609048e2226a",
+          "packed_longs": 37
+        },
+        "MOTION_BLOCKING_NO_LEAVES": {
+          "max_y": 67,
+          "min_y": 61,
+          "negative_columns": 0,
+          "packed_digest": "ef746a38f7c5118d",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR": {
+          "max_y": 68,
+          "min_y": 55,
+          "negative_columns": 0,
+          "packed_digest": "b019006142e937ee",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR_WG": {
+          "max_y": 68,
+          "min_y": 55,
+          "negative_columns": 0,
+          "packed_digest": "b019006142e937ee",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE": {
+          "max_y": 68,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "4a11b36bc27b63b4",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE_WG": {
+          "max_y": 68,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "4a11b36bc27b63b4",
+          "packed_longs": 37
+        }
+      },
+      "light": {
+        "digest": "c4f3b10633914870",
+        "len": 6180,
+        "prefix_hex": "01000000000000070000010000000000"
+      },
+      "name": "seed=0 chunk=(0,0)",
+      "packet": {
+        "digest": "c8da1bb85a2942c6",
+        "len": 26765,
+        "prefix_hex": "2c00000000000000000304251fcfe7f3"
+      },
+      "packet_heightmaps": {
+        "digest": "41591dadedc615bb",
+        "len": 895,
+        "prefix_hex": "0304251fcfe7f3f9fcfe7f200fe7f3f9"
+      },
+      "sections": [
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "980c6c43b7e97487",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            85,
+            23250,
+            132,
+            130,
+            5107
+          ],
+          "block_palette_len": 8,
+          "y": -4
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "18f7630da158dd41",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            124,
+            23250,
+            130,
+            6683
+          ],
+          "block_palette_len": 7,
+          "y": -3
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "805b4bcff8fbc8ac",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            124,
+            23250,
+            130,
+            5107,
+            564
+          ],
+          "block_palette_len": 8,
+          "y": -2
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "71d03d1baf0c0e07",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            124,
+            132,
+            130,
+            6683,
+            5107
+          ],
+          "block_palette_len": 8,
+          "y": -1
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "63a796ca0fe47acc",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            10,
+            4,
+            133,
+            131,
+            129
+          ],
+          "block_palette_len": 11,
+          "y": 0
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "e3ba64d4ac5b598c",
+          "block_palette_first": [
+            0,
+            1,
+            2,
+            4,
+            133,
+            131,
+            129,
+            25111
+          ],
+          "block_palette_len": 8,
+          "y": 1
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "fceb3243e2b7506d",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            2,
+            4,
+            6,
+            133,
+            131
+          ],
+          "block_palette_len": 9,
+          "y": 2
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:river"
+          ],
+          "block_palette_digest": "705b653b541facfc",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            10,
+            9,
+            2,
+            6,
+            133
+          ],
+          "block_palette_len": 27,
+          "y": 3
+        }
+      ],
+      "seed": 0
+    },
+    {
+      "chunk": [
+        1,
+        -1
+      ],
+      "chunk_data": {
+        "digest": "21a0f1438e93f50f",
+        "len": 16644,
+        "prefix_hex": "0f76040755cad8019b34667c00840100"
+      },
+      "heightmaps": {
+        "MOTION_BLOCKING": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "MOTION_BLOCKING_NO_LEAVES": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR": {
+          "max_y": 49,
+          "min_y": 31,
+          "negative_columns": 0,
+          "packed_digest": "5eb342e105f96a44",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR_WG": {
+          "max_y": 49,
+          "min_y": 31,
+          "negative_columns": 0,
+          "packed_digest": "5eb342e105f96a44",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE_WG": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        }
+      },
+      "light": {
+        "digest": "101ade2c6cdba190",
+        "len": 4130,
+        "prefix_hex": "01000000000000030000010000000000"
+      },
+      "name": "seed=1 chunk=(1,-1)",
+      "packet": {
+        "digest": "b0369d327dee8bd5",
+        "len": 21682,
+        "prefix_hex": "2c00000001ffffffff0304251fcfe7f3"
+      },
+      "packet_heightmaps": {
+        "digest": "507b8a15aad1c696",
+        "len": 895,
+        "prefix_hex": "0304251fcfe7f3f9fcfe7f1fcfe7f3f9"
+      },
+      "sections": [
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "7fd15925d31e2074",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            85,
+            102,
+            124,
+            132,
+            6683
+          ],
+          "block_palette_len": 8,
+          "y": -4
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "c3f8adab962a0564",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            132,
+            5107
+          ],
+          "block_palette_len": 5,
+          "y": -3
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "e94346bd890e68d9",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            23250,
+            6683,
+            5107,
+            8284
+          ],
+          "block_palette_len": 7,
+          "y": -2
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "ad3bd22c8177e7a9",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            23250,
+            132,
+            130,
+            6683,
+            5107
+          ],
+          "block_palette_len": 9,
+          "y": -1
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "168eee202feb4386",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            2,
+            131,
+            129,
+            130,
+            6681
+          ],
+          "block_palette_len": 13,
+          "y": 0
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "37f687ae9584b258",
+          "block_palette_first": [
+            0,
+            1,
+            124,
+            86,
+            2,
+            6,
+            131,
+            129
+          ],
+          "block_palette_len": 11,
+          "y": 1
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "039867202240165b",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            124,
+            4,
+            2056,
+            2055,
+            2054
+          ],
+          "block_palette_len": 13,
+          "y": 2
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "fa49ca86c94944ee",
+          "block_palette_first": [
+            0,
+            86,
+            14880,
+            14881
+          ],
+          "block_palette_len": 4,
+          "y": 3
+        }
+      ],
+      "seed": 1
+    },
+    {
+      "chunk": [
+        -1,
+        0
+      ],
+      "chunk_data": {
+        "digest": "397ae7051bb1099e",
+        "len": 16633,
+        "prefix_hex": "0f9d040955cad801d2b5019b347cf327"
+      },
+      "heightmaps": {
+        "MOTION_BLOCKING": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "MOTION_BLOCKING_NO_LEAVES": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR": {
+          "max_y": 40,
+          "min_y": 31,
+          "negative_columns": 0,
+          "packed_digest": "7289dae7fbfb9106",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR_WG": {
+          "max_y": 40,
+          "min_y": 31,
+          "negative_columns": 0,
+          "packed_digest": "7289dae7fbfb9106",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE_WG": {
+          "max_y": 63,
+          "min_y": 63,
+          "negative_columns": 0,
+          "packed_digest": "0f5781169a8ec52c",
+          "packed_longs": 37
+        }
+      },
+      "light": {
+        "digest": "101ade2c6cdba190",
+        "len": 4130,
+        "prefix_hex": "01000000000000030000010000000000"
+      },
+      "name": "seed=-1 chunk=(-1,0)",
+      "packet": {
+        "digest": "38deea754c747bd3",
+        "len": 21671,
+        "prefix_hex": "2cffffffff000000000304251fcfe7f3"
+      },
+      "packet_heightmaps": {
+        "digest": "507b8a15aad1c696",
+        "len": 895,
+        "prefix_hex": "0304251fcfe7f3f9fcfe7f1fcfe7f3f9"
+      },
+      "sections": [
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "db642cd8beb3bbda",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            85,
+            124,
+            23250,
+            132,
+            6683
+          ],
+          "block_palette_len": 10,
+          "y": -4
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "b6fd8bf2e8a5a263",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            132,
+            130,
+            6683,
+            5107
+          ],
+          "block_palette_len": 7,
+          "y": -2
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "b7d851a31592753b",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            124,
+            23250,
+            132,
+            130,
+            6683
+          ],
+          "block_palette_len": 9,
+          "y": -1
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "d22efb67071f68e6",
+          "block_palette_first": [
+            0,
+            1,
+            27722,
+            10,
+            124,
+            2,
+            6,
+            133
+          ],
+          "block_palette_len": 13,
+          "y": 0
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "1533ba2cac224aff",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            124,
+            10,
+            4,
+            6,
+            133
+          ],
+          "block_palette_len": 11,
+          "y": 1
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "95575349e6cbf2e8",
+          "block_palette_first": [
+            0,
+            1,
+            86,
+            124,
+            10,
+            25111,
+            2056,
+            2055
+          ],
+          "block_palette_len": 9,
+          "y": 2
+        },
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "6a7cdd868ae3d353",
+          "block_palette_first": [
+            0,
+            86
+          ],
+          "block_palette_len": 2,
+          "y": 3
+        }
+      ],
+      "seed": -1
+    },
+    {
+      "chunk": [
+        0,
+        0
+      ],
+      "chunk_data": {
+        "digest": "063fe75d64a63142",
+        "len": 6310,
+        "prefix_hex": "028004045500568b0200000000000000"
+      },
+      "heightmaps": {
+        "MOTION_BLOCKING": {
+          "max_y": 71,
+          "min_y": -61,
+          "negative_columns": 16,
+          "packed_digest": "660c869a7ea84c2f",
+          "packed_longs": 37
+        },
+        "MOTION_BLOCKING_NO_LEAVES": {
+          "max_y": 65,
+          "min_y": -61,
+          "negative_columns": 16,
+          "packed_digest": "53a2042269d07b9c",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR": {
+          "max_y": 71,
+          "min_y": -63,
+          "negative_columns": 16,
+          "packed_digest": "132611f637a91813",
+          "packed_longs": 37
+        },
+        "OCEAN_FLOOR_WG": {
+          "max_y": 71,
+          "min_y": -63,
+          "negative_columns": 16,
+          "packed_digest": "132611f637a91813",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE": {
+          "max_y": 71,
+          "min_y": -61,
+          "negative_columns": 16,
+          "packed_digest": "660c869a7ea84c2f",
+          "packed_longs": 37
+        },
+        "WORLD_SURFACE_WG": {
+          "max_y": 71,
+          "min_y": -61,
+          "negative_columns": 16,
+          "packed_digest": "660c869a7ea84c2f",
+          "packed_longs": 37
+        }
+      },
+      "light": {
+        "digest": "8f81d9159f839974",
+        "len": 20530,
+        "prefix_hex": "0100000000000007fe00010000000000"
+      },
+      "name": "synthetic-edge",
+      "packet": {
+        "digest": "6a97406795678787",
+        "len": 27747,
+        "prefix_hex": "2c000000000000000003042520502814"
+      },
+      "packet_heightmaps": {
+        "digest": "71215c0e088fa1aa",
+        "len": 895,
+        "prefix_hex": "030425205028140a050281205028140a"
+      },
+      "sections": [
+        {
+          "biome_palette": [
+            "minecraft:deep_ocean"
+          ],
+          "block_palette_digest": "d82581bf3d79a202",
+          "block_palette_first": [
+            0,
+            85,
+            86,
+            267
+          ],
+          "block_palette_len": 4,
+          "y": -4
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest",
+            "minecraft:plains"
+          ],
+          "block_palette_digest": "d53cf61c1a04bb8d",
+          "block_palette_first": [
+            0,
+            1,
+            9
+          ],
+          "block_palette_len": 3,
+          "y": 0
+        },
+        {
+          "biome_palette": [
+            "minecraft:forest"
+          ],
+          "block_palette_digest": "0c88d32cc1883604",
+          "block_palette_first": [
+            0,
+            1,
+            267
+          ],
+          "block_palette_len": 3,
+          "y": 4
+        }
+      ],
+      "seed": null
+    }
+  ],
+  "data_version": 4788,
+  "format_version": 1,
+  "heightmap_types": [
+    "WORLD_SURFACE",
+    "WORLD_SURFACE_WG",
+    "OCEAN_FLOOR",
+    "OCEAN_FLOOR_WG",
+    "MOTION_BLOCKING",
+    "MOTION_BLOCKING_NO_LEAVES"
+  ],
+  "java_flat_captures": {
+    "coords": [
+      [
+        0,
+        -1
+      ],
+      [
+        1,
+        -1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0,
+        -2
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        -1,
+        0
+      ],
+      [
+        0,
+        -3
+      ],
+      [
+        1,
+        -2
+      ],
+      [
+        -2,
+        -1
+      ],
+      [
+        -1,
+        -2
+      ],
+      [
+        2,
+        -1
+      ],
+      [
+        -1,
+        1
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        -3,
+        -1
+      ],
+      [
+        1,
+        -3
+      ],
+      [
+        2,
+        -2
+      ],
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        0,
+        -4
+      ],
+      [
+        -1,
+        -3
+      ],
+      [
+        3,
+        -1
+      ],
+      [
+        -2,
+        -2
+      ],
+      [
+        -2,
+        0
+      ],
+      [
+        -3,
+        -2
+      ],
+      [
+        -4,
+        -1
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        2,
+        -3
+      ],
+      [
+        -2,
+        1
+      ],
+      [
+        -2,
+        -3
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        1,
+        -4
+      ],
+      [
+        -3,
+        0
+      ],
+      [
+        -1,
+        2
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        -2
+      ],
+      [
+        -1,
+        -4
+      ],
+      [
+        4,
+        -1
+      ],
+      [
+        0,
+        -5
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        -1,
+        3
+      ],
+      [
+        -3,
+        -3
+      ],
+      [
+        3,
+        -3
+      ],
+      [
+        4,
+        -2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        -4,
+        -2
+      ],
+      [
+        2,
+        -4
+      ]
+    ],
+    "count": 48,
+    "digest": "6bc4d79c62ca880b"
+  }
+}

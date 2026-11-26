@@ -8,6 +8,7 @@ pub mod block_entity;
 pub mod block_shapes;
 pub mod block_update;
 pub mod chunk;
+pub mod chunk_entity;
 pub mod chunk_packet;
 pub mod chunk_status;
 pub mod chunk_status_pipeline;

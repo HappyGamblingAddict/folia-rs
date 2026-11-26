@@ -1,4 +1,5 @@
 use crate::block_entity::BlockEntityMap;
+use crate::chunk_entity::{ChunkEntities, decode_entities, store_entities};
 use crate::light::{DataLayer, SectionLight};
 use crate::nbt::Tag;
 use std::collections::HashMap;
@@ -397,6 +398,26 @@ pub fn encode_chunk_with_block_entities(
 ) -> io::Result<Tag> {
     let mut root = encode_chunk(chunk)?;
     crate::block_entity::store_block_entities(&mut root, entities)?;
+    Ok(root)
+}
+
+/// Decode a chunk root together with its block entities and entities.
+pub fn decode_chunk_with_entities(
+    root: &Tag,
+) -> io::Result<(Chunk, BlockEntityMap, ChunkEntities)> {
+    let (chunk, block_entities) = decode_chunk_with_block_entities(root)?;
+    let entities = decode_entities(root)?;
+    Ok((chunk, block_entities, entities))
+}
+
+/// Encode a chunk with both its block-entity and entity lists installed.
+pub fn encode_chunk_with_entities(
+    chunk: &Chunk,
+    block_entities: &BlockEntityMap,
+    entities: &ChunkEntities,
+) -> io::Result<Tag> {
+    let mut root = encode_chunk_with_block_entities(chunk, block_entities)?;
+    store_entities(&mut root, entities)?;
     Ok(root)
 }
 

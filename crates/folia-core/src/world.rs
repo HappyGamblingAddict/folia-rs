@@ -4,6 +4,7 @@ use crate::block_entity::{
     decode_block_entities, store_block_entities,
 };
 use crate::chunk::{BlockState, Chunk, decode_chunk, encode_chunk};
+use crate::chunk_entity::{ChunkEntities, ChunkEntity, decode_entities, store_entities};
 use crate::item_components::ItemStack;
 use crate::nbt::Tag;
 use crate::region::{ChunkPos, RegionKey, RegionMap};
@@ -230,6 +231,9 @@ pub struct WorldStorage {
     chunks: HashMap<(i32, i32), Chunk>,
     /// Block entities belonging to cached/loaded chunks, keyed by chunk.
     block_entities: HashMap<(i32, i32), BlockEntityMap>,
+    /// Entities belonging to cached/loaded chunks, keyed by chunk. Kept even
+    /// after a chunk is evicted so a staged entity edit cannot be lost.
+    entities: HashMap<(i32, i32), ChunkEntities>,
     cache_order: VecDeque<(i32, i32)>,
     cache_hits: u64,
     cache_misses: u64,
@@ -252,6 +256,7 @@ impl WorldStorage {
             regions: HashMap::new(),
             chunks: HashMap::new(),
             block_entities: HashMap::new(),
+            entities: HashMap::new(),
             cache_order: VecDeque::new(),
             cache_hits: 0,
             cache_misses: 0,
@@ -561,6 +566,107 @@ impl WorldStorage {
         Ok(moved)
     }
 
+    /// All server-owned entities of a chunk. Returns `None` when neither the
+    /// chunk nor an entity list for it exists.
+    pub fn entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<Option<&ChunkEntities>> {
+        if !self.ensure_entities(chunk_x, chunk_z)? {
+            return Ok(None);
+        }
+        Ok(self.entities.get(&(chunk_x, chunk_z)))
+    }
+
+    /// Owned copy of a chunk's entities, loading them from disk when needed.
+    pub fn load_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<ChunkEntities>> {
+        if !self.ensure_entities(chunk_x, chunk_z)? {
+            return Ok(None);
+        }
+        Ok(self.entities.get(&(chunk_x, chunk_z)).cloned())
+    }
+
+    /// Insert or replace one entity (matched by UUID) in its chunk.
+    pub fn insert_entity(&mut self, entity: ChunkEntity) -> io::Result<()> {
+        let (chunk_x, chunk_z) = entity.chunk();
+        self.ensure_entities(chunk_x, chunk_z)?;
+        let list = self.entities.entry((chunk_x, chunk_z)).or_default();
+        match list
+            .iter()
+            .position(|existing| existing.uuid == entity.uuid)
+        {
+            Some(index) => list[index] = entity,
+            None => list.push(entity),
+        }
+        Ok(())
+    }
+
+    /// Remove one entity by UUID from a chunk, returning it when present.
+    pub fn remove_entity(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+        uuid: [u8; 16],
+    ) -> io::Result<Option<ChunkEntity>> {
+        if !self.ensure_entities(chunk_x, chunk_z)? {
+            return Ok(None);
+        }
+        Ok(self.entities.get_mut(&(chunk_x, chunk_z)).and_then(|list| {
+            list.iter()
+                .position(|entity| entity.uuid == uuid)
+                .map(|index| list.remove(index))
+        }))
+    }
+
+    /// Replace a chunk's whole entity list.
+    pub fn set_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+        entities: ChunkEntities,
+    ) -> io::Result<()> {
+        self.entities.insert((chunk_x, chunk_z), entities);
+        Ok(())
+    }
+
+    /// Drop every staged entity from a chunk so a later save writes an empty
+    /// `Entities` list. An explicit empty list is stored (rather than forgetting
+    /// the chunk) so `update_chunk` cannot reload the deleted entities.
+    pub fn clear_entities(&mut self, chunk_x: i32, chunk_z: i32) {
+        self.entities.insert((chunk_x, chunk_z), Vec::new());
+    }
+
+    fn ensure_entities(&mut self, chunk_x: i32, chunk_z: i32) -> io::Result<bool> {
+        let key = (chunk_x, chunk_z);
+        if self.entities.contains_key(&key) {
+            return Ok(true);
+        }
+        if let Some(entities) = self.read_stored_entities(chunk_x, chunk_z)? {
+            self.entities.insert(key, entities);
+            return Ok(true);
+        }
+        if self.chunks.contains_key(&key) {
+            self.entities.insert(key, Vec::new());
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn read_stored_entities(
+        &mut self,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> io::Result<Option<ChunkEntities>> {
+        let position = RegionPos::from_chunk(chunk_x, chunk_z);
+        let (local_x, local_z) = position.local_chunk(chunk_x, chunk_z);
+        let region = self.region_mut(position)?;
+        match read_stored_chunk(region, local_x, local_z, chunk_x, chunk_z)? {
+            Some(tag) => Ok(Some(decode_entities(&tag)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Runs one game tick of block simulation for only the chunks owned by
     /// `region`.
     ///
@@ -754,7 +860,8 @@ impl WorldStorage {
             return Ok(None);
         };
         let chunk = decode_chunk(&tag)?;
-        let entities = decode_block_entities(&tag)?;
+        let block_entities = decode_block_entities(&tag)?;
+        let entities = decode_entities(&tag)?;
         if chunk.x != chunk_x || chunk.z != chunk_z {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -767,58 +874,76 @@ impl WorldStorage {
         self.cache_chunk(chunk.clone());
         self.block_entities
             .entry((chunk_x, chunk_z))
-            .or_insert(entities);
+            .or_insert(block_entities);
+        self.entities.entry((chunk_x, chunk_z)).or_insert(entities);
         Ok(Some(chunk))
     }
 
     pub fn save_chunk(&mut self, chunk: &Chunk, compression: Compression) -> io::Result<()> {
         // A generated column replaces the stored one, so it must not inherit
-        // block entities from whatever was there before.
-        self.write_chunk_with_entities(chunk, compression, &BlockEntityMap::new())
+        // block entities or entities from whatever was there before.
+        self.write_chunk_with_entities(
+            chunk,
+            compression,
+            &BlockEntityMap::new(),
+            &ChunkEntities::new(),
+        )
     }
 
     /// Save a chunk together with the block-entity map currently cached for
     /// it.  Use this after [`insert_block_entity`](Self::insert_block_entity)
     /// or [`remove_block_entity`](Self::remove_block_entity); ordinary
     /// generated terrain should use [`save_chunk`](Self::save_chunk), which
-    /// deliberately writes an empty map.
+    /// deliberately writes empty lists.
     pub fn save_chunk_with_block_entities(
         &mut self,
         chunk: &Chunk,
         compression: Compression,
     ) -> io::Result<()> {
-        let entities = self
-            .block_entities
-            .get(&(chunk.x, chunk.z))
-            .cloned()
-            .unwrap_or_default();
-        self.write_chunk_with_entities(chunk, compression, &entities)
+        self.save_chunk_with_entities(chunk, compression)
+    }
+
+    /// Save a chunk with both caches: its block entities and its server-owned
+    /// entities. This is the staging entry point for callers that inserted
+    /// entities with [`insert_entity`](Self::insert_entity).
+    pub fn save_chunk_with_entities(
+        &mut self,
+        chunk: &Chunk,
+        compression: Compression,
+    ) -> io::Result<()> {
+        let key = (chunk.x, chunk.z);
+        let block_entities = self.block_entities.get(&key).cloned().unwrap_or_default();
+        let entities = self.entities.get(&key).cloned().unwrap_or_default();
+        self.write_chunk_with_entities(chunk, compression, &block_entities, &entities)
     }
 
     fn write_chunk_with_entities(
         &mut self,
         chunk: &Chunk,
         compression: Compression,
-        entities: &BlockEntityMap,
+        block_entities: &BlockEntityMap,
+        entities: &ChunkEntities,
     ) -> io::Result<()> {
         // Opening the region at stage time keeps the region file and its loaded
         // handle visible to callers; only the chunk record waits for the flush.
         let position = RegionPos::from_chunk(chunk.x, chunk.z);
         self.region_mut(position)?;
         let mut tag = encode_chunk(chunk)?;
-        store_block_entities(&mut tag, entities)?;
+        store_block_entities(&mut tag, block_entities)?;
+        store_entities(&mut tag, entities)?;
         let tag = stamp_chunk(tag, chunk);
         self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
         self.block_entities
-            .insert((chunk.x, chunk.z), entities.clone());
+            .insert((chunk.x, chunk.z), block_entities.clone());
+        self.entities.insert((chunk.x, chunk.z), entities.clone());
         Ok(())
     }
 
     /// Save a chunk that was loaded from this level, keeping the top-level
-    /// fields this port does not decode (status, heightmaps, entities,
-    /// structures, post-processing, ...). Block entities are handled by the
-    /// position-keyed map rather than copied from the stored root.
+    /// fields this port does not decode (status, heightmaps, structures,
+    /// post-processing, ...). Block entities and entities are handled by their
+    /// own stores rather than copied wholesale from the stored root.
     ///
     /// Generated terrain goes through [`save_chunk`](Self::save_chunk) instead:
     /// it replaces the stored column, so merging fields such as block entities
@@ -836,8 +961,8 @@ impl WorldStorage {
     ) -> io::Result<()> {
         let key = (chunk.x, chunk.z);
         // An earlier write in the same batch is the most recent stored root.
-        // Reading it instead of the region keeps unknown fields and block
-        // entities coherent across repeated edits before a flush.
+        // Reading it instead of the region keeps unknown fields, block entities,
+        // and entities coherent across repeated edits before a flush.
         let queued_root = self.pending.get(&key).map(|write| write.tag.clone());
         let existing = match queued_root {
             Some(root) => Some(root),
@@ -848,7 +973,7 @@ impl WorldStorage {
                 read_stored_chunk(region, local_x, local_z, chunk.x, chunk.z)?
             }
         };
-        let mut entities = match self.block_entities.get(&key) {
+        let mut block_entities = match self.block_entities.get(&key) {
             Some(entities) => entities.clone(),
             None => match &existing {
                 Some(existing) => decode_block_entities(existing)?,
@@ -856,17 +981,26 @@ impl WorldStorage {
             },
         };
         for &(x, y, z) in edited_blocks {
-            entities.remove(&BlockEntityPos::new(x, y, z));
+            block_entities.remove(&BlockEntityPos::new(x, y, z));
         }
+        let entities = match self.entities.get(&key) {
+            Some(entities) => entities.clone(),
+            None => match &existing {
+                Some(existing) => decode_entities(existing)?,
+                None => Vec::new(),
+            },
+        };
         let mut tag = encode_chunk(chunk)?;
         if let Some(existing) = &existing {
             preserve_unknown_fields(existing, &mut tag);
         }
-        store_block_entities(&mut tag, &entities)?;
+        store_block_entities(&mut tag, &block_entities)?;
+        store_entities(&mut tag, &entities)?;
         let tag = stamp_chunk(tag, chunk);
         self.mark_dirty(chunk.x, chunk.z, tag, compression);
         self.cache_chunk(chunk.clone());
-        self.block_entities.insert(key, entities);
+        self.block_entities.insert(key, block_entities);
+        self.entities.insert(key, entities);
         Ok(())
     }
 
@@ -911,6 +1045,8 @@ impl WorldStorage {
         self.chunks
             .retain(|(chunk_x, chunk_z), _| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
         self.block_entities
+            .retain(|(chunk_x, chunk_z), _| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
+        self.entities
             .retain(|(chunk_x, chunk_z), _| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
         self.cache_order
             .retain(|(chunk_x, chunk_z)| RegionPos::from_chunk(*chunk_x, *chunk_z) != position);
@@ -1057,6 +1193,8 @@ fn preserve_unknown_fields(existing: &Tag, target: &mut Tag) {
             || key == WRITTEN_MARKER
             || key == crate::block_entity::BLOCK_ENTITIES_KEY
             || key == crate::block_entity::LEGACY_BLOCK_ENTITIES_KEY
+            || key == crate::chunk_entity::ENTITIES_KEY
+            || key == crate::chunk_entity::LEGACY_ENTITIES_KEY
         {
             continue;
         }

@@ -18,6 +18,7 @@ fn pos() -> BlockEntityPos {
 
 fn chunk_at() -> Chunk {
     let mut chunk = Chunk {
+        light_present: false,
         x: 0,
         z: 0,
         sections: Vec::new(),

@@ -51,7 +51,12 @@ fn air_chunk(x: i32, z: i32) -> Chunk {
             light: SectionLight::default(),
         });
     }
-    Chunk { x, z, sections }
+    Chunk {
+        light_present: false,
+        x,
+        z,
+        sections,
+    }
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -134,20 +139,19 @@ fn layer_bytes(layer: &DataLayer) -> Vec<u8> {
 #[test]
 fn nibble_layers_round_trip_through_chunk_nbt() {
     let mut chunk = air_chunk(2, -3);
-    let section = chunk
-        .sections
-        .iter_mut()
-        .find(|section| section.y == 0)
-        .unwrap();
     let mut sky = DataLayer::filled(15);
     sky.set(3, 4, 5, 0);
     let mut block = DataLayer::new();
     block.set(8, 9, 10, 14);
     block.set(0, 0, 0, 1);
-    section.light = SectionLight {
-        sky: Some(sky.clone()),
-        block: Some(block.clone()),
-    };
+    assert!(chunk.set_section_light(
+        0,
+        SectionLight {
+            sky: Some(sky.clone()),
+            block: Some(block.clone()),
+        }
+    ));
+    assert!(chunk.has_light());
 
     let tag = encode_chunk(&chunk).expect("encode chunk");
     let encoded = tag

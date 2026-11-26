@@ -46,6 +46,10 @@ pub struct Chunk {
     pub x: i32,
     pub z: i32,
     pub sections: Vec<ChunkSection>,
+    /// Cached `any(section.light is non-empty)`. Kept in sync by every path
+    /// that stores or drops light layers so `has_light` and the block-write
+    /// invalidation check stay O(1) instead of scanning all sections.
+    pub light_present: bool,
 }
 
 impl Chunk {
@@ -146,10 +150,13 @@ impl Chunk {
         };
         section.block_states.indices[index] = palette_index as u16;
         // A block edit can change opacity or emission anywhere the resulting
-        // light reaches, so the whole chunk's cached layers are stale. Clearing
-        // them forces the caller (or light_bytes' height fallback) to recompute
-        // instead of persisting a stale layer.
-        self.clear_light();
+        // light reaches, so cached layers are stale. When the chunk stores no
+        // light at all (the common case during worldgen, where thousands of
+        // writes happen before the first relight), there is nothing to drop:
+        // the cached flag makes this check O(1) and skips the clearing loop.
+        if self.light_present {
+            self.clear_light();
+        }
         true
     }
 
@@ -159,12 +166,34 @@ impl Chunk {
         for section in &mut self.sections {
             section.light = SectionLight::default();
         }
+        self.light_present = false;
     }
 
+    /// O(1) cached answer to "does any section store a light layer?".
+    #[inline]
     pub fn has_light(&self) -> bool {
-        self.sections
+        self.light_present
+    }
+
+    /// Recompute the cached light-presence flag from the actual sections.
+    /// Call this after installing layers directly rather than through
+    /// [`Self::set_section_light`].
+    pub fn refresh_light_present(&mut self) {
+        self.light_present = self
+            .sections
             .iter()
-            .any(|section| !section.light.is_empty())
+            .any(|section| !section.light.is_empty());
+    }
+
+    /// Install a section's light layers and keep the cached presence flag in
+    /// sync. Returns false when the section does not exist.
+    pub fn set_section_light(&mut self, section_y: i8, light: SectionLight) -> bool {
+        let Some(index) = self.section_index(section_y) else {
+            return false;
+        };
+        self.sections[index].light = light;
+        self.refresh_light_present();
+        true
     }
 
     /// Recompute sky and block light for this chunk without neighbour data.
@@ -287,8 +316,14 @@ pub fn decode_chunk(root: &Tag) -> io::Result<Chunk> {
         sections.push(decode_section(section_tag)?);
     }
     sections.sort_by_key(|section| section.y);
+    let light_present = sections.iter().any(|section| !section.light.is_empty());
 
-    Ok(Chunk { x, z, sections })
+    Ok(Chunk {
+        x,
+        z,
+        sections,
+        light_present,
+    })
 }
 
 pub fn encode_chunk(chunk: &Chunk) -> io::Result<Tag> {
@@ -789,6 +824,7 @@ mod tests {
             indices: (0..64).collect(),
         };
         let chunk = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: vec![ChunkSection {
@@ -886,6 +922,7 @@ mod tests {
         }
 
         let contiguous = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: (-4..=19)
@@ -899,6 +936,7 @@ mod tests {
         assert_eq!(contiguous.section_index(20), None);
 
         let mut sparse = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: vec![
@@ -955,6 +993,7 @@ mod tests {
         };
 
         let chunk = Chunk {
+            light_present: false,
             x: 7,
             z: -9,
             sections: vec![
@@ -1005,6 +1044,7 @@ mod tests {
             indices: (0..4096).map(|index| (index % 2) as u16).collect(),
         };
         let chunk = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: vec![ChunkSection {

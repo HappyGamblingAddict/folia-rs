@@ -4174,6 +4174,7 @@ mod tests {
 
     fn flat_chunk() -> Chunk {
         let mut chunk = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: Vec::new(),

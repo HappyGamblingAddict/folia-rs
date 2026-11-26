@@ -76,7 +76,12 @@ fn air_chunk(x: i32, z: i32) -> Chunk {
             light: SectionLight::default(),
         })
         .collect();
-    Chunk { x, z, sections }
+    Chunk {
+        light_present: false,
+        x,
+        z,
+        sections,
+    }
 }
 
 fn set(chunk: &mut Chunk, x: i32, y: i32, z: i32, name: &str) {

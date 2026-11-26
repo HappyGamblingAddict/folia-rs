@@ -75,7 +75,12 @@ fn chunk_with_sections(x: i32, z: i32, sections: impl IntoIterator<Item = i8>) -
             light: folia_core::light::SectionLight::default(),
         })
         .collect();
-    Chunk { x, z, sections }
+    Chunk {
+        x,
+        z,
+        light_present: false,
+        sections,
+    }
 }
 
 fn temp_dir(name: &str) -> PathBuf {

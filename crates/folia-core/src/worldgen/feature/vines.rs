@@ -315,6 +315,7 @@ mod tests {
     #[test]
     fn column_helpers_place_head_and_body_in_java_order() {
         let mut chunk = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: Vec::new(),

@@ -146,6 +146,7 @@ fn random_chunk_palettes_never_panic() {
         };
 
         let chunk = Chunk {
+            light_present: false,
             x: 0,
             z: 0,
             sections: vec![ChunkSection {

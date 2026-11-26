@@ -13,6 +13,7 @@ fn state(name: &str) -> BlockState {
 
 fn sample_chunk(x: i32, z: i32) -> Chunk {
     Chunk {
+        light_present: false,
         x,
         z,
         sections: vec![

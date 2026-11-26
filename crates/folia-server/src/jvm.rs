@@ -2890,6 +2890,7 @@ mod tests {
         let mut chunk = chunk::Chunk {
             x: 0,
             z: 0,
+            light_present: false,
             sections: Vec::new(),
         };
         chunk.set_block_state(

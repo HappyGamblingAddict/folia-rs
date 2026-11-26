@@ -23,6 +23,7 @@ fn state(name: &str) -> BlockState {
 
 fn air_chunk(x: i32, z: i32) -> Chunk {
     Chunk {
+        light_present: false,
         x,
         z,
         sections: vec![ChunkSection {

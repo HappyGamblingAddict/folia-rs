@@ -579,6 +579,7 @@ impl LightStorage {
         for section in &mut chunk.sections {
             section.light = self.sections.get(&section.y).cloned().unwrap_or_default();
         }
+        chunk.refresh_light_present();
     }
 }
 
@@ -1286,6 +1287,7 @@ impl<'a> LightScene<'a> {
                 if section.light.block.is_none() {
                     section.light.block = Some(DataLayer::new());
                 }
+                chunk.light_present = true;
                 self.dirty
                     .insert(LightSectionPos::new(chunk_x, chunk_z, section.y));
             }
@@ -1726,6 +1728,9 @@ impl<'a> LightScene<'a> {
             Layer::Block => section.light.block.get_or_insert_with(DataLayer::new),
         };
         target.set(local_x, local_y, local_z, value);
+        // `get_or_insert_with` only runs when the layer was absent and the new
+        // value is non-zero, so a stored layer now exists.
+        self.chunks[chunk_index].light_present = true;
         self.dirty
             .insert(LightSectionPos::new(chunk_x, chunk_z, section_y));
         true
@@ -1753,6 +1758,7 @@ fn materialize_sky_layers(chunk: &mut Chunk) {
     else {
         return;
     };
+    let mut added = false;
     for section in &mut chunk.sections {
         if section.light.sky.is_none() {
             section.light.sky = Some(if section.y > highest {
@@ -1760,7 +1766,11 @@ fn materialize_sky_layers(chunk: &mut Chunk) {
             } else {
                 DataLayer::new()
             });
+            added = true;
         }
+    }
+    if added {
+        chunk.light_present = true;
     }
 }
 

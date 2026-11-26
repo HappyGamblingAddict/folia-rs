@@ -20,7 +20,7 @@
 
 use folia_core::anvil::Compression;
 use folia_core::block_update::block_update_packet;
-use folia_core::chunk::BlockState;
+use folia_core::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer};
 use folia_core::chunk_packet::{ChunkPacketTemplate, flat_chunk};
 use folia_core::entity_ai::{ActorView, AiDriver, MemoryWorld, PathOptions, find_path};
 use folia_core::light;
@@ -362,6 +362,89 @@ fn region_reuse_smoke() {
     guard("region_reuse_smoke shared", shared);
     assert_eq!(fresh_digest, shared_digest, "cache must be transparent");
     assert_eq!(chunk_digest(&fresh_chunk), chunk_digest(&shared_chunk));
+}
+
+fn light_invalidation_fixture(with_light: bool) -> Chunk {
+    let air = state("minecraft:air");
+    let mut sections = Vec::with_capacity(24);
+    for y in -4i8..=19 {
+        sections.push(ChunkSection {
+            y,
+            block_states: PalettedContainer {
+                palette: vec![air.clone()],
+                indices: vec![0; 4096],
+            },
+            biomes: Some(PalettedContainer {
+                palette: vec!["minecraft:plains".into()],
+                indices: vec![0; 64],
+            }),
+            light: folia_core::light::SectionLight {
+                sky: with_light.then(|| folia_core::light::DataLayer::filled(15)),
+                block: with_light.then(folia_core::light::DataLayer::new),
+            },
+        });
+    }
+    Chunk {
+        light_present: with_light,
+        x: 0,
+        z: 0,
+        sections,
+    }
+}
+
+#[test]
+fn light_invalidation_smoke() {
+    let writes = 200_000usize;
+    let stone = state("minecraft:stone");
+    let air = air();
+
+    let mut no_light = light_invalidation_fixture(false);
+    assert!(!no_light.has_light());
+    let start = Instant::now();
+    for i in 0..writes {
+        let y = -64 + (i % 384) as i32;
+        let state = if i % 2 == 0 { &stone } else { &air };
+        black_box(no_light.set_block_state_ref(i % 16, y, (i / 16) % 16, state));
+    }
+    let cold = start.elapsed();
+
+    // Simulate the pre-optimization path: an unconditional whole-chunk clear
+    // on every write, even though the chunk stores no light.
+    let mut forced = light_invalidation_fixture(false);
+    let start = Instant::now();
+    for i in 0..writes {
+        let y = -64 + (i % 384) as i32;
+        let state = if i % 2 == 0 { &stone } else { &air };
+        black_box(forced.set_block_state_ref(i % 16, y, (i / 16) % 16, state));
+        forced.clear_light();
+    }
+    let forced_clear = start.elapsed();
+
+    let invalidations = 256usize;
+    let mut lit_chunks: Vec<Chunk> = (0..invalidations)
+        .map(|_| light_invalidation_fixture(true))
+        .collect();
+    assert!(lit_chunks.iter().all(|chunk| chunk.has_light()));
+    let start = Instant::now();
+    for chunk in &mut lit_chunks {
+        black_box(chunk.set_block_state_ref(8, -60, 8, &stone));
+    }
+    let warm = start.elapsed();
+
+    eprintln!(
+        "light_invalidation_smoke: {writes} writes without light {cold:?} ({:.2} ns/write) vs forced whole-chunk clear {forced_clear:?} ({:.2} ns/write); {invalidations} invalidation writes with light {warm:?} ({:.2} ns/write)",
+        cold.as_nanos() as f64 / writes as f64,
+        forced_clear.as_nanos() as f64 / writes as f64,
+        warm.as_nanos() as f64 / invalidations as f64
+    );
+    guard("light_invalidation_smoke cold", cold);
+    guard("light_invalidation_smoke forced", forced_clear);
+    guard("light_invalidation_smoke warm", warm);
+    assert!(!no_light.has_light(), "no-light writes never add light");
+    assert!(
+        lit_chunks.iter().all(|chunk| !chunk.has_light()),
+        "writes invalidate existing light"
+    );
 }
 
 #[test]

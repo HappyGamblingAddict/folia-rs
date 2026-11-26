@@ -303,6 +303,7 @@ impl NetherGenerator {
         let mut chunk = Chunk {
             x: chunk_x,
             z: chunk_z,
+            light_present: false,
             sections,
         };
 

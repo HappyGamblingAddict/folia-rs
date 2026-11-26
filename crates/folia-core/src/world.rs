@@ -951,6 +951,7 @@ mod tests {
         indices[0] = 0;
 
         Chunk {
+            light_present: false,
             x: chunk_x,
             z: chunk_z,
             sections: vec![ChunkSection {

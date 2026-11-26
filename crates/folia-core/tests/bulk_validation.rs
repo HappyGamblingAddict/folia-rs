@@ -1126,7 +1126,12 @@ fn chunk_round_trips_fifty_random_palettes_with_biomes() {
             expected_sections.push((y, palette, indices, biomes));
         }
 
-        let chunk = Chunk { x, z, sections };
+        let chunk = Chunk {
+            light_present: false,
+            x,
+            z,
+            sections,
+        };
         let encoded = encode_chunk(&chunk).expect("encode random chunk");
         let decoded = decode_chunk(&encoded).expect("decode random chunk");
 
@@ -1205,6 +1210,7 @@ fn chunk_encoder_rejects_invalid_sections() {
     };
 
     let mut chunk = Chunk {
+        light_present: false,
         x: 0,
         z: 0,
         sections: vec![ChunkSection {
@@ -1258,6 +1264,7 @@ fn chunk_encoder_rejects_invalid_sections() {
     assert_eq!(decoded.sections[0].block_states.palette[0], air());
 
     let empty = Chunk {
+        light_present: false,
         x: i32::MAX,
         z: i32::MIN,
         sections: Vec::new(),
@@ -1272,6 +1279,7 @@ fn biome_lookup_maps_4x4x4_coordinates() {
     indices[15] = 1;
 
     let chunk = Chunk {
+        light_present: false,
         x: 0,
         z: 0,
         sections: vec![ChunkSection {

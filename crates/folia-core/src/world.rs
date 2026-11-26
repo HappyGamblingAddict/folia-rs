@@ -958,6 +958,7 @@ mod tests {
         indices[0] = 0;
 
         Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: chunk_x,
             z: chunk_z,

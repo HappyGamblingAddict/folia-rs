@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,723 passing** at the 8418ea0 gate (0 failed, 1 ignored benchmark); chunk-ticket slice next expected 1,736
+> Test status: **1,736 passing** at the 0c4d8b7 gate (0 failed, 1 ignored benchmark); chunk-status slice next expected 1,755
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1591,8 +1591,14 @@ section-only light packets are still open.
   Current generation runs a fixed sequence without a general status pipeline.
 - **Reference:** `net/minecraft/world/level/chunk/status/ChunkStatus.java`,
   `ChunkGenerator.java`, `ChunkStatusTasks.java`.
-- **Done when:** Chunks can be upgraded one status at a time and the pipeline is
-  resumable/cancellable.
+- **Done (2026-11-26):** `ChunkStatus` covers all 12 statuses, is persisted in
+  Anvil, and a generic `ChunkStatusPipeline` checkpoints one stage at a time with
+  cancel/failure resume and an audit log. Overworld generation is split into
+  pipeline stages with identical block digests; 13 lib + 6 integration tests pin
+  ordering, parsing, partial resume, full upgrade, cancellation, failure resume,
+  and Anvil round-trip. Neighbour-aware `ChunkCache`, exact task dependency graph,
+  async per-stage scheduling, in-flight dedupe, and world-level status storage
+  remain explicit differences.
 
 ### P3.3 Async chunk generation scheduling `[~]` `L`
 

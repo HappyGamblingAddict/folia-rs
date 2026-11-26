@@ -23,6 +23,7 @@ fn state(name: &str) -> BlockState {
 
 fn air_chunk(x: i32, z: i32) -> Chunk {
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x,
         z,

@@ -18,6 +18,7 @@ fn pos() -> BlockEntityPos {
 
 fn chunk_at() -> Chunk {
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,

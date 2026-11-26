@@ -4,6 +4,8 @@ use crate::nbt::Tag;
 use std::collections::HashMap;
 use std::io;
 
+pub use crate::chunk_status::ChunkStatus;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockState {
     pub name: String,
@@ -50,9 +52,38 @@ pub struct Chunk {
     /// that stores or drops light layers so `has_light` and the block-write
     /// invalidation check stay O(1) instead of scanning all sections.
     pub light_present: bool,
+    /// Generation stage this column has reached. The status pipeline advances
+    /// it one named stage at a time; it is persisted in the Anvil `Status`
+    /// field so a partially generated column can be resumed after a restart.
+    pub status: ChunkStatus,
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            z: 0,
+            sections: Vec::new(),
+            light_present: false,
+            status: ChunkStatus::Empty,
+        }
+    }
 }
 
 impl Chunk {
+    /// Generation stage this column has reached.
+    #[inline]
+    pub const fn status(&self) -> ChunkStatus {
+        self.status
+    }
+
+    /// Record a new generation stage. The pipeline only ever advances this,
+    /// but callers building synthetic chunks may set it directly.
+    #[inline]
+    pub fn set_status(&mut self, status: ChunkStatus) {
+        self.status = status;
+    }
+
     #[inline]
     fn section_index(&self, section_y: i8) -> Option<usize> {
         let first = self.sections.first()?;
@@ -317,12 +348,19 @@ pub fn decode_chunk(root: &Tag) -> io::Result<Chunk> {
     }
     sections.sort_by_key(|section| section.y);
     let light_present = sections.iter().any(|section| !section.light.is_empty());
+    // Older chunks written before status tracking carry `full` (without the
+    // namespace) or no field at all; both mean a completed column.
+    let status = match root.get("Status").and_then(Tag::as_str) {
+        Some(value) => ChunkStatus::parse(value).unwrap_or(ChunkStatus::Full),
+        None => ChunkStatus::Full,
+    };
 
     Ok(Chunk {
         x,
         z,
         sections,
         light_present,
+        status,
     })
 }
 
@@ -334,7 +372,7 @@ pub fn encode_chunk(chunk: &Chunk) -> io::Result<Tag> {
 
     Ok(Tag::Compound(vec![
         ("DataVersion".into(), Tag::Int(crate::level::DATA_VERSION)),
-        ("Status".into(), Tag::String("minecraft:full".into())),
+        ("Status".into(), Tag::String(chunk.status.to_nbt().into())),
         ("xPos".into(), Tag::Int(chunk.x)),
         ("zPos".into(), Tag::Int(chunk.z)),
         ("sections".into(), Tag::List(sections)),
@@ -824,6 +862,7 @@ mod tests {
             indices: (0..64).collect(),
         };
         let chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -922,6 +961,7 @@ mod tests {
         }
 
         let contiguous = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -936,6 +976,7 @@ mod tests {
         assert_eq!(contiguous.section_index(20), None);
 
         let mut sparse = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -993,6 +1034,7 @@ mod tests {
         };
 
         let chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 7,
             z: -9,
@@ -1034,6 +1076,59 @@ mod tests {
     }
 
     #[test]
+    fn status_round_trips_through_the_nbt_codec() {
+        for status in ChunkStatus::ALL {
+            let chunk = Chunk {
+                status,
+                ..Chunk::default()
+            };
+            let tag = encode_chunk(&chunk).unwrap();
+            assert_eq!(
+                tag.get("Status").and_then(Tag::as_str),
+                Some(status.to_nbt())
+            );
+            let decoded = decode_chunk(&tag).unwrap();
+            assert_eq!(decoded.status(), status);
+        }
+    }
+
+    #[test]
+    fn stored_chunks_without_a_known_status_default_to_full() {
+        let air = BlockState {
+            name: "minecraft:air".into(),
+            properties: vec![],
+        };
+        let make = |status: Option<&str>| {
+            let mut entries = vec![
+                ("xPos".into(), Tag::Int(0)),
+                ("zPos".into(), Tag::Int(0)),
+                (
+                    "sections".into(),
+                    Tag::List(vec![Tag::Compound(vec![
+                        ("Y".into(), Tag::Byte(0)),
+                        (
+                            "block_states".into(),
+                            Tag::Compound(vec![(
+                                "palette".into(),
+                                Tag::List(vec![encode_block_state(&air)]),
+                            )]),
+                        ),
+                    ])]),
+                ),
+            ];
+            if let Some(value) = status {
+                entries.push(("Status".into(), Tag::String(value.into())));
+            }
+            decode_chunk(&Tag::Compound(entries)).unwrap()
+        };
+        assert_eq!(make(None).status(), ChunkStatus::Full);
+        assert_eq!(make(Some("full")).status(), ChunkStatus::Full);
+        assert_eq!(make(Some("minecraft:noise")).status(), ChunkStatus::Noise);
+        // An unrecognised status is treated as a completed legacy column.
+        assert_eq!(make(Some("future:status")).status(), ChunkStatus::Full);
+    }
+
+    #[test]
     fn encoder_deduplicates_palette_entries() {
         let stone = BlockState {
             name: "minecraft:stone".into(),
@@ -1044,6 +1139,7 @@ mod tests {
             indices: (0..4096).map(|index| (index % 2) as u16).collect(),
         };
         let chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

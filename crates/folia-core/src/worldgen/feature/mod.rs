@@ -2608,6 +2608,7 @@ mod tests {
 
     fn chunk() -> Chunk {
         Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

@@ -385,6 +385,7 @@ fn light_invalidation_fixture(with_light: bool) -> Chunk {
         });
     }
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: with_light,
         x: 0,
         z: 0,

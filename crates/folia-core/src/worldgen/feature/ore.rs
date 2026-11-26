@@ -555,6 +555,7 @@ mod tests {
 
     fn flat_stone() -> Chunk {
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -709,6 +710,7 @@ mod tests {
     #[test]
     fn column_precheck_matches_the_ocean_floor_predicate() {
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -806,6 +808,7 @@ mod tests {
 
     fn column_chunk() -> Chunk {
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,
@@ -861,6 +864,7 @@ mod tests {
     #[test]
     fn empty_column_has_no_top_and_keeps_the_min_y_threshold() {
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

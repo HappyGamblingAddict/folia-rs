@@ -10,6 +10,10 @@
 //! finish the chunk. Other features and structures are not applied yet.
 
 use crate::chunk::{BlockState, Chunk, ChunkSection, PalettedContainer, is_air_state};
+use crate::chunk_status::ChunkStatus;
+use crate::chunk_status_pipeline::{
+    ChunkCoord, ChunkStageRunner, ChunkStatusPipeline, UpgradeReport,
+};
 use crate::worldgen::aquifer::{Aquifer, AquiferSubstance};
 use crate::worldgen::biome::BiomeSampler;
 use crate::worldgen::carver::{CarverContext, CarverSet};
@@ -354,6 +358,40 @@ impl WorldGenerator {
         self.generate_chunk_with_steps(chunk_x, chunk_z, &Self::DEFAULT_DECORATION_STEPS)
     }
 
+    /// A resumable pipeline that executes this generator's stages with the
+    /// default decoration steps. Callers can upgrade a chunk to any target,
+    /// cancel, and later resume from the recorded checkpoint.
+    pub fn pipeline(&self) -> ChunkStatusPipeline<GeneratorStageRunner<'_>> {
+        ChunkStatusPipeline::new(GeneratorStageRunner::new(
+            self,
+            &Self::DEFAULT_DECORATION_STEPS,
+        ))
+    }
+
+    /// Upgrade an existing chunk to `target` with this generator's stages.
+    /// Stages at or before the chunk's recorded status are skipped.
+    pub fn upgrade_chunk_to(
+        &self,
+        chunk: &mut Chunk,
+        target: ChunkStatus,
+    ) -> io::Result<UpgradeReport> {
+        let mut pipeline = self.pipeline();
+        pipeline.upgrade(chunk, target)
+    }
+
+    /// Generate a fresh chunk only up to `target`, leaving it resumable with
+    /// [`Self::upgrade_chunk_to`] (or a caller-owned [`Self::pipeline`]).
+    pub fn generate_chunk_to_status(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        target: ChunkStatus,
+    ) -> io::Result<Chunk> {
+        let mut chunk = self.empty_chunk(chunk_x, chunk_z);
+        self.upgrade_chunk_to(&mut chunk, target)?;
+        Ok(chunk)
+    }
+
     /// Generates one chunk with an explicit decoration-step list.
     pub fn generate_chunk_with_steps(
         &self,
@@ -387,23 +425,31 @@ impl WorldGenerator {
         steps: &[Decoration],
         diagnostics: &mut GenerationDiagnostics,
     ) -> io::Result<DiagnosedChunk> {
-        let cells_x = (16 / CELL_WIDTH + 1) as usize;
-        let cells_z = cells_x;
-        let cells_y = (self.height / CELL_HEIGHT + 1) as usize;
-        let mut grid = vec![0.0f64; cells_x * cells_z * cells_y];
+        let mut chunk = self.empty_chunk(chunk_x, chunk_z);
+        let runner = GeneratorStageRunner {
+            generator: self,
+            steps,
+            diagnostics: RefCell::new(std::mem::take(diagnostics)),
+        };
+        let mut pipeline = ChunkStatusPipeline::new(&runner);
+        pipeline.upgrade_to_full(&mut chunk)?;
+        *diagnostics = runner.diagnostics.into_inner();
+        Ok(DiagnosedChunk {
+            chunk,
+            diagnostics: std::mem::take(diagnostics),
+        })
+    }
 
-        let density = self.router.final_density();
-        for xi in 0..cells_x {
-            for zi in 0..cells_z {
-                for yi in 0..cells_y {
-                    let x = chunk_x * 16 + xi as i32 * CELL_WIDTH;
-                    let y = self.min_y + yi as i32 * CELL_HEIGHT;
-                    let z = chunk_z * 16 + zi as i32 * CELL_WIDTH;
-                    grid[(xi * cells_z + zi) * cells_y + yi] = density.compute(x, y, z);
-                }
-            }
-        }
+    /// A fresh air-only chunk at [`ChunkStatus::Empty`], ready for a pipeline
+    /// upgrade. Sections are pre-allocated so the `biomes` stage has somewhere
+    /// to write before the `noise` stage fills blocks.
+    pub fn empty_chunk_at(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
+        self.empty_chunk(chunk_x, chunk_z)
+    }
 
+    /// A chunk whose sections are all air. This is the `empty` status; no
+    /// terrain has been evaluated yet.
+    fn empty_chunk(&self, chunk_x: i32, chunk_z: i32) -> Chunk {
         let min_section = self.min_y.div_euclid(16);
         let section_count = self.height / 16;
         let mut sections = Vec::with_capacity(section_count as usize);
@@ -421,17 +467,54 @@ impl WorldGenerator {
                 light: crate::light::SectionLight::default(),
             });
         }
-
-        let mut chunk = Chunk {
+        Chunk {
             x: chunk_x,
             z: chunk_z,
-            light_present: false,
             sections,
-        };
+            light_present: false,
+            status: ChunkStatus::Empty,
+        }
+    }
 
+    fn noise_grid(&self, chunk_x: i32, chunk_z: i32) -> Vec<f64> {
+        let cells_x = (16 / CELL_WIDTH + 1) as usize;
+        let cells_z = cells_x;
+        let cells_y = (self.height / CELL_HEIGHT + 1) as usize;
+        let mut grid = vec![0.0f64; cells_x * cells_z * cells_y];
+        let density = self.router.final_density();
+        for xi in 0..cells_x {
+            for zi in 0..cells_z {
+                for yi in 0..cells_y {
+                    let x = chunk_x * 16 + xi as i32 * CELL_WIDTH;
+                    let y = self.min_y + yi as i32 * CELL_HEIGHT;
+                    let z = chunk_z * 16 + zi as i32 * CELL_WIDTH;
+                    grid[(xi * cells_z + zi) * cells_y + yi] = density.compute(x, y, z);
+                }
+            }
+        }
+        grid
+    }
+
+    /// Centre-chunk biome cells used by surface rules, carvers and the chunk
+    /// biome palette. Recomputed from the thread-local cache at each stage so
+    /// resuming never depends on state left behind by an earlier stage.
+    fn chunk_biome_indices(&self, chunk_x: i32, chunk_z: i32) -> Vec<usize> {
+        self.feature_biome_region(chunk_x, chunk_z)
+            .center_cells()
+            .iter()
+            .map(|&entry| entry as usize)
+            .collect()
+    }
+
+    /// `noise` stage: fill stone/fluid/ore-vein blocks from the density grid.
+    fn stage_noise(&self, chunk: &mut Chunk) -> io::Result<()> {
+        let cells_x = (16 / CELL_WIDTH + 1) as usize;
+        let cells_z = cells_x;
+        let cells_y = (self.height / CELL_HEIGHT + 1) as usize;
+        let grid = self.noise_grid(chunk.x, chunk.z);
         let mut aquifer = Aquifer::new(
-            chunk_x,
-            chunk_z,
+            chunk.x,
+            chunk.z,
             &self.router,
             &self.aquifer_factory,
             self.min_y,
@@ -447,11 +530,8 @@ impl WorldGenerator {
         let mut fluids: Vec<Option<BlockState>> = vec![None; self.height as usize];
         for local_x in 0..16 {
             for local_z in 0..16 {
-                let world_x = chunk_x * 16 + local_x;
-                let world_z = chunk_z * 16 + local_z;
-                // The column buffers are reused, so clear them: leaving a
-                // previous column's solid/fluid flags in place leaks terrain
-                // sideways into neighbouring columns.
+                let world_x = chunk.x * 16 + local_x;
+                let world_z = chunk.z * 16 + local_z;
                 solid.fill(false);
                 fluids.fill(None);
 
@@ -484,10 +564,6 @@ impl WorldGenerator {
                 for index in 0..self.height as usize {
                     let y = self.min_y + index as i32;
                     if solid[index] {
-                        // Vanilla's block-state filler chain runs the ore-vein
-                        // pass for solid positions before surface rules and
-                        // carvers. It replaces granite/tuff/copper/iron vein
-                        // blocks; `None` keeps the base stone.
                         if let Some(state) = self.ore_veins.block_at(world_x, y, world_z) {
                             chunk.set_block_state(local_x as usize, y, local_z as usize, state);
                         } else {
@@ -504,40 +580,12 @@ impl WorldGenerator {
                 }
             }
         }
+        Ok(())
+    }
 
-        // Sample the 3x3 decoration biome window once. The centre chunk's
-        // cells feed the chunk palette and surface rules; the full region feeds
-        // vanilla's active-biome feature set during decoration.
-        let biome_region = self.feature_biome_region(chunk_x, chunk_z);
-        let biome_indices: Vec<usize> = biome_region
-            .center_cells()
-            .iter()
-            .map(|&entry| entry as usize)
-            .collect();
-        let preliminary_surface = self.router.function("preliminary_surface_level")?;
-        surface::build_surface(
-            &self.surface,
-            &self.surface_rules,
-            preliminary_surface.as_ref(),
-            &self.biomes,
-            &biome_indices,
-            &mut chunk,
-        );
-
-        // Vanilla runs carvers after the surface pass, so they can cut through
-        // grass and dirt and then ask the surface rules for a replacement floor.
-        let carver_context = CarverContext::new(
-            &self.surface,
-            &self.surface_rules,
-            preliminary_surface.as_ref(),
-            &self.biomes,
-            &biome_indices,
-            self.min_y,
-            self.height,
-        );
-        self.carvers
-            .apply(&carver_context, &mut chunk, &mut aquifer, self.seed);
-
+    /// `biomes` stage: write the 4x4x4 biome palette into every section.
+    fn stage_biomes(&self, chunk: &mut Chunk) {
+        let biome_indices = self.chunk_biome_indices(chunk.x, chunk.z);
         let mut biome_cursor = 0usize;
         for section in &mut chunk.sections {
             let mut palette: Vec<String> = Vec::new();
@@ -557,15 +605,55 @@ impl WorldGenerator {
             }
             section.biomes = Some(PalettedContainer { palette, indices });
         }
+    }
 
-        // Biomes are now stored in the chunk, which the biome placement filter
-        // reads through `FeaturePlacementWorld`.
-        self.apply_decorations(&mut chunk, &biome_region, steps, diagnostics)?;
+    fn preliminary_surface(&self) -> io::Result<Arc<crate::worldgen::density::DensityFunction>> {
+        self.router
+            .function("preliminary_surface_level")
+            .map(Arc::clone)
+    }
 
-        Ok(DiagnosedChunk {
+    /// `surface` stage: replace near-surface blocks through the surface rules.
+    fn stage_surface(&self, chunk: &mut Chunk) -> io::Result<()> {
+        let biome_indices = self.chunk_biome_indices(chunk.x, chunk.z);
+        let preliminary_surface = self.preliminary_surface()?;
+        surface::build_surface(
+            &self.surface,
+            &self.surface_rules,
+            preliminary_surface.as_ref(),
+            &self.biomes,
+            &biome_indices,
             chunk,
-            diagnostics: std::mem::take(diagnostics),
-        })
+        );
+        Ok(())
+    }
+
+    /// `carvers` stage: cut caves/canyons after surface so carved floors can
+    /// be re-covered by the surface rules.
+    fn stage_carvers(&self, chunk: &mut Chunk) -> io::Result<()> {
+        let biome_indices = self.chunk_biome_indices(chunk.x, chunk.z);
+        let preliminary_surface = self.preliminary_surface()?;
+        let mut aquifer = Aquifer::new(
+            chunk.x,
+            chunk.z,
+            &self.router,
+            &self.aquifer_factory,
+            self.min_y,
+            self.height,
+            self.sea_level,
+        );
+        let carver_context = CarverContext::new(
+            &self.surface,
+            &self.surface_rules,
+            preliminary_surface.as_ref(),
+            &self.biomes,
+            &biome_indices,
+            self.min_y,
+            self.height,
+        );
+        self.carvers
+            .apply(&carver_context, chunk, &mut aquifer, self.seed);
+        Ok(())
     }
 
     /// Runs the decoration steps this port implements for every biome in the
@@ -856,6 +944,60 @@ impl WorldGenerator {
             self.height,
             cells,
         )
+    }
+}
+
+/// Executes the overworld stages for the chunk-status pipeline.
+///
+/// Stages that need no block work in this port (`structure_starts`,
+/// `structure_references`, the light stages and `spawn`) are explicit no-ops;
+/// structures are placed inside the `features` stage, matching the existing
+/// generator's behaviour and keeping its block output unchanged.
+pub struct GeneratorStageRunner<'a> {
+    generator: &'a WorldGenerator,
+    steps: &'a [Decoration],
+    diagnostics: RefCell<GenerationDiagnostics>,
+}
+
+impl<'a> GeneratorStageRunner<'a> {
+    pub fn new(generator: &'a WorldGenerator, steps: &'a [Decoration]) -> Self {
+        Self {
+            generator,
+            steps,
+            diagnostics: RefCell::new(GenerationDiagnostics::default()),
+        }
+    }
+}
+
+impl ChunkStageRunner for GeneratorStageRunner<'_> {
+    fn run_stage(
+        &self,
+        chunk: &mut Chunk,
+        coord: ChunkCoord,
+        status: ChunkStatus,
+    ) -> io::Result<()> {
+        match status {
+            ChunkStatus::Empty
+            | ChunkStatus::StructureStarts
+            | ChunkStatus::StructureReferences
+            | ChunkStatus::InitializeLight
+            | ChunkStatus::Light
+            | ChunkStatus::Spawn => Ok(()),
+            ChunkStatus::Biomes => {
+                self.generator.stage_biomes(chunk);
+                Ok(())
+            }
+            ChunkStatus::Noise => self.generator.stage_noise(chunk),
+            ChunkStatus::Surface => self.generator.stage_surface(chunk),
+            ChunkStatus::Carvers => self.generator.stage_carvers(chunk),
+            ChunkStatus::Features => {
+                let region = self.generator.feature_biome_region(coord.x, coord.z);
+                let mut diagnostics = self.diagnostics.borrow_mut();
+                self.generator
+                    .apply_decorations(chunk, &region, self.steps, &mut diagnostics)
+            }
+            ChunkStatus::Full => Ok(()),
+        }
     }
 }
 

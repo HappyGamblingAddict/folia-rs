@@ -133,6 +133,7 @@ pub fn flat_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
     }
 
     Chunk {
+        status: crate::chunk::ChunkStatus::Full,
         x: chunk_x,
         z: chunk_z,
         light_present: false,
@@ -742,6 +743,7 @@ mod tests {
         let source_palette = vec![air.clone(), grass.clone(), snowy_grass.clone()];
         let source_indices: Vec<u16> = (0..4096).map(|index| (index % 3) as u16).collect();
         let chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

@@ -35,6 +35,7 @@ fn flat_nether_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
         });
     }
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: chunk_x,
         z: chunk_z,

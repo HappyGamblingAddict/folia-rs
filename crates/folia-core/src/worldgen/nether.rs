@@ -301,6 +301,7 @@ impl NetherGenerator {
             });
         }
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             x: chunk_x,
             z: chunk_z,
             light_present: false,

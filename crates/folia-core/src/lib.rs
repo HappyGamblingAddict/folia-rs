@@ -9,6 +9,8 @@ pub mod block_shapes;
 pub mod block_update;
 pub mod chunk;
 pub mod chunk_packet;
+pub mod chunk_status;
+pub mod chunk_status_pipeline;
 pub mod chunk_tickets;
 pub mod combat;
 pub mod compression;

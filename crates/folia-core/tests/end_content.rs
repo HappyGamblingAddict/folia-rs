@@ -39,6 +39,7 @@ fn air_chunk(chunk_x: i32, chunk_z: i32) -> Chunk {
         });
     }
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: chunk_x,
         z: chunk_z,

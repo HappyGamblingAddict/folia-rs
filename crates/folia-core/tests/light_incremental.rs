@@ -76,6 +76,7 @@ fn chunk_with_sections(x: i32, z: i32, sections: impl IntoIterator<Item = i8>) -
         })
         .collect();
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         x,
         z,
         light_present: false,

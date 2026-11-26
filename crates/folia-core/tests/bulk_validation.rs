@@ -1127,6 +1127,7 @@ fn chunk_round_trips_fifty_random_palettes_with_biomes() {
         }
 
         let chunk = Chunk {
+            status: folia_core::chunk::ChunkStatus::Full,
             light_present: false,
             x,
             z,
@@ -1210,6 +1211,7 @@ fn chunk_encoder_rejects_invalid_sections() {
     };
 
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,
@@ -1264,6 +1266,7 @@ fn chunk_encoder_rejects_invalid_sections() {
     assert_eq!(decoded.sections[0].block_states.palette[0], air());
 
     let empty = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: i32::MAX,
         z: i32::MIN,
@@ -1279,6 +1282,7 @@ fn biome_lookup_maps_4x4x4_coordinates() {
     indices[15] = 1;
 
     let chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,

@@ -4174,6 +4174,7 @@ mod tests {
 
     fn flat_chunk() -> Chunk {
         let mut chunk = Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

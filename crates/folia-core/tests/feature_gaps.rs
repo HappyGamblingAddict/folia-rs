@@ -19,6 +19,7 @@ fn block(name: &str) -> BlockState {
 
 fn empty_chunk() -> Chunk {
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,
@@ -876,6 +877,7 @@ fn shipped_end_spike_uses_the_level_seed_and_queues_its_crystal() {
     let chunk_z = spike.chunk_z();
 
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: chunk_x,
         z: chunk_z,
@@ -910,6 +912,7 @@ fn shipped_end_spike_uses_the_level_seed_and_queues_its_crystal() {
     );
 
     let mut replay = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: chunk_x,
         z: chunk_z,

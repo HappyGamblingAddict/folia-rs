@@ -146,6 +146,7 @@ fn random_chunk_palettes_never_panic() {
         };
 
         let chunk = Chunk {
+            status: folia_core::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

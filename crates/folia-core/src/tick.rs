@@ -1870,6 +1870,7 @@ mod tests {
     fn chunk_with_grass() -> Chunk {
         let air = state("minecraft:air");
         Chunk {
+            status: crate::chunk::ChunkStatus::Full,
             light_present: false,
             x: 0,
             z: 0,

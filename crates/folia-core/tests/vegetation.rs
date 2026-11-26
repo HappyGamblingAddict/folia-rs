@@ -19,6 +19,7 @@ fn block(name: &str) -> BlockState {
 
 fn empty_chunk() -> Chunk {
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,

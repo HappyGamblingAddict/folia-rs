@@ -43,6 +43,7 @@ fn air_chunk(x: i32, z: i32) -> Chunk {
         });
     }
     Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x,
         z,
@@ -75,6 +76,7 @@ fn no_light_writes_keep_every_section_lightless() {
 #[test]
 fn writes_into_a_new_section_create_default_light() {
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,

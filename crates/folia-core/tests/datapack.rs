@@ -442,6 +442,7 @@ fn custom_feature_places_blocks_through_a_datapack_placed_feature() {
     );
 
     let mut chunk = Chunk {
+        status: folia_core::chunk::ChunkStatus::Full,
         light_present: false,
         x: 0,
         z: 0,

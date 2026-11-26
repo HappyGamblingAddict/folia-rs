@@ -2888,6 +2888,7 @@ mod tests {
         let root = temp_dir("world");
         let mut storage = WorldStorage::for_dimension(root.join("world"), Dimension::Overworld);
         let mut chunk = chunk::Chunk {
+            status: folia_core::chunk::ChunkStatus::Full,
             x: 0,
             z: 0,
             light_present: false,

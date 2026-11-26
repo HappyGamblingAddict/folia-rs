@@ -10,8 +10,10 @@
 //! * `net/minecraft/world/level/block/{FallingBlock,VegetationBlock,GrassBlock}`
 //!
 //! This is deliberately a small vertical slice. Blocks that need the full
-//! `P1.5` behaviour table (doors, rails, …) keep their vanilla state in the
-//! world but their neighbor/random tick is an explicit no-op. Leaf decay lives
+//! `P1.5` behaviour table (doors, …) keep their vanilla state in the world but
+//! their neighbor/random tick is an explicit no-op. Floor/wall torch and rail
+//! support loss is handled by [`crate::block_update::support_still_valid`],
+//! which reuses the placement support predicates. Leaf decay lives
 //! in [`crate::leaves`], crop/sapling growth in [`crate::crops`] and
 //! [`crate::saplings`]. Water/lava flow lives in [`crate::fluid`]; wire, lever,
 //! button, repeater, comparator, observer, redstone-torch, pressure-plate, and
@@ -1200,6 +1202,32 @@ static GRASS: GrassBehavior = GrassBehavior;
 struct GrowingPlantBehavior;
 static GROWING_PLANT: GrowingPlantBehavior = GrowingPlantBehavior;
 
+/// Neighbour shape behaviour for the support-checked floor and wall torches.
+///
+/// Rails use [`crate::rail::RailBehavior`], which calls the same helper before
+/// reconnecting. The support decision is delegated to
+/// [`crate::block_update::support_still_valid`], which reuses the placement
+/// predicates, so placement and support loss cannot disagree about what
+/// counts as a supporting face.
+struct SupportBehavior;
+static SUPPORT: SupportBehavior = SupportBehavior;
+
+impl BlockBehavior for SupportBehavior {
+    fn update_shape(
+        &self,
+        world: &mut TickWorld<'_>,
+        pos: BlockPos,
+        _direction: Direction,
+        _neighbor: &BlockState,
+        state: &BlockState,
+    ) -> io::Result<Option<BlockState>> {
+        if !crate::block_update::support_still_valid(world, pos, state)? {
+            return Ok(Some(air()));
+        }
+        Ok(None)
+    }
+}
+
 /// Returns the built-in behaviour for a block state.
 pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
     if crate::fluid::fluid_state(state).is_some() {
@@ -1218,6 +1246,8 @@ pub fn behavior_for(state: &BlockState) -> &'static dyn BlockBehavior {
         &crate::redstone::OBSERVER_BEHAVIOR
     } else if crate::redstone::is_redstone_torch(state) {
         &crate::redstone::REDSTONE_TORCH_BEHAVIOR
+    } else if crate::block_update::is_torch(state) {
+        &SUPPORT
     } else if crate::redstone::is_pressure_plate(state) {
         &crate::redstone::PRESSURE_PLATE_BEHAVIOR
     } else if crate::redstone::is_tripwire(state) {
@@ -1287,25 +1317,14 @@ pub fn unsupported_neighbor_reason(state: &BlockState) -> Option<&'static str> {
     if name == "minecraft:tripwire_hook" {
         Some("tripwire-hook signal chains and hook shape updates are not ported")
     } else if is_known_unsupported_neighbor(name) {
-        Some("hoppers, rails, and non-redstone torch support are not ported")
+        Some("hoppers are not ported")
     } else {
         None
     }
 }
 
 fn is_known_unsupported_neighbor(name: &str) -> bool {
-    matches!(
-        name,
-        "minecraft:hopper"
-            | "minecraft:rail"
-            | "minecraft:powered_rail"
-            | "minecraft:detector_rail"
-            | "minecraft:activator_rail"
-            | "minecraft:torch"
-            | "minecraft:wall_torch"
-            | "minecraft:soul_torch"
-            | "minecraft:soul_wall_torch"
-    )
+    matches!(name, "minecraft:hopper")
 }
 
 /// Vanilla `FallingBlock.isFree`: air, fire, liquid, or replaceable.
@@ -1400,7 +1419,7 @@ fn with_age(state: &BlockState, value: u8) -> BlockState {
     next
 }
 
-fn air() -> BlockState {
+pub(crate) fn air() -> BlockState {
     BlockState {
         name: "minecraft:air".into(),
         properties: Vec::new(),

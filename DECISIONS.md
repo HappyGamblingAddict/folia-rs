@@ -3735,3 +3735,32 @@ Format:
   exact-name parity test is unchanged. Focused: leaves (10), saplings (9),
   ticks (13), vegetation (18), worldgen parity (8), lib (701), check and
   clippy are green.
+
+## 2026-11-26 - P3.10 support-dependent blocks break on support loss
+
+- Context: floor torches, wall torches, and rails kept their vanilla state when
+  the block supporting them was removed. Placement already validated support
+  through `block_update::placement_has_support` and
+  `block_update::placement_has_wall_support`, but no neighbour-update path
+  reused those predicates. The decompiled Java tree is not present in this
+  Linux checkout, so the exact `BlockBehaviour`/`BlockState` support flag set
+  could not be read from the local oracle (BLOCKERS.md).
+- Decision: add `block_update::support_still_valid`, which reads the same
+  supporting block placement checks (the full upper face below a floor
+  torch/rail/wire, or the full occluding wall face opposite a wall torch's
+  `facing`) and feeds it back through the placement predicates. A new shared
+  `SUPPORT` behaviour handles floor and soul torches in `tick::behavior_for`;
+  `rail::RailBehavior::update_shape` checks support before reconnecting. The
+  redstone-torch behaviour keeps its existing support rules rather than
+  duplicating a second path. Unsupported-neighbour diagnostics no longer list
+  rails and torches.
+- Consequences: this is an approximation of Java's solid-side flag set, using
+  the shipped `covers_full_upper_face` and `face_occludes` shapes. Partial
+  faces (for example a bottom slab below a torch) correctly lose support, but
+  unusual shapes may be accepted/rejected slightly differently from vanilla.
+  Waterlogged blocks, plants, and other support-checked blocks are untouched
+  unless their existing behaviour already handles them. Support loss is
+  deterministic in state, block-change packet, and broadcast output; no Java
+  differential support fixture exists. Focused: 3 lib + 8 support-break + 1
+  packet-determinism new tests, the placement/rails/ticks/crop/sapling/leaf/
+  redstone suites, lib, check, fmt and clippy are green.

@@ -754,6 +754,55 @@ pub fn placement_has_wall_support(
     )
 }
 
+/// Whether `state` is a torch whose support is handled by this port.
+///
+/// Redstone torches are deliberately excluded: their existing behaviour keeps
+/// its own support check, so this helper must not take over their updates.
+pub fn is_torch(state: &BlockState) -> bool {
+    is_wall_torch(state)
+        || matches!(
+            state.name.as_str(),
+            "minecraft:torch" | "minecraft:soul_torch"
+        )
+}
+
+/// Whether a support-checked block still has valid support after a neighbour
+/// changed.
+///
+/// This is the neighbour-update counterpart of [`placement_has_support`] and
+/// [`placement_has_wall_support`]. It reads the same supporting block the
+/// placement rules validate and feeds it back through those predicates, so a
+/// support-loss update cannot drift from placement. Floor torches, rails, and
+/// redstone wire are checked against the block below; wall torches are checked
+/// against the block opposite their `facing`, which is the wall they hang
+/// from. Blocks that are not support-checked, or that remain supported,
+/// return `true`.
+///
+/// Java's exact solid-face flag set is not available in this checkout. The
+/// approximation is the shipped placement predicate set
+/// ([`covers_full_upper_face`] plus `face_occludes` for wall faces); see
+/// DECISIONS.md (P3.10 support loss).
+pub fn support_still_valid(
+    world: &mut crate::tick::TickWorld<'_>,
+    pos: BlockPos,
+    state: &BlockState,
+) -> io::Result<bool> {
+    if is_wall_torch(state) {
+        let facing = crate::redstone::facing(state);
+        let wall = world.block_state(pos.offset(-facing.step_x(), 0, -facing.step_z()))?;
+        Ok(placement_has_wall_support(
+            wall.as_ref(),
+            state,
+            facing.data_3d() as u8,
+        ))
+    } else if requires_solid_top_support(state) {
+        let below = world.block_state(pos.below())?;
+        Ok(placement_has_support(below.as_ref(), state))
+    } else {
+        Ok(true)
+    }
+}
+
 pub fn light_update_packet(chunk_x: i32, chunk_z: i32, light: &[u8]) -> Vec<u8> {
     let mut writer = PacketWriter::new();
     writer.write_varint(CLIENTBOUND_LIGHT_UPDATE).unwrap();
@@ -833,6 +882,13 @@ mod tests {
     fn stone() -> BlockState {
         BlockState {
             name: "minecraft:stone".into(),
+            properties: vec![],
+        }
+    }
+
+    fn air_state() -> BlockState {
+        BlockState {
+            name: "minecraft:air".into(),
             properties: vec![],
         }
     }
@@ -1350,6 +1406,68 @@ mod tests {
             assert!(requires_solid_top_support(state));
             assert!(placement_has_support(Some(&stone()), state));
             assert!(!placement_has_support(Some(&air), state));
+        }
+    }
+
+    fn support_storage(name: &str) -> WorldStorage {
+        let root = temp_dir(name);
+        let mut storage = WorldStorage::new(root.join("region"));
+        storage
+            .save_chunk(&flat_chunk(0, 0), Compression::Zlib)
+            .unwrap();
+        storage.flush().unwrap();
+        storage
+    }
+
+    fn is_supported(storage: &mut WorldStorage, pos: BlockPos, state: &BlockState) -> bool {
+        let mut world = crate::tick::TickWorld::new(storage, 0);
+        support_still_valid(&mut world, pos, state).unwrap()
+    }
+
+    #[test]
+    fn support_check_uses_the_floor_torch_placement_predicate() {
+        let mut storage = support_storage("floor-support");
+        let pos = BlockPos::new(2, -60, 2);
+        let torch = named_state("minecraft:torch", &[]);
+        // The flat chunk has a full grass block below the torch position.
+        assert!(is_supported(&mut storage, pos, &torch));
+        set_block(&mut storage, pos.x(), pos.below().y(), pos.z(), air_state()).unwrap();
+        assert!(!is_supported(&mut storage, pos, &torch));
+    }
+
+    #[test]
+    fn support_check_uses_the_wall_torch_placement_predicate() {
+        let mut storage = support_storage("wall-support");
+        let pos = BlockPos::new(2, -60, 2);
+        for (facing, (dx, dz)) in [
+            ("north", (0, 1)),
+            ("south", (0, -1)),
+            ("west", (1, 0)),
+            ("east", (-1, 0)),
+        ] {
+            let torch = named_state("minecraft:wall_torch", &[("facing", facing)]);
+            set_block(&mut storage, pos.x(), pos.y(), pos.z(), torch.clone()).unwrap();
+            let wall = pos.offset(dx, 0, dz);
+            set_block(&mut storage, wall.x(), wall.y(), wall.z(), stone()).unwrap();
+            assert!(
+                is_supported(&mut storage, pos, &torch),
+                "{facing} wall torch supported by its wall"
+            );
+            set_block(&mut storage, wall.x(), wall.y(), wall.z(), air_state()).unwrap();
+            assert!(
+                !is_supported(&mut storage, pos, &torch),
+                "{facing} wall torch loses support with its wall"
+            );
+            set_block(&mut storage, pos.x(), pos.y(), pos.z(), air_state()).unwrap();
+        }
+    }
+
+    #[test]
+    fn support_check_leaves_unrelated_blocks_alone() {
+        let mut storage = support_storage("unrelated-support");
+        let pos = BlockPos::new(2, -60, 2);
+        for state in [stone(), named_state("minecraft:short_grass", &[])] {
+            assert!(is_supported(&mut storage, pos, &state));
         }
     }
 

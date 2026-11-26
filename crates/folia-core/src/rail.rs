@@ -261,6 +261,12 @@ impl BlockBehavior for RailBehavior {
         _neighbor: &BlockState,
         state: &BlockState,
     ) -> io::Result<Option<BlockState>> {
+        // `RailBlock.updateShape` drops the rail before recomputing its shape
+        // when the block below no longer provides solid-top support. The check
+        // reuses the placement predicate, so the two rules stay in sync.
+        if !crate::block_update::support_still_valid(world, pos, state)? {
+            return Ok(Some(crate::tick::air()));
+        }
         let new_state = compute_rail_state(world, pos, state)?;
         if new_state != *state {
             Ok(Some(new_state))

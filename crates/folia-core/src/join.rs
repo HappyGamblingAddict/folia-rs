@@ -20,6 +20,7 @@ use crate::block_entity::{BlockEntity, BlockEntityPos, SpawnerBlockEntity};
 use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
+use crate::chunk_tickets::{TicketChunk, allocate_player_owner};
 use crate::combat::AttackCooldown;
 use crate::crypto::{self, CryptoError, RsaKeyPair, constant_time_eq, server_hash};
 use crate::dimension::{self, PortalKind, PortalRequest, SessionDimensionState};
@@ -75,6 +76,44 @@ fn write_packet(stream: &mut LoginStream, payload: &[u8]) -> io::Result<()> {
     }
     stream.write_packet_while(payload, || !shutdown_requested())?;
     Ok(())
+}
+
+/// Bring one session's shared player tickets in line with its view centre.
+/// The diff is idempotent, so the play loop's periodic top-ups do not churn the
+/// ticket map or disturb other players that share the same columns.
+fn refresh_view_tickets(
+    owner: u64,
+    dimension: crate::world::Dimension,
+    radius: i32,
+    center_x: i32,
+    center_z: i32,
+) {
+    crate::chunk_tickets::lock().set_player_footprint(
+        owner,
+        dimension,
+        crate::region::ChunkPos::new(center_x, center_z),
+        radius,
+    );
+}
+
+fn release_view_tickets(owner: u64) {
+    crate::chunk_tickets::lock().remove_owner(owner);
+}
+
+/// Releases a session's player tickets on every exit path (disconnect, kick,
+/// shutdown, or a propagated I/O error) so a crashed client cannot pin chunks.
+struct ViewTicketGuard(u64);
+
+impl ViewTicketGuard {
+    fn new(owner: u64) -> Self {
+        Self(owner)
+    }
+}
+
+impl Drop for ViewTicketGuard {
+    fn drop(&mut self) {
+        release_view_tickets(self.0);
+    }
 }
 
 const LOGIN_ACKNOWLEDGED: i32 = 3;
@@ -1814,6 +1853,21 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let updates = crate::block_update::register_session();
     let mut center_x = (session.x.floor() as i32).div_euclid(16);
     let mut center_z = (session.z.floor() as i32).div_euclid(16);
+    // Every session shares one ticket manager. The spawn footprint is a
+    // persistent ticket installed once per level; re-adding it on each join is
+    // idempotent because the spawn owner is fixed.
+    let view_owner = allocate_player_owner();
+    let _view_guard = ViewTicketGuard::new(view_owner);
+    let spawn_radius = crate::chunk_tickets::spawn_chunk_radius();
+    if spawn_radius > 0
+        && let Some((spawn_x, _, spawn_z)) = world.spawn
+    {
+        crate::chunk_tickets::lock().set_spawn_footprint(
+            crate::world::Dimension::Overworld,
+            crate::region::ChunkPos::new(spawn_x.div_euclid(16), spawn_z.div_euclid(16)),
+            spawn_radius,
+        );
+    }
     let mut sent_chunks: HashSet<(i32, i32)> = HashSet::new();
     let streamed = stream_chunks_around(
         &mut stream,
@@ -1822,6 +1876,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         initial_dimension,
         world.seed,
         radius,
+        view_owner,
         center_x,
         center_z,
         &mut sent_chunks,
@@ -1883,6 +1938,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
 
     loop {
         if shutdown_requested() {
+            release_view_tickets(view_owner);
             tracked_entities.clear();
             drop_entities.clear();
             projectiles.clear();
@@ -2089,7 +2145,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2101,7 +2163,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2119,7 +2187,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2131,7 +2205,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2143,7 +2223,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2252,7 +2338,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         tracked_entities.clear();
                         drop_entities.clear();
                         projectiles.clear();
-                        finish_disconnected(&session, current_storage, &start.name, &error);
+                        finish_disconnected(
+                            &session,
+                            current_storage,
+                            &start.name,
+                            &error,
+                            view_owner,
+                        );
                         return Ok(());
                     }
                     return Err(error);
@@ -2592,6 +2684,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
                 SessionCommand::Disconnect { reason } => {
                     write_packet(&mut stream, &disconnect_packet(&reason)?)?;
+                    release_view_tickets(view_owner);
                     tracked_entities.clear();
                     drop_entities.clear();
                     projectiles.clear();
@@ -2633,6 +2726,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             dimension_state.current(),
                             world.seed,
                             radius,
+                            view_owner,
                             center_x,
                             center_z,
                             &mut sent_chunks,
@@ -2809,6 +2903,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 world.trust_stored,
                 world.seed,
                 radius,
+                view_owner,
                 &mut center_x,
                 &mut center_z,
                 &mut sent_chunks,
@@ -2829,6 +2924,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     current_storage,
                     world.trust_stored,
                     radius,
+                    view_owner,
                     &mut center_x,
                     &mut center_z,
                     &mut sent_chunks,
@@ -2870,6 +2966,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 dimension_state.current(),
                 world.seed,
                 radius,
+                view_owner,
                 center_x,
                 center_z,
                 &mut sent_chunks,
@@ -2890,7 +2987,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             if let Err(error) = write_packet(&mut stream, &update) {
                 if is_disconnect(&error) {
                     tracked_entities.clear();
-                    finish_disconnected(&session, current_storage, &start.name, &error);
+                    finish_disconnected(&session, current_storage, &start.name, &error, view_owner);
                     return Ok(());
                 }
                 return Err(error);
@@ -2944,6 +3041,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 current_storage,
                                 world.trust_stored,
                                 radius,
+                                view_owner,
                                 &mut center_x,
                                 &mut center_z,
                                 &mut sent_chunks,
@@ -3597,6 +3695,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 dimension_state.current(),
                                 world.seed,
                                 radius,
+                                view_owner,
                                 center_x,
                                 center_z,
                                 &mut sent_chunks,
@@ -3607,6 +3706,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 // time; that ends the session, it is not a
                                 // server failure.
                                 Err(error) if is_disconnect(&error) => {
+                                    release_view_tickets(view_owner);
                                     if let Err(save_error) =
                                         dimension::save_playerdata_preserving_dimension(
                                             &session,
@@ -3680,7 +3780,13 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         write_packet(&mut stream, &keepalive_packet(keepalive_nonce))
                     {
                         if is_disconnect(&error) {
-                            finish_disconnected(&session, current_storage, &start.name, &error);
+                            finish_disconnected(
+                                &session,
+                                current_storage,
+                                &start.name,
+                                &error,
+                                view_owner,
+                            );
                             return Ok(());
                         }
                         return Err(error);
@@ -6356,6 +6462,7 @@ fn respawn_player(
     storage: &Mutex<WorldStorage>,
     trust_stored: bool,
     radius: i32,
+    owner: u64,
     center_x: &mut i32,
     center_z: &mut i32,
     sent_chunks: &mut HashSet<(i32, i32)>,
@@ -6379,6 +6486,7 @@ fn respawn_player(
         crate::world::Dimension::Overworld,
         0,
         radius,
+        owner,
         *center_x,
         *center_z,
         sent_chunks,
@@ -6421,6 +6529,7 @@ fn switch_dimension(
     trust_stored: bool,
     seed: i64,
     radius: i32,
+    owner: u64,
     center_x: &mut i32,
     center_z: &mut i32,
     sent_chunks: &mut HashSet<(i32, i32)>,
@@ -6475,7 +6584,9 @@ fn switch_dimension(
     }
 
     // 6. The client drops every column on Respawn; stream the destination
-    //    dimension from scratch.
+    //    dimension from scratch. Tickets are dimension-scoped, so the old
+    //    dimension's player tickets must be released explicitly.
+    release_view_tickets(owner);
     *center_x = (session.x.floor() as i32).div_euclid(16);
     *center_z = (session.z.floor() as i32).div_euclid(16);
     sent_chunks.clear();
@@ -6486,6 +6597,7 @@ fn switch_dimension(
         trigger.to,
         seed,
         radius,
+        owner,
         *center_x,
         *center_z,
         sent_chunks,
@@ -6964,7 +7076,9 @@ fn finish_disconnected(
     storage: &Mutex<WorldStorage>,
     name: &str,
     error: &io::Error,
+    view_owner: u64,
 ) {
+    release_view_tickets(view_owner);
     if let Err(save_error) =
         dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
     {
@@ -7171,11 +7285,13 @@ fn stream_chunks_around(
     dimension: crate::world::Dimension,
     seed: i64,
     radius: i32,
+    owner: u64,
     center_x: i32,
     center_z: i32,
     sent: &mut HashSet<(i32, i32)>,
     max_columns: usize,
 ) -> io::Result<ChunkBatch> {
+    refresh_view_tickets(owner, dimension, radius, center_x, center_z);
     let storage = &mut *crate::world::lock(storage);
     write_packet(stream, &chunk_cache_center(center_x, center_z))?;
     let mut batch = ChunkBatch::default();
@@ -7225,8 +7341,16 @@ fn stream_chunks_around(
         if index % 16 == 0 && shutdown_requested() {
             return Ok(ChunkBatch::default());
         }
-        let trusted = trust_stored || (generated && storage.is_written_chunk(chunk_x, chunk_z)?);
+        let key = TicketChunk::new(dimension, chunk_x, chunk_z);
+        let shared = crate::chunk_tickets::lock().is_materialized(key);
+        // A column another player already loaded/generated is served from the
+        // shared storage cache instead of being generated a second time.
+        let trusted = trust_stored
+            || (generated && storage.is_written_chunk(chunk_x, chunk_z)?)
+            || shared
+            || storage.is_cached(chunk_x, chunk_z);
         if trusted && let Some(chunk) = storage.load_chunk(chunk_x, chunk_z)? {
+            crate::chunk_tickets::lock().mark_materialized(key);
             loaded.push(Some((chunk, ChunkSource::World)));
             continue;
         }
@@ -7247,6 +7371,12 @@ fn stream_chunks_around(
     // Generated terrain stays in the region cache until the session's scheduled
     // flush: a region file is rewritten as a whole file, so flushing per batch
     // would rewrite the same multi-megabyte file on every border crossing.
+    {
+        let mut tickets = crate::chunk_tickets::lock();
+        for &(chunk_x, chunk_z) in &columns {
+            tickets.mark_materialized(TicketChunk::new(dimension, chunk_x, chunk_z));
+        }
+    }
     Ok(batch)
 }
 
@@ -8402,6 +8532,33 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn session_view_tickets_follow_the_center_and_clear_on_release() {
+        let owner = allocate_player_owner();
+        refresh_view_tickets(owner, crate::world::Dimension::Overworld, 1, 0, 0);
+        {
+            let tickets = crate::chunk_tickets::lock();
+            assert_eq!(tickets.refcount(TicketChunk::overworld(0, 0)), 1);
+            assert_eq!(tickets.player_chunks(owner).len(), 9);
+        }
+
+        refresh_view_tickets(owner, crate::world::Dimension::Overworld, 1, 2, 0);
+        {
+            let tickets = crate::chunk_tickets::lock();
+            assert_eq!(tickets.refcount(TicketChunk::overworld(1, 0)), 1);
+            assert!(
+                tickets
+                    .pending_unloads()
+                    .contains(&TicketChunk::overworld(-1, 0))
+            );
+        }
+
+        release_view_tickets(owner);
+        let tickets = crate::chunk_tickets::lock();
+        assert!(tickets.player_chunks(owner).is_empty());
+        assert!(!tickets.is_loaded(TicketChunk::overworld(2, 0)));
     }
 
     #[test]

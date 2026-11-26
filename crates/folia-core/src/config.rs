@@ -32,6 +32,10 @@ pub struct ServerProperties {
     pub difficulty: String,
     pub gamemode: String,
     pub spawn_protection: i32,
+    /// Radius (in chunks) of persistent spawn chunks. Non-positive disables
+    /// spawn tickets. This port accepts the key in `server.properties`; vanilla
+    /// keeps the value in `world-level` settings instead.
+    pub spawn_chunk_radius: i32,
     /// Paper's `environment.generate-flat-bedrock`. Paper normally reads this
     /// from `config/paper-world-defaults.yml`; this port accepts the same key
     /// in `server.properties` so a single file configures the native server.
@@ -60,6 +64,7 @@ impl Default for ServerProperties {
             difficulty: "easy".into(),
             gamemode: "survival".into(),
             spawn_protection: 16,
+            spawn_chunk_radius: 0,
             generate_flat_bedrock: false,
             extra: BTreeMap::new(),
         }
@@ -112,6 +117,9 @@ impl ServerProperties {
             "difficulty" => self.difficulty = value,
             "gamemode" => self.gamemode = value,
             "spawn-protection" => self.spawn_protection = parse_i32(&value, 16),
+            "spawn-chunk-radius" => {
+                self.spawn_chunk_radius = parse_i32(&value, 0).max(0);
+            }
             "generate-flat-bedrock" => self.generate_flat_bedrock = parse_bool(&value),
             other => {
                 self.extra.insert(other.to_owned(), value);
@@ -382,6 +390,24 @@ unknown-key=kept
         assert_eq!(
             properties.extra.get("unknown-key").map(String::as_str),
             Some("kept")
+        );
+    }
+
+    #[test]
+    fn spawn_chunk_radius_is_optional_and_clamped() {
+        assert_eq!(ServerProperties::default().spawn_chunk_radius, 0);
+        assert_eq!(
+            ServerProperties::parse("spawn-chunk-radius=3\n").spawn_chunk_radius,
+            3
+        );
+        assert_eq!(
+            ServerProperties::parse("spawn-chunk-radius=-4\n").spawn_chunk_radius,
+            0,
+            "a negative radius disables spawn tickets"
+        );
+        assert_eq!(
+            ServerProperties::parse("spawn-chunk-radius=oops\n").spawn_chunk_radius,
+            0
         );
     }
 

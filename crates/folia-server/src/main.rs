@@ -42,6 +42,7 @@ fn main() -> Result<()> {
     folia_core::join::configure_operators(root.join("run").join("ops.txt"));
     folia_core::join::configure_world_dir(root.join(&level_name));
     folia_core::join::configure_view_distance(properties.view_distance);
+    folia_core::chunk_tickets::configure_spawn_chunk_radius(properties.spawn_chunk_radius);
     folia_core::join::configure_online_mode(properties.online_mode);
     folia_core::join::configure_max_players(properties.max_players);
     let _ = folia_core::config::secure_chat_startup_audit();
@@ -126,6 +127,15 @@ fn run_server(root: &std::path::Path, level_root: &std::path::Path) -> Result<()
             plugins.tick()?;
         }
         ticks += 1;
+        // Advance the shared ticket manager's unload queue; a column whose
+        // last player ticket disappeared is discarded after the grace window.
+        let ticket_unloads = folia_core::chunk_tickets::lock().tick();
+        if !ticket_unloads.is_empty() {
+            println!(
+                "[rust] chunk tickets: unloaded {} column(s) after the ticket grace window",
+                ticket_unloads.len()
+            );
+        }
         // Regionized block-level world tick: chunks are grouped by vanilla
         // 8x8 regions and every region runs its own task queue, scheduled/
         // random ticks, block entities, hoppers, and neighbour drains in

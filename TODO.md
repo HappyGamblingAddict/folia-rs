@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,715 passing** at the c6f6bf4 gate (0 failed, 1 ignored benchmark); datapack slice next expected 1,721
+> Test status: **1,723 passing** at the 8418ea0 gate (0 failed, 1 ignored benchmark); chunk-ticket slice next expected 1,736
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 

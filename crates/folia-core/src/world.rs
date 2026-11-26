@@ -37,7 +37,7 @@ impl RegionPos {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dimension {
     Overworld,
     Nether,
@@ -276,6 +276,13 @@ impl WorldStorage {
         let mut coords: Vec<(i32, i32)> = self.chunks.keys().copied().collect();
         coords.sort_unstable();
         coords
+    }
+
+    /// True when a column is already decoded in this storage. The join
+    /// streamer uses this to serve a chunk another player materialized without
+    /// generating a duplicate copy; `load_chunk` then returns it from cache.
+    pub fn is_cached(&self, chunk_x: i32, chunk_z: i32) -> bool {
+        self.chunks.contains_key(&(chunk_x, chunk_z))
     }
 
     /// Section Y coordinates of a cached chunk, sorted for deterministic random

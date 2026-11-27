@@ -1136,6 +1136,66 @@ impl PlayerSession {
         }
     }
 
+    /// Consume a movement packet while a teleport is awaiting acknowledgement.
+    ///
+    /// Vanilla ignores the claimed position until the client confirms the
+    /// teleport: the packet may still report the place the client had before
+    /// the teleport was applied, so replaying or correcting it would
+    /// rubber-band the server's accepted position. The position is left
+    /// untouched, the simulation's reported position is resynchronised to it,
+    /// and rotation/ground flags are still applied so the first validated
+    /// packet after the ack starts in sync.
+    pub fn absorb_movement_while_teleporting(
+        &mut self,
+        packet: &[u8],
+    ) -> io::Result<MovementOutcome> {
+        let Some(update) = parse_movement(packet)? else {
+            return Ok(MovementOutcome::not_movement());
+        };
+        match update {
+            MovementUpdate::Position {
+                yaw,
+                pitch,
+                on_ground,
+                ..
+            } => {
+                if let Some(yaw) = yaw {
+                    self.yaw = yaw;
+                    self.physics.yaw = yaw;
+                }
+                if let Some(pitch) = pitch {
+                    self.pitch = pitch;
+                    self.physics.pitch = pitch;
+                }
+                self.on_ground = on_ground;
+                self.physics.on_ground = on_ground;
+            }
+            MovementUpdate::Rotation {
+                yaw,
+                pitch,
+                on_ground,
+            } => {
+                self.yaw = yaw;
+                self.pitch = pitch;
+                self.on_ground = on_ground;
+                self.physics.yaw = yaw;
+                self.physics.pitch = pitch;
+                self.physics.on_ground = on_ground;
+            }
+            MovementUpdate::Status { on_ground } => {
+                self.on_ground = on_ground;
+                self.physics.on_ground = on_ground;
+            }
+        }
+        self.physics.sync_reported_position();
+        Ok(MovementOutcome {
+            was_movement: true,
+            position_changed: false,
+            correction: None,
+            fall_damage: 0.0,
+        })
+    }
+
     pub fn save(&self, directory: impl AsRef<Path>) -> io::Result<PathBuf> {
         let directory = directory.as_ref();
         fs::create_dir_all(directory)?;

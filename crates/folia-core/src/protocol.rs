@@ -1831,6 +1831,44 @@ pub fn read_set_entity_motion(data: &[u8]) -> io::Result<(i32, [f64; 3])> {
 pub const SERVERBOUND_PLAYER_INPUT: i32 = 42;
 pub const SERVERBOUND_USE_ITEM: i32 = 64;
 
+/// `ServerboundAcceptTeleportation` play packet id.
+///
+/// Packet shape (1.21.11): a single VarInt `id`, the value carried by the
+/// server's `ClientboundTeleportEntity` (play id 70). `ServerboundMovePlayer`
+/// has no acknowledgement field in this protocol version, so this dedicated
+/// packet is the only ack path. No existing packet layout changes: the
+/// builder/parser below only add a body to this previously ignored packet id.
+pub const SERVERBOUND_ACCEPT_TELEPORTATION: i32 = 0;
+
+/// Read the teleport id from a `ServerboundAcceptTeleportation` body. An id
+/// that does not match a session's outstanding teleport is stale/unknown and
+/// the caller ignores it; malformed frames are reported as errors.
+pub fn parse_accept_teleportation(data: &[u8]) -> io::Result<i32> {
+    let mut reader = PacketReader::new(data);
+    let id = reader.read_varint()?;
+    if id != SERVERBOUND_ACCEPT_TELEPORTATION {
+        return Err(invalid("wrong packet id"));
+    }
+    let teleport_id = reader.read_varint()?;
+    if reader.remaining() != 0 {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok(teleport_id)
+}
+
+/// Build a `ServerboundAcceptTeleportation` with the given teleport id. The
+/// id is a single `0x00` byte when unused/zero and otherwise the exact VarInt
+/// the server sent; no existing packet layout changes, so old fixtures stay
+/// byte-stable.
+pub fn build_accept_teleportation(teleport_id: i32) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer
+        .write_varint(SERVERBOUND_ACCEPT_TELEPORTATION)
+        .unwrap();
+    writer.write_varint(teleport_id).unwrap();
+    writer.into_inner()
+}
+
 pub const PLAYER_INPUT_FORWARD: u8 = 0x01;
 pub const PLAYER_INPUT_BACKWARD: u8 = 0x02;
 pub const PLAYER_INPUT_LEFT: u8 = 0x04;
@@ -1975,6 +2013,33 @@ mod tests {
     fn ping_round_trip() {
         let payload = build_ping(0x1122334455667788);
         assert_eq!(parse_ping(&payload).unwrap(), 0x1122334455667788);
+    }
+
+    #[test]
+    fn accept_teleportation_round_trip() {
+        for id in [0, 1, 1000, 1_000_002, 268_435_455] {
+            let packet = build_accept_teleportation(id);
+            assert_eq!(packet[0] as i32, SERVERBOUND_ACCEPT_TELEPORTATION);
+            assert_eq!(parse_accept_teleportation(&packet).unwrap(), id);
+        }
+    }
+
+    #[test]
+    fn accept_teleportation_rejects_wrong_id_and_trailing_bytes() {
+        let mut wrong = PacketWriter::new();
+        wrong.write_varint(1).unwrap();
+        wrong.write_varint(1002).unwrap();
+        assert!(parse_accept_teleportation(&wrong.into_inner()).is_err());
+
+        let mut trailing = build_accept_teleportation(1002);
+        trailing.push(0);
+        assert!(parse_accept_teleportation(&trailing).is_err());
+
+        let mut missing = PacketWriter::new();
+        missing
+            .write_varint(SERVERBOUND_ACCEPT_TELEPORTATION)
+            .unwrap();
+        assert!(parse_accept_teleportation(&missing.into_inner()).is_err());
     }
 
     #[test]

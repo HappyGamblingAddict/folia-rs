@@ -38,19 +38,22 @@ use crate::item_prototypes::ConsumablePrototype;
 use crate::math::{BlockPos, Vec3};
 use crate::nbt::Tag;
 use crate::player::{
-    ChatPublicKey, PlayerSession, ProfilePublicKey, RemoteChatSession, SignedMessage, uuid_string,
+    ChatPublicKey, MovementOutcome, PlayerSession, ProfilePublicKey, RemoteChatSession,
+    SignedMessage, uuid_string,
 };
 use crate::player_info::{player_info_add_packet, player_info_remove_packet};
-use crate::player_physics::{MovementCorrection, StoragePhysicsWorld};
+use crate::player_physics::{MovementCorrection, PhysicsWorld, StoragePhysicsWorld};
 use crate::protocol::{
     Connection, EncryptionRequest, GameProfile, Handshake, LAST_SEEN_MESSAGES_WINDOW,
-    LastSeenValidator, PacketReader, PacketWriter, ProfileProperty, SERVERBOUND_CHAT,
-    SERVERBOUND_CHAT_SESSION_UPDATE, SignedMessageBody, build_disguised_chat_packet,
-    build_encryption_request, build_login_disconnect, build_login_success,
-    build_player_chat_packet, parse_encryption_response, parse_login_start, parse_serverbound_chat,
-    parse_serverbound_chat_session_update,
+    LastSeenValidator, PacketReader, PacketWriter, ProfileProperty,
+    SERVERBOUND_ACCEPT_TELEPORTATION, SERVERBOUND_CHAT, SERVERBOUND_CHAT_SESSION_UPDATE,
+    SignedMessageBody, build_disguised_chat_packet, build_encryption_request,
+    build_login_disconnect, build_login_success, build_player_chat_packet,
+    parse_accept_teleportation, parse_encryption_response, parse_login_start,
+    parse_serverbound_chat, parse_serverbound_chat_session_update,
 };
 use crate::registry_key::IdMap;
+use crate::teleport::{FIRST_TELEPORT_ID, TeleportTracker};
 use crate::tnt::{ExplosionEvent, TntStore, TntTick};
 use crate::weather::Weather;
 use crate::world::WorldStorage;
@@ -283,7 +286,6 @@ const PLAYER_SAVE_INTERVAL: Duration = Duration::from_secs(5);
 /// while a blocking socket read waits for the next client packet.
 const SESSION_TICK_INTERVAL: Duration = Duration::from_millis(50);
 
-const SERVERBOUND_ACCEPT_TELEPORTATION: i32 = 0;
 const SERVERBOUND_CHUNK_BATCH_RECEIVED: i32 = 10;
 const SERVERBOUND_KEEP_ALIVE: i32 = 27;
 const SERVERBOUND_PONG: i32 = 44;
@@ -1912,7 +1914,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
 
     stream.set_read_timeout(Some(SESSION_TICK_INTERVAL))?;
     stream.set_write_timeout(Some(SESSION_TICK_INTERVAL))?;
-    let mut teleport_id = 1001i32;
+    let mut teleports = TeleportTracker::new(FIRST_TELEPORT_ID);
     let mut last_keepalive = Instant::now();
     let mut last_save = Instant::now();
     let mut last_flush = Instant::now();
@@ -2563,8 +2565,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     false,
                 );
                 session.reset_physics();
-                teleport_id += 1;
-                write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                let id = teleports.issue();
+                write_packet(&mut stream, &position_packet(&session, id))?;
                 let fall_damage = pearl_fall_damage(session.game_mode);
                 if !awaiting_respawn && fall_damage > 0.0 {
                     let result = damage_player_with_rng(
@@ -2715,8 +2717,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     session.pitch = pitch;
                     session.physics.yaw = yaw;
                     session.physics.pitch = pitch;
-                    teleport_id += 1;
-                    write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                    let id = teleports.issue();
+                    write_packet(&mut stream, &position_packet(&session, id))?;
                     let new_x = (session.x.floor() as i32).div_euclid(16);
                     let new_z = (session.z.floor() as i32).div_euclid(16);
                     if (new_x, new_z) != (center_x, center_z) {
@@ -2910,7 +2912,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 &mut center_x,
                 &mut center_z,
                 &mut sent_chunks,
-                &mut teleport_id,
+                &mut teleports,
             )?;
             current_storage = new_storage;
             continue;
@@ -2932,7 +2934,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                     &mut center_z,
                     &mut sent_chunks,
                     respawn_position,
-                    &mut teleport_id,
+                    &mut teleports,
                 )?;
                 awaiting_respawn = false;
                 death_at = None;
@@ -3008,8 +3010,20 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 match id {
                     SERVERBOUND_KEEP_ALIVE
                     | SERVERBOUND_PONG
-                    | SERVERBOUND_ACCEPT_TELEPORTATION
                     | SERVERBOUND_CHUNK_BATCH_RECEIVED => {}
+                    SERVERBOUND_ACCEPT_TELEPORTATION => {
+                        match parse_accept_teleportation(&packet) {
+                            Ok(ack) if teleports.acknowledge(ack) => {
+                                println!("[join] {} acknowledged teleport {ack}", start.name);
+                            }
+                            // Stale/unknown ids (including the login teleport
+                            // and superseded corrections) are harmless.
+                            Ok(_) => {}
+                            Err(error) => {
+                                eprintln!("[join] teleport acknowledgement failed: {error}");
+                            }
+                        }
+                    }
                     SERVERBOUND_CHANGE_GAME_MODE => {
                         if !is_operator(&session.name) {
                             println!(
@@ -3049,7 +3063,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                                 &mut center_z,
                                 &mut sent_chunks,
                                 respawn_position,
-                                &mut teleport_id,
+                                &mut teleports,
                             )?;
                             awaiting_respawn = false;
                             death_at = None;
@@ -3099,8 +3113,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         if let Some((x, y, z)) = pending_teleport.take() {
                             session.teleport(x, y, z, false);
                             session.reset_physics();
-                            teleport_id += 1;
-                            write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                            let id = teleports.issue();
+                            write_packet(&mut stream, &position_packet(&session, id))?;
                             center_x = (session.x.floor() as i32).div_euclid(16);
                             center_z = (session.z.floor() as i32).div_euclid(16);
                             if let Err(error) = dimension::save_playerdata_preserving_dimension(
@@ -3631,10 +3645,12 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         let outcome = {
                             let storage = &mut *crate::world::lock(current_storage);
                             let mut collider = StoragePhysicsWorld::new(storage);
-                            session.apply_movement_with_allowance(
+                            apply_movement_with_teleport_gate(
+                                &mut session,
                                 &packet,
                                 &mut collider,
                                 allowance,
+                                &teleports,
                             )?
                         };
                         if !outcome.was_movement {
@@ -3642,8 +3658,8 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         }
                         last_move_at = Instant::now();
                         if let Some(correction) = outcome.correction {
-                            teleport_id += 1;
-                            write_packet(&mut stream, &position_packet(&session, teleport_id))?;
+                            let id = teleports.issue();
+                            write_packet(&mut stream, &position_packet(&session, id))?;
                             match correction {
                                 MovementCorrection::TooFar { distance_squared } => println!(
                                     "[join] {} moved {:.1} blocks in one packet; sent back to \
@@ -6553,14 +6569,14 @@ fn respawn_player(
     center_z: &mut i32,
     sent_chunks: &mut HashSet<(i32, i32)>,
     spawn: (f64, f64, f64),
-    teleport_id: &mut i32,
+    teleports: &mut TeleportTracker,
 ) -> io::Result<()> {
     session.teleport(spawn.0, spawn.1, spawn.2, true);
     session.health = 20.0;
     reset_player_entity(session, player_entity_id());
     write_packet(stream, &respawn_packet(session.game_mode)?)?;
-    *teleport_id += 1;
-    write_packet(stream, &position_packet(session, *teleport_id))?;
+    let id = teleports.issue();
+    write_packet(stream, &position_packet(session, id))?;
     write_packet(stream, &health_packet(session))?;
     write_packet(stream, &abilities_packet(session.game_mode))?;
     *center_x = (session.x.floor() as i32).div_euclid(16);
@@ -6619,7 +6635,7 @@ fn switch_dimension(
     center_x: &mut i32,
     center_z: &mut i32,
     sent_chunks: &mut HashSet<(i32, i32)>,
-    teleport_id: &mut i32,
+    teleports: &mut TeleportTracker,
 ) -> io::Result<()> {
     // 1. Persist the old position in the old dimension.
     if let Err(error) =
@@ -6657,8 +6673,8 @@ fn switch_dimension(
         stream,
         &dimension_respawn_packet(trigger.to, session.game_mode, seed, 1)?,
     )?;
-    *teleport_id += 1;
-    write_packet(stream, &position_packet(session, *teleport_id))?;
+    let id = teleports.issue();
+    write_packet(stream, &position_packet(session, id))?;
     write_packet(stream, &health_packet(session))?;
     write_packet(stream, &abilities_packet(session.game_mode))?;
 
@@ -6765,6 +6781,27 @@ fn portal_click(storage: &mut WorldStorage, packet: &[u8]) -> io::Result<Option<
         return Ok(None);
     };
     Ok(dimension::portal_kind_for_block(&state.name))
+}
+
+/// Apply one client movement packet while honouring an outstanding teleport.
+///
+/// Before the client acknowledges the server's teleport id its position
+/// packets are ignored: they may still report the pre-teleport place, so
+/// replaying or correcting them would rubber-band the accepted position.
+/// Rotation and ground flags still sync, and the simulation's reported
+/// position is resynchronised so the first packet after the ack is validated
+/// from the teleport destination.
+fn apply_movement_with_teleport_gate(
+    session: &mut PlayerSession,
+    packet: &[u8],
+    world: &mut impl PhysicsWorld,
+    allowance: f64,
+    teleports: &TeleportTracker,
+) -> io::Result<MovementOutcome> {
+    if teleports.is_pending() {
+        return session.absorb_movement_while_teleporting(packet);
+    }
+    session.apply_movement_with_allowance(packet, world, allowance)
 }
 
 fn position_packet(session: &PlayerSession, teleport_id: i32) -> Vec<u8> {
@@ -12159,5 +12196,134 @@ mod tests {
         }
         assert!(saw_remove, "viewer should see the newcomer removed");
         drop(viewer_guard);
+    }
+
+    fn movement_packet(x: f64, y: f64, z: f64, on_ground: bool) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer
+            .write_varint(crate::player::SERVERBOUND_MOVE_POS)
+            .unwrap();
+        writer.write_f64(x).unwrap();
+        writer.write_f64(y).unwrap();
+        writer.write_f64(z).unwrap();
+        writer.write_u8(u8::from(on_ground)).unwrap();
+        writer.into_inner()
+    }
+
+    fn decode_position_packet(packet: &[u8]) -> (i32, f64, f64, f64) {
+        let mut reader = PacketReader::new(packet);
+        assert_eq!(reader.read_varint().unwrap(), PLAY_POSITION);
+        let id = reader.read_varint().unwrap();
+        (
+            id,
+            reader.read_f64().unwrap(),
+            reader.read_f64().unwrap(),
+            reader.read_f64().unwrap(),
+        )
+    }
+
+    #[test]
+    fn position_correction_carries_the_issued_teleport_id() {
+        let mut session = PlayerSession::new("T".into(), [0x21; 16], 1.0, 64.0, -2.0);
+        let mut teleports = TeleportTracker::new(FIRST_TELEPORT_ID);
+        session.teleport(10.0, 70.0, 20.0, false);
+
+        let id = teleports.issue();
+        assert_eq!(id, FIRST_TELEPORT_ID);
+        assert_eq!(teleports.pending_id(), Some(id));
+        assert_eq!(
+            decode_position_packet(&position_packet(&session, id)),
+            (id, 10.0, 70.0, 20.0),
+            "the correction packet sends the id followed by the accepted place"
+        );
+
+        let next = teleports.issue();
+        assert_eq!(next, id + 1);
+        assert_eq!(
+            decode_position_packet(&position_packet(&session, next)).0,
+            next
+        );
+        assert_eq!(
+            decode_position_packet(&position_packet(&session, 1000)).0,
+            1000,
+            "a zero/unused id is still byte-stable"
+        );
+    }
+
+    #[test]
+    fn pending_teleport_suppresses_rubber_banding_until_the_matching_ack() {
+        let mut session = PlayerSession::new("T".into(), [0x22; 16], 0.0, 64.0, 0.0);
+        let mut world = crate::player_physics::FlatPhysicsWorld::new(0);
+        session.teleport(100.0, 70.0, 200.0, false);
+        session.reset_physics();
+        let mut teleports = TeleportTracker::new(FIRST_TELEPORT_ID);
+        let id = teleports.issue();
+        let allowance = crate::player_physics::MAX_MOVEMENT_DISTANCE_SQUARED;
+
+        // The client still reports the place it had before the teleport.
+        let stale = movement_packet(0.0, 64.0, 0.0, false);
+        let outcome = apply_movement_with_teleport_gate(
+            &mut session,
+            &stale,
+            &mut world,
+            allowance,
+            &teleports,
+        )
+        .unwrap();
+        assert_eq!(outcome.correction, None, "no correction while pending");
+        assert_eq!((session.x, session.y, session.z), (100.0, 70.0, 200.0));
+        assert_eq!(session.physics.reported_position(), (100.0, 70.0, 200.0));
+
+        // A wrong ack leaves the gate closed.
+        assert!(!teleports.acknowledge(id + 1));
+        let outcome = apply_movement_with_teleport_gate(
+            &mut session,
+            &stale,
+            &mut world,
+            allowance,
+            &teleports,
+        )
+        .unwrap();
+        assert_eq!(outcome.correction, None);
+        assert_eq!((session.x, session.y, session.z), (100.0, 70.0, 200.0));
+
+        // The matching ack resumes normal validation.
+        assert!(teleports.acknowledge(id));
+        assert!(!teleports.is_pending());
+        let walk = movement_packet(100.2, 70.0, 200.0, true);
+        let outcome = apply_movement_with_teleport_gate(
+            &mut session,
+            &walk,
+            &mut world,
+            allowance,
+            &teleports,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.correction, None,
+            "a legal walk is not rubber-banded"
+        );
+        assert!((session.x - 100.2).abs() < 1.0e-9);
+        assert!(!teleports.acknowledge(id), "a second ack is stale");
+
+        let jump = movement_packet(600.0, 70.0, 200.0, false);
+        let outcome = apply_movement_with_teleport_gate(
+            &mut session,
+            &jump,
+            &mut world,
+            allowance,
+            &teleports,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                outcome.correction,
+                Some(MovementCorrection::TooFar { distance_squared })
+                    if (distance_squared - 499.8 * 499.8).abs() < 1.0e-3
+            ),
+            "an oversized move is corrected again after the ack: {:?}",
+            outcome.correction
+        );
+        assert_eq!((session.x, session.y, session.z), (100.2, 70.0, 200.0));
     }
 }

@@ -4020,3 +4020,34 @@ Format:
   feet-fluid detection). Focused `use_item`, `item_components`, `enchanting`,
   `player_physics`, `join`, `durability`, and `projectile` suites, workspace
   check, fmt, and clippy `-D warnings` green.
+
+## 2026-11-27 — P4.2 teleport ids acknowledge through a dedicated packet
+
+- Context: position corrections and command/respawn/portal/pearl teleports
+  already carried an id in `join::position_packet`, but the play loop ignored
+  the client's acknowledgement (packet id 0) and validated the next movement
+  against the pre-teleport position, so a client that had not applied the
+  teleport yet could be rubber-banded back.
+- Decision: `TeleportTracker` keeps one pending id per session. `issue()`
+  increments it (1002 is the first play-loop id, preserving the old sequence;
+  the login position's 1000 is deliberately untracked) and replaces any older
+  pending id. `ServerboundAcceptTeleportation` (play id 0) is a single VarInt:
+  `parse_accept_teleportation` reads it and only an exact match clears the
+  pending id; stale/unknown ids are ignored, not errors. While an id is
+  pending the play loop absorbs movement packets without replaying or
+  correcting them (rotation/ground flags still sync and the simulation's
+  reported position is resynchronised), then resumes normal validation on ack.
+- Why: vanilla ignores movement until the client confirms the teleport, and
+  1.21.11 `ServerboundMovePlayer` has no ack field, so the dedicated confirm
+  packet is the correct source. No existing wire layout changes: the position
+  packet already had the VarInt id, and the ack packet was previously ignored.
+- Consequences / documented gaps: the login teleport (id 1000) is not tracked,
+  so its ack is an unknown id; this keeps the existing join/movement fixtures
+  byte-stable and lets the time-scaled catch-up resync a client that walked
+  while the initial chunk batch streamed. Late acks for superseded teleports
+  are harmless. No Java oracle fixture exists for the confirm packet; its
+  shape is pinned by Rust codec tests and the captured id-70 layout.
+- Verification: 6 `teleport` unit tests, 2 `protocol` ack codec tests, 2 `join`
+  unit tests (correction id, gated movement, stale/matching ack, walk after
+  ack), and `tests/teleport_ack.rs` driving a full TCP join. Focused
+  `movement_validation`, workspace check, fmt, and clippy `-D warnings` green.

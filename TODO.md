@@ -1933,6 +1933,9 @@ instantly on start-destroy and places on use-item-on.
 
 ### P4.2 Movement validation, corrections, and teleports `[~]` `M`
 
+- **Progress (2026-11-27):** Teleport corrections now use per-session ids;
+  movement is suppressed until the matching `ServerboundAcceptTeleportation`,
+  with 11 tracker/codec/join/TCP tests. Stale acks remain harmless.
 - **Progress (2026-11-05):** a movement packet whose squared displacement
   exceeds 100 (ten blocks) is reverted and answered with a position packet
   carrying the last accepted position; the integration test joins, sends a

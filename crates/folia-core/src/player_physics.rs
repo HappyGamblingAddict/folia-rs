@@ -656,6 +656,16 @@ impl PlayerPhysics {
         (self.reported_x, self.reported_y, self.reported_z)
     }
 
+    /// Resynchronise the movement-baseline position without moving the player.
+    /// Used while a teleport is awaiting acknowledgement so the next accepted
+    /// packet is measured from the server's position, not the stale client
+    /// position reported before the teleport was applied.
+    pub fn sync_reported_position(&mut self) {
+        self.reported_x = self.x;
+        self.reported_y = self.y;
+        self.reported_z = self.z;
+    }
+
     /// Place the player without simulating movement. Used by login settling,
     /// respawn, and command teleports.
     pub fn teleport(&mut self, x: f64, y: f64, z: f64) {

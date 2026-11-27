@@ -58,6 +58,7 @@ pub mod snbt;
 pub mod spawn;
 pub mod status;
 pub mod tags;
+pub mod teleport;
 pub mod tick;
 pub mod tnt;
 pub mod varint;

@@ -9,7 +9,7 @@ Last updated: 2026-11-24
 ## Current status
 
 - Current commit: see `git log`; all work is committed and pushed to `main`.
-  CI is green at `fca9a5a` with 1,919 tests. P1.8, P0.5 orchestration, P1.2
+  CI is green at `28526c6` with 1,926 tests. P1.8, P0.5 orchestration, P1.2
   typed keys (menu + particle), explosion feedback, status, max-player guard,
   P7.6 game rules, game-event model, P4.15 player entities, P8.9/P11.3 fuzz,
   P10.8 watchdog, P10.9 concurrency stress, P11.1 protocol differential,
@@ -18,8 +18,8 @@ Last updated: 2026-11-24
   ocean ruin/monument, mineshaft, stronghold, igloo, Ancient City, trial chamber,
   Nether bastion/fortress, and End-city wiring/fixtures are complete locally;
   all pushed and CI-green.
-- Tests: **1,919 passing** on the last confirmed full gate (0 failed, 1 ignored
-  benchmark); fluid-movement slice next expected 1,926. Parity is **98.75% block-class /
+- Tests: **1,926 passing** on the last confirmed full gate (0 failed, 1 ignored
+  benchmark); movement-effect slice next expected 1,934. Parity is **98.75% block-class /
   95.88% exact-name**.
 - Formatting/Clippy: clean; no warnings.
 - Worldgen: **224/224** configured feature types execute, 888/888 placement
@@ -105,6 +105,8 @@ Last updated: 2026-11-24
 - P4.1 fluid movement landed for water/lava flow, bubble columns, and powder
   snow; elytra, levitation, depth strider, riptide, and live freeze packets
   remain unsupported.
+- P4.1 movement effects landed for Depth Strider, Slow Falling, and Levitation;
+  elytra, riptide, and live session-to-physics effect feeding remain open.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

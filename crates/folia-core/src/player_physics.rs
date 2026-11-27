@@ -20,9 +20,10 @@
 //!
 //! The fluid formulas are Rust-only goldens: no 1.21.11 Java movement oracle is
 //! available on this host, so `FlowingFluid.getFlow` and the buoyancy constants
-//! are approximated (see `DECISIONS.md`). Elytra, levitation/slow falling,
-//! depth strider, riptide, and live freeze-damage health wiring are still
-//! intentionally unsupported.
+//! are approximated (see `DECISIONS.md`). Depth strider, slow falling, and
+//! levitation now modify submerged water speed, descent, and ascent through
+//! inert [`PlayerPhysics`] modifier fields; elytra, riptide, and live
+//! freeze-damage health wiring are still intentionally unsupported.
 
 use crate::block_behaviour::MovementTraits;
 use crate::chunk::{BlockState, Chunk};
@@ -121,6 +122,27 @@ pub const MAX_FREEZE_TICKS: u16 = 160;
 /// Vanilla `LivingEntity.getTicksRequiredToFreeze` default interval.
 pub const FREEZE_DAMAGE_INTERVAL: u64 = 40;
 pub const FREEZE_DAMAGE: f32 = 1.0;
+/// Depth strider level 0 keeps the vanilla water speed unchanged; each level
+/// adds two thirds of that base speed (levels 1..=3 multiply it by 5/3, 7/3,
+/// and 3). No Java movement oracle exists on this host, so this is a Rust-only
+/// golden following the 2/3-per-level spec; see `DECISIONS.md`.
+pub const DEPTH_STRIDER_STEP: f64 = 2.0 / 3.0;
+pub const MAX_DEPTH_STRIDER_LEVEL: i32 = 3;
+/// Slow falling replaces the normal air gravity with a quarter of it and caps
+/// the descent velocity (`SlowFallingMobEffect` prevents fall damage).
+pub const SLOW_FALL_GRAVITY_FACTOR: f64 = 0.25;
+pub const SLOW_FALL_TERMINAL_VELOCITY: f64 = -0.1;
+/// Levitation approaches `LEVITATION_ACCELERATION * level` upward while active
+/// (`LivingEntity` levitation branch).
+pub const LEVITATION_ACCELERATION: f64 = 0.05;
+pub const LEVITATION_APPROACH: f64 = 0.2;
+
+/// Horizontal submerged-water speed multiplier for a depth strider level.
+/// Levels outside `0..=3` are clamped, so missing or invalid enchantment data
+/// stays inert.
+pub fn depth_strider_speed_multiplier(level: i32) -> f64 {
+    1.0 + f64::from(level.clamp(0, MAX_DEPTH_STRIDER_LEVEL)) * DEPTH_STRIDER_STEP
+}
 
 /// World queries player physics needs. Implemented by the shared world storage
 /// and by the flat/test worlds used in focused tests.
@@ -447,6 +469,12 @@ pub struct PlayerPhysics {
     pub cobweb_stuck: bool,
     /// `LivingEntity.ticksFrozen`, advanced by powder-snow exposure.
     pub ticks_frozen: u16,
+    /// Depth strider level from the boots slot; `0` keeps water movement inert.
+    pub depth_strider_level: i32,
+    /// Whether slow falling is active; suppresses gravity and fall damage.
+    pub slow_falling: bool,
+    /// Levitation level (`amplifier + 1`); `0` disables the upward push.
+    pub levitation_level: i32,
     /// Monotonic simulation tick count used for the freeze-damage interval.
     pub tick_count: u64,
     /// Last position reported by the client. Deltas are measured from here,
@@ -475,6 +503,9 @@ impl PlayerPhysics {
             fall_distance: 0.0,
             cobweb_stuck: false,
             ticks_frozen: 0,
+            depth_strider_level: 0,
+            slow_falling: false,
+            levitation_level: 0,
             tick_count: 0,
             reported_x: x,
             reported_y: y,
@@ -696,7 +727,11 @@ impl PlayerPhysics {
     ) -> TickOutcome {
         let kind = state.kind;
         let speed = match kind {
-            FluidKind::Water => self.movement_speed(),
+            // Depth strider only speeds up submerged water travel; lava and
+            // every other movement branch stay unchanged.
+            FluidKind::Water => {
+                self.movement_speed() * depth_strider_speed_multiplier(self.depth_strider_level)
+            }
             FluidKind::Lava => LAVA_MOVE_SPEED,
         };
         self.move_relative(speed, input);
@@ -842,6 +877,20 @@ impl PlayerPhysics {
             }
         }
 
+        // Levitation replaces gravity with an upward approach to a per-level
+        // target; slow falling keeps a fraction of gravity and caps descent.
+        // Both are no-ops with the inert defaults, so ordinary air travel keeps
+        // the same GRAVITY recurrence and existing fixtures stay unchanged.
+        let gravity = if self.levitation_level > 0 {
+            let target = LEVITATION_ACCELERATION * f64::from(self.levitation_level);
+            self.velocity_y += (target - self.velocity_y) * LEVITATION_APPROACH;
+            0.0
+        } else if self.slow_falling {
+            GRAVITY * SLOW_FALL_GRAVITY_FACTOR
+        } else {
+            GRAVITY
+        };
+
         // `WebBlock.entityInside` arms the multiplier at the end of the tick
         // in which the player enters the web; the following move consumes it
         // and `Entity.move` zeroes delta movement.
@@ -886,11 +935,14 @@ impl PlayerPhysics {
         } else {
             self.velocity_x = moved.dx * friction * AIR_FRICTION * speed_factor;
             self.velocity_y = match (moved.bounce_velocity, climb_lift) {
-                (Some(bounce), _) => (bounce - GRAVITY) * DRAG,
-                (None, true) => (CLIMB_SPEED - GRAVITY) * DRAG,
-                (None, false) => (moved.dy - GRAVITY) * DRAG,
+                (Some(bounce), _) => (bounce - gravity) * DRAG,
+                (None, true) => (CLIMB_SPEED - gravity) * DRAG,
+                (None, false) => (moved.dy - gravity) * DRAG,
             };
             self.velocity_z = moved.dz * friction * AIR_FRICTION * speed_factor;
+        }
+        if self.slow_falling && self.levitation_level == 0 {
+            self.velocity_y = self.velocity_y.max(SLOW_FALL_TERMINAL_VELOCITY);
         }
         // `Entity.applyEffectsFromBlocks` calls `SlimeBlock.stepOn` at the end
         // of the tick, after `travelInAir` has applied gravity and drag.
@@ -906,7 +958,9 @@ impl PlayerPhysics {
 
         let mut landed = false;
         let mut fall_damage = 0.0;
-        if self.swimming || powder_snow {
+        if self.swimming || powder_snow || self.slow_falling || self.levitation_level > 0 {
+            // Slow falling and levitation clear the accumulated fall distance
+            // every tick, so landing under either effect deals no damage.
             self.fall_distance = 0.0;
         } else {
             if moved.dy < 0.0 {

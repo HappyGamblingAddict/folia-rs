@@ -2,9 +2,10 @@ use folia_core::block_behaviour::MovementTraits;
 use folia_core::fluid::{self, FluidKind, FluidState};
 use folia_core::player_physics::{
     AIR_FRICTION, Aabb, CLIMB_MOVE_LIMIT, CLIMB_SPEED, COBWEB_MOVE_MULTIPLIER, ClientMove, DRAG,
-    FREEZE_DAMAGE, FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE, MAX_FREEZE_TICKS, MIN_FREEZE_TICKS,
-    MovementCorrection, MovementInput, PhysicsWorld, PlayerPhysics, SNEAKING_HEIGHT,
-    STANDING_HEIGHT, SWIMMING_HEIGHT, TERMINAL_VELOCITY, WATER_FLOW_ACCELERATION, WIDTH,
+    FREEZE_DAMAGE, FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE, LEVITATION_ACCELERATION,
+    MAX_FREEZE_TICKS, MIN_FREEZE_TICKS, MovementCorrection, MovementInput, PhysicsWorld,
+    PlayerPhysics, SLOW_FALL_TERMINAL_VELOCITY, SNEAKING_HEIGHT, STANDING_HEIGHT, SWIMMING_HEIGHT,
+    TERMINAL_VELOCITY, WATER_FLOW_ACCELERATION, WIDTH, depth_strider_speed_multiplier,
 };
 use std::collections::HashMap;
 
@@ -964,6 +965,221 @@ fn fluid_and_powder_snow_movement_is_deterministic() {
             },
         );
         let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        (0..40)
+            .map(|_| {
+                physics.tick(
+                    &mut world,
+                    MovementInput {
+                        forward: 0.5,
+                        strafe: -0.25,
+                        jumping: false,
+                    },
+                );
+                (physics.x, physics.y, physics.z, physics.ticks_frozen)
+            })
+            .collect()
+    }
+    assert_eq!(trace(), trace());
+}
+
+/// A wide, shallow water lane over solid ground. The player stays submerged at
+/// y=0 while swimming east, so the only variable is the depth strider level.
+fn water_lane() -> FluidWorld {
+    let mut world = FluidWorld::new(0);
+    for x in -8..=24 {
+        for z in -1..=1 {
+            world.set(
+                x,
+                0,
+                z,
+                FluidEntry {
+                    fluid: Some(FluidState::source(FluidKind::Water)),
+                    ..FluidEntry::default()
+                },
+            );
+        }
+    }
+    world
+}
+
+fn swim_east_distance(level: i32, ticks: usize) -> f64 {
+    let mut world = water_lane();
+    let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+    physics.yaw = -90.0;
+    physics.depth_strider_level = level;
+    for _ in 0..ticks {
+        physics.tick(&mut world, MovementInput::walking_forward());
+    }
+    physics.x - 0.5
+}
+
+#[test]
+fn depth_strider_speed_multiplier_follows_two_thirds_steps() {
+    assert!((depth_strider_speed_multiplier(0) - 1.0).abs() < 1.0e-12);
+    assert!((depth_strider_speed_multiplier(1) - 5.0 / 3.0).abs() < 1.0e-12);
+    assert!((depth_strider_speed_multiplier(2) - 7.0 / 3.0).abs() < 1.0e-12);
+    assert!((depth_strider_speed_multiplier(3) - 3.0).abs() < 1.0e-12);
+    assert_eq!(
+        depth_strider_speed_multiplier(-2),
+        depth_strider_speed_multiplier(0)
+    );
+    assert_eq!(
+        depth_strider_speed_multiplier(9),
+        depth_strider_speed_multiplier(3)
+    );
+}
+
+#[test]
+fn each_depth_strider_level_speeds_up_submerged_water_travel() {
+    let base = swim_east_distance(0, 20);
+    let level1 = swim_east_distance(1, 20);
+    let level2 = swim_east_distance(2, 20);
+    let level3 = swim_east_distance(3, 20);
+
+    assert!(base > 0.0, "baseline water swim distance {base}");
+    assert!(
+        (level1 - base * 5.0 / 3.0).abs() < 1.0e-9,
+        "level 1 {level1} vs expected {}",
+        base * 5.0 / 3.0
+    );
+    assert!(
+        (level2 - base * 7.0 / 3.0).abs() < 1.0e-9,
+        "level 2 {level2} vs expected {}",
+        base * 7.0 / 3.0
+    );
+    assert!(
+        (level3 - base * 3.0).abs() < 1.0e-9,
+        "level 3 {level3} vs expected {}",
+        base * 3.0
+    );
+    assert!(level1 > base && level2 > level1 && level3 > level2);
+}
+
+#[test]
+fn depth_strider_leaves_lava_and_air_movement_unchanged() {
+    let mut lava = FluidWorld::new(0);
+    for x in -2..=8 {
+        for z in -1..=1 {
+            lava.set(
+                x,
+                0,
+                z,
+                FluidEntry {
+                    fluid: Some(FluidState::source(FluidKind::Lava)),
+                    ..FluidEntry::default()
+                },
+            );
+        }
+    }
+    let mut air = FluidWorld::new(0);
+
+    fn distance(world: &mut impl PhysicsWorld, level: i32) -> f64 {
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        physics.on_ground = true;
+        physics.yaw = -90.0;
+        physics.depth_strider_level = level;
+        for _ in 0..20 {
+            physics.tick(world, MovementInput::walking_forward());
+        }
+        physics.x - 0.5
+    }
+
+    let lava0 = distance(&mut lava, 0);
+    let lava3 = distance(&mut lava, 3);
+    let air0 = distance(&mut air, 0);
+    let air3 = distance(&mut air, 3);
+    assert_eq!(lava0, lava3, "lava is unaffected by depth strider");
+    assert_eq!(air0, air3, "air movement is unaffected by depth strider");
+}
+
+#[test]
+fn slow_falling_slows_the_descent_and_prevents_fall_damage() {
+    let mut world = FlatPhysicsWorld::new(0);
+    let mut slowed = PlayerPhysics::new(0.5, 40.0, 0.5);
+    slowed.slow_falling = true;
+    let mut normal = PlayerPhysics::new(0.5, 40.0, 0.5);
+
+    let mut slowed_damage = 0.0;
+    let mut normal_damage = 0.0;
+    for _ in 0..60 {
+        slowed_damage += slowed
+            .tick(&mut world, MovementInput::default())
+            .fall_damage;
+        normal_damage += normal
+            .tick(&mut world, MovementInput::default())
+            .fall_damage;
+    }
+    assert!(slowed.y > normal.y + 20.0, "slow fall y={}", slowed.y);
+    assert_eq!(slowed_damage, 0.0);
+    assert_eq!(normal_damage, 37.0);
+    assert!(
+        slowed.velocity_y >= SLOW_FALL_TERMINAL_VELOCITY - 1.0e-9,
+        "descent velocity {}",
+        slowed.velocity_y
+    );
+
+    for _ in 0..500 {
+        slowed_damage += slowed
+            .tick(&mut world, MovementInput::default())
+            .fall_damage;
+    }
+    assert!(slowed.on_ground, "the slow fall eventually lands");
+    assert_eq!(slowed_damage, 0.0, "slow falling cancels all fall damage");
+}
+
+#[test]
+fn levitation_pushes_the_player_upward_and_scales_with_level() {
+    fn ascent(level: i32) -> (f64, f64, f32) {
+        let mut world = FlatPhysicsWorld::new(-100);
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        physics.levitation_level = level;
+        physics.fall_distance = 10.0;
+        let mut damage = 0.0;
+        for _ in 0..40 {
+            damage += physics
+                .tick(&mut world, MovementInput::default())
+                .fall_damage;
+        }
+        (physics.y, physics.velocity_y, damage)
+    }
+
+    let (y1, velocity1, damage1) = ascent(1);
+    let (y2, velocity2, damage2) = ascent(2);
+    assert!(y1 > 1.0, "level 1 ascends to y={y1}");
+    assert!(velocity1 > 0.0, "level 1 upward velocity {velocity1}");
+    assert!(y2 > y1, "level 2 ascends higher: {y2} vs {y1}");
+    assert!(velocity2 > velocity1);
+    assert_eq!(damage1, 0.0);
+    assert_eq!(damage2, 0.0);
+
+    // The steady-state upward velocity tracks 0.05 * level from below.
+    assert!(
+        velocity1 > 0.0 && velocity1 < LEVITATION_ACCELERATION,
+        "level 1 steady velocity {velocity1}"
+    );
+    assert!(
+        velocity2 > LEVITATION_ACCELERATION && velocity2 < LEVITATION_ACCELERATION * 2.0,
+        "level 2 steady velocity {velocity2}"
+    );
+}
+
+#[test]
+fn levitation_and_slow_falling_and_depth_strider_are_deterministic() {
+    fn trace() -> Vec<(f64, f64, f64, u16)> {
+        let mut world = FluidWorld::new(-100);
+        world.set(
+            0,
+            0,
+            0,
+            FluidEntry {
+                fluid: Some(FluidState::source(FluidKind::Water)),
+                ..FluidEntry::default()
+            },
+        );
+        let mut physics = PlayerPhysics::new(0.5, 4.0, 0.5);
+        physics.depth_strider_level = 2;
+        physics.slow_falling = true;
+        physics.levitation_level = 1;
         (0..40)
             .map(|_| {
                 physics.tick(

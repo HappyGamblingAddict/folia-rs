@@ -3904,3 +3904,32 @@ Format:
   player_input, fluids, fluid_interactions, block_behaviour_integration, join,
   full workspace tests, check, fmt, and clippy `-D warnings` green (one flaky
   generation_scheduler ordering test passed on rerun).
+
+## 2026-11-27 — P4.1 depth strider, slow falling, and levitation
+
+- Context: the fluid-movement slice left depth strider, slow falling, and
+  levitation unsupported. No 1.21.11 Java movement oracle is available on this
+  host, so these remain Rust-only goldens rather than claimed 1:1 traces.
+- Decision: `PlayerPhysics` gained inert `depth_strider_level`, `slow_falling`,
+  and `levitation_level` fields (defaults `0`/`false`/`0`). Submerged water
+  input speed is multiplied by `1 + 2/3 * clamp(level, 0, 3)` (levels 1..=3 give
+  5/3, 7/3, 3); lava and air are untouched. Slow falling replaces air gravity
+  with a quarter of it, caps descent at `-0.1` per tick, and clears fall
+  distance so landing does no damage. Levitation approaches `0.05 * level`
+  upward with a `0.2` approach factor, disables gravity, and also clears fall
+  distance. `effects::apply_movement_modifiers` bridges the boots enchantment
+  and `StatusEffectSet` onto a physics state; callers that omit it keep the
+  inert defaults.
+- Why: the 2/3-per-level depth-strider step follows the task's vanilla spec;
+  the slow-falling and levitation constants follow the documented
+  `SlowFallingMobEffect` / `LivingEntity` levitation behavior. All are applied
+  only in the simulation `tick()`, never in the client-authoritative
+  `reconcile()`, so existing movement fixtures stay unchanged.
+- Consequences: live `join.rs` sessions are not yet feeding equipment/effects
+  into `PlayerPhysics` each tick, and elytra, riptide, swim-sprint, and live
+  freeze-damage health wiring remain unsupported.
+- Verification: 7 new `tests/player_physics.rs` cases (multiplier steps, each
+  level, lava/air invariance, slow-fall speed/damage, levitation ascent/levels,
+  determinism) and 1 new `tests/effects.rs` bridge case; player_physics,
+  effects, player_input, effect_packets, join suites plus workspace check, fmt,
+  and clippy `-D warnings` green.

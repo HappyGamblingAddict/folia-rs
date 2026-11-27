@@ -2,10 +2,12 @@
 
 use folia_core::effects::{
     DamageType, EffectTick, StatusEffect, StatusEffectKind, StatusEffectSet, apply_damage,
-    armor_values_from_equipment, damage_after_armor,
+    apply_movement_modifiers, armor_values_from_equipment, damage_after_armor, depth_strider_level,
 };
 use folia_core::entity_metadata::{Equipment, EquipmentSlot, LivingEntity};
-use folia_core::item_components::ItemStack;
+use folia_core::item_components::{ComponentValue, ItemStack};
+use folia_core::player_physics::PlayerPhysics;
+use std::collections::BTreeMap;
 
 fn full_set(equipment: &mut Equipment, prefix: &str) {
     equipment.set(
@@ -185,4 +187,32 @@ fn fire_resistance_flag_is_exposed() {
     assert!(!effects.has_fire_resistance());
     effects.add(StatusEffect::new(StatusEffectKind::FireResistance, 20, 0));
     assert!(effects.has_fire_resistance());
+}
+
+#[test]
+fn movement_modifiers_come_from_boots_and_status_effects() {
+    let mut equipment = Equipment::new();
+    let mut boots = ItemStack::new("minecraft:diamond_boots".to_string(), 1);
+    boots.set_component(ComponentValue::Enchantments(BTreeMap::from([(
+        "minecraft:depth_strider".to_string(),
+        3,
+    )])));
+    equipment.set(EquipmentSlot::Feet, boots);
+    assert_eq!(depth_strider_level(&equipment), 3);
+
+    let mut effects = StatusEffectSet::new();
+    effects.add(StatusEffect::new(StatusEffectKind::SlowFalling, 200, 0));
+    effects.add(StatusEffect::new(StatusEffectKind::Levitation, 200, 1));
+
+    let mut physics = PlayerPhysics::new(0.5, 10.0, 0.5);
+    apply_movement_modifiers(&mut physics, &equipment, &effects);
+    assert_eq!(physics.depth_strider_level, 3);
+    assert!(physics.slow_falling);
+    assert_eq!(physics.levitation_level, 2);
+
+    let empty = Equipment::new();
+    apply_movement_modifiers(&mut physics, &empty, &StatusEffectSet::new());
+    assert_eq!(physics.depth_strider_level, 0);
+    assert!(!physics.slow_falling);
+    assert_eq!(physics.levitation_level, 0);
 }

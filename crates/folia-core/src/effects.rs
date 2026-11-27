@@ -9,6 +9,7 @@
 
 use crate::entity_metadata::{Equipment, EquipmentSlot, HurtResult, LivingEntity};
 use crate::item_components::{ItemStack, MobEffectInstance, PotionContents, normalize_key};
+use crate::player_physics::PlayerPhysics;
 use crate::protocol::{PacketReader, PacketWriter};
 use std::io;
 
@@ -1134,6 +1135,30 @@ pub fn damage_after_enchantments(amount: f32, protection: i32) -> f32 {
     } else {
         amount * (1.0 - protection.clamp(0, 20) as f32 / 25.0)
     }
+}
+
+/// Depth strider level from the boots slot (`EnchantmentHelper` reads the feet
+/// equipment slot). Levels above the vanilla cap are clamped by physics.
+pub fn depth_strider_level(equipment: &Equipment) -> i32 {
+    equipment
+        .get(EquipmentSlot::Feet)
+        .enchantment_level("minecraft:depth_strider")
+        .max(0)
+}
+
+/// Copy the movement-affecting enchantments and status effects onto a player's
+/// physics state. Missing equipment or effects keep the inert defaults, so a
+/// caller may omit this bridge entirely without changing movement.
+pub fn apply_movement_modifiers(
+    physics: &mut PlayerPhysics,
+    equipment: &Equipment,
+    effects: &StatusEffectSet,
+) {
+    physics.depth_strider_level = depth_strider_level(equipment);
+    physics.slow_falling = effects.has(StatusEffectKind::SlowFalling);
+    physics.levitation_level = effects
+        .amplifier(StatusEffectKind::Levitation)
+        .map_or(0, |level| i32::from(level) + 1);
 }
 
 /// Damage categories with the vanilla bypass flags this slice models.

@@ -18,12 +18,13 @@
 //! bubble-column push, and powder-snow sinking/freezing use the shipped fluid
 //! states, behaviour metadata, and [`crate::fluid`] velocity helpers.
 //!
-//! The fluid and elytra formulas are Rust-only goldens: no 1.21.11 Java
-//! movement oracle is available on this host, so `FlowingFluid.getFlow`, the
-//! buoyancy constants, and the glide constants are pinned by Rust tests rather
-//! than a differential fixture (see `DECISIONS.md`). Depth strider, slow
-//! falling, levitation, and elytra modify movement through inert
-//! [`PlayerPhysics`] modifier fields; riptide, firework boost, elytra
+//! The fluid, elytra, and riptide formulas are Rust-only goldens: no 1.21.11
+//! Java movement oracle or decompiled source tree is available on this host, so
+//! `FlowingFluid.getFlow`, the buoyancy constants, the glide constants, and the
+//! riptide speed are pinned by Rust tests rather than a differential fixture
+//! (see `DECISIONS.md`). Depth strider, slow falling, levitation, and elytra
+//! modify movement through inert [`PlayerPhysics`] modifier fields; riptide is
+//! applied as a one-shot impulse by the item-use path. Firework boost, elytra
 //! durability wear, wall-impact damage, and live freeze-damage health wiring
 //! are still intentionally unsupported.
 
@@ -156,6 +157,40 @@ pub const GLIDE_VERTICAL_DRAG: f64 = 0.98;
 /// `LivingEntity.checkSlowFallDistance`: a descent slower than 0.5 blocks per
 /// tick clears accumulated fall distance.
 pub const GLIDE_SLOW_FALL_THRESHOLD: f64 = -0.5;
+/// `TridentItem.releaseUsing` riptide launch: `3.0F * ((1 + level) / 4)`.
+/// Levels 1..=3 give `1.5`, `2.25`, and `3.0`. This float constant is a
+/// Rust-only golden (no local 1.21.11 Java source, see `DECISIONS.md`).
+pub const RIPTIDE_BASE_SPEED: f64 = 3.0;
+pub const MAX_RIPTIDE_LEVEL: i32 = 3;
+
+/// Launch speed of a riptide enchantment level. Level `0` (or negative) is
+/// inert, matching an unenchanted trident.
+pub fn riptide_speed(level: i32) -> f64 {
+    if level <= 0 {
+        return 0.0;
+    }
+    RIPTIDE_BASE_SPEED * (f64::from(level.clamp(1, MAX_RIPTIDE_LEVEL)) + 1.0) / 4.0
+}
+
+/// The velocity Java applies on a wet riptide use: the look vector is
+/// normalised by its length (vanilla's `f5`) and scaled by [`riptide_speed`].
+/// Returns `None` for an inert level or a degenerate direction, so callers can
+/// fall through to the normal trident throw.
+pub fn riptide_launch_velocity(level: i32, dir: [f64; 3]) -> Option<[f64; 3]> {
+    let speed = riptide_speed(level);
+    if speed == 0.0 {
+        return None;
+    }
+    let length = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if !length.is_finite() || length <= EPSILON {
+        return None;
+    }
+    Some([
+        dir[0] / length * speed,
+        dir[1] / length * speed,
+        dir[2] / length * speed,
+    ])
+}
 
 /// Horizontal submerged-water speed multiplier for a depth strider level.
 /// Levels outside `0..=3` are clamped, so missing or invalid enchantment data
@@ -691,6 +726,24 @@ impl PlayerPhysics {
             self.velocity_x -= yaw.sin() * 0.2;
             self.velocity_z += yaw.cos() * 0.2;
         }
+    }
+
+    /// Apply the one-shot `TridentItem.releaseUsing` riptide impulse along a
+    /// look vector. Java also clears sneaking (`removeSneaking`) and the fall
+    /// distance on this path; the client velocity sync is the caller's motion
+    /// packet, and the riptide sound/particles are not modelled (see
+    /// `DECISIONS.md`). Returns `false` for an inert level or bad direction,
+    /// leaving physics untouched.
+    pub fn launch_riptide(&mut self, level: i32, dir: [f64; 3]) -> bool {
+        let Some(velocity) = riptide_launch_velocity(level, dir) else {
+            return false;
+        };
+        self.velocity_x = velocity[0];
+        self.velocity_y = velocity[1];
+        self.velocity_z = velocity[2];
+        self.sneaking = false;
+        self.fall_distance = 0.0;
+        true
     }
 
     /// `Entity.getBlockJumpFactor`: use the block at the player's feet unless

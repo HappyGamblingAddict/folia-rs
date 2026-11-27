@@ -3970,3 +3970,53 @@ Format:
 - Verification: 6 new `tests/player_physics.rs` cases (entry conditions, level
   steady descent, pitch dive/climb, landing cancellation, water/climbable
   cancellation, determinism) and 1 new `tests/effects.rs` bridge case.
+
+## 2026-11-27 — P4.1 Riptide trident launch
+
+- Context: the elytra slice left riptide explicitly unsupported. This checkout
+  still has no decompiled 1.21.11 source tree and no local Java movement oracle
+  (`BLOCKERS.md`), so the launch constant cannot be captured from the Java
+  server here.
+- Decision: `player_physics.rs` gained `RIPTIDE_BASE_SPEED = 3.0`,
+  `MAX_RIPTIDE_LEVEL = 3`, `riptide_speed` (`3.0 * (1 + clamp(level, 1, 3)) / 4`,
+  i.e. `1.5`, `2.25`, `3.0` for levels 1..=3; level `0` is inert),
+  `riptide_launch_velocity` (normalises the look vector by its length before
+  scaling, matching Java's divisor), and `PlayerPhysics::launch_riptide` (sets
+  velocity, clears sneaking and fall distance). `join.rs` reads the Riptide
+  level from the held trident via `ItemStack::enchantment_level`, treats the
+  feet block's fluid (including waterlogged states) plus the session's
+  `Weather.raining` flag as the wet condition, sends a
+  `ClientboundSetEntityMotionPacket` like the knockback path, wears one
+  durability with `apply_item_durability_with_rng` (applying prototype defaults
+  first so `/give` tridents carry `max_damage: 250`), resyncs the slot, and
+  saves playerdata. Dry, unenchanted, and non-trident uses fall through with no
+  launch and no projectile, so the absence of a trident throw is unchanged.
+  The impulse written to `PlayerPhysics` is intentionally transient: the
+  client-authoritative `reconcile_with_allowance` replaces velocity with the
+  packet delta on the next movement update. The lasting client effect is the
+  motion packet, and riptide-sized moves take the existing validated-burst
+  branch so they are not rubber-banded.
+- Why: this is the smallest end-to-end wet-launch slice that reuses the
+  existing look-vector, enchantment, durability, inventory, and motion-packet
+  paths. The float constant and call order follow published vanilla
+  `TridentItem.releaseUsing`; they are Rust-only goldens, not a claimed 1:1
+  differential trace.
+- Consequences / documented gaps: no 1.21.11 Java fixture verifies the speed
+  float or the exact release timing. The Riptide `item.trident.riptide_*`
+  sounds, splash/consuming particles, the Riptide III particle burst, and any
+  state beyond the motion packet are not emitted. This server has no item
+  cooldown model, so no `ClientboundSetItemCooldown` packet is sent; that is
+  consistent with the existing simplified bow and flint-and-steel item uses.
+  Rain comes from the per-session weather clock, not a per-dimension rain
+  check, and trident charging (`getUseDuration`/release timing) is not
+  modelled — the launch happens on the USE_ITEM packet like the other
+  simplified item uses. Water is tested at the feet block (`blockPosition()`),
+  matching Java's `Entity.isInWater`. Elytra firework boost, glide wall damage,
+  and live freeze-damage health wiring remain unsupported.
+- Verification: 5 new `tests/player_physics.rs` cases (levels 1..=3 plus clamp,
+  look-vector direction, normalisation/rejection, physics application,
+  determinism/inert level) and 7 new `join.rs` unit cases (dry/wet, rain, each
+  level, yaw/pitch direction, determinism, inert non-trident, unchanged throw,
+  feet-fluid detection). Focused `use_item`, `item_components`, `enchanting`,
+  `player_physics`, `join`, `durability`, and `projectile` suites, workspace
+  check, fmt, and clippy `-D warnings` green.

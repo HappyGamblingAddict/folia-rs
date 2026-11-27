@@ -3202,7 +3202,10 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut stream,
                             &mut session,
                             &mut projectiles,
+                            current_storage,
+                            &mut drop_rng,
                             player_entity,
+                            weather.raining,
                             game_tick,
                             &mut bow_draw,
                             &mut eat_start,
@@ -4383,6 +4386,40 @@ fn look_vector(session: &PlayerSession) -> [f64; 3] {
     ]
 }
 
+/// Whether the block at the player's feet is water, including waterlogged
+/// blocks. Riptide launches while this is true or the world is raining.
+fn player_in_water(storage: &mut WorldStorage, session: &PlayerSession) -> bool {
+    let feet = BlockPos::new(
+        session.x.floor() as i32,
+        session.y.floor() as i32,
+        session.z.floor() as i32,
+    );
+    block_at(storage, feet).ok().flatten().is_some_and(|state| {
+        crate::fluid::fluid_state(&state)
+            .is_some_and(|fluid| fluid.kind == crate::fluid::FluidKind::Water)
+    })
+}
+
+/// Apply a wet Riptide launch for the held trident and return the impulse the
+/// caller must send to the client. Dry, unenchanted, and non-trident uses
+/// return `None`, so the normal item-use path (which has no trident throw yet)
+/// runs unchanged.
+fn try_riptide_launch(
+    session: &mut PlayerSession,
+    in_water: bool,
+    in_rain: bool,
+) -> Option<[f64; 3]> {
+    let held = session.selected_item()?;
+    if held.item != "minecraft:trident" || !(in_water || in_rain) {
+        return None;
+    }
+    let level = held.enchantment_level("minecraft:riptide");
+    let dir = look_vector(session);
+    let velocity = crate::player_physics::riptide_launch_velocity(level, dir)?;
+    session.physics.launch_riptide(level, dir);
+    Some(velocity)
+}
+
 /// `ServerboundInteractPacket` with action `ATTACK` (`ActionType` 1).
 fn use_item_projectile(
     session: &PlayerSession,
@@ -4690,7 +4727,10 @@ fn handle_use_item(
     stream: &mut LoginStream,
     session: &mut PlayerSession,
     projectiles: &mut crate::projectile::ProjectileStore,
+    current_storage: &Mutex<WorldStorage>,
+    drop_rng: &mut LegacyRandomSource,
     player_entity: i32,
+    in_rain: bool,
     game_tick: u64,
     bow_draw: &mut Option<u64>,
     eat_start: &mut Option<(u64, String, i32)>,
@@ -4706,6 +4746,45 @@ fn handle_use_item(
     {
         *eat_start = Some((game_tick, held.item.clone(), consumable.consume_ticks));
         return Ok(());
+    }
+    // A wet Riptide trident launches the player along the look vector instead
+    // of being thrown. This is the only trident branch in the use-item path;
+    // dry and unenchanted use falls through unchanged.
+    if session
+        .selected_item()
+        .is_some_and(|held| held.item == "minecraft:trident")
+    {
+        let in_water = {
+            let mut storage = crate::world::lock(current_storage);
+            player_in_water(&mut storage, session)
+        };
+        if let Some(velocity) = try_riptide_launch(session, in_water, in_rain) {
+            write_packet(
+                stream,
+                &crate::protocol::set_entity_motion_packet(player_entity, velocity),
+            )?;
+            let slot = session.selected_slot.max(0) as usize;
+            if session.game_mode != 1
+                && let Some(stack) = session.inventory.get_mut(slot)
+            {
+                crate::item_prototypes::apply_defaults(stack);
+                let wear =
+                    block_breaking::apply_item_durability_with_rng(stack, 1, false, &mut *drop_rng);
+                if wear.broke {
+                    println!("[join] {} broke their trident on launch", session.name);
+                }
+            }
+            write_packet(
+                stream,
+                &inventory::inventory_packet(slot as i32, &session.inventory[slot]),
+            )?;
+            if let Err(error) =
+                dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
+            {
+                eprintln!("[join] could not save riptide inventory: {error}");
+            }
+            return Ok(());
+        }
     }
     let Some((kind, velocity, consume_item)) = use_item_projectile(session) else {
         return Ok(());
@@ -10856,6 +10935,125 @@ mod tests {
         assert!(velocity[1].abs() < 1e-6);
         assert!(velocity[2].abs() < 1e-6);
         assert!(!consume);
+    }
+
+    fn trident_session(level: i32, yaw: f32, pitch: f32) -> PlayerSession {
+        let mut session = PlayerSession::new("Riptide".to_string(), [0xC1; 16], 0.0, 64.0, 0.0);
+        for stack in &mut session.inventory {
+            *stack = crate::inventory::ItemStack::empty();
+        }
+        let mut stack = crate::inventory::ItemStack::new("minecraft:trident", 1);
+        if level > 0 {
+            stack.set_component(crate::item_components::ComponentValue::Enchantments(
+                std::collections::BTreeMap::from([("minecraft:riptide".to_owned(), level)]),
+            ));
+        }
+        session.inventory[0] = stack;
+        session.selected_slot = 0;
+        session.yaw = yaw;
+        session.pitch = pitch;
+        session
+    }
+
+    #[test]
+    fn riptide_launches_only_when_wet() {
+        let mut session = trident_session(2, 0.0, 0.0);
+        assert!(
+            try_riptide_launch(&mut session, false, false).is_none(),
+            "a dry riptide use is inert"
+        );
+        assert_eq!(session.physics.velocity_z, 0.0);
+        let velocity = try_riptide_launch(&mut session, true, false).expect("wet launch");
+        assert!((velocity[2] - 2.25).abs() < 1e-9);
+        assert!((session.physics.velocity_z - 2.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn riptide_launches_in_rain_without_water() {
+        let mut session = trident_session(1, 0.0, 0.0);
+        assert!(try_riptide_launch(&mut session, false, true).is_some());
+        assert!((session.physics.velocity_z - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn riptide_levels_scale_impulse() {
+        for (level, speed) in [(1, 1.5), (2, 2.25), (3, 3.0)] {
+            let mut session = trident_session(level, 0.0, 0.0);
+            let velocity = try_riptide_launch(&mut session, true, false).unwrap();
+            assert!((velocity[2] - speed).abs() < 1e-9, "level {level}");
+            assert!(
+                (session.physics.velocity_z - speed).abs() < 1e-9,
+                "level {level}"
+            );
+        }
+    }
+
+    #[test]
+    fn riptide_follows_look_vector_and_is_deterministic() {
+        let mut west = trident_session(1, 90.0, 0.0);
+        let velocity = try_riptide_launch(&mut west, true, false).unwrap();
+        assert!((velocity[0] + 1.5).abs() < 1e-6, "yaw 90 launches west");
+        assert!(velocity[2].abs() < 1e-6);
+
+        let mut down = trident_session(1, 0.0, 90.0);
+        let velocity = try_riptide_launch(&mut down, true, false).unwrap();
+        assert!(
+            (velocity[1] + 1.5).abs() < 1e-9,
+            "positive pitch looks down"
+        );
+
+        fn trace() -> [f64; 3] {
+            let mut session = trident_session(3, -45.0, 10.0);
+            let velocity = try_riptide_launch(&mut session, false, true).unwrap();
+            [velocity[0], velocity[1], velocity[2]]
+        }
+        assert_eq!(trace(), trace());
+    }
+
+    #[test]
+    fn riptide_is_inert_for_unenchanted_and_non_trident() {
+        let mut plain = trident_session(0, 0.0, 0.0);
+        assert!(try_riptide_launch(&mut plain, true, true).is_none());
+        assert_eq!(plain.physics.velocity_z, 0.0);
+
+        let mut snowball = trident_session(1, 0.0, 0.0);
+        snowball.inventory[0] = crate::inventory::ItemStack::new("minecraft:snowball", 1);
+        assert!(try_riptide_launch(&mut snowball, true, true).is_none());
+    }
+
+    #[test]
+    fn regular_trident_throw_is_unchanged() {
+        let plain = trident_session(0, 0.0, 0.0);
+        assert!(
+            use_item_projectile(&plain).is_none(),
+            "a plain trident still spawns no projectile"
+        );
+        let enchanted = trident_session(3, 0.0, 0.0);
+        assert!(
+            use_item_projectile(&enchanted).is_none(),
+            "riptide does not add a throw projectile"
+        );
+    }
+
+    #[test]
+    fn riptide_water_detection_reads_the_feet_fluid() {
+        let directory = temp_region_dir("riptide-water");
+        let mut storage = WorldStorage::new(directory.clone());
+        let chunk = crate::chunk_packet::flat_chunk(0, 0);
+        storage
+            .save_chunk(&chunk, crate::anvil::Compression::Zlib)
+            .unwrap();
+        let water = crate::chunk::BlockState {
+            name: "minecraft:water".into(),
+            properties: vec![("level".to_owned(), "0".to_owned())],
+        };
+        crate::block_update::set_block(&mut storage, 0, 4, 0, water).unwrap();
+
+        let wet = PlayerSession::new("Wet".to_string(), [0xC2; 16], 0.5, 4.0, 0.5);
+        assert!(player_in_water(&mut storage, &wet));
+        let dry = PlayerSession::new("Dry".to_string(), [0xC3; 16], 0.5, 5.0, 0.5);
+        assert!(!player_in_water(&mut storage, &dry));
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

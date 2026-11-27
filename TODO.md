@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,934 passing** at the e9c1a82 gate (0 failed, 1 ignored benchmark); elytra slice next expected 1,941
+> Test status: **1,941 passing** at the 40fa798 gate (0 failed, 1 ignored benchmark); riptide slice next expected 1,953
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1895,6 +1895,10 @@ instantly on start-destroy and places on use-item-on.
   `ServerPlayer.java`, `LivingEntity.travel`.
 - **Done when:** Movement traces match Java for walking, jumping, falling,
   swimming, and ladders within `1e-4`.
+- **Progress (2026-11-27d):** Wet Riptide tridents now launch the player along
+  the look vector with level-scaled speed, motion packet, durability wear, and
+  12 tests. Firework boost, sounds/particles, cooldown, and lasting physics
+  reconciliation remain open.
 - **Progress (2026-11-27c):** Elytra gliding now launches on a falling jump
   edge, uses vanilla-style look-vector recurrence, and cancels on landing,
   water, climbables, or unequip, with 7 new tests. Firework boost, durability,

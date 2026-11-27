@@ -6,7 +6,7 @@ use folia_core::player_physics::{
     MAX_FREEZE_TICKS, MIN_FREEZE_TICKS, MovementCorrection, MovementInput, PhysicsWorld,
     PlayerPhysics, SLOW_FALL_TERMINAL_VELOCITY, SNEAKING_HEIGHT, STANDING_HEIGHT, SWIMMING_HEIGHT,
     TERMINAL_VELOCITY, WATER_FLOW_ACCELERATION, WIDTH, depth_strider_speed_multiplier,
-    glide_velocity,
+    glide_velocity, riptide_launch_velocity, riptide_speed,
 };
 use std::collections::HashMap;
 
@@ -1420,4 +1420,73 @@ fn elytra_glide_is_deterministic() {
             .collect()
     }
     assert_eq!(trace(), trace());
+}
+
+#[test]
+fn riptide_speed_scales_levels_one_through_three() {
+    assert_eq!(riptide_speed(0), 0.0);
+    assert_eq!(riptide_speed(-1), 0.0);
+    assert!((riptide_speed(1) - 1.5).abs() < 1e-9);
+    assert!((riptide_speed(2) - 2.25).abs() < 1e-9);
+    assert!((riptide_speed(3) - 3.0).abs() < 1e-9);
+    assert_eq!(riptide_speed(4), riptide_speed(3));
+    assert_eq!(riptide_speed(i32::MAX), riptide_speed(3));
+}
+
+#[test]
+fn riptide_launch_velocity_follows_the_look_vector() {
+    let forward = riptide_launch_velocity(1, [0.0, 0.0, 1.0]).unwrap();
+    assert!((forward[0]).abs() < 1e-9);
+    assert!((forward[1]).abs() < 1e-9);
+    assert!((forward[2] - 1.5).abs() < 1e-9);
+
+    let west = riptide_launch_velocity(2, [-1.0, 0.0, 0.0]).unwrap();
+    assert!((west[0] + 2.25).abs() < 1e-9);
+    assert!((west[1]).abs() < 1e-9);
+    assert!((west[2]).abs() < 1e-9);
+
+    let down = riptide_launch_velocity(3, [0.0, -1.0, 0.0]).unwrap();
+    assert!((down[1] + 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn riptide_launch_velocity_normalizes_and_rejects_bad_input() {
+    let scaled = riptide_launch_velocity(1, [0.0, 0.0, 5.0]).unwrap();
+    assert!(
+        (scaled[2] - 1.5).abs() < 1e-9,
+        "Java divides by the look length"
+    );
+
+    assert_eq!(riptide_launch_velocity(0, [0.0, 0.0, 1.0]), None);
+    assert_eq!(riptide_launch_velocity(1, [0.0, 0.0, 0.0]), None);
+    assert_eq!(riptide_launch_velocity(1, [f64::NAN, 0.0, 1.0]), None);
+}
+
+#[test]
+fn riptide_launch_applies_impulse_and_clears_sneaking() {
+    let mut physics = PlayerPhysics::new(0.0, 64.0, 0.0);
+    physics.sneaking = true;
+    physics.fall_distance = 12.0;
+    physics.velocity_x = 1.0;
+    assert!(physics.launch_riptide(2, [0.0, 0.0, 1.0]));
+    assert!((physics.velocity_z - 2.25).abs() < 1e-9);
+    assert_eq!(physics.velocity_x, 0.0);
+    assert_eq!(physics.velocity_y, 0.0);
+    assert!(!physics.sneaking);
+    assert_eq!(physics.fall_distance, 0.0);
+}
+
+#[test]
+fn riptide_launch_is_deterministic_and_inert_without_enchantment() {
+    fn impulse() -> [f64; 3] {
+        let mut physics = PlayerPhysics::new(1.0, 2.0, 3.0);
+        physics.launch_riptide(3, [-1.0, 0.0, 2.0]);
+        [physics.velocity_x, physics.velocity_y, physics.velocity_z]
+    }
+    assert_eq!(impulse(), impulse());
+
+    let mut physics = PlayerPhysics::new(0.0, 64.0, 0.0);
+    physics.velocity_z = 0.5;
+    assert!(!physics.launch_riptide(0, [0.0, 0.0, 1.0]));
+    assert_eq!(physics.velocity_z, 0.5, "an unenchanted launch is inert");
 }

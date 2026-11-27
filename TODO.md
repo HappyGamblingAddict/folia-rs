@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,907 passing** at the e9513c2 gate (0 failed, 1 ignored benchmark); special-movement slice next expected 1,919
+> Test status: **1,919 passing** at the fca9a5a gate (0 failed, 1 ignored benchmark); fluid-movement slice next expected 1,926
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1895,6 +1895,10 @@ instantly on start-destroy and places on use-item-on.
   `ServerPlayer.java`, `LivingEntity.travel`.
 - **Done when:** Movement traces match Java for walking, jumping, falling,
   swimming, and ladders within `1e-4`.
+- **Progress (2026-11-27):** Water/lava travel, downhill flow, bubble columns,
+  and powder-snow sinking/freezing now use shipped fluid/movement metadata with
+  7 new tests. Elytra, levitation, depth strider, riptide, and live freeze-damage
+  packets remain open.
 - **Progress (2026-11-26):** Ladder/vine/scaffolding climbing, cobweb slowdown,
   slime bounce, and fall-damage resets now use shipped movement traits, with 12
   new tests. Elytra, currents, bubbles, and powder snow remain open.

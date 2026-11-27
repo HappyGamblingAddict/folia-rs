@@ -50,13 +50,15 @@ impl BlockBehaviour {
 
 /// Movement-relevant properties vanilla reads from `BlockTags.CLIMBABLE`,
 /// `BlockTags.FALL_DAMAGE_RESETTING`, or from the block class during
-/// `LivingEntity.travel` (`WebBlock`, `SlimeBlock`, `ScaffoldingBlock`).
+/// `LivingEntity.travel` (`WebBlock`, `SlimeBlock`, `ScaffoldingBlock`,
+/// `PowderSnowBlock`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MovementTraits {
     pub climbable: bool,
     pub scaffolding: bool,
     pub cobweb: bool,
     pub slime: bool,
+    pub powder_snow: bool,
     pub resets_fall_damage: bool,
 }
 
@@ -66,6 +68,7 @@ impl MovementTraits {
         scaffolding: false,
         cobweb: false,
         slime: false,
+        powder_snow: false,
         resets_fall_damage: false,
     };
 
@@ -76,6 +79,7 @@ impl MovementTraits {
             scaffolding: self.scaffolding || other.scaffolding,
             cobweb: self.cobweb || other.cobweb,
             slime: self.slime || other.slime,
+            powder_snow: self.powder_snow || other.powder_snow,
             resets_fall_damage: self.resets_fall_damage || other.resets_fall_damage,
         }
     }
@@ -84,8 +88,9 @@ impl MovementTraits {
 /// Resolve the shipped special-movement properties of a concrete block state.
 ///
 /// Climbable and fall-damage-resetting membership come from the shipped block
-/// tags; there are no vanilla tags identifying cobwebs, slime blocks, or
-/// scaffolding alone, so those three are resolved by their registry names.
+/// tags; there are no vanilla tags identifying cobwebs, slime blocks,
+/// scaffolding, or powder snow alone, so those four are resolved by their
+/// registry names.
 pub fn movement_traits(state: &BlockState) -> MovementTraits {
     let name = state.name.as_str();
     MovementTraits {
@@ -93,6 +98,7 @@ pub fn movement_traits(state: &BlockState) -> MovementTraits {
         scaffolding: name == "minecraft:scaffolding",
         cobweb: name == "minecraft:cobweb",
         slime: name == "minecraft:slime_block",
+        powder_snow: name == "minecraft:powder_snow",
         resets_fall_damage: crate::tags::block_has("fall_damage_resetting", name),
     }
 }
@@ -424,6 +430,15 @@ mod tests {
             slime,
             MovementTraits {
                 slime: true,
+                ..MovementTraits::NONE
+            }
+        );
+
+        let snow = movement_traits(&state("minecraft:powder_snow", &[]));
+        assert_eq!(
+            snow,
+            MovementTraits {
+                powder_snow: true,
                 ..MovementTraits::NONE
             }
         );

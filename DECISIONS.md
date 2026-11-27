@@ -3866,3 +3866,41 @@ Format:
   `tests/player_physics.rs` cases, one new storage-tag case in
   `tests/block_behaviour_integration.rs`, 2 `block_behaviour` lib tests, plus
   player_physics/input/join suites, check, fmt, and clippy `-D warnings` green.
+
+## 2026-11-27 — P4.1 fluid currents, bubble columns, and powder snow
+
+- Context: the previous special-movement slice left water/lava currents, bubble
+  columns, and powder snow as generic air/ground travel. The decompiled 1.21.11
+  Java tree and a movement oracle are not available on this Linux host
+  (BLOCKERS.md), so exact `FlowingFluid.getFlow` and buoyancy traces cannot be
+  differential-tested here.
+- Decision: `PhysicsWorld` gained `fluid_state`, `fluid_flow`,
+  `bubble_column_drag`, and `is_powder_snow` with inert defaults, all resolved
+  from shipped behavior metadata / block-state properties. `StoragePhysicsWorld`
+  implements them by reading the cached chunk state. `fluid::flow_vector` turns
+  four neighbour fluid heights into a downhill `(x, y, z)` hint (empty sides are
+  sinks, falling fluid pulls down); the player tick applies per-family
+  acceleration, buoyancy-scaled gravity, drag (`0.8` water / `0.5` lava), the
+  `0.02` lava input speed, and clears fall distance while submerged. Bubble
+  columns reuse `fluid::bubble_column_velocity` verbatim (inside vs above-surface
+  caps), overriding gravity only in water. Powder snow uses the `(0.9, 0.5, 0.9)`
+  movement multiplier, resets fall distance, and advances `ticks_frozen` by 7
+  per tick to a 160-tick cap with 1 damage every 40 ticks above 140.
+- Why: these are the documented modern-vanilla constants and call orders; with
+  no Java oracle the fixtures are Rust-only goldens rather than claimed 1:1
+  traces. Reconciliation only clears fall distance in fluids/snow; it does not
+  rubber-band the client by replaying server-side flow.
+- Consequences: water/lava speed, drag, and flow acceleration are approximations,
+  not exact `getFlow`/`getSlopeDistance` parity. Elytra, levitation/slow falling,
+  depth strider, riptide, swim-sprint, open-trapdoor climbing, and live
+  freeze-damage health packets remain unsupported; `TickOutcome.freeze_damage`
+  is reported for a future live-session tick to consume. `reconcile()` keeps
+  client-authoritative positions, so downstream push is only modeled by the
+  simulation `tick()` until a standalone player tick is wired.
+- Verification: 5 new `tests/player_physics.rs` cases (downstream flow, lava
+  slowness, bubble up/down, powder-snow sink/freeze/thaw, determinism) plus the
+  extended inert-defaults case, 1 new `fluid` unit test for `flow_vector`, 1 new
+  `block_behaviour` unit test for powder-snow traits; player_physics,
+  player_input, fluids, fluid_interactions, block_behaviour_integration, join,
+  full workspace tests, check, fmt, and clippy `-D warnings` green (one flaky
+  generation_scheduler ordering test passed on rerun).

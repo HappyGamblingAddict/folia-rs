@@ -358,6 +358,47 @@ pub fn bubble_column_velocity_delta(
     bubble_column_velocity(drag_down, placement, vertical_velocity) - vertical_velocity
 }
 
+/// A downhill flow vector for a fluid state and its four horizontal neighbours,
+/// ordered north, east, south, west as in `Direction.Plane.HORIZONTAL`.
+///
+/// This is a Rust-only approximation of `FlowingFluid.getFlow`: a neighbour with
+/// a lower `FluidState.getOwnHeight()` pulls the vector toward itself, an empty
+/// neighbour counts as a downhill sink, and a falling source pulls downward.
+/// The exact Java `getSlopeDistance` recursion cannot be reproduced here because
+/// no 1.21.11 Java movement oracle is available on this host; the returned
+/// components are normalized to at most one block per axis so callers can scale
+/// them with their own acceleration constant.
+pub fn flow_vector(here: FluidState, neighbors: [Option<FluidState>; 4]) -> (f32, f32, f32) {
+    let mut x = 0.0f32;
+    let mut z = 0.0f32;
+    let own_height = here.own_height();
+    for (neighbor, direction) in neighbors.into_iter().zip(HORIZONTAL) {
+        let step_x = direction.step_x() as f32;
+        let step_z = direction.step_z() as f32;
+        match neighbor {
+            None => {
+                x += step_x * 0.25;
+                z += step_z * 0.25;
+            }
+            Some(neighbor) if neighbor.kind == here.kind => {
+                let drop = own_height - neighbor.own_height();
+                if drop > 0.0 {
+                    x += step_x * drop;
+                    z += step_z * drop;
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let length = (x * x + z * z).sqrt();
+    if length > 1.0 {
+        x /= length;
+        z /= length;
+    }
+    let y = if here.falling { -1.0 } else { 0.0 };
+    (x, y, z)
+}
+
 fn can_exist_in_bubble_column(state: &BlockState) -> bool {
     is_bubble_column(state)
         || (state.name == "minecraft:water"
@@ -1537,6 +1578,41 @@ mod tests {
             &state("minecraft:water", &[("level", "0")]),
             &state("minecraft:stone", &[])
         ));
+    }
+
+    #[test]
+    fn flow_vector_points_downhill_and_pulls_falling_fluid_down() {
+        let source = FluidState::source(FluidKind::Water);
+        let lower = fluid_state(&state("minecraft:water", &[("level", "1")])).unwrap();
+
+        // Neighbour order is north, east, south, west. With the other sides
+        // held at source height, a lower neighbour to the east pulls +X.
+        let (x, _, z) = flow_vector(
+            source,
+            [Some(source), Some(lower), Some(source), Some(source)],
+        );
+        assert!(x > 0.0, "flow x={x}");
+        assert_eq!(z, 0.0);
+
+        // An empty neighbour is treated as a downhill sink; four symmetric
+        // holes cancel out.
+        assert_eq!(flow_vector(source, [None; 4]), (0.0, 0.0, 0.0));
+
+        // Equal-height neighbours cancel out when every neighbour is a source.
+        let (x, y, z) = flow_vector(source, [Some(source); 4]);
+        assert_eq!((x, y, z), (0.0, 0.0, 0.0));
+
+        let falling = FluidState::flowing_of(FluidKind::Water, 8, true).unwrap();
+        let (_, y, _) = flow_vector(falling, [Some(falling); 4]);
+        assert_eq!(y, -1.0);
+
+        // Each neighbour contributes at most its height difference, so the
+        // horizontal components stay within one block per axis.
+        let (x, _, z) = flow_vector(
+            source,
+            [Some(source), Some(lower), Some(lower), Some(source)],
+        );
+        assert!(x > 0.0 && x <= 1.0 && z > 0.0 && z <= 1.0);
     }
 
     #[test]

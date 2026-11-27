@@ -1,8 +1,10 @@
 use folia_core::block_behaviour::MovementTraits;
+use folia_core::fluid::{self, FluidKind, FluidState};
 use folia_core::player_physics::{
     AIR_FRICTION, Aabb, CLIMB_MOVE_LIMIT, CLIMB_SPEED, COBWEB_MOVE_MULTIPLIER, ClientMove, DRAG,
-    FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE, MovementCorrection, MovementInput, PhysicsWorld,
-    PlayerPhysics, SNEAKING_HEIGHT, STANDING_HEIGHT, SWIMMING_HEIGHT, TERMINAL_VELOCITY, WIDTH,
+    FREEZE_DAMAGE, FlatPhysicsWorld, GRAVITY, JUMP_IMPULSE, MAX_FREEZE_TICKS, MIN_FREEZE_TICKS,
+    MovementCorrection, MovementInput, PhysicsWorld, PlayerPhysics, SNEAKING_HEIGHT,
+    STANDING_HEIGHT, SWIMMING_HEIGHT, TERMINAL_VELOCITY, WATER_FLOW_ACCELERATION, WIDTH,
 };
 use std::collections::HashMap;
 
@@ -667,6 +669,312 @@ fn special_movement_is_deterministic() {
             .map(|_| {
                 physics.tick(&mut world, input);
                 (physics.x, physics.y, physics.z, physics.velocity_y)
+            })
+            .collect()
+    }
+    assert_eq!(trace(), trace());
+}
+
+#[derive(Clone, Copy, Default)]
+struct FluidEntry {
+    fluid: Option<FluidState>,
+    bubble_drag: Option<bool>,
+    powder_snow: bool,
+    traits: MovementTraits,
+    collision: bool,
+}
+
+/// A grid world carrying shipped-style fluid states, bubble columns, and
+/// powder snow so the fluid branch of `PlayerPhysics::tick` can be exercised
+/// without a generated chunk.
+#[derive(Clone)]
+struct FluidWorld {
+    ground_y: i32,
+    blocks: HashMap<(i32, i32, i32), FluidEntry>,
+}
+
+impl FluidWorld {
+    fn new(ground_y: i32) -> Self {
+        Self {
+            ground_y,
+            blocks: HashMap::new(),
+        }
+    }
+
+    fn set(&mut self, x: i32, y: i32, z: i32, entry: FluidEntry) {
+        self.blocks.insert((x, y, z), entry);
+    }
+
+    fn water_column(&mut self, x: i32, y: i32, z: i32, height: i32) {
+        for level in 0..height {
+            self.set(
+                x,
+                y + level,
+                z,
+                FluidEntry {
+                    fluid: Some(FluidState::source(FluidKind::Water)),
+                    ..FluidEntry::default()
+                },
+            );
+        }
+    }
+}
+
+impl PhysicsWorld for FluidWorld {
+    fn collision_box(&mut self, x: i32, y: i32, z: i32) -> Option<Aabb> {
+        self.blocks
+            .get(&(x, y, z))
+            .is_some_and(|entry| entry.collision)
+            .then(|| Aabb::block(x, y, z))
+            .or_else(|| (y < self.ground_y).then(|| Aabb::block(x, y, z)))
+    }
+
+    fn movement_traits(&mut self, x: i32, y: i32, z: i32) -> MovementTraits {
+        self.blocks
+            .get(&(x, y, z))
+            .map_or(MovementTraits::NONE, |entry| entry.traits)
+    }
+
+    fn fluid_state(&mut self, x: i32, y: i32, z: i32) -> Option<FluidState> {
+        self.blocks.get(&(x, y, z)).and_then(|entry| entry.fluid)
+    }
+
+    fn bubble_column_drag(&mut self, x: i32, y: i32, z: i32) -> Option<bool> {
+        self.blocks
+            .get(&(x, y, z))
+            .and_then(|entry| entry.bubble_drag)
+    }
+
+    fn is_powder_snow(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.blocks
+            .get(&(x, y, z))
+            .is_some_and(|entry| entry.powder_snow)
+    }
+}
+
+#[test]
+fn flowing_water_pushes_the_player_downstream() {
+    let still_water = FluidState::source(FluidKind::Water);
+    let lower_water = fluid::fluid_state(&folia_core::chunk::BlockState {
+        name: "minecraft:water".into(),
+        properties: vec![("level".into(), "1".into())],
+    })
+    .unwrap();
+
+    let mut still = FluidWorld::new(0);
+    still.water_column(0, 0, 0, 1);
+    for (x, z) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+        still.water_column(x, 0, z, 1);
+    }
+    let mut flowing = still.clone();
+    flowing.set(
+        1,
+        0,
+        0,
+        FluidEntry {
+            fluid: Some(lower_water),
+            ..FluidEntry::default()
+        },
+    );
+
+    let mut still_player = PlayerPhysics::new(0.5, 0.0, 0.5);
+    let mut flowing_player = PlayerPhysics::new(0.5, 0.0, 0.5);
+    for _ in 0..30 {
+        still_player.tick(&mut still, MovementInput::default());
+        flowing_player.tick(&mut flowing, MovementInput::default());
+    }
+
+    assert!(
+        (still_player.x - 0.5).abs() < 1.0e-9,
+        "level water has no flow, x={}",
+        still_player.x
+    );
+    assert!(
+        flowing_player.x > 0.5 + WATER_FLOW_ACCELERATION,
+        "water flowing east pushes the player downstream, x={}",
+        flowing_player.x
+    );
+    assert!((flowing_player.z - 0.5).abs() < 1.0e-9);
+    assert_eq!(flowing_player.fall_distance, 0.0);
+    assert_eq!(still_water.amount, lower_water.amount + 1);
+}
+
+#[test]
+fn lava_is_much_slower_than_air_and_damps_velocity_harder() {
+    let mut lava = FluidWorld::new(0);
+    for x in -2..=4 {
+        for z in -1..=1 {
+            lava.set(
+                x,
+                0,
+                z,
+                FluidEntry {
+                    fluid: Some(FluidState::source(FluidKind::Lava)),
+                    ..FluidEntry::default()
+                },
+            );
+        }
+    }
+    let mut air = FluidWorld::new(0);
+
+    let mut swimmers = PlayerPhysics::new(0.5, 0.0, 0.5);
+    let mut walkers = PlayerPhysics::new(0.5, 0.0, 0.5);
+    swimmers.on_ground = true;
+    walkers.on_ground = true;
+    swimmers.yaw = -90.0;
+    walkers.yaw = -90.0;
+    for _ in 0..20 {
+        swimmers.tick(&mut lava, MovementInput::walking_forward());
+        walkers.tick(&mut air, MovementInput::walking_forward());
+    }
+
+    let lava_distance = swimmers.x - 0.5;
+    let air_distance = walkers.x - 0.5;
+    assert!(
+        lava_distance > 0.0 && lava_distance < air_distance * 0.25,
+        "lava distance {lava_distance} vs air {air_distance}"
+    );
+    assert!(
+        swimmers.velocity_y.abs() < walkers.velocity_y.abs(),
+        "lava drag {} vs air {}",
+        swimmers.velocity_y,
+        walkers.velocity_y
+    );
+}
+
+#[test]
+fn bubble_columns_lift_and_pull_the_player() {
+    fn trace(drag_down: bool) -> (f64, f64) {
+        let mut world = FluidWorld::new(-100);
+        for y in -10..=10 {
+            world.set(
+                0,
+                y,
+                0,
+                FluidEntry {
+                    fluid: Some(FluidState::source(FluidKind::Water)),
+                    bubble_drag: Some(drag_down),
+                    ..FluidEntry::default()
+                },
+            );
+            for (x, z) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                world.water_column(x, y, z, 1);
+            }
+        }
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        for _ in 0..15 {
+            physics.tick(&mut world, MovementInput::default());
+        }
+        (physics.y, physics.velocity_y)
+    }
+
+    let (up_y, up_velocity) = trace(false);
+    let (down_y, down_velocity) = trace(true);
+    assert!(up_y > 0.5, "soul sand lifts the player to y={up_y}");
+    assert!(up_velocity > 0.0, "up velocity {up_velocity}");
+    assert!(
+        down_y < 0.0 && down_velocity < 0.0,
+        "magma pulls the player to y={down_y}, velocity {down_velocity}"
+    );
+    assert!(
+        fluid::bubble_column_velocity(false, fluid::BubbleColumnPlacement::Inside, 0.0) > 0.0
+            && fluid::bubble_column_velocity(true, fluid::BubbleColumnPlacement::Inside, 0.0) < 0.0
+    );
+}
+
+#[test]
+fn powder_snow_sinks_slowly_and_freezes_the_player() {
+    let mut snow = FluidWorld::new(-100);
+    for y in -20..=3 {
+        snow.set(
+            0,
+            y,
+            0,
+            FluidEntry {
+                powder_snow: true,
+                ..FluidEntry::default()
+            },
+        );
+    }
+    let mut air = FluidWorld::new(-100);
+    let mut sunk = PlayerPhysics::new(0.5, 3.0, 0.5);
+    let mut falling = PlayerPhysics::new(0.5, 3.0, 0.5);
+
+    let mut damage = 0.0;
+    for _ in 0..45 {
+        damage += sunk.tick(&mut snow, MovementInput::default()).freeze_damage;
+        falling.tick(&mut air, MovementInput::default());
+    }
+    assert!(
+        sunk.y > falling.y + 1.0,
+        "powder snow slows the sink: y={} vs air {}",
+        sunk.y,
+        falling.y
+    );
+    assert_eq!(sunk.fall_distance, 0.0);
+    assert_eq!(sunk.ticks_frozen, MAX_FREEZE_TICKS);
+    assert!(sunk.ticks_frozen > MIN_FREEZE_TICKS);
+    assert!(
+        damage >= FREEZE_DAMAGE,
+        "sustained exposure deals freeze damage, got {damage}"
+    );
+
+    sunk.y = 20.0;
+    let before = sunk.ticks_frozen;
+    for _ in 0..10 {
+        sunk.tick(&mut snow, MovementInput::default());
+    }
+    assert_eq!(
+        sunk.ticks_frozen,
+        before - 10,
+        "freezing thaws outside snow"
+    );
+}
+
+#[test]
+fn fluid_and_powder_snow_movement_is_deterministic() {
+    fn trace() -> Vec<(f64, f64, f64, u16)> {
+        let mut world = FluidWorld::new(0);
+        world.set(
+            0,
+            0,
+            0,
+            FluidEntry {
+                fluid: Some(FluidState::source(FluidKind::Water)),
+                bubble_drag: Some(false),
+                ..FluidEntry::default()
+            },
+        );
+        world.set(
+            1,
+            0,
+            0,
+            FluidEntry {
+                fluid: Some(FluidState::source(FluidKind::Lava)),
+                ..FluidEntry::default()
+            },
+        );
+        world.set(
+            0,
+            1,
+            0,
+            FluidEntry {
+                powder_snow: true,
+                ..FluidEntry::default()
+            },
+        );
+        let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
+        (0..40)
+            .map(|_| {
+                physics.tick(
+                    &mut world,
+                    MovementInput {
+                        forward: 0.5,
+                        strafe: -0.25,
+                        jumping: false,
+                    },
+                );
+                (physics.x, physics.y, physics.z, physics.ticks_frozen)
             })
             .collect()
     }

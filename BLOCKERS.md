@@ -1321,3 +1321,20 @@ These are expected gaps, not reasons to stop:
 - Leaves do not drop saplings/sticks/apples on decay yet; they are removed to
   air only. Decay item drops need the block-drop table wired into the tick
   behaviour and a Java fixture.
+
+## 2026-11-27 — P4.1 fluid/bubble/powder-snow movement has no Java differential oracle
+
+- Blocker: the 1.21.11 decompiled tree and a Java movement capture server are
+  absent from this Linux checkout (see the P0.5 and 2026-11-26 entries), so
+  `FlowingFluid.getFlow`/`getSlopeDistance`, buoyancy, and the exact powder-snow
+  freeze timers cannot be replayed against Java here.
+- What is needed: run a Java probe that records a player's per-tick
+  `getDeltaMovement()` and block position while descending a waterfalls,
+  drifting in a sloping water stream, sinking in lava, entering soul-sand and
+  magma bubble columns, and standing in powder snow until freeze damage starts;
+  compare it with the Rust golden traces in `tests/player_physics.rs`.
+- Workaround: `fluid::flow_vector` and the per-family physics constants use the
+  documented modern-vanilla formulas and are pinned by Rust-only tests only.
+  Do not claim exact fluid-movement parity until the Java trace exists. Elytra,
+  levitation/slow falling, depth strider, riptide, swim-sprint, and live
+  freeze-damage health wiring are explicitly unsupported (DECISIONS.md).

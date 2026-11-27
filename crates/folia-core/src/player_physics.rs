@@ -14,12 +14,19 @@
 //! scaffolding climbing, cobweb slowdown, and slime bounce follow
 //! `LivingEntity.handleOnClimbable`, `WebBlock.entityInside`, and
 //! `SlimeBlock.fallOn`/`bounceUp`; climbable and fall-damage-resetting blocks
-//! come from the shipped block tags. Elytra, water/lava currents, bubbles,
-//! and powder snow are still intentionally not simulated; see
-//! `DECISIONS.md` for the exact remaining gaps.
+//! come from the shipped block tags. Water/lava travel, downhill flow,
+//! bubble-column push, and powder-snow sinking/freezing use the shipped fluid
+//! states, behaviour metadata, and [`crate::fluid`] velocity helpers.
+//!
+//! The fluid formulas are Rust-only goldens: no 1.21.11 Java movement oracle is
+//! available on this host, so `FlowingFluid.getFlow` and the buoyancy constants
+//! are approximated (see `DECISIONS.md`). Elytra, levitation/slow falling,
+//! depth strider, riptide, and live freeze-damage health wiring are still
+//! intentionally unsupported.
 
 use crate::block_behaviour::MovementTraits;
 use crate::chunk::{BlockState, Chunk};
+use crate::fluid::{self, BubbleColumnPlacement, FluidKind, FluidState};
 use crate::world::WorldStorage;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -88,6 +95,32 @@ pub const COBWEB_MOVE_MULTIPLIER: (f64, f64, f64) = (0.25, 0.05, 0.25);
 /// for a player who is not stepping carefully.
 pub const SLIME_STEP_BASE: f64 = 0.4;
 pub const SLIME_STEP_FACTOR: f64 = 0.2;
+/// `LivingEntity.travel` scales delta movement by `0.8` in water.
+pub const WATER_DRAG: f64 = 0.8;
+/// `LivingEntity.travel` scales delta movement by `0.5` in lava.
+pub const LAVA_DRAG: f64 = 0.5;
+/// Buoyancy: gravity is halved while submerged.
+pub const WATER_GRAVITY_FACTOR: f64 = 0.5;
+pub const LAVA_GRAVITY_FACTOR: f64 = 0.5;
+/// `LivingEntity.travel` uses a `0.02` input speed in lava instead of
+/// `Player.getSpeed()`, which is why lava feels much heavier than water.
+pub const LAVA_MOVE_SPEED: f64 = 0.02;
+/// Per-tick acceleration applied per unit of [`crate::fluid::flow_vector`] in
+/// water (vanilla `Entity.getFluidPushFactor` is small, so flow is gradual).
+pub const WATER_FLOW_ACCELERATION: f64 = 0.01;
+pub const LAVA_FLOW_ACCELERATION: f64 = 0.005;
+/// `PowderSnowBlock.entityInside` multiplies movement by `(0.9, 0.5, 0.9)`,
+/// which makes an entity sink slowly and struggle to move sideways.
+pub const POWDER_SNOW_MOVE_MULTIPLIER: (f64, f64, f64) = (0.9, 0.5, 0.9);
+/// Frozen ticks added on every tick inside powder snow.
+pub const POWDER_SNOW_FREEZE_PER_TICK: u16 = 7;
+/// Vanilla `LivingEntity.MIN_FREEZE_TICKS`: freezing damage starts above this.
+pub const MIN_FREEZE_TICKS: u16 = 140;
+/// Vanilla `LivingEntity.MAX_FREEZE_TICKS` (`MIN_FREEZE_TICKS + 20`).
+pub const MAX_FREEZE_TICKS: u16 = 160;
+/// Vanilla `LivingEntity.getTicksRequiredToFreeze` default interval.
+pub const FREEZE_DAMAGE_INTERVAL: u64 = 40;
+pub const FREEZE_DAMAGE: f32 = 1.0;
 
 /// World queries player physics needs. Implemented by the shared world storage
 /// and by the flat/test worlds used in focused tests.
@@ -146,6 +179,38 @@ pub trait PhysicsWorld {
     }
     fn resets_fall_damage(&mut self, x: i32, y: i32, z: i32) -> bool {
         self.movement_traits(x, y, z).resets_fall_damage
+    }
+    /// Powder snow at this position. Vanilla has no tag isolating it, so the
+    /// shipped `movement_traits` resolves it by registry name.
+    fn is_powder_snow(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.movement_traits(x, y, z).powder_snow
+    }
+    /// The fluid state at this position from the shipped block-behaviour
+    /// metadata. Defaults to none so flat/grid fixture worlds keep air physics.
+    fn fluid_state(&mut self, _x: i32, _y: i32, _z: i32) -> Option<FluidState> {
+        None
+    }
+    /// Downhill flow vector of the fluid at this position. The default samples
+    /// the four horizontal neighbour fluid states and applies
+    /// [`crate::fluid::flow_vector`].
+    fn fluid_flow(&mut self, x: i32, y: i32, z: i32) -> (f64, f64, f64) {
+        let Some(here) = self.fluid_state(x, y, z) else {
+            return (0.0, 0.0, 0.0);
+        };
+        let neighbors = [
+            self.fluid_state(x, y, z - 1),
+            self.fluid_state(x + 1, y, z),
+            self.fluid_state(x, y, z + 1),
+            self.fluid_state(x - 1, y, z),
+        ];
+        let (flow_x, flow_y, flow_z) = fluid::flow_vector(here, neighbors);
+        (f64::from(flow_x), f64::from(flow_y), f64::from(flow_z))
+    }
+    /// Bubble-column direction at this position: `Some(true)` is magma (pull
+    /// down), `Some(false)` is soul sand (push up). Uses the shipped
+    /// `drag` block-state property; defaults to none for fixture worlds.
+    fn bubble_column_drag(&mut self, _x: i32, _y: i32, _z: i32) -> Option<bool> {
+        None
     }
 }
 
@@ -272,6 +337,15 @@ impl PhysicsWorld for StoragePhysicsWorld<'_> {
             crate::block_behaviour::movement_traits,
         )
     }
+
+    fn fluid_state(&mut self, x: i32, y: i32, z: i32) -> Option<FluidState> {
+        self.block_state(x, y, z).and_then(fluid::fluid_state)
+    }
+
+    fn bubble_column_drag(&mut self, x: i32, y: i32, z: i32) -> Option<bool> {
+        self.block_state(x, y, z)
+            .and_then(fluid::bubble_column_drag)
+    }
 }
 
 /// Player movement input for one tick. Vanilla's server reads this from
@@ -335,6 +409,10 @@ pub struct TickOutcome {
     pub on_ground: bool,
     pub landed: bool,
     pub fall_damage: f32,
+    /// Damage from sustained powder-snow exposure. The live session does not
+    /// yet consume this value (see `DECISIONS.md`); the simulation reports it
+    /// so a future tick integration can apply it without recomputing.
+    pub freeze_damage: f32,
 }
 
 /// Result of reconciling one client movement packet.
@@ -367,6 +445,10 @@ pub struct PlayerPhysics {
     /// One-shot motion multiplier set when the player is inside a cobweb
     /// (`Entity.stuckSpeedMultiplier`) and consumed by the next move.
     pub cobweb_stuck: bool,
+    /// `LivingEntity.ticksFrozen`, advanced by powder-snow exposure.
+    pub ticks_frozen: u16,
+    /// Monotonic simulation tick count used for the freeze-damage interval.
+    pub tick_count: u64,
     /// Last position reported by the client. Deltas are measured from here,
     /// matching how the server tracks a session's last accepted position.
     reported_x: f64,
@@ -392,6 +474,8 @@ impl PlayerPhysics {
             swimming: false,
             fall_distance: 0.0,
             cobweb_stuck: false,
+            ticks_frozen: 0,
+            tick_count: 0,
             reported_x: x,
             reported_y: y,
             reported_z: z,
@@ -431,6 +515,7 @@ impl PlayerPhysics {
         self.velocity_z = 0.0;
         self.fall_distance = 0.0;
         self.cobweb_stuck = false;
+        self.ticks_frozen = 0;
         self.on_ground = false;
         self.reported_x = x;
         self.reported_y = y;
@@ -548,6 +633,119 @@ impl PlayerPhysics {
         self.on_climbable(world) || (!self.sneaking && self.standing_on_slime(world))
     }
 
+    /// Fluid at the player's block position (`Entity.isInWater`/`isInLava`).
+    fn fluid_at_feet(&self, world: &mut impl PhysicsWorld) -> Option<FluidState> {
+        let (x, y, z) = self.feet();
+        world.fluid_state(x, y, z)
+    }
+
+    /// Powder snow at the player's block position.
+    fn powder_snow_at(&self, world: &mut impl PhysicsWorld) -> bool {
+        let (x, y, z) = self.feet();
+        world.is_powder_snow(x, y, z)
+    }
+
+    /// Bubble column affecting the player: inside the feet block gets the
+    /// weaker velocity, the block below gets the surface launch.
+    fn bubble_column_at(
+        &self,
+        world: &mut impl PhysicsWorld,
+    ) -> Option<(bool, BubbleColumnPlacement)> {
+        let (x, y, z) = self.feet();
+        if let Some(drag_down) = world.bubble_column_drag(x, y, z) {
+            return Some((drag_down, BubbleColumnPlacement::Inside));
+        }
+        world
+            .bubble_column_drag(x, y - 1, z)
+            .map(|drag_down| (drag_down, BubbleColumnPlacement::AboveSurface))
+    }
+
+    /// Advance `LivingEntity.ticksFrozen` and return freeze damage for this
+    /// tick. Powder snow adds seven ticks each tick; outside it thaws one tick
+    /// at a time. Damage starts above `MIN_FREEZE_TICKS` every 40 ticks.
+    fn tick_frozen_state(&mut self, world: &mut impl PhysicsWorld) -> f32 {
+        self.tick_count = self.tick_count.wrapping_add(1);
+        if self.powder_snow_at(world) {
+            self.ticks_frozen =
+                (self.ticks_frozen + POWDER_SNOW_FREEZE_PER_TICK).min(MAX_FREEZE_TICKS);
+        } else if self.ticks_frozen > 0 {
+            self.ticks_frozen -= 1;
+        }
+        if self.ticks_frozen > MIN_FREEZE_TICKS
+            && self.tick_count.is_multiple_of(FREEZE_DAMAGE_INTERVAL)
+        {
+            FREEZE_DAMAGE
+        } else {
+            0.0
+        }
+    }
+
+    /// One `LivingEntity.travel` tick while submerged in water or lava.
+    ///
+    /// Input speed, buoyancy, drag, and flow acceleration come from the fluid
+    /// family; fall distance is cleared every tick, as vanilla does while
+    /// submerged. Bubble columns override gravity with the exact
+    /// [`fluid::bubble_column_velocity`] caps.
+    fn tick_in_fluid(
+        &mut self,
+        world: &mut impl PhysicsWorld,
+        state: FluidState,
+        input: MovementInput,
+        start: (f64, f64, f64),
+        freeze_damage: f32,
+    ) -> TickOutcome {
+        let kind = state.kind;
+        let speed = match kind {
+            FluidKind::Water => self.movement_speed(),
+            FluidKind::Lava => LAVA_MOVE_SPEED,
+        };
+        self.move_relative(speed, input);
+
+        let (x, y, z) = self.feet();
+        let (flow_x, flow_y, flow_z) = world.fluid_flow(x, y, z);
+        let acceleration = match kind {
+            FluidKind::Water => WATER_FLOW_ACCELERATION,
+            FluidKind::Lava => LAVA_FLOW_ACCELERATION,
+        };
+        self.velocity_x += flow_x * acceleration;
+        self.velocity_z += flow_z * acceleration;
+        if flow_y < 0.0 {
+            self.velocity_y += flow_y * acceleration;
+        }
+
+        let gravity = match kind {
+            FluidKind::Water => GRAVITY * WATER_GRAVITY_FACTOR,
+            FluidKind::Lava => GRAVITY * LAVA_GRAVITY_FACTOR,
+        };
+        let bubble = if kind == FluidKind::Water {
+            self.bubble_column_at(world)
+        } else {
+            None
+        };
+        if let Some((drag_down, placement)) = bubble {
+            self.velocity_y = fluid::bubble_column_velocity(drag_down, placement, self.velocity_y);
+        } else {
+            self.velocity_y -= gravity;
+        }
+
+        let moved = self.move_by(world, self.velocity_x, self.velocity_y, self.velocity_z);
+        let drag = match kind {
+            FluidKind::Water => WATER_DRAG,
+            FluidKind::Lava => LAVA_DRAG,
+        };
+        self.velocity_x = moved.dx * drag;
+        self.velocity_y = moved.dy * drag;
+        self.velocity_z = moved.dz * drag;
+        self.fall_distance = 0.0;
+        TickOutcome {
+            moved: (self.x, self.y, self.z) != start,
+            on_ground: self.on_ground,
+            landed: false,
+            fall_damage: 0.0,
+            freeze_damage,
+        }
+    }
+
     /// `Entity.moveRelative`: rotate the local input by yaw and add it to the
     /// current velocity.
     fn move_relative(&mut self, speed: f64, input: MovementInput) {
@@ -580,6 +778,7 @@ impl PlayerPhysics {
             let jump_factor = self.block_jump_factor(world);
             self.jump_with_factor(jump_factor);
         }
+        let freeze_damage = self.tick_frozen_state(world);
 
         let start = (self.x, self.y, self.z);
         if self.flying {
@@ -602,10 +801,16 @@ impl PlayerPhysics {
                 on_ground: self.on_ground,
                 landed: false,
                 fall_damage: 0.0,
+                freeze_damage,
             };
             return outcome;
         }
 
+        if let Some(state) = self.fluid_at_feet(world) {
+            return self.tick_in_fluid(world, state, input, start, freeze_damage);
+        }
+
+        let powder_snow = self.powder_snow_at(world);
         let friction = if self.on_ground {
             world.friction(
                 self.x.floor() as i32,
@@ -647,6 +852,13 @@ impl PlayerPhysics {
             move_x *= COBWEB_MOVE_MULTIPLIER.0;
             move_y *= COBWEB_MOVE_MULTIPLIER.1;
             move_z *= COBWEB_MOVE_MULTIPLIER.2;
+        }
+        // `PowderSnowBlock.entityInside` damps movement before the collision
+        // move, so an entity sinks slowly and cannot sprint through the snow.
+        if powder_snow {
+            move_x *= POWDER_SNOW_MOVE_MULTIPLIER.0;
+            move_y *= POWDER_SNOW_MOVE_MULTIPLIER.1;
+            move_z *= POWDER_SNOW_MOVE_MULTIPLIER.2;
         }
         let moved = self.move_by(world, move_x, move_y, move_z);
         if stuck {
@@ -694,7 +906,7 @@ impl PlayerPhysics {
 
         let mut landed = false;
         let mut fall_damage = 0.0;
-        if self.swimming {
+        if self.swimming || powder_snow {
             self.fall_distance = 0.0;
         } else {
             if moved.dy < 0.0 {
@@ -721,6 +933,7 @@ impl PlayerPhysics {
             on_ground: self.on_ground,
             landed,
             fall_damage,
+            freeze_damage,
         }
     }
 
@@ -785,7 +998,12 @@ impl PlayerPhysics {
         if horizontal <= MAX_SIMULATED_HORIZONTAL_MOVE {
             let movement = self.move_by(world, dx, dy, dz);
             moved = (self.x, self.y, self.z) != start;
-            if !self.flying && !self.swimming && movement.dy < 0.0 {
+            if !self.flying
+                && !self.swimming
+                && !self.powder_snow_at(world)
+                && self.fluid_at_feet(world).is_none()
+                && movement.dy < 0.0
+            {
                 self.fall_distance += -movement.dy;
             }
             let grounded = movement.on_ground || (client.on_ground && self.is_supported(world));
@@ -852,7 +1070,12 @@ impl PlayerPhysics {
                 }
             }
             moved = (self.x, self.y, self.z) != start;
-            if !self.flying && !self.swimming && dy < 0.0 {
+            if !self.flying
+                && !self.swimming
+                && !self.powder_snow_at(world)
+                && self.fluid_at_feet(world).is_none()
+                && dy < 0.0
+            {
                 self.fall_distance += -dy;
             }
             landed = client.on_ground && self.is_supported(world);
@@ -1326,7 +1549,11 @@ mod tests {
         assert!(!world.is_scaffolding(0, 0, 0));
         assert!(!world.is_cobweb(0, 0, 0));
         assert!(!world.is_slime(0, 0, 0));
+        assert!(!world.is_powder_snow(0, 0, 0));
         assert!(!world.resets_fall_damage(0, 0, 0));
+        assert!(world.fluid_state(0, 0, 0).is_none());
+        assert_eq!(world.fluid_flow(0, 0, 0), (0.0, 0.0, 0.0));
+        assert_eq!(world.bubble_column_drag(0, 0, 0), None);
 
         let mut physics = PlayerPhysics::new(0.5, 0.0, 0.5);
         physics.on_ground = true;

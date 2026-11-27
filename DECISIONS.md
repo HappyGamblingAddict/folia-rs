@@ -4051,3 +4051,44 @@ Format:
   unit tests (correction id, gated movement, stale/matching ack, walk after
   ack), and `tests/teleport_ack.rs` driving a full TCP join. Focused
   `movement_validation`, workspace check, fmt, and clippy `-D warnings` green.
+
+## 2026-11-27 — P4.3 live block-damage overlay and XP packets
+
+- Context: `block_breaking.rs` modelled the dig state machine and progress but
+  explicitly produced no overlay packet; `join.rs` resynchronised a cancelled
+  block with a plain Block Update. XP was sent on join, `/xp add` and orb
+  pickup, but not on respawn or dimension change.
+- Decision: add the 1.21.11 `ClientboundBlockDestructionPacket` (id 5) body in
+  `block_update.rs`: VarInt entity id, packed `Position` (i64), unsigned-byte
+  destroy stage. `destruction_stage` is vanilla's `(int)(progress * 10)`
+  clamped to 0..=9, with `-1` (wire `0xFF`) clearing the overlay.
+- Packet-id source / fixture gap: the local decompiled tree is unavailable on
+  this host and `assets/join_play.bin` contains no block-destruction frame, so
+  the id is not Java-oracle-pinned here. It was taken from the published
+  clientbound play packet list, where `block_destruction` (5) is contiguous with
+  `block_entity_data` (6), `block_event` (7) and `block_update` (8); id 8 is
+  already verified by the shipped capture and `join.rs`. The class field layout
+  (entityId/pos/progress) was confirmed against the 1.21.11
+  `ClientboundBlockDestructionPacket` mapping. Rust codec tests pin the bytes
+  and a live TCP test pins the observed frames.
+- Decision: the overlay is keyed by the digging player's entity id. Frames go
+  out on START (stage 0), on every integer stage change while the dig is active
+  (suppressed by a `lastSentState`-style `DigOverlay`), and a clear is sent on
+  STOP, ABORT, target change, block break, dimension change, and the still
+  writable disconnect paths. On a closed socket a clear cannot be delivered,
+  so disconnect only resets local dig/overlay state; vanilla likewise drops
+  overlays with the player entity, and this server's per-session stream never
+  showed the digger's overlay to other viewers.
+- Decision: `send_experience` is the single helper for `ClientboundSetExperience`
+  (progress/level/total) and is used at all live XP changes: join, orb pickup,
+  `/xp add`, ordinary respawn and dimension respawn. Death XP loss is
+  reflected by the respawn packet; no packet is sent when XP is unchanged.
+- Consequences: the existing join/break/loot/item-entity fixtures stay stable
+  because they filter packets by id; new overlay frames are id 5. Break sounds
+  and particles, per-viewer overlay broadcast and a Java destruction capture
+  remain explicit gaps.
+- Verification: 4 `block_update` codec/stage unit tests, 1 `block_breaking`
+  `active_progress` unit test, and a new `tests/block_damage_overlay.rs` live
+  dig test. Focused `experience`, `block_breaking`, `item_entities`,
+  `loot_drops`, `entity_metadata`, `drop_store`, `join`, block_update/block_
+  breaking lib tests, workspace check, fmt and clippy `-D warnings` green.

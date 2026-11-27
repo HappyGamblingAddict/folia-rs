@@ -17,7 +17,10 @@
 use crate::anvil::Compression;
 use crate::block_breaking::{self, DigStart, DigState, DigStop, MiningContext};
 use crate::block_entity::{BlockEntity, BlockEntityPos, SpawnerBlockEntity};
-use crate::block_update::{SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON};
+use crate::block_update::{
+    BLOCK_DESTRUCTION_CLEAR, SERVERBOUND_PLAYER_ACTION, SERVERBOUND_USE_ITEM_ON,
+    block_destruction_packet, destruction_stage,
+};
 use crate::chunk::{BlockState, Chunk};
 use crate::chunk_packet::ChunkPacketTemplate;
 use crate::chunk_tickets::{TicketChunk, allocate_player_owner};
@@ -1784,14 +1787,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
         &mut stream,
         &crate::entity_metadata::set_equipment_packet(player_entity, &player_equipment(&session)),
     )?;
-    write_packet(
-        &mut stream,
-        &crate::entity_metadata::set_experience_packet(
-            session.xp_progress,
-            session.xp_level,
-            session.xp_total,
-        ),
-    )?;
+    send_experience(&mut stream, &session)?;
     // Start the client at the time stored in level.dat. The captured
     // ClientboundSetTime is filtered out of the replayed play packets, so this
     // is the only time packet during login.
@@ -1927,6 +1923,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
     let play_started = Instant::now();
     let mut last_chunk_topup = Instant::now();
     let mut dig = DigState::default();
+    let mut overlay: DigOverlay = None;
     let mut menus = inventory::SessionMenus::new();
     let mut remote_chat: Option<RemoteChatSession> = None;
     let mut last_seen = LastSeenValidator::new(LAST_SEEN_MESSAGES_WINDOW);
@@ -1947,6 +1944,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             tracked_entities.clear();
             drop_entities.clear();
             projectiles.clear();
+            forget_dig(&mut dig, &mut overlay);
             menus.on_disconnect();
             if let Err(error) =
                 dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
@@ -2366,14 +2364,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 }
             }
             if drop_tick.picked_experience {
-                write_packet(
-                    &mut stream,
-                    &crate::entity_metadata::set_experience_packet(
-                        session.xp_progress,
-                        session.xp_level,
-                        session.xp_total,
-                    ),
-                )?;
+                send_experience(&mut stream, &session)?;
             }
             game_tick = game_tick.wrapping_add(1);
             // With doDaylightCycle=false vanilla freezes the time-of-day clock
@@ -2900,6 +2891,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 &mut session,
                 &mut menus,
                 &mut dig,
+                &mut overlay,
                 &mut tracked_entities,
                 &mut drop_entities,
                 &trigger,
@@ -3502,6 +3494,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                             &mut session,
                             &mut menus,
                             &mut dig,
+                            &mut overlay,
                             play_started,
                             &mut projectiles,
                             &mut drop_entities,
@@ -3778,12 +3771,25 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.kind() == io::ErrorKind::TimedOut =>
             {
+                if let Err(tick_error) = tick_active_dig_overlay(
+                    current_storage,
+                    &mut stream,
+                    &session,
+                    &dig,
+                    &mut overlay,
+                    player_entity,
+                    play_started,
+                ) {
+                    eprintln!("[join] active dig overlay failed: {tick_error}");
+                }
                 if let Err(tick_error) = tick_delayed_destroy(
                     current_storage,
                     &mut stream,
                     &mut session,
                     &mut menus,
                     &mut dig,
+                    &mut overlay,
+                    player_entity,
                     play_started,
                     &mut drop_entities,
                     &mut drop_rng,
@@ -3802,6 +3808,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
                         write_packet(&mut stream, &keepalive_packet(keepalive_nonce))
                     {
                         if is_disconnect(&error) {
+                            forget_dig(&mut dig, &mut overlay);
                             finish_disconnected(
                                 &session,
                                 current_storage,
@@ -3819,6 +3826,7 @@ pub fn handle_login(stream: TcpStream, handshake: &Handshake) -> io::Result<()> 
             }
             Err(error) => {
                 menus.on_disconnect();
+                forget_dig(&mut dig, &mut overlay);
                 if let Err(save_error) =
                     dimension::save_playerdata_preserving_dimension(&session, playerdata_dir())
                 {
@@ -5716,14 +5724,7 @@ fn handle_command(
                 return Ok(());
             }
             session.add_experience(amount);
-            write_packet(
-                stream,
-                &crate::entity_metadata::set_experience_packet(
-                    session.xp_progress,
-                    session.xp_level,
-                    session.xp_total,
-                ),
-            )?;
+            send_experience(stream, session)?;
             if let Err(error) =
                 dimension::save_playerdata_preserving_dimension(session, playerdata_dir())
             {
@@ -6579,6 +6580,7 @@ fn respawn_player(
     write_packet(stream, &position_packet(session, id))?;
     write_packet(stream, &health_packet(session))?;
     write_packet(stream, &abilities_packet(session.game_mode))?;
+    send_experience(stream, session)?;
     *center_x = (session.x.floor() as i32).div_euclid(16);
     *center_z = (session.z.floor() as i32).div_euclid(16);
     let batch = stream_chunks_around(
@@ -6623,6 +6625,7 @@ fn switch_dimension(
     session: &mut PlayerSession,
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
+    overlay: &mut DigOverlay,
     tracked: &mut SessionEntityTracker,
     drops: &mut DropEntityStore,
     trigger: &dimension::PortalTrigger,
@@ -6654,6 +6657,7 @@ fn switch_dimension(
     }
     tracked.clear();
     drops.clear();
+    clear_dig_overlay(stream, player_entity_id(), overlay)?;
     *dig = DigState::default();
 
     // 3. Load the destination column first so the arrival can be lifted out of
@@ -6677,6 +6681,7 @@ fn switch_dimension(
     write_packet(stream, &position_packet(session, id))?;
     write_packet(stream, &health_packet(session))?;
     write_packet(stream, &abilities_packet(session.game_mode))?;
+    send_experience(stream, session)?;
 
     // 5. Persist the new position and dimension.
     if let Err(error) =
@@ -7846,6 +7851,7 @@ fn handle_block_action(
     session: &mut PlayerSession,
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
+    overlay: &mut DigOverlay,
     play_started: Instant,
     projectiles: &mut crate::projectile::ProjectileStore,
     drop_entities: &mut DropEntityStore,
@@ -7943,6 +7949,8 @@ fn handle_block_action(
             let now = mining_tick(play_started);
             match action.action {
                 block_breaking::ACTION_START_DESTROY_BLOCK => {
+                    // A new swing retires any overlay left by the previous one.
+                    clear_dig_overlay(stream, player_entity, overlay)?;
                     // Vanilla resynchronises the old destroy position when the
                     // player starts mining a different block mid-swing.
                     if let Some(previous) = dig.active_target()
@@ -7979,7 +7987,18 @@ fn handle_block_action(
                                 save_after_break(session);
                             }
                         }
-                        DigStart::Started | DigStart::Rejected => {}
+                        DigStart::Started => {
+                            // Vanilla sends stage 0 as soon as a dig begins so
+                            // the client shows the first crack frame.
+                            update_dig_overlay(
+                                stream,
+                                player_entity,
+                                overlay,
+                                pos,
+                                destruction_stage(0.0),
+                            )?;
+                        }
+                        DigStart::Rejected => {}
                     }
                 }
                 block_breaking::ACTION_STOP_DESTROY_BLOCK => {
@@ -7993,6 +8012,9 @@ fn handle_block_action(
                     let context = mining_context(session, storage);
                     let had_target =
                         dig.active_target().is_some() || dig.delayed_target().is_some();
+                    // A client-side STOP removes the crack overlay even when
+                    // the server keeps a delayed destroy alive.
+                    clear_dig_overlay(stream, player_entity, overlay)?;
                     let creative = session.game_mode == 1;
                     match dig.stop(pos, &state, held.as_ref(), &context, now) {
                         DigStop::Destroyed => {
@@ -8071,6 +8093,7 @@ fn handle_block_action(
                     }
                 }
                 block_breaking::ACTION_ABORT_DESTROY_BLOCK => {
+                    clear_dig_overlay(stream, player_entity, overlay)?;
                     if let Some(previous) = dig.abort(pos) {
                         resync_block(stream, storage, previous)?;
                     }
@@ -8471,6 +8494,8 @@ fn tick_delayed_destroy(
     session: &mut PlayerSession,
     menus: &mut inventory::SessionMenus,
     dig: &mut DigState,
+    overlay: &mut DigOverlay,
+    player_entity: i32,
     play_started: Instant,
     drop_entities: &mut DropEntityStore,
     drop_rng: &mut LegacyRandomSource,
@@ -8490,6 +8515,7 @@ fn tick_delayed_destroy(
     let held = session.selected_item().cloned();
     let context = mining_context(session, storage);
     if dig.tick_delayed(&state, held.as_ref(), &context, mining_tick(play_started)) {
+        clear_dig_overlay(stream, player_entity, overlay)?;
         let packets = finish_break(
             storage,
             session,
@@ -8509,14 +8535,50 @@ fn tick_delayed_destroy(
     Ok(())
 }
 
+/// Advance the visible crack overlay for an active survival dig.
+///
+/// Vanilla re-broadcasts only when the integer stage changes, so this uses
+/// [`update_dig_overlay`] rather than writing a packet every tick.
+fn tick_active_dig_overlay(
+    storage: &Mutex<WorldStorage>,
+    stream: &mut LoginStream,
+    session: &PlayerSession,
+    dig: &DigState,
+    overlay: &mut DigOverlay,
+    player_entity: i32,
+    play_started: Instant,
+) -> io::Result<()> {
+    let Some(pos) = dig.active_target() else {
+        return Ok(());
+    };
+    let storage = &mut *crate::world::lock(storage);
+    let Some(state) = block_at(storage, pos)? else {
+        return Ok(());
+    };
+    let held = session.selected_item().cloned();
+    let context = mining_context(session, storage);
+    let Some(progress) =
+        dig.active_progress(&state, held.as_ref(), &context, mining_tick(play_started))
+    else {
+        return Ok(());
+    };
+    // A fully accumulated survival dig keeps the last visible frame until the
+    // client's STOP breaks the block; only stop/abort/break sends the clear.
+    let stage = if progress >= 1.0 {
+        9
+    } else {
+        destruction_stage(progress)
+    };
+    update_dig_overlay(stream, player_entity, overlay, pos, stage)
+}
+
 fn save_after_break(session: &PlayerSession) {
     if let Err(error) = dimension::save_playerdata_preserving_dimension(session, playerdata_dir()) {
         eprintln!("[join] could not save inventory after a block break: {error}");
     }
 }
 
-/// Send the current block state back to the client, clearing a block-damage
-/// overlay without introducing a new packet type.
+/// Send the current block state back to the client after a cancelled dig.
 fn resync_block(
     stream: &mut LoginStream,
     storage: &mut WorldStorage,
@@ -8529,6 +8591,70 @@ fn resync_block(
     write_packet(
         stream,
         &crate::block_update::block_update_packet(pos.x(), pos.y(), pos.z(), state_id),
+    )
+}
+
+/// Last overlay stage sent for a position. `None` means no overlay is visible.
+type DigOverlay = Option<(BlockPos, i32)>;
+
+/// Send one block-damage overlay frame for `pos`.
+fn send_dig_overlay(
+    stream: &mut LoginStream,
+    player_entity: i32,
+    pos: BlockPos,
+    stage: i32,
+) -> io::Result<()> {
+    write_packet(
+        stream,
+        &block_destruction_packet(player_entity, pos.x(), pos.y(), pos.z(), stage),
+    )
+}
+
+/// Send a stage only when it differs from the last frame for that position,
+/// matching vanilla's `lastSentState` suppression.
+fn update_dig_overlay(
+    stream: &mut LoginStream,
+    player_entity: i32,
+    overlay: &mut DigOverlay,
+    pos: BlockPos,
+    stage: i32,
+) -> io::Result<()> {
+    if *overlay == Some((pos, stage)) {
+        return Ok(());
+    }
+    *overlay = Some((pos, stage));
+    send_dig_overlay(stream, player_entity, pos, stage)
+}
+
+/// Remove the visible overlay, if any. Called on stop, abort, break, target
+/// change and disconnect.
+fn clear_dig_overlay(
+    stream: &mut LoginStream,
+    player_entity: i32,
+    overlay: &mut DigOverlay,
+) -> io::Result<()> {
+    if let Some((pos, _)) = overlay.take() {
+        send_dig_overlay(stream, player_entity, pos, BLOCK_DESTRUCTION_CLEAR)?;
+    }
+    Ok(())
+}
+
+/// Reset dig/overlay bookkeeping on disconnect. The peer socket is already
+/// gone, so only local state can be cleared here (see `DECISIONS.md`).
+fn forget_dig(dig: &mut DigState, overlay: &mut DigOverlay) {
+    *dig = DigState::default();
+    *overlay = None;
+}
+
+/// Send the client's current XP progress, level and total.
+fn send_experience(stream: &mut LoginStream, session: &PlayerSession) -> io::Result<()> {
+    write_packet(
+        stream,
+        &crate::entity_metadata::set_experience_packet(
+            session.xp_progress,
+            session.xp_level,
+            session.xp_total,
+        ),
     )
 }
 

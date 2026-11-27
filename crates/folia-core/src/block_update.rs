@@ -10,6 +10,10 @@ use std::io;
 use std::sync::{LazyLock, Mutex, mpsc};
 
 pub const CLIENTBOUND_BLOCK_UPDATE: i32 = 8;
+/// 1.21.11 `ClientboundBlockDestructionPacket` (the block-damage overlay).
+/// Its id sits immediately before `block_entity_data` (6), `block_event`
+/// (7) and the already-verified `block_update` (8) in the play protocol.
+pub const CLIENTBOUND_BLOCK_DESTRUCTION: i32 = 5;
 pub const CLIENTBOUND_SECTION_BLOCKS_UPDATE: i32 = 82;
 pub const CLIENTBOUND_LIGHT_UPDATE: i32 = 47;
 pub const SERVERBOUND_PLAYER_ACTION: i32 = 40;
@@ -234,6 +238,58 @@ pub fn block_update_packet(x: i32, y: i32, z: i32, state_id: i32) -> Vec<u8> {
     writer.write_i64(block_pos_long(x, y, z)).unwrap();
     writer.write_varint(state_id).unwrap();
     writer.into_inner()
+}
+
+/// Vanilla writes `-1` as the destroy stage to remove a block-damage overlay.
+/// The wire field is an unsigned byte, so this serialises as `0xFF`.
+pub const BLOCK_DESTRUCTION_CLEAR: i32 = -1;
+
+/// `ServerPlayerGameMode.tick`'s `(int)(destroyProgress * 10.0F)` stage.
+///
+/// Stages 0..=9 are the ten visible overlay frames; a finished, missing or
+/// non-finite progress clears the overlay.
+pub fn destruction_stage(progress: f32) -> i32 {
+    if !progress.is_finite() || progress < 0.0 || progress >= 1.0 {
+        return BLOCK_DESTRUCTION_CLEAR;
+    }
+    (progress * 10.0) as i32
+}
+
+/// Build the 1.21.11 block-damage overlay packet:
+/// `VarInt id, VarInt entityId, i64 position, u8 destroyStage`.
+///
+/// The entity id is the digging player's own id; the client keys overlays by
+/// it, so using the same id clears exactly this player's overlay.
+pub fn block_destruction_packet(entity_id: i32, x: i32, y: i32, z: i32, stage: i32) -> Vec<u8> {
+    let mut writer = PacketWriter::new();
+    writer.write_varint(CLIENTBOUND_BLOCK_DESTRUCTION).unwrap();
+    writer.write_varint(entity_id).unwrap();
+    writer.write_i64(block_pos_long(x, y, z)).unwrap();
+    writer.write_u8(stage as u8).unwrap();
+    writer.into_inner()
+}
+
+/// Decode a [`block_destruction_packet`]. The stage is returned as a signed
+/// value so a clear comes back as [`BLOCK_DESTRUCTION_CLEAR`].
+pub fn read_block_destruction(packet: &[u8]) -> io::Result<(i32, i64, i32)> {
+    let mut reader = PacketReader::new(packet);
+    let id = reader.read_varint()?;
+    if id != CLIENTBOUND_BLOCK_DESTRUCTION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected block destruction id {CLIENTBOUND_BLOCK_DESTRUCTION}, got {id}"),
+        ));
+    }
+    let entity_id = reader.read_varint()?;
+    let position = reader.read_i64()?;
+    let stage = reader.read_u8()? as i8 as i32;
+    if !reader.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing bytes after block destruction",
+        ));
+    }
+    Ok((entity_id, position, stage))
 }
 
 pub fn section_blocks_update_packet(
@@ -1490,6 +1546,49 @@ mod tests {
         assert_eq!(reader.read_i64().unwrap(), block_pos_long(1, 2, 3));
         assert_eq!(reader.read_varint().unwrap(), 1);
         assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn block_destruction_packet_pins_the_1_21_11_wire_layout() {
+        let packet = block_destruction_packet(42, 1, -61, 0, 3);
+        assert_eq!(packet[0], 0x05, "clientbound block destruction id 5");
+        let (entity_id, position, stage) = read_block_destruction(&packet).unwrap();
+        assert_eq!(entity_id, 42);
+        assert_eq!(position, block_pos_long(1, -61, 0));
+        assert_eq!(stage, 3);
+    }
+
+    #[test]
+    fn block_destruction_clear_writes_the_unsigned_byte_for_minus_one() {
+        let packet = block_destruction_packet(7, 0, 64, -1, BLOCK_DESTRUCTION_CLEAR);
+        assert_eq!(packet.last().copied(), Some(0xFF));
+        let (entity_id, position, stage) = read_block_destruction(&packet).unwrap();
+        assert_eq!(entity_id, 7);
+        assert_eq!(position, block_pos_long(0, 64, -1));
+        assert_eq!(stage, BLOCK_DESTRUCTION_CLEAR);
+    }
+
+    #[test]
+    fn read_block_destruction_rejects_wrong_id_and_trailing_bytes() {
+        let mut wrong = block_destruction_packet(1, 0, 0, 0, 0);
+        wrong[0] = 0x08;
+        assert!(read_block_destruction(&wrong).is_err());
+
+        let mut trailing = block_destruction_packet(1, 0, 0, 0, 0);
+        trailing.push(0);
+        assert!(read_block_destruction(&trailing).is_err());
+    }
+
+    #[test]
+    fn destruction_stage_follows_vanilla_ten_frame_progression() {
+        assert_eq!(destruction_stage(0.0), 0);
+        assert_eq!(destruction_stage(0.09), 0);
+        assert_eq!(destruction_stage(0.1), 1);
+        assert_eq!(destruction_stage(0.69), 6);
+        assert_eq!(destruction_stage(0.7), 7);
+        assert_eq!(destruction_stage(0.99), 9);
+        assert_eq!(destruction_stage(1.0), BLOCK_DESTRUCTION_CLEAR);
+        assert_eq!(destruction_stage(f32::NAN), BLOCK_DESTRUCTION_CLEAR);
     }
 
     #[test]

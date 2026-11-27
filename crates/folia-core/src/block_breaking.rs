@@ -20,7 +20,8 @@
 //!
 //! The wire protocol is unchanged: callers validate the client's dig packets
 //! and broadcast the existing block-update packet when the block actually
-//! breaks. Block-damage overlay packets are intentionally not produced here.
+//! breaks. The per-tick `ClientboundBlockDestruction` overlay is derived from
+//! [`DigState::active_progress`] and built in [`crate::block_update`].
 
 use crate::block_behaviour;
 use crate::chunk::BlockState;
@@ -504,6 +505,27 @@ impl DigState {
     /// (`hasDelayedDestroy`), if any.
     pub fn delayed_target(&self) -> Option<BlockPos> {
         self.delayed.map(|dig| dig.pos)
+    }
+
+    /// Accumulated destroy progress for the active target at `now_tick`.
+    ///
+    /// This uses the same elapsed-tick formula as [`DigState::stop`] and
+    /// [`DigState::tick_delayed`], so the overlay the client sees is derived
+    /// from the exact progress the break decision uses. `None` when there is
+    /// no active target or the block has become air.
+    pub fn active_progress(
+        &self,
+        state: &BlockState,
+        held: Option<&ItemStack>,
+        context: &MiningContext,
+        now_tick: u64,
+    ) -> Option<f32> {
+        let dig = self.active?;
+        if is_air(state) {
+            return None;
+        }
+        let elapsed = now_tick.saturating_sub(dig.start_tick) as f32 + 1.0;
+        Some(destroy_progress_per_tick(state, held, context) * elapsed)
     }
 
     /// Drop a delayed destroy without changing the world.
@@ -1598,6 +1620,29 @@ mod tests {
         // 22 ticks = 0.0444 * 23 = 1.02 >= 1.0 -> destroyed on the next tick.
         assert!(dig.tick_delayed(&stone, Some(&pick), &ctx, 122));
         assert_eq!(dig.delayed_target(), None);
+    }
+
+    #[test]
+    fn active_progress_tracks_the_dig_used_by_stop() {
+        let stone = state("minecraft:stone");
+        let pick = ItemStack::new("minecraft:wooden_pickaxe", 1);
+        let ctx = MiningContext::default();
+        let pos = BlockPos::new(0, 64, 0);
+        let mut dig = DigState::default();
+        assert_eq!(
+            dig.start(pos, false, &stone, Some(&pick), &ctx, 100),
+            DigStart::Started
+        );
+        let per_tick = destroy_progress_per_tick(&stone, Some(&pick), &ctx);
+        // START counts as one elapsed tick, matching the stop formula.
+        assert!(
+            (dig.active_progress(&stone, Some(&pick), &ctx, 100).unwrap() - per_tick).abs() < 1e-6
+        );
+        let later = dig.active_progress(&stone, Some(&pick), &ctx, 110).unwrap();
+        assert!((later - per_tick * 11.0).abs() < 1e-6);
+
+        dig.abort(pos);
+        assert_eq!(dig.active_progress(&stone, Some(&pick), &ctx, 110), None);
     }
 
     #[test]

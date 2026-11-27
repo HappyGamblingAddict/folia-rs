@@ -1980,6 +1980,9 @@ instantly on start-destroy and places on use-item-on.
   inventory. 13 unit + 9 integration tests cover stone/wood, dirt/shovel,
   obsidian tier gating, creative, durability, drop counts, and the
   delayed-destroy path.
+- **Progress (2026-11-27):** Block-damage overlays and XP packets now update live
+  during digging/orb pickup, with packet/live TCP tests. Entity death loot/XP
+  drops and chunk-unload retention remain open.
 - **Progress (2026-11-13):** live drops — block breaks now spawn into a
   per-session `DropEntityStore` instead of the inventory; `finish_break`
   returns add/metadata packets; `handle_block_action` and

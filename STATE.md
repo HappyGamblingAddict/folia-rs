@@ -114,6 +114,8 @@ Last updated: 2026-11-24
   sounds/particles, cooldown packet, and lasting physics reconciliation remain.
 - P4.2 teleport acknowledgement landed with per-session ids, pending-movement
   suppression, exact-match acks, and stale-ack safety.
+- P4.3 block-damage overlays and XP updates are now sent live; death loot/XP
+  drops and chunk-unload retention remain open.
 - Major gaps: P0.5 full regeneration is blocked by the missing Windows Java
   reference tree and pwsh (see BLOCKERS.md); -Check hash verification works,
   Mojang profile-key trust roots and signed-command validation,

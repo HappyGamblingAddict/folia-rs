@@ -6,6 +6,7 @@ use folia_core::player_physics::{
     MAX_FREEZE_TICKS, MIN_FREEZE_TICKS, MovementCorrection, MovementInput, PhysicsWorld,
     PlayerPhysics, SLOW_FALL_TERMINAL_VELOCITY, SNEAKING_HEIGHT, STANDING_HEIGHT, SWIMMING_HEIGHT,
     TERMINAL_VELOCITY, WATER_FLOW_ACCELERATION, WIDTH, depth_strider_speed_multiplier,
+    glide_velocity,
 };
 use std::collections::HashMap;
 
@@ -973,6 +974,7 @@ fn fluid_and_powder_snow_movement_is_deterministic() {
                         forward: 0.5,
                         strafe: -0.25,
                         jumping: false,
+                        pitch: None,
                     },
                 );
                 (physics.x, physics.y, physics.z, physics.ticks_frozen)
@@ -1188,9 +1190,232 @@ fn levitation_and_slow_falling_and_depth_strider_are_deterministic() {
                         forward: 0.5,
                         strafe: -0.25,
                         jumping: false,
+                        pitch: None,
                     },
                 );
                 (physics.x, physics.y, physics.z, physics.ticks_frozen)
+            })
+            .collect()
+    }
+    assert_eq!(trace(), trace());
+}
+
+fn glider(y: f64) -> PlayerPhysics {
+    let mut physics = PlayerPhysics::new(0.5, y, 0.5);
+    physics.elytra = true;
+    physics
+}
+
+#[test]
+fn elytra_launch_needs_equipment_airborne_and_a_jump_edge() {
+    let mut world = FlatPhysicsWorld::new(0);
+    let jumping = MovementInput {
+        jumping: true,
+        ..MovementInput::default()
+    };
+
+    let mut grounded = glider(0.0);
+    grounded.on_ground = true;
+    assert!(!grounded.try_start_gliding(&mut world));
+    grounded.tick(&mut world, jumping);
+    assert!(!grounded.fall_flying, "cannot launch from the ground");
+
+    let mut unequipped = PlayerPhysics::new(0.5, 40.0, 0.5);
+    assert!(!unequipped.try_start_gliding(&mut world));
+    unequipped.tick(&mut world, jumping);
+    assert!(!unequipped.fall_flying, "cannot launch without a glider");
+
+    let mut airborne = glider(40.0);
+    assert!(airborne.try_start_gliding(&mut world));
+    assert!(airborne.fall_flying);
+    assert_eq!(
+        airborne.height(),
+        SWIMMING_HEIGHT,
+        "gliding uses the 0.6 pose"
+    );
+
+    let mut edge = glider(40.0);
+    edge.tick(&mut world, jumping);
+    assert!(edge.fall_flying, "a jump edge in mid-air launches");
+
+    let mut held = PlayerPhysics::new(0.5, 40.0, 0.5);
+    held.tick(&mut world, jumping);
+    held.elytra = true;
+    held.tick(&mut world, jumping);
+    assert!(!held.fall_flying, "holding jump is not a fresh launch edge");
+
+    let mut levitating = glider(40.0);
+    levitating.levitation_level = 1;
+    assert!(!levitating.try_start_gliding(&mut world));
+    let mut flying = glider(40.0);
+    flying.flying = true;
+    assert!(!flying.try_start_gliding(&mut world));
+
+    let mut water = FluidWorld::new(-100);
+    water.water_column(0, 40, 0, 1);
+    let mut submerged = glider(40.0);
+    assert!(
+        !submerged.try_start_gliding(&mut water),
+        "no launch in water"
+    );
+
+    let mut ladder = SpecialWorld::new(-100);
+    ladder.set(0, 40, 0, LADDER, false);
+    let mut climbing = glider(40.0);
+    assert!(
+        !climbing.try_start_gliding(&mut ladder),
+        "no launch on a climbable block"
+    );
+}
+
+#[test]
+fn level_glide_converges_to_the_vanilla_descent_rate() {
+    let mut world = FlatPhysicsWorld::new(-100);
+    let mut physics = glider(40.0);
+    physics.velocity_y = -1.0;
+    assert!(physics.try_start_gliding(&mut world));
+
+    let mut expected_y = -1.0;
+    let mut expected_z = 0.0;
+    for _ in 0..60 {
+        let (_, new_y, new_z) = glide_velocity(
+            0.0,
+            expected_y,
+            expected_z,
+            physics.yaw,
+            physics.pitch,
+            GRAVITY,
+        );
+        expected_y = new_y;
+        expected_z = new_z;
+        physics.tick(&mut world, MovementInput::default());
+    }
+
+    assert!(
+        (physics.velocity_y - expected_y).abs() < 1.0e-9,
+        "descent {} vs recurrence {}",
+        physics.velocity_y,
+        expected_y
+    );
+    assert!(
+        (physics.velocity_z - expected_z).abs() < 1.0e-9,
+        "forward speed {} vs recurrence {}",
+        physics.velocity_z,
+        expected_z
+    );
+    assert!((physics.velocity_y + 0.149_946).abs() < 1.0e-4);
+    assert!(
+        physics.z > 0.5 + 5.0,
+        "a level glide flies forward, z={}",
+        physics.z
+    );
+    assert!(physics.fall_flying);
+    assert_eq!(physics.fall_distance, 0.0);
+}
+
+#[test]
+fn pitch_input_dives_and_climbs_the_glide() {
+    fn trace(pitch: f32) -> (f64, f64, f64) {
+        let mut world = FlatPhysicsWorld::new(-1000);
+        let mut physics = glider(200.0);
+        physics.pitch = pitch;
+        physics.velocity_y = -0.5;
+        physics.velocity_z = 2.0;
+        assert!(physics.try_start_gliding(&mut world));
+        let input = MovementInput {
+            pitch: Some(pitch),
+            ..MovementInput::default()
+        };
+        for _ in 0..40 {
+            physics.tick(&mut world, input);
+        }
+        (physics.y, physics.velocity_y, physics.z)
+    }
+
+    let dive = trace(45.0);
+    let level = trace(0.0);
+    let climb = trace(-45.0);
+    assert!(
+        dive.1 < level.1 - 0.3,
+        "diving descends faster: {} vs {}",
+        dive.1,
+        level.1
+    );
+    assert!(
+        climb.1 > level.1 + 0.5,
+        "looking up lifts: {} vs {}",
+        climb.1,
+        level.1
+    );
+    assert!(dive.0 < level.0 && level.0 < climb.0);
+    assert!(
+        dive.2 > climb.2,
+        "diving trades pitch for forward speed: {} vs {}",
+        dive.2,
+        climb.2
+    );
+}
+
+#[test]
+fn landing_cancels_gliding_without_fall_damage() {
+    let mut world = FlatPhysicsWorld::new(0);
+    let mut physics = glider(30.0);
+    physics.velocity_y = -2.0;
+    assert!(physics.try_start_gliding(&mut world));
+
+    let mut damage = 0.0;
+    let mut landed = false;
+    for _ in 0..400 {
+        let outcome = physics.tick(&mut world, MovementInput::default());
+        damage += outcome.fall_damage;
+        if outcome.landed {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the glide eventually lands");
+    assert!(physics.on_ground);
+    assert!(!physics.fall_flying, "landing clears shared flag 7");
+    assert_eq!(damage, 0.0, "slow-fall distance tracking cancels damage");
+    assert_eq!(physics.fall_distance, 0.0);
+}
+
+#[test]
+fn water_and_climbable_cancel_an_active_glide() {
+    let mut flat = FlatPhysicsWorld::new(-100);
+    let mut submerged = glider(30.0);
+    assert!(submerged.try_start_gliding(&mut flat));
+    let mut water = FluidWorld::new(-100);
+    water.water_column(0, 30, 0, 1);
+    submerged.tick(&mut water, MovementInput::default());
+    assert!(!submerged.fall_flying, "water cancels an active glide");
+
+    let mut climbing = glider(30.0);
+    assert!(climbing.try_start_gliding(&mut flat));
+    let mut ladder = SpecialWorld::new(-100);
+    ladder.set(0, 30, 0, LADDER, false);
+    climbing.tick(&mut ladder, MovementInput::default());
+    assert!(!climbing.fall_flying, "a climbable cancels an active glide");
+}
+
+#[test]
+fn elytra_glide_is_deterministic() {
+    fn trace() -> Vec<(f64, f64, f64, bool)> {
+        let mut world = FlatPhysicsWorld::new(-100);
+        let mut physics = glider(100.0);
+        physics.yaw = -90.0;
+        physics.velocity_y = -1.0;
+        assert!(physics.try_start_gliding(&mut world));
+        (0..40)
+            .map(|_| {
+                physics.tick(
+                    &mut world,
+                    MovementInput {
+                        pitch: Some(10.0),
+                        ..MovementInput::default()
+                    },
+                );
+                (physics.x, physics.y, physics.z, physics.fall_flying)
             })
             .collect()
     }

@@ -3,7 +3,7 @@
 > Last updated: 2026-11-16
 > Current commit: see `git log` (all work is committed and pushed)
 > Working tree: clean
-> Test status: **1,926 passing** at the 28526c6 gate (0 failed, 1 ignored benchmark); movement-effect slice next expected 1,934
+> Test status: **1,934 passing** at the e9c1a82 gate (0 failed, 1 ignored benchmark); elytra slice next expected 1,941
 > Worldgen parity: **98.75% block-class / 95.88% exact-name** on the 16-column fixture
 > Overall completion estimate: **~30%** (range 22-35% depending on metric)
 
@@ -1895,6 +1895,10 @@ instantly on start-destroy and places on use-item-on.
   `ServerPlayer.java`, `LivingEntity.travel`.
 - **Done when:** Movement traces match Java for walking, jumping, falling,
   swimming, and ladders within `1e-4`.
+- **Progress (2026-11-27c):** Elytra gliding now launches on a falling jump
+  edge, uses vanilla-style look-vector recurrence, and cancels on landing,
+  water, climbables, or unequip, with 7 new tests. Firework boost, durability,
+  wall impact, riptide, and live START_FALL_FLYING wiring remain open.
 - **Progress (2026-11-27b):** Depth Strider, Slow Falling, and Levitation now
   affect player physics through an effects/equipment bridge, with 8 new tests.
   Elytra and riptide remain unsupported, and live sessions still need to call

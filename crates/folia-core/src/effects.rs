@@ -1146,6 +1146,14 @@ pub fn depth_strider_level(equipment: &Equipment) -> i32 {
         .max(0)
 }
 
+/// Whether the chest slot holds a glider. Vanilla checks every equipment slot
+/// for a `Glider` component whose `Equippable.slot` matches; the Rust equipment
+/// model only carries the chestplate slot, which is where a player elytra goes.
+pub fn has_elytra(equipment: &Equipment) -> bool {
+    let stack = equipment.get(EquipmentSlot::Chest);
+    !stack.is_empty() && normalize_key(&stack.item) == "minecraft:elytra"
+}
+
 /// Copy the movement-affecting enchantments and status effects onto a player's
 /// physics state. Missing equipment or effects keep the inert defaults, so a
 /// caller may omit this bridge entirely without changing movement.
@@ -1155,6 +1163,7 @@ pub fn apply_movement_modifiers(
     effects: &StatusEffectSet,
 ) {
     physics.depth_strider_level = depth_strider_level(equipment);
+    physics.elytra = has_elytra(equipment);
     physics.slow_falling = effects.has(StatusEffectKind::SlowFalling);
     physics.levitation_level = effects
         .amplifier(StatusEffectKind::Levitation)

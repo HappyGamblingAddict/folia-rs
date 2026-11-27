@@ -3933,3 +3933,40 @@ Format:
   determinism) and 1 new `tests/effects.rs` bridge case; player_physics,
   effects, player_input, effect_packets, join suites plus workspace check, fmt,
   and clippy `-D warnings` green.
+
+## 2026-11-27 — P4.1 elytra flight physics
+
+- Context: `PlayerPhysics` had no glider state. The decompiled 1.21.11 source
+  tree is not present in this checkout, and there is no local 1.21.11 Java
+  movement oracle (see `BLOCKERS.md`), so no differential elytra trace can be
+  captured here. The formula is ported from the published 1.21.4
+  `LivingEntity.updateFallFlyingMovement` / `travelFallFlying` source and
+  pinned by Rust-only goldens; 1.21.11 renamed the methods (`tryToStartFallFlying`
+  -> `checkGliding`, `startFallFlying` -> `startGliding`) but the movement
+  math is unchanged as far as the available mapping data shows.
+- Decision: `PlayerPhysics` gained inert `elytra` (glider equipped) and
+  `fall_flying` (shared flag 7) fields. `effects::has_elytra` derives `elytra`
+  from the chest equipment slot and `apply_movement_modifiers` writes it onto
+  the physics state. Gliding launches only on a rising jump edge while
+  airborne, with a glider equipped, out of fluids, off a climbable block, not
+  in creative flight, and not levitating; landing, submersion, a climbable
+  block, levitation, or unequipping the glider cancels it. Glide velocity uses
+  the vanilla look-vector recurrence: `cos(pitch)^2 * 0.75` gravity scaling,
+  descent transfer `v.y * -0.1 * cos(pitch)^2`, an upward boost for negative
+  pitch, 0.1 horizontal alignment to the look direction, and `(0.99, 0.98,
+  0.99)` drag, then the shared axis-separated collider. `MovementInput` gained
+  an optional `pitch` override whose `None` keeps the pitch already synced by
+  movement packets, so all existing callers remain inert.
+- Why: this is the smallest end-to-end controlled glide that matches the
+  documented vanilla entry conditions and recurrence without inventing a
+  client-authoritative path. The climbable cancellation is deliberately more
+  conservative than `LivingEntity.canGlide` (which does not check climbables),
+  matching the client-side launch guard and avoiding ladder-glide exploits.
+- Consequences: no Java parity claim is made for these traces. Firework/rocket
+  boost, elytra durability wear, glide collision wall damage, riptide, live
+  session command wiring (the client's START_FALL_FLYING packet), and a
+  1.21.11 differential fixture remain explicitly unsupported. The glide only
+  runs in the simulation `tick()`; `reconcile()` still trusts client positions.
+- Verification: 6 new `tests/player_physics.rs` cases (entry conditions, level
+  steady descent, pitch dive/climb, landing cancellation, water/climbable
+  cancellation, determinism) and 1 new `tests/effects.rs` bridge case.

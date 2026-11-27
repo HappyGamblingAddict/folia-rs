@@ -18,12 +18,14 @@
 //! bubble-column push, and powder-snow sinking/freezing use the shipped fluid
 //! states, behaviour metadata, and [`crate::fluid`] velocity helpers.
 //!
-//! The fluid formulas are Rust-only goldens: no 1.21.11 Java movement oracle is
-//! available on this host, so `FlowingFluid.getFlow` and the buoyancy constants
-//! are approximated (see `DECISIONS.md`). Depth strider, slow falling, and
-//! levitation now modify submerged water speed, descent, and ascent through
-//! inert [`PlayerPhysics`] modifier fields; elytra, riptide, and live
-//! freeze-damage health wiring are still intentionally unsupported.
+//! The fluid and elytra formulas are Rust-only goldens: no 1.21.11 Java
+//! movement oracle is available on this host, so `FlowingFluid.getFlow`, the
+//! buoyancy constants, and the glide constants are pinned by Rust tests rather
+//! than a differential fixture (see `DECISIONS.md`). Depth strider, slow
+//! falling, levitation, and elytra modify movement through inert
+//! [`PlayerPhysics`] modifier fields; riptide, firework boost, elytra
+//! durability wear, wall-impact damage, and live freeze-damage health wiring
+//! are still intentionally unsupported.
 
 use crate::block_behaviour::MovementTraits;
 use crate::chunk::{BlockState, Chunk};
@@ -136,12 +138,80 @@ pub const SLOW_FALL_TERMINAL_VELOCITY: f64 = -0.1;
 /// (`LivingEntity` levitation branch).
 pub const LEVITATION_ACCELERATION: f64 = 0.05;
 pub const LEVITATION_APPROACH: f64 = 0.2;
+/// `LivingEntity.updateFallFlyingMovement`: the gravity term is scaled by
+/// `cos(xRot)^2 * 0.75`, so a level glide sheds a quarter of normal gravity.
+pub const GLIDE_GRAVITY_FACTOR: f64 = 0.75;
+/// Descending glides transfer ten percent of their vertical speed into the
+/// look direction and back (`v.y * -0.1 * cos(xRot)^2`).
+pub const GLIDE_DIVE_TRANSFER: f64 = 0.1;
+/// Looking up transfers `horizontalSpeed * -sin(xRot) * 0.04` away from the
+/// look direction, three and a fifth of it into upward velocity.
+pub const GLIDE_LIFT_TRANSFER: f64 = 0.04;
+pub const GLIDE_LIFT_MULTIPLIER: f64 = 3.2;
+/// Per-tick alignment of horizontal velocity with the look direction.
+pub const GLIDE_ALIGNMENT: f64 = 0.1;
+/// `Entity.move` drag after `updateFallFlyingMovement`.
+pub const GLIDE_HORIZONTAL_DRAG: f64 = 0.99;
+pub const GLIDE_VERTICAL_DRAG: f64 = 0.98;
+/// `LivingEntity.checkSlowFallDistance`: a descent slower than 0.5 blocks per
+/// tick clears accumulated fall distance.
+pub const GLIDE_SLOW_FALL_THRESHOLD: f64 = -0.5;
 
 /// Horizontal submerged-water speed multiplier for a depth strider level.
 /// Levels outside `0..=3` are clamped, so missing or invalid enchantment data
 /// stays inert.
 pub fn depth_strider_speed_multiplier(level: i32) -> f64 {
     1.0 + f64::from(level.clamp(0, MAX_DEPTH_STRIDER_LEVEL)) * DEPTH_STRIDER_STEP
+}
+
+/// `LivingEntity.updateFallFlyingMovement`, ported to Rust scalars.
+///
+/// `yaw`/`pitch` are Minecraft degrees: positive pitch looks down, matching
+/// `calculateViewVector(xRot, yRot)`. The look vector's horizontal length is
+/// `cos(pitch)` because the client clamps pitch to `[-90, 90]`.
+pub fn glide_velocity(
+    velocity_x: f64,
+    velocity_y: f64,
+    velocity_z: f64,
+    yaw: f32,
+    pitch: f32,
+    gravity: f64,
+) -> (f64, f64, f64) {
+    let horizontal = (velocity_x * velocity_x + velocity_z * velocity_z).sqrt();
+    let yaw_rad = f64::from(yaw).to_radians();
+    let pitch_rad = f64::from(pitch).to_radians();
+    let (sin_yaw, cos_yaw) = yaw_rad.sin_cos();
+    let cos_pitch = pitch_rad.cos();
+    let sin_pitch = pitch_rad.sin();
+    let look_x = -sin_yaw * cos_pitch;
+    let look_z = cos_yaw * cos_pitch;
+    let cos_squared = cos_pitch * cos_pitch;
+
+    let mut x = velocity_x;
+    let mut y = velocity_y;
+    let mut z = velocity_z;
+    y += gravity * (-1.0 + cos_squared * GLIDE_GRAVITY_FACTOR);
+    if y < 0.0 && cos_pitch > 0.0 {
+        let transfer = y * -GLIDE_DIVE_TRANSFER * cos_squared;
+        x += look_x * transfer / cos_pitch;
+        y += transfer;
+        z += look_z * transfer / cos_pitch;
+    }
+    if pitch_rad < 0.0 && cos_pitch > 0.0 {
+        let lift = horizontal * -sin_pitch * GLIDE_LIFT_TRANSFER;
+        x -= look_x * lift / cos_pitch;
+        y += lift * GLIDE_LIFT_MULTIPLIER;
+        z -= look_z * lift / cos_pitch;
+    }
+    if cos_pitch > 0.0 {
+        x += (look_x / cos_pitch * horizontal - x) * GLIDE_ALIGNMENT;
+        z += (look_z / cos_pitch * horizontal - z) * GLIDE_ALIGNMENT;
+    }
+    (
+        x * GLIDE_HORIZONTAL_DRAG,
+        y * GLIDE_VERTICAL_DRAG,
+        z * GLIDE_HORIZONTAL_DRAG,
+    )
 }
 
 /// World queries player physics needs. Implemented by the shared world storage
@@ -381,6 +451,10 @@ pub struct MovementInput {
     /// Left/right input, `-1.0..=1.0`.
     pub strafe: f64,
     pub jumping: bool,
+    /// Optional per-tick pitch override for elytra steering. `None` uses the
+    /// pitch already synced onto [`PlayerPhysics`] by movement packets, so
+    /// every existing caller stays inert without setting this field.
+    pub pitch: Option<f32>,
 }
 
 impl MovementInput {
@@ -475,6 +549,14 @@ pub struct PlayerPhysics {
     pub slow_falling: bool,
     /// Levitation level (`amplifier + 1`); `0` disables the upward push.
     pub levitation_level: i32,
+    /// Whether a glider is equipped in the chest slot. Derived from equipment
+    /// by [`crate::effects::apply_movement_modifiers`]; `false` is inert.
+    pub elytra: bool,
+    /// Whether the player is actively gliding (vanilla shared flag 7). Only
+    /// set by [`Self::try_start_gliding`] while [`Self::elytra`] is equipped.
+    pub fall_flying: bool,
+    /// Previous tick's jump input, used for the vanilla rising-edge launch.
+    previous_jumping: bool,
     /// Monotonic simulation tick count used for the freeze-damage interval.
     pub tick_count: u64,
     /// Last position reported by the client. Deltas are measured from here,
@@ -506,6 +588,9 @@ impl PlayerPhysics {
             depth_strider_level: 0,
             slow_falling: false,
             levitation_level: 0,
+            elytra: false,
+            fall_flying: false,
+            previous_jumping: false,
             tick_count: 0,
             reported_x: x,
             reported_y: y,
@@ -518,7 +603,8 @@ impl PlayerPhysics {
     }
 
     pub fn height(&self) -> f64 {
-        if self.swimming {
+        // `Pose.FALL_FLYING` uses the same 0.6-high dimensions as `Pose.SWIMMING`.
+        if self.swimming || self.fall_flying {
             SWIMMING_HEIGHT
         } else if self.sneaking {
             SNEAKING_HEIGHT
@@ -548,6 +634,8 @@ impl PlayerPhysics {
         self.cobweb_stuck = false;
         self.ticks_frozen = 0;
         self.on_ground = false;
+        self.fall_flying = false;
+        self.previous_jumping = false;
         self.reported_x = x;
         self.reported_y = y;
         self.reported_z = z;
@@ -781,6 +869,83 @@ impl PlayerPhysics {
         }
     }
 
+    /// Vanilla `Player.tryToStartFallFlying` plus the client's jump-edge and
+    /// climbable guards. A glider must be equipped, the player airborne, not
+    /// fly-mode, not levitating, out of fluids, and off a climbable block.
+    /// Returns whether gliding actually started.
+    pub fn try_start_gliding(&mut self, world: &mut impl PhysicsWorld) -> bool {
+        if self.fall_flying
+            || !self.elytra
+            || self.on_ground
+            || self.flying
+            || self.levitation_level > 0
+            || self.fluid_at_feet(world).is_some()
+            || self.on_climbable(world)
+        {
+            return false;
+        }
+        self.fall_flying = true;
+        true
+    }
+
+    /// `LivingEntity.canGlide` with the conservative water/climbable guards
+    /// used at entry. Checked each tick so landing, submersion, removing the
+    /// elytra, or levitation cancels an active glide.
+    fn can_continue_gliding(&mut self, world: &mut impl PhysicsWorld) -> bool {
+        self.elytra
+            && !self.on_ground
+            && !self.flying
+            && self.levitation_level == 0
+            && self.fluid_at_feet(world).is_none()
+            && !self.on_climbable(world)
+    }
+
+    /// `LivingEntity.travelFallFlying`: update velocity from look direction,
+    /// move with the shared collider, and clear accumulated fall distance the
+    /// way `checkSlowFallDistance` does. Wall-impact damage and durability
+    /// wear are not modeled (see `DECISIONS.md`).
+    fn tick_gliding(
+        &mut self,
+        world: &mut impl PhysicsWorld,
+        pitch: f32,
+        start: (f64, f64, f64),
+        freeze_damage: f32,
+    ) -> TickOutcome {
+        let gravity = if self.slow_falling && self.velocity_y <= 0.0 {
+            GRAVITY.min(0.01)
+        } else {
+            GRAVITY
+        };
+        let (x, y, z) = glide_velocity(
+            self.velocity_x,
+            self.velocity_y,
+            self.velocity_z,
+            self.yaw,
+            pitch,
+            gravity,
+        );
+        self.velocity_x = x;
+        self.velocity_y = y;
+        self.velocity_z = z;
+        if self.velocity_y > GLIDE_SLOW_FALL_THRESHOLD {
+            self.fall_distance = 0.0;
+        }
+        let moved = self.move_by(world, x, y, z);
+        self.velocity_x = moved.dx;
+        self.velocity_y = moved.dy;
+        self.velocity_z = moved.dz;
+        if moved.on_ground {
+            self.fall_flying = false;
+        }
+        TickOutcome {
+            moved: (self.x, self.y, self.z) != start,
+            on_ground: self.on_ground,
+            landed: moved.on_ground,
+            fall_damage: 0.0,
+            freeze_damage,
+        }
+    }
+
     /// `Entity.moveRelative`: rotate the local input by yaw and add it to the
     /// current velocity.
     fn move_relative(&mut self, speed: f64, input: MovementInput) {
@@ -804,6 +969,10 @@ impl PlayerPhysics {
     /// One vanilla living-entity travel tick (`LivingEntity.travelInAir`,
     /// plus the flying branch of `Player.travel`).
     pub fn tick(&mut self, world: &mut impl PhysicsWorld, input: MovementInput) -> TickOutcome {
+        // Vanilla launches a glide on a rising jump edge (the client sends a
+        // START_FALL_FLYING command). Track the edge before any early return.
+        let jump_pressed = input.jumping && !self.previous_jumping;
+        self.previous_jumping = input.jumping;
         // `LivingEntity.aiStep` zeros tiny horizontal velocities for players.
         if self.velocity_x * self.velocity_x + self.velocity_z * self.velocity_z < 9.0e-6 {
             self.velocity_x = 0.0;
@@ -812,6 +981,9 @@ impl PlayerPhysics {
         if input.jumping && self.on_ground {
             let jump_factor = self.block_jump_factor(world);
             self.jump_with_factor(jump_factor);
+        }
+        if jump_pressed {
+            self.try_start_gliding(world);
         }
         let freeze_damage = self.tick_frozen_state(world);
 
@@ -841,8 +1013,19 @@ impl PlayerPhysics {
             return outcome;
         }
 
-        if let Some(state) = self.fluid_at_feet(world) {
+        // Fluids win over gliding in `LivingEntity.travel`; water and lava
+        // also cancel an active glide here so leaving the fluid does not
+        // silently resume flight.
+        let fluid = self.fluid_at_feet(world);
+        if self.fall_flying && (fluid.is_some() || !self.can_continue_gliding(world)) {
+            self.fall_flying = false;
+        }
+        if let Some(state) = fluid {
             return self.tick_in_fluid(world, state, input, start, freeze_damage);
+        }
+        if self.fall_flying {
+            let pitch = input.pitch.unwrap_or(self.pitch);
+            return self.tick_gliding(world, pitch, start, freeze_damage);
         }
 
         let powder_snow = self.powder_snow_at(world);

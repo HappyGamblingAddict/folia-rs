@@ -3,6 +3,7 @@
 use folia_core::effects::{
     DamageType, EffectTick, StatusEffect, StatusEffectKind, StatusEffectSet, apply_damage,
     apply_movement_modifiers, armor_values_from_equipment, damage_after_armor, depth_strider_level,
+    has_elytra,
 };
 use folia_core::entity_metadata::{Equipment, EquipmentSlot, LivingEntity};
 use folia_core::item_components::{ComponentValue, ItemStack};
@@ -215,4 +216,39 @@ fn movement_modifiers_come_from_boots_and_status_effects() {
     assert_eq!(physics.depth_strider_level, 0);
     assert!(!physics.slow_falling);
     assert_eq!(physics.levitation_level, 0);
+}
+
+#[test]
+fn elytra_flag_comes_from_the_chest_slot() {
+    let mut equipment = Equipment::new();
+    equipment.set(
+        EquipmentSlot::Chest,
+        ItemStack::new("minecraft:elytra".to_string(), 1),
+    );
+    assert!(has_elytra(&equipment));
+
+    let mut physics = PlayerPhysics::new(0.5, 40.0, 0.5);
+    apply_movement_modifiers(&mut physics, &equipment, &StatusEffectSet::new());
+    assert!(
+        physics.elytra,
+        "the bridge derives the glider flag from equipment"
+    );
+
+    equipment.set(
+        EquipmentSlot::Chest,
+        ItemStack::new("minecraft:diamond_chestplate".to_string(), 1),
+    );
+    assert!(!has_elytra(&equipment));
+    apply_movement_modifiers(&mut physics, &equipment, &StatusEffectSet::new());
+    assert!(!physics.elytra, "replacing the elytra clears the flag");
+
+    equipment.set(
+        EquipmentSlot::Chest,
+        ItemStack::new("elytra".to_string(), 1),
+    );
+    assert!(has_elytra(&equipment), "bare registry ids are accepted");
+    equipment.set(EquipmentSlot::Chest, ItemStack::empty());
+    assert!(!has_elytra(&equipment));
+    apply_movement_modifiers(&mut physics, &equipment, &StatusEffectSet::new());
+    assert!(!physics.elytra);
 }
